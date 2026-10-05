@@ -6,9 +6,11 @@
   "types": "src/index.ts",
   "license": "MIT",
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.4",
     "@agtpilot/core": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
-    "playwright": "^1.50.0"
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@types/turndown": "^5.0.6",
+    "playwright": "^1.50.0",
+    "turndown": "^7.2.4"
   }
 }

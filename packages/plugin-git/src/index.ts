@@ -5,6 +5,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import '@agtpilot/core';
 
+import * as Diff from 'diff';
+
 const execAsync = promisify(exec);
 
 export const name = 'agtpilot-plugin-git';
@@ -62,45 +64,95 @@ export function apply(ctx: Context) {
     },
   });
 
-  // 3. git_apply_patch: 精准应用 Unified Diff / 局部补丁
+  // 3. git_apply_patch: 精准应用 Unified Diff / 局部补丁 (基于官方 jsdiff 引擎)
   ctx.agent.registerTool({
     name: 'git_apply_patch',
-    description: '对标 Aider 补丁机制：对目标文件安全应用局部 Unified Diff 补丁或指定查找块替换，避免全文件重写丢失代码。',
+    description: '集成全球标准 diff 库与 Aider 补丁引擎：对目标文件应用标准 Unified Diff 补丁或指定查找块替换，支持 hunk 行号容差对齐，避免全文件重写丢失代码。',
     parameters: {
       type: 'object',
       properties: {
         filePath: { type: 'string', description: '要修改的文件相对路径' },
-        searchBlock: { type: 'string', description: '原文件中要被替换的代码段（必须精准匹配上下文）' },
-        replaceBlock: { type: 'string', description: '替换后的新代码段' },
+        patchString: { type: 'string', description: '可选，标准 Unified Diff 补丁文本（包含 @@ -l,s +l,s @@ hunk 头）' },
+        searchBlock: { type: 'string', description: '可选，原文件中要被替换的代码段（必须匹配上下文）' },
+        replaceBlock: { type: 'string', description: '可选，替换后的新代码段' },
       },
-      required: ['filePath', 'searchBlock', 'replaceBlock'],
+      required: ['filePath'],
     },
-    execute: async ({ filePath, searchBlock, replaceBlock }) => {
+    execute: async ({ filePath, patchString, searchBlock, replaceBlock }) => {
       const fullPath = path.resolve(cwd, filePath);
       if (!fs.existsSync(fullPath)) {
         return { success: false, error: `文件未找到: ${filePath}` };
       }
 
       const content = fs.readFileSync(fullPath, 'utf-8');
-      if (!content.includes(searchBlock)) {
+
+      // 方案 A: 如果提供了标准 Unified Diff，使用业界顶级的 jsdiff.applyPatch
+      if (patchString) {
+        const patched = Diff.applyPatch(content, patchString, { fuzzFactor: 2 });
+        if (typeof patched === 'string') {
+          fs.writeFileSync(fullPath, patched, 'utf-8');
+          return {
+            success: true,
+            filePath,
+            engine: 'jsdiff',
+            message: `标准 Unified Diff 已通过官方 diff 引擎成功应用至 [${filePath}]。`,
+          };
+        }
+      }
+
+      // 方案 B: 精准匹配块替换
+      if (searchBlock !== undefined && replaceBlock !== undefined) {
+        if (!content.includes(searchBlock)) {
+          return {
+            success: false,
+            error: `无法在 [${filePath}] 中匹配到原代码段 searchBlock，请先核验文件最新内容。`,
+          };
+        }
+        const updated = content.replace(searchBlock, replaceBlock);
+        fs.writeFileSync(fullPath, updated, 'utf-8');
         return {
-          success: false,
-          error: `无法在 [${filePath}] 中匹配到原代码段 searchBlock，请先核验文件最新内容。`,
+          success: true,
+          filePath,
+          engine: 'fuzzy-block',
+          message: `局部代码块已安全替换更新至 [${filePath}]。`,
         };
       }
 
-      const updated = content.replace(searchBlock, replaceBlock);
-      fs.writeFileSync(fullPath, updated, 'utf-8');
+      return { success: false, error: '必须提供 patchString 或 (searchBlock + replaceBlock)' };
+    },
+  });
 
+  // 4. git_create_patch: 使用 diff 库生成两个文本版本的 Unified Diff
+  ctx.agent.registerTool({
+    name: 'git_create_patch',
+    description: '使用官方 diff 库比较原文本与修改文本，生成标准的 Unified Diff 补丁字符串。',
+    parameters: {
+      type: 'object',
+      properties: {
+        fileName: { type: 'string', description: '展示的文件名' },
+        oldContent: { type: 'string', description: '修改前的原始内容' },
+        newContent: { type: 'string', description: '修改后的最新内容' },
+      },
+      required: ['fileName', 'oldContent', 'newContent'],
+    },
+    execute: async ({ fileName, oldContent, newContent }) => {
+      const patch = Diff.createTwoFilesPatch(
+        fileName,
+        fileName,
+        oldContent,
+        newContent,
+        'original',
+        'modified'
+      );
       return {
         success: true,
-        filePath,
-        message: `补丁已安全应用到 [${filePath}]，局部代码替换成功。`,
+        fileName,
+        patch,
       };
     },
   });
 
-  // 4. git_create_checkpoint: 建立安全快照分支
+  // 5. git_create_checkpoint: 建立安全快照分支
   ctx.agent.registerTool({
     name: 'git_create_checkpoint',
     description: '在进行大型重构或危险修改前，创建临时快照备份分支，支持随时一键回滚。',

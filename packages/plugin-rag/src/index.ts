@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import '@agtpilot/core';
 
+import { cosineSimilarity } from 'ai';
+
 export const name = 'agtpilot-plugin-rag';
 export const inject = ['agent'];
 
@@ -108,18 +110,17 @@ export class RagService extends Service {
     const qTokens = this.tokenize(query);
     if (qTokens.length === 0 || this.chunks.length === 0) return [];
 
+    // 提取词表向量维度空间
+    const vocabulary = Array.from(new Set([...qTokens, ...this.chunks.flatMap((c) => c.tokens.slice(0, 15))]));
+    const qVector = vocabulary.map((word) => (qTokens.includes(word) ? 1 : 0));
+
     const scored = this.chunks.map((chunk) => {
-      let matches = 0;
-      for (const qt of qTokens) {
-        if (chunk.tokens.includes(qt)) {
-          matches++;
-        }
-      }
-      const score = matches / Math.sqrt(qTokens.length * (chunk.tokens.length || 1));
+      const cVector = vocabulary.map((word) => (chunk.tokens.includes(word) ? 1 : 0));
+      const score = cosineSimilarity(qVector, cVector);
       return {
         docTitle: chunk.docTitle,
         content: chunk.content,
-        score,
+        score: Math.round(score * 100) / 100,
       };
     });
 

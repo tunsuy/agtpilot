@@ -6,6 +6,7 @@
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
     "@agtpilot/protocol": "workspace:*",
-    "@agtpilot/core": "workspace:*"
+    "@agtpilot/core": "workspace:*",
+    "ai": "^4.0.0"
   }
 }

@@ -26,6 +26,8 @@
     "@agtpilot/plugin-desktop": "workspace:*",
     "@agtpilot/plugin-router": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
+    "ai": "^4.0.0",
+    "diff": "^7.0.0",
     "@copilotkit/react-core": "^1.77.0",
     "@copilotkit/react-ui": "^1.77.0",
     "@copilotkit/runtime": "^1.77.0",

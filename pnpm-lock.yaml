@@ -147,6 +147,12 @@ importers:
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
         version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      ai:
+        specifier: ^4.0.0
+        version: 4.3.19(react@19.3.0)(zod@3.25.76)
+      diff:
+        specifier: ^7.0.0
+        version: 7.0.0
       lucide-react:
         specifier: ^0.475.0
         version: 0.475.0(react@19.3.0)
@@ -380,6 +386,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
         version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      ai:
+        specifier: ^4.0.0
+        version: 4.3.19(react@19.3.0)(zod@3.25.76)
 
   packages/plugin-router:
     dependencies:
@@ -5548,6 +5557,10 @@ packages:
 
   diff@5.2.2:
     resolution: {integrity: sha512-vtcDfH3TOjP8UekytvnHH1o1P4FcUdt4eQ1Y+Abap1tk/OB2MWQvcwS2ClCd1zuIhc3JKOx6p3kod8Vfys3E+A==}
+    engines: {node: '>=0.3.1'}
+
+  diff@7.0.0:
+    resolution: {integrity: sha512-PJWHUb1RFevKCwaFA9RlG5tCd+FO5iRh9A8HEtkmBH2Li03iJriB6m6JIN4rGz3K3JLawI7/veA1xzRKP6ISBw==}
     engines: {node: '>=0.3.1'}
 
   diff@9.0.0:
@@ -14127,6 +14140,8 @@ snapshots:
   diff-match-patch@1.0.5: {}
 
   diff@5.2.2: {}
+
+  diff@7.0.0: {}
 
   diff@9.0.0: {}
 

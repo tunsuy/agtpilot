@@ -3,6 +3,7 @@ import { generateText, CoreMessage, tool } from 'ai';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
+import { ModelStepResult } from '@agtpilot/protocol';
 import '@agtpilot/core';
 
 export const name = 'agtpilot-plugin-model';
@@ -14,20 +15,7 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export interface ModelStepResult {
-  text: string;
-  reasoning?: string;
-  toolCalls: Array<{
-    toolCallId: string;
-    toolName: string;
-    args: Record<string, any>;
-  }>;
-  finishReason: string;
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-  };
-}
+export type { ModelStepResult };
 
 export interface ModelInvokeOptions {
   model?: string;

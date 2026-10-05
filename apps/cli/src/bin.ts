@@ -10,6 +10,11 @@ import * as PlannerPlugin from '@agtpilot/plugin-planner';
 import * as MemoryPlugin from '@agtpilot/plugin-memory';
 import * as CronPlugin from '@agtpilot/plugin-cron';
 import * as ObservabilityPlugin from '@agtpilot/plugin-observability';
+import * as GitPlugin from '@agtpilot/plugin-git';
+import * as NotifyPlugin from '@agtpilot/plugin-notify';
+import * as RagPlugin from '@agtpilot/plugin-rag';
+import * as DesktopPlugin from '@agtpilot/plugin-desktop';
+import * as RouterPlugin from '@agtpilot/plugin-router';
 
 async function main() {
   console.log('🚀 启动 agtpilot (基于 DeepSeek Harness 官方 Cordis 插件微内核)...');
@@ -32,6 +37,11 @@ async function main() {
   await ctx.plugin(MemoryPlugin);
   await ctx.plugin(CronPlugin);
   await ctx.plugin(ObservabilityPlugin);
+  await ctx.plugin(GitPlugin);
+  await ctx.plugin(NotifyPlugin);
+  await ctx.plugin(RagPlugin);
+  await ctx.plugin(DesktopPlugin);
+  await ctx.plugin(RouterPlugin);
 
   console.log('\n✅ agtpilot 底座启动成功！已动态装载的服务与工具:');
   console.log(` - 🧠 模型驱动服务: ctx.model 已就绪 (基于 Vercel AI SDK 方案 A 单步驱动)`);

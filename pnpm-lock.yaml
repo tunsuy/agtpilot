@@ -39,6 +39,12 @@ importers:
       '@agtpilot/plugin-cron':
         specifier: workspace:*
         version: link:../../packages/plugin-cron
+      '@agtpilot/plugin-desktop':
+        specifier: workspace:*
+        version: link:../../packages/plugin-desktop
+      '@agtpilot/plugin-git':
+        specifier: workspace:*
+        version: link:../../packages/plugin-git
       '@agtpilot/plugin-mcp':
         specifier: workspace:*
         version: link:../../packages/plugin-mcp
@@ -48,12 +54,21 @@ importers:
       '@agtpilot/plugin-model':
         specifier: workspace:*
         version: link:../../packages/plugin-model
+      '@agtpilot/plugin-notify':
+        specifier: workspace:*
+        version: link:../../packages/plugin-notify
       '@agtpilot/plugin-observability':
         specifier: workspace:*
         version: link:../../packages/plugin-observability
       '@agtpilot/plugin-planner':
         specifier: workspace:*
         version: link:../../packages/plugin-planner
+      '@agtpilot/plugin-rag':
+        specifier: workspace:*
+        version: link:../../packages/plugin-rag
+      '@agtpilot/plugin-router':
+        specifier: workspace:*
+        version: link:../../packages/plugin-router
       '@agtpilot/plugin-sandbox':
         specifier: workspace:*
         version: link:../../packages/plugin-sandbox
@@ -81,6 +96,12 @@ importers:
       '@agtpilot/plugin-cron':
         specifier: workspace:*
         version: link:../../packages/plugin-cron
+      '@agtpilot/plugin-desktop':
+        specifier: workspace:*
+        version: link:../../packages/plugin-desktop
+      '@agtpilot/plugin-git':
+        specifier: workspace:*
+        version: link:../../packages/plugin-git
       '@agtpilot/plugin-mcp':
         specifier: workspace:*
         version: link:../../packages/plugin-mcp
@@ -90,12 +111,21 @@ importers:
       '@agtpilot/plugin-model':
         specifier: workspace:*
         version: link:../../packages/plugin-model
+      '@agtpilot/plugin-notify':
+        specifier: workspace:*
+        version: link:../../packages/plugin-notify
       '@agtpilot/plugin-observability':
         specifier: workspace:*
         version: link:../../packages/plugin-observability
       '@agtpilot/plugin-planner':
         specifier: workspace:*
         version: link:../../packages/plugin-planner
+      '@agtpilot/plugin-rag':
+        specifier: workspace:*
+        version: link:../../packages/plugin-rag
+      '@agtpilot/plugin-router':
+        specifier: workspace:*
+        version: link:../../packages/plugin-router
       '@agtpilot/plugin-sandbox':
         specifier: workspace:*
         version: link:../../packages/plugin-sandbox
@@ -221,6 +251,30 @@ importers:
         specifier: ^9.0.0
         version: 9.1.0
 
+  packages/plugin-desktop:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
+  packages/plugin-git:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
   packages/plugin-mcp:
     dependencies:
       '@agtpilot/core':
@@ -272,6 +326,18 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
+  packages/plugin-notify:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
   packages/plugin-observability:
     dependencies:
       '@agtpilot/core':
@@ -285,6 +351,30 @@ importers:
         version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
 
   packages/plugin-planner:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
+  packages/plugin-rag:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
+  packages/plugin-router:
     dependencies:
       '@agtpilot/core':
         specifier: workspace:*

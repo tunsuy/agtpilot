@@ -16,6 +16,11 @@ import * as PlannerPlugin from '@agtpilot/plugin-planner';
 import * as MemoryPlugin from '@agtpilot/plugin-memory';
 import * as CronPlugin from '@agtpilot/plugin-cron';
 import * as ObservabilityPlugin from '@agtpilot/plugin-observability';
+import * as GitPlugin from '@agtpilot/plugin-git';
+import * as NotifyPlugin from '@agtpilot/plugin-notify';
+import * as RagPlugin from '@agtpilot/plugin-rag';
+import * as DesktopPlugin from '@agtpilot/plugin-desktop';
+import * as RouterPlugin from '@agtpilot/plugin-router';
 
 // 1. 初始化并缓存单例 Cordis 微内核底座
 let cordisContext: Context | null = null;
@@ -28,7 +33,7 @@ async function getCordisTools() {
       new AgentService(ctx);
       new OrchestratorService(ctx);
 
-      // 加载全套原子插件：浏览器、执行沙箱、互联网搜索引擎、Anthropic MCP 协议、产物画布、任务看板、长期记忆、定时巡检、可观测性
+      // 加载全套 15 大原子插件
       await ctx.plugin(BrowserPlugin, { headless: true });
       await ctx.plugin(SandboxPlugin);
       await ctx.plugin(SearchPlugin);
@@ -38,6 +43,11 @@ async function getCordisTools() {
       await ctx.plugin(MemoryPlugin);
       await ctx.plugin(CronPlugin);
       await ctx.plugin(ObservabilityPlugin);
+      await ctx.plugin(GitPlugin);
+      await ctx.plugin(NotifyPlugin);
+      await ctx.plugin(RagPlugin);
+      await ctx.plugin(DesktopPlugin);
+      await ctx.plugin(RouterPlugin);
 
       cordisContext = ctx;
 

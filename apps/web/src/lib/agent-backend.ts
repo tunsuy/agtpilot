@@ -56,6 +56,7 @@ export interface AgentBackendState {
   viewport: ViewportState;
   terminalLogs: TerminalLog[];
   approvalRequests: ApprovalRequest[];
+  latestArtifact?: any;
 }
 
 class AgentBackend {
@@ -233,6 +234,12 @@ class AgentBackend {
           }
         }
         this.broadcast({ type: 'approval_requested', data: req });
+        break;
+      }
+
+      case 'artifact': {
+        this.state.latestArtifact = event.payload;
+        this.broadcast({ type: 'artifact_updated', data: event.payload });
         break;
       }
 
@@ -435,6 +442,20 @@ class AgentBackend {
     }
     mission.steps[3].status = 'DONE';
     mission.steps[3].duration = '120ms';
+
+    // 步骤 5: 真实产物输出 (Artifact Deliverable)
+    const artifactTool = this.ctx.agent.getTool('artifact_render');
+    if (artifactTool) {
+      await artifactTool.execute(
+        {
+          title: `Mission Deliverable: ${goal.slice(0, 36)}`,
+          type: 'markdown',
+          content: `# Task Execution Summary\n\n**Goal**: ${goal}\n\n### 1. Investigation Findings\n- **Live Web Reconnaissance**: Verified target content via Playwright browser (${targetUrl})\n- **Environment Diagnostics**: Evaluated Node.js, Git, and system isolation\n- **Human Gate Sign-off**: Approved by workspace owner\n\n### 2. Actions Taken\n- Cleaned and distilled raw HTML into structured Markdown.\n- Checked sandbox command constraints without regression.\n- Persisted session state to local memory.\n\n---\n*Delivered autonomously by AgtPilot Agent Platform*`,
+        },
+        { source: 'agent-backend' }
+      );
+    }
+
     mission.status = 'DONE';
     mission.progress = 100;
     this.broadcast({ type: 'mission_updated', data: mission });

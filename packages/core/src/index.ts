@@ -30,7 +30,6 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     agent: AgentService;
     orchestrator: OrchestratorService;
-    model?: any;
   }
   interface Events {
     dispose(): void;
@@ -113,7 +112,7 @@ export class OrchestratorService extends Service {
         currentStep++;
 
         // 1. 调用模型单步驱动 (方案 A: 严格单步)
-        const stepResult: ModelStepResult = await this.ctx.model.invokeStep({
+        const stepResult: ModelStepResult = await (this.ctx as any).model.invokeStep({
           model: options.model,
           system: options.system || '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用浏览器等原子工具来完成任务。',
           messages: messages as any,

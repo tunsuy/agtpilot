@@ -80,11 +80,30 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
         const rawMarkdown = turndown.turndown(html);
         const markdown = rawMarkdown.length > 4000 ? rawMarkdown.slice(0, 4000) + '\n\n...(内容过长，已截断)' : rawMarkdown;
 
+        let screenshotBase64 = '';
+        try {
+          const buffer = await page.screenshot({ type: 'jpeg', quality: 65 });
+          screenshotBase64 = buffer.toString('base64');
+        } catch {
+          // 容错处理
+        }
+
+        ctx.agent.emitEvent({
+          type: 'viewport_update',
+          payload: {
+            url,
+            title,
+            screenshotBase64,
+          },
+          timestamp: Date.now(),
+        });
+
         return {
           success: true,
           url,
           title,
           content: markdown,
+          screenshotBase64: screenshotBase64 ? `data:image/jpeg;base64,${screenshotBase64}` : undefined,
         };
       } catch (err: any) {
         return {
@@ -140,11 +159,22 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       try {
         const page = await getOrCreatePage();
         const savePath = path.resolve(process.cwd(), filename);
-        await page.screenshot({ path: savePath, fullPage: false });
+        const buffer = await page.screenshot({ path: savePath, fullPage: false, type: 'jpeg', quality: 75 });
+        const screenshotBase64 = buffer.toString('base64');
+        ctx.agent.emitEvent({
+          type: 'viewport_update',
+          payload: {
+            url: page.url(),
+            title: await page.title(),
+            screenshotBase64,
+          },
+          timestamp: Date.now(),
+        });
         return {
           success: true,
           savePath,
           message: `截图已保存至: ${savePath}`,
+          screenshotBase64: `data:image/jpeg;base64,${screenshotBase64}`,
         };
       } catch (err: any) {
         return {

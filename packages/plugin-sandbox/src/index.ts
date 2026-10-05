@@ -63,6 +63,18 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
         });
 
         const durationMs = Date.now() - startTime;
+        ctx.agent.emitEvent({
+          type: 'terminal_output',
+          payload: {
+            command,
+            cwd: execCwd,
+            stdout: stdout.trim(),
+            stderr: stderr.trim(),
+            exitCode: 0,
+            durationMs,
+          },
+          timestamp: Date.now(),
+        });
         return {
           success: true,
           command,
@@ -73,12 +85,26 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
         };
       } catch (err: any) {
         const durationMs = Date.now() - startTime;
+        const errOut = (err.stderr || err.message || '').trim();
+        const stdOut = (err.stdout || '').trim();
+        ctx.agent.emitEvent({
+          type: 'terminal_output',
+          payload: {
+            command,
+            cwd: execCwd,
+            stdout: stdOut,
+            stderr: errOut,
+            exitCode: err.code ?? -1,
+            durationMs,
+          },
+          timestamp: Date.now(),
+        });
         return {
           success: false,
           command,
           exitCode: err.code ?? -1,
-          stdout: (err.stdout || '').trim(),
-          stderr: (err.stderr || err.message || '').trim(),
+          stdout: stdOut,
+          stderr: errOut,
           durationMs,
           timedOut: err.killed || false,
         };

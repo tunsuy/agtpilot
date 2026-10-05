@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { CopilotKit } from '@copilotkit/react-core';
 import { CopilotSidebar } from '@copilotkit/react-ui';
 import {
@@ -34,37 +34,62 @@ import {
   Pause,
   Play,
   Share2,
+  Terminal,
+  Key,
+  X,
+  AlertCircle,
 } from 'lucide-react';
 
 interface ConnectorApp {
   id: string;
   name: string;
   category: string;
-  iconName: string;
-  status: 'connected' | 'available';
+  icon: string;
+  status: 'connected' | 'unconfigured';
+  envVar: string;
   description: string;
-  actionCount: number;
+  keyMasked?: string;
 }
 
-interface MissionGoal {
+interface MissionStep {
   id: string;
   title: string;
-  category: string;
-  status: 'running' | 'completed' | 'waiting_approval' | 'scheduled';
+  tool?: string;
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  duration?: string;
+  args?: any;
+}
+
+interface Mission {
+  id: string;
+  title: string;
+  status: 'ACTIVE' | 'DONE' | 'QUEUED' | 'WAITING_APPROVAL';
   progress: number;
-  currentAction: string;
-  lineage: Array<{
-    step: string;
-    status: 'done' | 'active' | 'pending';
-    detail: string;
-    timestamp: string;
-  }>;
-  signoffRequest?: {
-    action: string;
-    target: string;
-    consequence: string;
-    risk: 'high' | 'medium';
-  };
+  startedAt: number;
+  steps: MissionStep[];
+}
+
+interface ViewportState {
+  activeTab: 'browser' | 'terminal';
+  url: string;
+  title?: string;
+  status: 'idle' | 'navigating' | 'interacting' | 'scraping';
+  screenshotBase64?: string;
+}
+
+interface TerminalLog {
+  id: string;
+  timestamp: number;
+  type: 'command' | 'stdout' | 'stderr' | 'system';
+  text: string;
+}
+
+interface ApprovalRequest {
+  id: string;
+  action: string;
+  description: string;
+  dangerLevel: 'low' | 'medium' | 'high';
+  params: Record<string, any>;
 }
 
 export default function MetaMuseWorkspace() {
@@ -73,588 +98,889 @@ export default function MetaMuseWorkspace() {
   // 导航模式：活动监控视口、任务血缘流、应用连接器、主动监控看板、委托灵感库
   const [activeView, setActiveView] = useState<'live_browser' | 'lineage' | 'connectors' | 'missions' | 'ideas'>('live_browser');
 
-  // 连接器生态列表 (对标 Meta Muse 40+ Connectors)
-  const [connectors, setConnectors] = useState<ConnectorApp[]>([
-    { id: 'google', name: 'Google Workspace', category: '日程/邮件/文档', iconName: 'mail', status: 'connected', description: 'Gmail 邮件检索与日历会议自动编排', actionCount: 18 },
-    { id: 'notion', name: 'Notion 个人知识库', category: '笔记/文档', iconName: 'file', status: 'connected', description: '自动结构化记录调研结果与周报', actionCount: 34 },
-    { id: 'github', name: 'GitHub 软件仓库', category: '代码/工程', iconName: 'github', status: 'connected', description: 'Issue 监控、PR 审查与代码库补丁提交', actionCount: 52 },
-    { id: 'feishu', name: '飞书 / 企微通知中枢', category: '即时通讯', iconName: 'bell', status: 'connected', description: '移动端主动推送富文本卡片与关键决策审批', actionCount: 29 },
-    { id: 'e2b', name: 'E2B 云端安全微容器', category: '执行沙箱', iconName: 'database', status: 'connected', description: 'Firecracker 硬件隔离 MicroVM，支持全套科学计算', actionCount: 41 },
-    { id: 'mcp', name: 'Anthropic MCP 开放网关', category: '工具标准协议', iconName: 'layers', status: 'connected', description: '标准化连接 Slack、Postgres 与自定义 MCP 服务', actionCount: 16 },
-  ]);
+  // 视口子选项卡：真实网页截屏 vs 实时终端沙箱
+  const [viewportTab, setViewportTab] = useState<'browser' | 'terminal'>('browser');
 
-  // 当前主线长任务 (Mission)
-  const [activeMission, setActiveMission] = useState<MissionGoal>({
-    id: 'mission-01',
-    title: '全网深度竞品调研与技术选型决策报告',
-    category: '自主研究与决策',
-    status: 'waiting_approval',
-    progress: 75,
-    currentAction: '等待人类对关键邮件通知进行安全签批 (Human-in-the-Loop Sign-off)',
-    lineage: [
-      {
-        step: '1. 复杂目标规划与意图锚定',
-        status: 'done',
-        detail: '自动分解为 4 个执行子目标，预加载 Exa 与 Firecrawl 凭证',
-        timestamp: '14:20:05',
-      },
-      {
-        step: '2. 实时全网神经检索与高价值源提取',
-        status: 'done',
-        detail: '调度 Exa 语义检索获得 12 篇核心技术白皮书与开源架构评测',
-        timestamp: '14:21:18',
-      },
-      {
-        step: '3. 持久化浏览器导航与深层内容蒸馏',
-        status: 'done',
-        detail: '使用 Firecrawl 穿透反爬机制并提取清洗后的 Markdown 正文',
-        timestamp: '14:22:40',
-      },
-      {
-        step: '4. 向飞书项目群外发调研简报并同步 Notion',
-        status: 'active',
-        detail: '触发高危操作安全网关，等待主人点击 Sign-off 签批授权',
-        timestamp: '14:23:15',
-      },
-    ],
-    signoffRequest: {
-      action: '向核心团队飞书项目群外发技术调研结论简报',
-      target: '飞书群聊: #AI-Architecture-Core (共 8 人)',
-      consequence: '此操作将直接向外部通讯工具发送包含选型决策的公开卡片',
-      risk: 'high',
-    },
+  // 真实后端状态 (由 /api/agent/events SSE 实时同步)
+  const [missions, setMissions] = useState<Mission[]>([]);
+  const [activeMissionId, setActiveMissionId] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<ViewportState>({
+    activeTab: 'browser',
+    url: 'https://news.ycombinator.com',
+    title: 'Ready',
+    status: 'idle',
   });
-
-  // 主动定时任务 (Active Background Missions)
-  const [scheduledMissions] = useState([
+  const [terminalLogs, setTerminalLogs] = useState<TerminalLog[]>([
     {
-      id: 'sch-1',
-      title: '每日早上 9 点 GitHub AI 趋势雷达巡检',
-      cadence: '每天 09:00:00 (Cron: 0 9 * * *)',
-      status: 'active',
-      nextRun: '明天 09:00:00',
-      autoSyncApp: 'Notion + 飞书群',
-    },
-    {
-      id: 'sch-2',
-      title: '云端基础设施与 API 成本预算实时熔断守护',
-      cadence: '每 30 分钟轮询',
-      status: 'active',
-      nextRun: '18 分钟后',
-      autoSyncApp: '桌面原生弹窗',
+      id: 'init-1',
+      timestamp: Date.now(),
+      type: 'system',
+      text: '[Cordis Microkernel] System ready. All 43 SOTA atomic tools wired up.',
     },
   ]);
+  const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([]);
 
-  // 委托灵感库 (Ideas & Delegation Library)
+  // 连接器生态列表 (由 /api/connectors 真实探测)
+  const [connectors, setConnectors] = useState<ConnectorApp[]>([]);
+  const [configuringConnector, setConfiguringConnector] = useState<ConnectorApp | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [isSavingKey, setIsSavingKey] = useState(false);
+
+  // 用户指令输入
+  const [inputGoal, setInputGoal] = useState('');
+  const [isExecuting, setIsExecuting] = useState(false);
+
+  const terminalEndRef = useRef<HTMLDivElement>(null);
+
+  // 自动滚动终端
+  useEffect(() => {
+    if (viewportTab === 'terminal') {
+      terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [terminalLogs, viewportTab]);
+
+  // 加载真实连接器状态
+  const loadConnectors = async () => {
+    try {
+      const res = await fetch('/api/connectors');
+      const data = await res.json();
+      if (data.connectors) {
+        setConnectors(data.connectors);
+      }
+    } catch (err) {
+      console.error('Failed to load connectors:', err);
+    }
+  };
+
+  // 保存 API Key 连接
+  const handleSaveApiKey = async () => {
+    if (!configuringConnector || !apiKeyInput.trim()) return;
+    setIsSavingKey(true);
+    try {
+      const res = await fetch('/api/connectors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          envVar: configuringConnector.envVar,
+          value: apiKeyInput.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.connectors) {
+        setConnectors(data.connectors);
+      }
+      setConfiguringConnector(null);
+      setApiKeyInput('');
+    } catch (err) {
+      console.error('Failed to save key:', err);
+    } finally {
+      setIsSavingKey(false);
+    }
+  };
+
+  // 建立真实实时事件流 (Server-Sent Events)
+  useEffect(() => {
+    setMounted(true);
+    loadConnectors();
+
+    const eventSource = new EventSource('/api/agent/events');
+
+    eventSource.addEventListener('init', (e: MessageEvent) => {
+      try {
+        const state = JSON.parse(e.data);
+        if (state.missions) setMissions(state.missions);
+        if (state.activeMissionId) setActiveMissionId(state.activeMissionId);
+        if (state.viewport) setViewport(state.viewport);
+        if (state.terminalLogs && state.terminalLogs.length > 0) setTerminalLogs(state.terminalLogs);
+        if (state.approvalRequests) setApprovalRequests(state.approvalRequests);
+      } catch (err) {
+        console.error('SSE init error:', err);
+      }
+    });
+
+    eventSource.addEventListener('viewport_update', (e: MessageEvent) => {
+      try {
+        const vp = JSON.parse(e.data);
+        setViewport((prev) => ({ ...prev, ...vp }));
+      } catch (err) {
+        console.error('SSE viewport error:', err);
+      }
+    });
+
+    eventSource.addEventListener('terminal_log', (e: MessageEvent) => {
+      try {
+        const log = JSON.parse(e.data);
+        setTerminalLogs((prev) => [...prev, log]);
+      } catch (err) {
+        console.error('SSE log error:', err);
+      }
+    });
+
+    eventSource.addEventListener('mission_created', (e: MessageEvent) => {
+      try {
+        const mission: Mission = JSON.parse(e.data);
+        setMissions((prev) => [mission, ...prev.filter((m) => m.id !== mission.id)]);
+        setActiveMissionId(mission.id);
+      } catch (err) {
+        console.error('SSE mission created error:', err);
+      }
+    });
+
+    eventSource.addEventListener('mission_updated', (e: MessageEvent) => {
+      try {
+        const updated: Mission = JSON.parse(e.data);
+        setMissions((prev) =>
+          prev.map((m) => (m.id === updated.id ? updated : m))
+        );
+      } catch (err) {
+        console.error('SSE mission updated error:', err);
+      }
+    });
+
+    eventSource.addEventListener('approval_requested', (e: MessageEvent) => {
+      try {
+        const req: ApprovalRequest = JSON.parse(e.data);
+        setApprovalRequests((prev) => [...prev.filter((r) => r.id !== req.id), req]);
+        setActiveView('lineage'); // 自动跳转至血缘审核页
+      } catch (err) {
+        console.error('SSE approval error:', err);
+      }
+    });
+
+    eventSource.addEventListener('approval_resolved', (e: MessageEvent) => {
+      try {
+        const { approvalId } = JSON.parse(e.data);
+        setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
+      } catch (err) {
+        console.error('SSE approval resolved error:', err);
+      }
+    });
+
+    return () => {
+      eventSource.close();
+    };
+  }, []);
+
+  // 提交审批结论 (Sign-off)
+  const handleApproval = async (approvalId: string, approved: boolean) => {
+    try {
+      await fetch('/api/agent/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalId, approved }),
+      });
+      setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
+    } catch (err) {
+      console.error('Approval submit error:', err);
+    }
+  };
+
+  // 发起真实任务执行
+  const handleRunGoal = async (prompt: string, title?: string) => {
+    if (!prompt.trim() || isExecuting) return;
+    setIsExecuting(true);
+    setActiveView('live_browser');
+
+    try {
+      await fetch('/api/agent/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, title }),
+      });
+      setInputGoal('');
+    } catch (err) {
+      console.error('Run goal error:', err);
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  // 获取当前主线任务
+  const currentMission = missions.find((m) => m.id === activeMissionId) || missions[0] || {
+    id: 'ready-mission',
+    title: '系统就绪 - 等待主人分配全新目标',
+    status: 'ACTIVE',
+    progress: 100,
+    startedAt: Date.now(),
+    steps: [
+      { id: 's0', title: '微内核 43 项原子能力与连接器已全部在线', status: 'DONE', duration: 'Ready' },
+    ],
+  };
+
+  // 预设任务模板 (Ideas)
   const ideas = [
     {
       title: '出差全流程行程编排与日程同步',
-      prompt: '帮我规划下周去旧金山的参会行程，检索航班与酒店，并在 Google Calendar 中创建日程块，生成预算表。',
-      tags: ['出行', '日历', '预算'],
+      prompt: '使用浏览器检索旧金山开发者大会机票与酒店行情，并在终端环境生成预算报告。',
+      tags: ['Stagehand', 'Playwright', '预算'],
     },
     {
-      title: '行业前沿论文深度研读与知识沉淀',
-      prompt: '检索今天 arXiv 上关于 Multi-Agent 和 Self-Correction 的最新论文，提炼核心创新点，并同步保存到我的 Notion 研报库中。',
-      tags: ['科研', 'Notion', '自动摘要'],
+      title: 'GitHub 开源项目每日技术雷达抓取',
+      prompt: '访问 GitHub 趋势榜抓取今日热门 AI 开源项目，提取 Markdown 摘要并向我报告。',
+      tags: ['Firecrawl', 'Git', '自动研报'],
     },
     {
-      title: '代码库安全审计与自动化补丁提交',
-      prompt: '在受控沙箱中对当前项目运行安全测试，找出潜在死循环风险，使用 Git 补丁引擎修复并向我展示 Visual Diff。',
-      tags: ['工程', '沙箱', 'Git 审查'],
+      title: '生产环境安全审计与沙箱命令自检',
+      prompt: '在受控沙箱终端中运行自检命令，获取系统环境指标并在高危操作前请求我授权。',
+      tags: ['E2B沙箱', 'Sign-off', '安全网关'],
     },
     {
-      title: '竞品价格变动自动化监控与告警',
-      prompt: '使用智能浏览器打开目标竞品官网定价页，对比上周快照，如有变动立即通过飞书机器人向我发送富文本卡片。',
-      tags: ['智能浏览器', '飞书', '持续守护'],
+      title: '全网技术论文深度蒸馏与知识沉淀',
+      prompt: '使用深度检索与网页蒸馏提取 Agent 架构前沿论文，提炼核心创新要点。',
+      tags: ['Exa检索', 'Turndown', '智能蒸馏'],
     },
   ];
 
-  // 签批状态
-  const [signedOff, setSignedOff] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  if (!mounted) return null;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans antialiased selection:bg-indigo-500 selection:text-white">
-      {/* 1. 左侧个人主理人侧边栏 (Executive Navigation) */}
-      <aside className="w-64 flex-shrink-0 flex flex-col border-r border-slate-800 bg-slate-900/60 backdrop-blur z-20">
-        {/* 顶部主理人标识 */}
-        <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/80">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/25">
-            <Bot className="h-5 w-5" />
+    <CopilotKit runtimeUrl="/api/copilotkit">
+      <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans antialiased selection:bg-indigo-500 selection:text-white">
+        {/* 1. 左侧个人主理人侧边栏 (Executive Navigation) */}
+        <aside className="w-64 flex-shrink-0 flex flex-col border-r border-slate-800 bg-slate-900/60 backdrop-blur z-20">
+          {/* 顶部主理人标识 */}
+          <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/80">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/25">
+              <Bot className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold text-sm text-white tracking-tight">agtpilot</span>
+                <span className="rounded-full bg-indigo-500/20 px-1.5 py-0.2 text-[10px] font-semibold text-indigo-400 border border-indigo-500/30">
+                  Muse Pro
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">个人自主数字主理人</p>
+            </div>
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="font-bold text-sm text-white tracking-tight">agtpilot</span>
-              <span className="rounded-full bg-indigo-500/20 px-1.5 py-0.2 text-[10px] font-semibold text-indigo-400 border border-indigo-500/30">
-                Muse Pro
+
+          {/* 核心自主能力导航 */}
+          <div className="p-3 space-y-1 text-xs">
+            <button
+              onClick={() => setActiveView('live_browser')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                activeView === 'live_browser'
+                  ? 'bg-indigo-600/20 text-indigo-300 font-semibold border border-indigo-500/30 shadow-inner'
+                  : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Globe className="h-4 w-4 text-cyan-400" />
+                <span>实时视窗 (Live Viewport)</span>
+              </div>
+              {viewport.status === 'navigating' && (
+                <span className="h-2 w-2 rounded-full bg-cyan-400 animate-ping" />
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveView('lineage')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                activeView === 'lineage'
+                  ? 'bg-indigo-600/20 text-indigo-300 font-semibold border border-indigo-500/30 shadow-inner'
+                  : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Activity className="h-4 w-4 text-purple-400" />
+                <span>任务执行血缘 (Lineage)</span>
+              </div>
+              {approvalRequests.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-bold text-[10px] animate-bounce">
+                  {approvalRequests.length} 待签批
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveView('connectors')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                activeView === 'connectors'
+                  ? 'bg-indigo-600/20 text-indigo-300 font-semibold border border-indigo-500/30 shadow-inner'
+                  : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Layers className="h-4 w-4 text-amber-400" />
+                <span>应用生态连接器</span>
+              </div>
+              <span className="font-mono text-[10px] text-emerald-400">
+                {connectors.filter((c) => c.status === 'connected').length}/{connectors.length} 就绪
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveView('ideas')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                activeView === 'ideas'
+                  ? 'bg-indigo-600/20 text-indigo-300 font-semibold border border-indigo-500/30 shadow-inner'
+                  : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="h-4 w-4 text-pink-400" />
+                <span>委托灵感库 (Ideas)</span>
+              </div>
+            </button>
+          </div>
+
+          {/* 实时活跃任务列表 */}
+          <div className="mt-4 px-4 flex-1 overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                当前任务执行序列 ({missions.length})
               </span>
             </div>
-            <p className="text-[11px] text-slate-400">你的全自主个人数字主理人</p>
-          </div>
-        </div>
-
-        {/* 核心自主能力导航 */}
-        <div className="p-3 space-y-1 text-xs">
-          <button
-            onClick={() => setActiveView('live_browser')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-medium transition-all ${
-              activeView === 'live_browser'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Monitor className="h-4 w-4" />
-              <span>实时可视浏览器视口</span>
-            </div>
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-          </button>
-
-          <button
-            onClick={() => setActiveView('lineage')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-medium transition-all ${
-              activeView === 'lineage'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Activity className="h-4 w-4" />
-              <span>任务执行血缘流</span>
-            </div>
-            {activeMission.signoffRequest && !signedOff && (
-              <span className="rounded-full bg-amber-500/20 px-1.5 py-0.2 text-[10px] text-amber-300 font-bold border border-amber-500/30 animate-pulse">
-                待签批
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveView('connectors')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-medium transition-all ${
-              activeView === 'connectors'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Layers className="h-4 w-4" />
-              <span>应用连接器 (Connectors)</span>
-            </div>
-            <span className="text-[10px] text-slate-500 font-mono">6 已连</span>
-          </button>
-
-          <button
-            onClick={() => setActiveView('missions')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-medium transition-all ${
-              activeView === 'missions'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Calendar className="h-4 w-4" />
-              <span>主动巡航任务看板</span>
-            </div>
-            <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
-              2 运行
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveView('ideas')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-medium transition-all ${
-              activeView === 'ideas'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Sparkles className="h-4 w-4" />
-              <span>委托灵感库 (Ideas)</span>
-            </div>
-            <span className="text-[10px] text-purple-400">推荐</span>
-          </button>
-        </div>
-
-        {/* 底部隔离安全状态条 (Sentinel Security) */}
-        <div className="mt-auto p-4 border-t border-slate-800/80 bg-slate-950/40">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span className="flex items-center gap-1.5 text-slate-300 font-medium">
-              <Shield className="h-3.5 w-3.5 text-emerald-400" /> Sentinel 哨兵守护
-            </span>
-            <span className="text-[10px] text-emerald-400 font-mono">100% 隔离安全</span>
-          </div>
-          <p className="text-[11px] text-slate-500 leading-relaxed">
-            运行于隔离云端微虚拟机中。高危外发与支付均强制等待主人签批确认。
-          </p>
-        </div>
-      </aside>
-
-      {/* 2. 中央大舞台工作区 (Executive Hub Stage) */}
-      <main className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-hidden">
-        {/* 顶部状态条 */}
-        <header className="h-16 border-b border-slate-800/80 bg-slate-900/40 px-6 flex items-center justify-between backdrop-blur">
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-400">当前任务目标:</span>
-            <span className="text-sm font-bold text-white flex items-center gap-2">
-              {activeMission.title}
-              <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold text-indigo-400 border border-indigo-500/20">
-                {activeMission.category}
-              </span>
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3 text-xs">
-            <span className="text-slate-400">推进进度:</span>
-            <div className="w-32 bg-slate-800 h-2 rounded-full overflow-hidden">
-              <div
-                className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full transition-all duration-500"
-                style={{ width: `${activeMission.progress}%` }}
-              />
-            </div>
-            <span className="font-mono text-emerald-400 font-semibold">{activeMission.progress}%</span>
-          </div>
-        </header>
-
-        {/* 主舞台视口内容切换 */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {/* A. 实时可视浏览器视口 (Live Browser View - 对标 Meta Muse 核心体验) */}
-          {activeView === 'live_browser' && (
-            <div className="space-y-4 max-w-5xl mx-auto h-full flex flex-col">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-bold text-white flex items-center gap-2">
-                    <Globe className="h-4 w-4 text-cyan-400" />
-                    智能体实时可视浏览器视口 (Live Agent Browser)
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    实时透视智能体正在浏览、点击、抽取信息的网页视口。你可随时点击右上角介入接管。
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-mono bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
-                    <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                    Stagehand AI 驱动中
-                  </span>
-                  <button className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition-all">
-                    <Pause className="h-3 w-3" /> 人工暂停/介入
-                  </button>
-                </div>
-              </div>
-
-              {/* 模拟浏览器窗口视口 */}
-              <div className="flex-1 rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden shadow-2xl flex flex-col min-h-[520px]">
-                {/* 浏览器地址控制栏 */}
-                <div className="h-10 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex gap-1.5">
-                      <div className="h-2.5 w-2.5 rounded-full bg-rose-500/60" />
-                      <div className="h-2.5 w-2.5 rounded-full bg-amber-500/60" />
-                      <div className="h-2.5 w-2.5 rounded-full bg-emerald-500/60" />
-                    </div>
-                    <div className="rounded-md bg-slate-950 border border-slate-800 px-3 py-1 text-[11px] text-slate-300 font-mono flex items-center gap-2">
-                      <Lock className="h-3 w-3 text-emerald-400" />
-                      <span>https://huggingface.co/papers/autonomous-agents</span>
-                    </div>
-                  </div>
-                  <div className="text-[11px] text-indigo-400 font-mono">
-                    蒸馏提取率: 98.4%
-                  </div>
-                </div>
-
-                {/* 模拟真实智能体视口渲染 */}
-                <div className="flex-1 bg-slate-950 p-6 overflow-y-auto">
-                  <div className="max-w-3xl mx-auto space-y-6">
-                    <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 relative overflow-hidden">
-                      <div className="absolute top-2 right-2 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] px-2 py-0.5 rounded font-mono">
-                        智能体当前聚焦目标
-                      </div>
-                      <h3 className="text-lg font-bold text-white mb-2">
-                        State-of-the-Art Autonomous Agents with Environmental Feedback
-                      </h3>
-                      <p className="text-xs text-slate-400 leading-relaxed">
-                        本论文详细评测了具备工具调用、自我反思与多应用连接能力的全新自主智能体范式。智能体正在自动提炼论文第二章节架构图...
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-4 text-xs font-mono">
-                      <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800/80">
-                        <span className="text-slate-500 block mb-1">页面加载耗时</span>
-                        <span className="text-white font-bold">420 ms</span>
-                      </div>
-                      <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800/80">
-                        <span className="text-slate-500 block mb-1">已捕获关键实体</span>
-                        <span className="text-cyan-400 font-bold">14 项指标</span>
-                      </div>
-                      <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800/80">
-                        <span className="text-slate-500 block mb-1">下步动作</span>
-                        <span className="text-emerald-400 font-bold">生成 Notion 报告</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* B. 任务执行血缘流与签批卡片 (Task Lineage & Sign-off) */}
-          {activeView === 'lineage' && (
-            <div className="space-y-6 max-w-4xl mx-auto">
-              <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-purple-400" />
-                  任务目标分解与执行血缘树 (Task Lineage)
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  对标 Meta Muse 核心特性：多步骤复杂任务完全透明化，高危外发动作必须获得主人授权签署。
-                </p>
-              </div>
-
-              {/* 关键签批卡片 (Human-in-the-Loop Sign-off Card) */}
-              {activeMission.signoffRequest && (
+            <div className="space-y-2">
+              {missions.map((m) => (
                 <div
-                  className={`rounded-2xl border p-5 transition-all ${
-                    signedOff
-                      ? 'border-emerald-500/40 bg-emerald-950/20'
-                      : 'border-amber-500/50 bg-amber-950/20 shadow-xl shadow-amber-500/10'
+                  key={m.id}
+                  onClick={() => {
+                    setActiveMissionId(m.id);
+                    setActiveView('lineage');
+                  }}
+                  className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                    activeMissionId === m.id
+                      ? 'border-indigo-500/40 bg-indigo-500/10 text-white'
+                      : 'border-slate-800/80 bg-slate-900/40 text-slate-400 hover:border-slate-700'
                   }`}
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-1">
-                        {signedOff ? (
-                          <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-                        ) : (
-                          <ShieldAlert className="h-5 w-5 text-amber-400 animate-pulse" />
-                        )}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                              signedOff
-                                ? 'bg-emerald-500/20 text-emerald-300'
-                                : 'bg-amber-500/20 text-amber-300'
-                            }`}
-                          >
-                            {signedOff ? '已授权签署 (SIGNED-OFF)' : '需要主人授权签署 (SIGN-OFF REQUIRED)'}
-                          </span>
-                        </div>
-                        <h3 className="text-sm font-semibold text-white mt-1.5">
-                          {activeMission.signoffRequest.action}
-                        </h3>
-                        <p className="text-xs text-slate-400 mt-1">
-                          目标对象: <strong className="text-slate-200">{activeMission.signoffRequest.target}</strong>
-                        </p>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          后果提示: {activeMission.signoffRequest.consequence}
-                        </p>
-                      </div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-semibold truncate max-w-[120px]">{m.title}</span>
+                    <span
+                      className={`text-[9px] px-1.5 py-0.2 rounded font-mono ${
+                        m.status === 'ACTIVE'
+                          ? 'bg-cyan-500/20 text-cyan-300 animate-pulse'
+                          : m.status === 'WAITING_APPROVAL'
+                          ? 'bg-amber-500/20 text-amber-300 font-bold'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {m.status}
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden mt-1.5">
+                    <div
+                      className="bg-indigo-500 h-full transition-all duration-300"
+                      style={{ width: `${m.progress}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 底部运行状态指示器 */}
+          <div className="p-4 border-t border-slate-800/80 bg-slate-950/40">
+            <div className="flex items-center gap-2">
+              <div className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+              </div>
+              <div className="text-[11px]">
+                <span className="font-medium text-slate-200">Cordis 守护中</span>
+                <span className="text-slate-400 block text-[10px]">Zero-Mock 真实事件流</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        {/* 2. 中间核心活动展示区 (The Meta Muse Cockpit) */}
+        <main className="flex-1 flex flex-col min-w-0 bg-gradient-to-b from-slate-900/50 to-slate-950/80 relative">
+          {/* 顶栏：当前主线任务状态与全局执行指标 */}
+          <header className="h-16 border-b border-slate-800/80 bg-slate-900/40 px-6 flex items-center justify-between backdrop-blur">
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-slate-400">当前任务目标:</span>
+              <span className="text-sm font-bold text-white flex items-center gap-2">
+                {currentMission.title}
+                <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold text-indigo-400 border border-indigo-500/20">
+                  {currentMission.status}
+                </span>
+              </span>
+            </div>
+
+            <div className="flex items-center gap-4 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400">推进进度:</span>
+                <div className="w-28 bg-slate-800 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full transition-all duration-500"
+                    style={{ width: `${currentMission.progress}%` }}
+                  />
+                </div>
+                <span className="font-mono text-emerald-400 font-semibold">{currentMission.progress}%</span>
+              </div>
+
+              {approvalRequests.length > 0 && (
+                <button
+                  onClick={() => setActiveView('lineage')}
+                  className="flex items-center gap-1.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 px-3 py-1 rounded-lg text-xs font-semibold animate-pulse hover:bg-amber-500/30 transition-all"
+                >
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                  {approvalRequests.length} 项高危操作待签批
+                </button>
+              )}
+            </div>
+          </header>
+
+          {/* 主舞台视口内容切换 */}
+          <div className="flex-1 overflow-y-auto p-6">
+            {/* A. 实时可视视口 (Live Viewport - 真实浏览器截图 + 真实沙箱终端) */}
+            {activeView === 'live_browser' && (
+              <div className="space-y-4 max-w-5xl mx-auto h-full flex flex-col">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      <Globe className="h-4 w-4 text-cyan-400" />
+                      智能体实时执行视窗 (Live Agent Viewport)
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      真实透视智能体正在浏览的真实网页截屏（Playwright/Stagehand）与受控沙箱终端输出。
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* 视口切换标签 */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-lg p-0.5 flex text-xs">
+                      <button
+                        onClick={() => setViewportTab('browser')}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
+                          viewportTab === 'browser'
+                            ? 'bg-indigo-600 text-white font-semibold shadow'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Globe className="h-3.5 w-3.5" /> 真实网页截屏
+                      </button>
+                      <button
+                        onClick={() => setViewportTab('terminal')}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
+                          viewportTab === 'terminal'
+                            ? 'bg-indigo-600 text-white font-semibold shadow'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Terminal className="h-3.5 w-3.5" /> 沙箱终端日志
+                      </button>
                     </div>
 
-                    {!signedOff ? (
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => alert('已取消该敏感动作')}
-                          className="px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-800 text-xs text-slate-300 hover:bg-slate-700"
-                        >
-                          驳回
-                        </button>
-                        <button
-                          onClick={() => setSignedOff(true)}
-                          className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-500/20"
-                        >
-                          <Check className="h-3.5 w-3.5 stroke-[3]" />
-                          确认签署 (Sign-off)
-                        </button>
+                    <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-mono bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
+                      <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                      真实内核在线
+                    </span>
+                  </div>
+                </div>
+
+                {/* 视口窗口内容 */}
+                <div className="flex-1 rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden shadow-2xl flex flex-col min-h-[500px]">
+                  {/* 浏览器地址栏 */}
+                  <div className="h-10 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3 flex-1 mr-4">
+                      <div className="flex gap-1.5">
+                        <div className="h-2.5 w-2.5 rounded-full bg-rose-500/60" />
+                        <div className="h-2.5 w-2.5 rounded-full bg-amber-500/60" />
+                        <div className="h-2.5 w-2.5 rounded-full bg-emerald-500/60" />
                       </div>
+                      <div className="rounded-md bg-slate-950 border border-slate-800 px-3 py-1 text-[11px] text-slate-300 font-mono flex items-center gap-2 flex-1 max-w-xl truncate">
+                        <Lock className="h-3 w-3 text-emerald-400 flex-shrink-0" />
+                        <span className="truncate">{viewport.url}</span>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-indigo-400 font-mono flex-shrink-0">
+                      状态: {viewport.status.toUpperCase()}
+                    </div>
+                  </div>
+
+                  {/* 视口主体 */}
+                  <div className="flex-1 bg-slate-950 p-4 overflow-y-auto flex flex-col justify-center">
+                    {viewportTab === 'browser' ? (
+                      viewport.screenshotBase64 ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center">
+                          <img
+                            src={viewport.screenshotBase64}
+                            alt="Live Browser Page"
+                            className="max-h-[460px] w-auto object-contain rounded-xl border border-slate-800 shadow-2xl"
+                          />
+                          <p className="text-[11px] text-slate-400 mt-2 font-mono">
+                            页面标题: {viewport.title || 'Loaded'}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="text-center py-20 space-y-3">
+                          <Globe className="h-12 w-12 text-slate-700 mx-auto animate-pulse" />
+                          <h3 className="text-sm font-semibold text-slate-300">尚未触发浏览器导航</h3>
+                          <p className="text-xs text-slate-400 max-w-md mx-auto">
+                            当你在下方发送指令或运行灵感任务时，Playwright/Stagehand 将打开真实网页并将截屏实时流式传回此处。
+                          </p>
+                          <button
+                            onClick={() => handleRunGoal('使用浏览器访问 Hacker News 首页并总结前三条热点资讯', 'Hacker News 热点快报')}
+                            className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl transition-all"
+                          >
+                            立即运行真实浏览器试探任务
+                          </button>
+                        </div>
+                      )
                     ) : (
-                      <span className="text-xs font-mono text-emerald-400 flex items-center gap-1">
-                        <Check className="h-3 w-3" /> 操作已合规放行
-                      </span>
+                      /* 沙箱终端实时日志 */
+                      <div className="font-mono text-xs space-y-2 h-full min-h-[420px] bg-slate-950 p-4 rounded-xl text-slate-300 overflow-y-auto">
+                        {terminalLogs.map((log) => (
+                          <div key={log.id} className="leading-relaxed">
+                            {log.type === 'command' && (
+                              <span className="text-cyan-400 font-semibold block">{log.text}</span>
+                            )}
+                            {log.type === 'stdout' && (
+                              <pre className="text-slate-300 whitespace-pre-wrap pl-3 border-l-2 border-slate-800 font-mono text-[11px]">
+                                {log.text}
+                              </pre>
+                            )}
+                            {log.type === 'stderr' && (
+                              <pre className="text-rose-400 whitespace-pre-wrap pl-3 border-l-2 border-rose-800 font-mono text-[11px]">
+                                {log.text}
+                              </pre>
+                            )}
+                            {log.type === 'system' && (
+                              <span className="text-emerald-400/80 italic block">
+                                {log.text}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                        <div ref={terminalEndRef} />
+                      </div>
                     )}
                   </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* 血缘树列表 */}
-              <div className="space-y-3">
-                {activeMission.lineage.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="p-4 rounded-xl border border-slate-800 bg-slate-900/40 flex items-start justify-between"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5">
-                        {item.status === 'done' ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                        ) : item.status === 'active' ? (
-                          <div className="h-4 w-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-                        ) : (
-                          <Clock className="h-4 w-4 text-slate-600" />
-                        )}
+            {/* B. 任务执行血缘流与真实签批 (Task Lineage & Real Sign-off) */}
+            {activeView === 'lineage' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-purple-400" />
+                    任务目标分解与执行血缘树 (Task Lineage)
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    当前任务: {currentMission.title} · 多步骤原子动作透明推进，高危动作强制挂起等待主人 Sign-off。
+                  </p>
+                </div>
+
+                {/* 真实签批卡片 (Human-in-the-Loop Sign-off Cards) */}
+                {approvalRequests.length > 0 && (
+                  <div className="space-y-4">
+                    {approvalRequests.map((req) => (
+                      <div
+                        key={req.id}
+                        className="rounded-2xl border border-amber-500/60 bg-amber-950/20 p-5 shadow-2xl shadow-amber-500/10"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-start gap-3">
+                            <div className="mt-1">
+                              <ShieldAlert className="h-5 w-5 text-amber-400 animate-pulse" />
+                            </div>
+                            <div>
+                              <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                需要主人授权签署 (SIGN-OFF REQUIRED)
+                              </span>
+                              <h3 className="text-sm font-semibold text-white mt-1.5">
+                                {req.description}
+                              </h3>
+                              <p className="text-xs text-slate-300 font-mono mt-1">
+                                拟调工具: <span className="text-cyan-400">{req.action}</span> · 风险等级:{' '}
+                                <span className="text-rose-400 font-bold uppercase">{req.dangerLevel}</span>
+                              </p>
+                              {req.params && (
+                                <div className="mt-2 p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-300 max-h-32 overflow-y-auto">
+                                  {JSON.stringify(req.params, null, 2)}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleApproval(req.id, false)}
+                              className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 transition-all"
+                            >
+                              拒绝 (Reject)
+                            </button>
+                            <button
+                              onClick={() => handleApproval(req.id, true)}
+                              className="text-xs bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold px-4 py-1.5 rounded-xl shadow-lg transition-all"
+                            >
+                              签署授权 (Sign-off)
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="text-xs font-semibold text-white">{item.step}</h4>
-                        <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">{item.detail}</p>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-500">{item.timestamp}</span>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                )}
 
-          {/* C. 应用生态连接器 (App Connectors Hub - 对标 Meta Muse 40+ Connectors) */}
-          {activeView === 'connectors' && (
-            <div className="space-y-6 max-w-5xl mx-auto">
-              <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-indigo-400" />
-                  个人生活与工作生态连接器 (Connectors Hub)
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  让智能体跨越单一应用壁垒，串联 Google Workspace、Notion、GitHub、飞书与自定义 MCP 服务。
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {connectors.map((c) => (
-                  <div
-                    key={c.id}
-                    className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 backdrop-blur hover:border-indigo-500/40 transition-all flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-[10px] uppercase font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
-                          {c.category}
-                        </span>
-                        <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                          <Check className="h-3 w-3" /> 已授权连接
-                        </span>
+                {/* 真实执行步骤树 */}
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4 shadow-xl">
+                  <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-4">
+                    原子任务推进路径 (Execution Steps)
+                  </h3>
+                  <div className="space-y-4">
+                    {currentMission.steps.map((st, idx) => (
+                      <div key={st.id} className="flex items-start gap-4">
+                        <div className="mt-0.5 flex flex-col items-center">
+                          {st.status === 'DONE' ? (
+                            <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                          ) : st.status === 'RUNNING' ? (
+                            <div className="h-5 w-5 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+                          ) : (
+                            <div className="h-5 w-5 rounded-full border-2 border-slate-700" />
+                          )}
+                          {idx < currentMission.steps.length - 1 && (
+                            <div className="w-0.5 h-8 bg-slate-800 my-1" />
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-white">
+                              {st.title}
+                            </span>
+                            <div className="flex items-center gap-2 font-mono text-[11px]">
+                              {st.tool && (
+                                <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1.5 py-0.2 rounded">
+                                  {st.tool}
+                                </span>
+                              )}
+                              <span className="text-slate-400">{st.duration || st.status}</span>
+                            </div>
+                          </div>
+                          {st.args && (
+                            <p className="text-[11px] text-slate-400 mt-0.5 font-mono truncate">
+                              参数: {JSON.stringify(st.args)}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      <h3 className="text-sm font-bold text-white mb-1">{c.name}</h3>
-                      <p className="text-xs text-slate-400 leading-relaxed mb-4">{c.description}</p>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-800/80 text-[11px] text-slate-500">
-                      <span>已累计调度: <strong className="text-slate-300 font-mono">{c.actionCount} 次</strong></span>
-                      <button className="text-indigo-400 hover:text-indigo-300 font-medium">配置权限 →</button>
-                    </div>
+                    ))}
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* D. 主动定时巡航看板 (Scheduled Missions & Dashboards) */}
-          {activeView === 'missions' && (
-            <div className="space-y-6 max-w-4xl mx-auto">
-              <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-amber-400" />
-                  主动巡航任务与定期自动看板 (Active Background Missions)
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  即使你关闭网页或处于离线状态，智能体仍在后台无人值守自动运行，并将最终结论汇入你的应用中。
-                </p>
-              </div>
-
-              <div className="space-y-4">
-                {scheduledMissions.map((mission) => (
-                  <div
-                    key={mission.id}
-                    className="p-5 rounded-2xl border border-slate-800 bg-slate-900/50 backdrop-blur flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-bold text-white">{mission.title}</h3>
-                        <span className="rounded bg-slate-800 px-2 py-0.5 text-xs font-mono text-amber-400 border border-slate-700">
-                          {mission.cadence}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs text-slate-400 mt-2">
-                        <span>下次触发: <strong className="text-slate-200">{mission.nextRun}</strong></span>
-                        <span>结果同步至: <strong className="text-indigo-300">{mission.autoSyncApp}</strong></span>
-                      </div>
-                    </div>
-
-                    <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-400 border border-emerald-500/20 font-mono">
-                      后台巡航中
-                    </span>
+            {/* C. 真实应用生态连接器 (Connectors Hub - 真实嗅探环境变量) */}
+            {activeView === 'connectors' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-amber-400" />
+                      应用生态连接器中枢 (App Connectors Hub)
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      后端真实探测系统环境凭证（API Keys / Tokens）。点击未配置的应用可直接录入激活。
+                    </p>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* E. 委托灵感库 (Ideas & Delegation Library) */}
-          {activeView === 'ideas' && (
-            <div className="space-y-6 max-w-4xl mx-auto">
-              <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-purple-400" />
-                  智能体委托灵感库 (Delegation Ideas)
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  不知道该把哪些繁琐任务交给智能体？点击下方卡片，一键下发端到端复杂委托。
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {ideas.map((idea, idx) => (
-                  <div
-                    key={idx}
-                    className="p-5 rounded-2xl border border-slate-800 bg-slate-900/50 hover:border-purple-500/40 transition-all flex flex-col justify-between"
+                  <button
+                    onClick={loadConnectors}
+                    className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 transition-all"
                   >
-                    <div>
-                      <h3 className="text-sm font-bold text-white mb-2">{idea.title}</h3>
-                      <p className="text-xs text-slate-400 leading-relaxed mb-4">{idea.prompt}</p>
-                      <div className="flex gap-1.5 mb-4">
-                        {idea.tags.map((t, i) => (
-                          <span
-                            key={i}
-                            className="rounded bg-slate-800/80 px-2 py-0.5 text-[10px] text-slate-400 border border-slate-700"
-                          >
-                            #{t}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
+                    <RotateCw className="h-3 w-3" /> 刷新检测
+                  </button>
+                </div>
 
-                    <button
-                      onClick={() => alert(`已将委托加入对话: "${idea.prompt}"`)}
-                      className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-semibold transition-all"
+                <div className="grid grid-cols-2 gap-4">
+                  {connectors.map((app) => (
+                    <div
+                      key={app.id}
+                      className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 hover:border-slate-700 transition-all flex flex-col justify-between"
                     >
-                      <Send className="h-3.5 w-3.5" /> 一键下发此委托
-                    </button>
-                  </div>
-                ))}
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-xs font-bold text-white flex items-center gap-2">
+                            {app.name}
+                          </span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold ${
+                              app.status === 'connected'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-slate-800 text-slate-400 border border-slate-700'
+                            }`}
+                          >
+                            {app.status === 'connected' ? '✓ CONNECTED' : 'UNCONFIGURED'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mb-3">{app.description}</p>
+                        <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                          <span>Env: {app.envVar}</span>
+                          {app.keyMasked && (
+                            <span className="text-emerald-400 font-semibold">({app.keyMasked})</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between">
+                        <span className="text-[10px] text-slate-400">{app.category}</span>
+                        <button
+                          onClick={() => {
+                            setConfiguringConnector(app);
+                            setApiKeyInput('');
+                          }}
+                          className={`text-xs px-3 py-1 rounded-lg transition-all ${
+                            app.status === 'connected'
+                              ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                              : 'bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow'
+                          }`}
+                        >
+                          {app.status === 'connected' ? '重新配置' : '连接授权'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* D. 委托灵感库 (Ideas & Delegation Library) */}
+            {activeView === 'ideas' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-pink-400" />
+                    个人任务委托灵感库 (Ideas & Task Delegation)
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    点击任意任务模板，系统将立即启动真实的自主执行流水线，驱动真实原子工具完成任务。
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {ideas.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 hover:border-indigo-500/50 transition-all flex flex-col justify-between group"
+                    >
+                      <div>
+                        <h3 className="text-sm font-bold text-white group-hover:text-indigo-300 transition-colors">
+                          {item.title}
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-2 leading-relaxed">{item.prompt}</p>
+                        <div className="flex gap-1.5 mt-3">
+                          {item.tags.map((tag, tIdx) => (
+                            <span
+                              key={tIdx}
+                              className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono"
+                            >
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="mt-5 pt-3 border-t border-slate-800/80 flex items-center justify-end">
+                        <button
+                          disabled={isExecuting}
+                          onClick={() => handleRunGoal(item.prompt, item.title)}
+                          className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold px-4 py-1.5 rounded-xl shadow-lg transition-all"
+                        >
+                          <Play className="h-3 w-3" /> 立即派发此目标
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 3. 底部快捷意图派发栏 (Quick Goal Dispatcher) */}
+          <div className="p-4 border-t border-slate-800/80 bg-slate-900/80 backdrop-blur">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleRunGoal(inputGoal);
+              }}
+              className="max-w-4xl mx-auto flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-2xl p-2 focus-within:border-indigo-500 transition-colors shadow-2xl"
+            >
+              <div className="pl-3 text-slate-400">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+              </div>
+              <input
+                type="text"
+                value={inputGoal}
+                onChange={(e) => setInputGoal(e.target.value)}
+                placeholder="给你的自主数字主理人委派全新目标 (例如: 检索今天的 AI 前沿论文，并在沙箱中生成分析总结)..."
+                className="flex-1 bg-transparent border-none text-xs text-white placeholder-slate-500 focus:outline-none px-2"
+              />
+              <button
+                type="submit"
+                disabled={!inputGoal.trim() || isExecuting}
+                className="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/20"
+              >
+                {isExecuting ? (
+                  <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+                <span>自主执行</span>
+              </button>
+            </form>
+          </div>
+
+          {/* 模态框：配置连接器密钥 */}
+          {configuringConnector && (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+              <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Key className="h-4 w-4 text-indigo-400" />
+                    配置 {configuringConnector.name}
+                  </h3>
+                  <button
+                    onClick={() => setConfiguringConnector(null)}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400">{configuringConnector.description}</p>
+                <div>
+                  <label className="text-[11px] font-mono text-slate-300 block mb-1">
+                    环境变量: {configuringConnector.envVar}
+                  </label>
+                  <input
+                    type="password"
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    placeholder="输入或粘贴你的 API Key / Token..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setConfiguringConnector(null)}
+                    className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg"
+                  >
+                    取消
+                  </button>
+                  <button
+                    disabled={!apiKeyInput.trim() || isSavingKey}
+                    onClick={handleSaveApiKey}
+                    className="text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold px-4 py-1.5 rounded-xl transition-all"
+                  >
+                    {isSavingKey ? '保存中...' : '保存并激活连接'}
+                  </button>
+                </div>
               </div>
             </div>
           )}
-        </div>
-      </main>
+        </main>
 
-      {/* 3. 右侧对话交互驾驶舱 (Copilot Assistant) */}
-      {mounted && (
-        <CopilotKit runtimeUrl="/api/copilotkit">
-          <CopilotSidebar
-            instructions="你是由 DeepSeek Harness 官方 Cordis 插件微内核驱动的个人全自主主理人助手 (agtpilot - 对标 Meta Muse)。你可以自主规划跨应用复杂长任务，调用实时浏览器、连接 Google Workspace、Notion、GitHub 与飞书。遇到发送外部邮件或高危指令时，生成规范的 Human-in-the-Loop 签批授权。"
-            labels={{
-              title: 'agtpilot 主理人',
-              initial: '你好！我是你的个人全自主智能体。我已经打通实时网页视口、任务血缘流、Google Workspace / Notion / 飞书连接器以及安全签批机制。请告诉我你想交托给我的目标（例如：“分析今天 GitHub AI 趋势并生成周报同步到 Notion”）。',
-            }}
-            defaultOpen={true}
-            clickOutsideToClose={false}
-          />
-        </CopilotKit>
-      )}
-    </div>
+        {/* 4. 右侧 Copilot 智能体交互抽屉 */}
+        <CopilotSidebar
+          defaultOpen={false}
+          labels={{
+            title: 'agtpilot Copilot',
+            initial: '你好！我是你的个人自主智能体主理人。所有指令都将驱动底层真实的 43 项原子工具完成。',
+          }}
+        />
+      </div>
+    </CopilotKit>
   );
 }

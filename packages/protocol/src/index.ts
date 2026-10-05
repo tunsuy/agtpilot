@@ -26,7 +26,7 @@ export interface PlanData {
 }
 
 export interface AgentEvent {
-  type: 'thought' | 'tool_call' | 'tool_result' | 'ui_card' | 'artifact' | 'plan' | 'approval_request' | 'done' | 'error';
+  type: 'thought' | 'tool_call' | 'tool_result' | 'ui_card' | 'artifact' | 'plan' | 'approval_request' | 'viewport_update' | 'terminal_output' | 'done' | 'error';
   payload: Record<string, any>;
   timestamp: number;
 }

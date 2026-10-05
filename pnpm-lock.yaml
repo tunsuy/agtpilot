@@ -30,15 +30,30 @@ importers:
       '@agtpilot/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@agtpilot/plugin-artifact':
+        specifier: workspace:*
+        version: link:../../packages/plugin-artifact
       '@agtpilot/plugin-browser':
         specifier: workspace:*
         version: link:../../packages/plugin-browser
+      '@agtpilot/plugin-cron':
+        specifier: workspace:*
+        version: link:../../packages/plugin-cron
       '@agtpilot/plugin-mcp':
         specifier: workspace:*
         version: link:../../packages/plugin-mcp
+      '@agtpilot/plugin-memory':
+        specifier: workspace:*
+        version: link:../../packages/plugin-memory
       '@agtpilot/plugin-model':
         specifier: workspace:*
         version: link:../../packages/plugin-model
+      '@agtpilot/plugin-observability':
+        specifier: workspace:*
+        version: link:../../packages/plugin-observability
+      '@agtpilot/plugin-planner':
+        specifier: workspace:*
+        version: link:../../packages/plugin-planner
       '@agtpilot/plugin-sandbox':
         specifier: workspace:*
         version: link:../../packages/plugin-sandbox
@@ -57,15 +72,30 @@ importers:
       '@agtpilot/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@agtpilot/plugin-artifact':
+        specifier: workspace:*
+        version: link:../../packages/plugin-artifact
       '@agtpilot/plugin-browser':
         specifier: workspace:*
         version: link:../../packages/plugin-browser
+      '@agtpilot/plugin-cron':
+        specifier: workspace:*
+        version: link:../../packages/plugin-cron
       '@agtpilot/plugin-mcp':
         specifier: workspace:*
         version: link:../../packages/plugin-mcp
+      '@agtpilot/plugin-memory':
+        specifier: workspace:*
+        version: link:../../packages/plugin-memory
       '@agtpilot/plugin-model':
         specifier: workspace:*
         version: link:../../packages/plugin-model
+      '@agtpilot/plugin-observability':
+        specifier: workspace:*
+        version: link:../../packages/plugin-observability
+      '@agtpilot/plugin-planner':
+        specifier: workspace:*
+        version: link:../../packages/plugin-planner
       '@agtpilot/plugin-sandbox':
         specifier: workspace:*
         version: link:../../packages/plugin-sandbox
@@ -99,6 +129,12 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.3.0(react@19.3.0)
+      react-markdown:
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@19.3.0)(react@19.3.0)(supports-color@7.2.0)
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1(supports-color@7.2.0)
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -124,6 +160,18 @@ importers:
 
   packages/core:
     dependencies:
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
+  packages/plugin-artifact:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
       '@agtpilot/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -158,6 +206,21 @@ importers:
         specifier: ^7.2.4
         version: 7.2.4
 
+  packages/plugin-cron:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      croner:
+        specifier: ^9.0.0
+        version: 9.1.0
+
   packages/plugin-mcp:
     dependencies:
       '@agtpilot/core':
@@ -172,6 +235,18 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
         version: 1.32.1(@cfworker/json-schema@4.1.1)(supports-color@7.2.0)(zod@3.25.76)
+
+  packages/plugin-memory:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
 
   packages/plugin-model:
     dependencies:
@@ -196,6 +271,30 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+
+  packages/plugin-observability:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
+  packages/plugin-planner:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
 
   packages/plugin-sandbox:
     dependencies:
@@ -5079,6 +5178,10 @@ packages:
 
   cose-base@2.2.0:
     resolution: {integrity: sha512-AzlgcsCbUMymkADOJtQm3wO9S3ltPfYOFD5033keQn9NJzIbtnZj+UdBJe7DYml/8TdbtHJW3j58SOnKhWY/5g==}
+
+  croner@9.1.0:
+    resolution: {integrity: sha512-p9nwwR4qyT5W996vBZhdvBCnMhicY5ytZkR4D1Xj0wuTDEiMnjwR57Q3RXYY/s0EpX6Ay3vgIcfaR+ewGHsi+g==}
+    engines: {node: '>=18.0'}
 
   cross-fetch@4.1.0:
     resolution: {integrity: sha512-uKm5PU+MHTootlWEY+mZ4vvXoCn4fLQxT9dSc1sXVMSFkINTJVN8cAQROpwcKm8bJ/c7rgZVIBWzH5T78sNZZw==}
@@ -13648,6 +13751,8 @@ snapshots:
   cose-base@2.2.0:
     dependencies:
       layout-base: 2.0.1
+
+  croner@9.1.0: {}
 
   cross-fetch@4.1.0:
     dependencies:

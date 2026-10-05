@@ -13,6 +13,11 @@
     "@agtpilot/plugin-search": "workspace:*",
     "@agtpilot/plugin-mcp": "workspace:*",
     "@agtpilot/plugin-model": "workspace:*",
+    "@agtpilot/plugin-artifact": "workspace:*",
+    "@agtpilot/plugin-planner": "workspace:*",
+    "@agtpilot/plugin-memory": "workspace:*",
+    "@agtpilot/plugin-cron": "workspace:*",
+    "@agtpilot/plugin-observability": "workspace:*",
     "@agtpilot/protocol": "workspace:*"
   }
 }

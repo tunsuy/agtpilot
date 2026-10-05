@@ -11,10 +11,15 @@
   "dependencies": {
     "@agtpilot/core": "workspace:*",
     "@agtpilot/plugin-browser": "workspace:*",
-    "@agtpilot/plugin-sandbox": "workspace:*",
-    "@agtpilot/plugin-search": "workspace:*",
     "@agtpilot/plugin-mcp": "workspace:*",
     "@agtpilot/plugin-model": "workspace:*",
+    "@agtpilot/plugin-sandbox": "workspace:*",
+    "@agtpilot/plugin-search": "workspace:*",
+    "@agtpilot/plugin-artifact": "workspace:*",
+    "@agtpilot/plugin-planner": "workspace:*",
+    "@agtpilot/plugin-memory": "workspace:*",
+    "@agtpilot/plugin-cron": "workspace:*",
+    "@agtpilot/plugin-observability": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
     "@copilotkit/react-core": "^1.77.0",
     "@copilotkit/react-ui": "^1.77.0",
@@ -23,7 +28,9 @@
     "lucide-react": "^0.475.0",
     "next": "^15.1.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

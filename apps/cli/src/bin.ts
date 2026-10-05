@@ -5,6 +5,11 @@ import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
 import * as SearchPlugin from '@agtpilot/plugin-search';
 import * as MCPPlugin from '@agtpilot/plugin-mcp';
 import * as ModelPlugin from '@agtpilot/plugin-model';
+import * as ArtifactPlugin from '@agtpilot/plugin-artifact';
+import * as PlannerPlugin from '@agtpilot/plugin-planner';
+import * as MemoryPlugin from '@agtpilot/plugin-memory';
+import * as CronPlugin from '@agtpilot/plugin-cron';
+import * as ObservabilityPlugin from '@agtpilot/plugin-observability';
 
 async function main() {
   console.log('🚀 启动 agtpilot (基于 DeepSeek Harness 官方 Cordis 插件微内核)...');
@@ -16,12 +21,17 @@ async function main() {
   new AgentService(ctx);
   new OrchestratorService(ctx);
 
-  // 3. 动态加载业界顶级原子能力插件
+  // 3. 动态加载全套业界顶级原子能力插件
   await ctx.plugin(BrowserPlugin, { headless: true });
   await ctx.plugin(SandboxPlugin);
   await ctx.plugin(SearchPlugin);
   await ctx.plugin(MCPPlugin);
   await ctx.plugin(ModelPlugin);
+  await ctx.plugin(ArtifactPlugin);
+  await ctx.plugin(PlannerPlugin);
+  await ctx.plugin(MemoryPlugin);
+  await ctx.plugin(CronPlugin);
+  await ctx.plugin(ObservabilityPlugin);
 
   console.log('\n✅ agtpilot 底座启动成功！已动态装载的服务与工具:');
   console.log(` - 🧠 模型驱动服务: ctx.model 已就绪 (基于 Vercel AI SDK 方案 A 单步驱动)`);

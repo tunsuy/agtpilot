@@ -1,0 +1,14 @@
+{
+  "name": "@agtpilot/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "agtpilot": "src/bin.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@agtpilot/core": "workspace:*",
+    "@agtpilot/plugin-browser": "workspace:*",
+    "@agtpilot/protocol": "workspace:*"
+  }
+}

@@ -30,6 +30,12 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     agent: AgentService;
     orchestrator: OrchestratorService;
+    model?: any;
+  }
+  interface Events {
+    dispose(): void;
+    'agtpilot/tool-registered'(tool: ToolDefinition): void;
+    'agtpilot/event'(event: AgentEvent): void;
   }
 }
 

@@ -11,6 +11,7 @@
     "@agtpilot/plugin-browser": "workspace:*",
     "@agtpilot/plugin-sandbox": "workspace:*",
     "@agtpilot/plugin-search": "workspace:*",
+    "@agtpilot/plugin-mcp": "workspace:*",
     "@agtpilot/plugin-model": "workspace:*",
     "@agtpilot/protocol": "workspace:*"
   }

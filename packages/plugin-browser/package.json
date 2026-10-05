@@ -10,6 +10,7 @@
     "@agtpilot/protocol": "workspace:*",
     "@browserbasehq/stagehand": "^4.1.0",
     "@deepseek-ai/cordis": "^4.0.4",
+    "@mendable/firecrawl-js": "^4.42.4",
     "@types/turndown": "^5.0.6",
     "playwright": "^1.50.0",
     "turndown": "^7.2.4"

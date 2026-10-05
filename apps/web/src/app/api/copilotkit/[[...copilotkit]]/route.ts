@@ -10,6 +10,7 @@ import { AgentService, OrchestratorService } from '@agtpilot/core';
 import * as BrowserPlugin from '@agtpilot/plugin-browser';
 import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
 import * as SearchPlugin from '@agtpilot/plugin-search';
+import * as MCPPlugin from '@agtpilot/plugin-mcp';
 
 // 1. 初始化并缓存单例 Cordis 微内核底座
 let cordisContext: Context | null = null;
@@ -22,19 +23,20 @@ async function getCordisTools() {
       new AgentService(ctx);
       new OrchestratorService(ctx);
 
-      // 加载三大原子插件：浏览器、执行沙箱、互联网搜索引擎
+      // 加载四大原子插件：浏览器、执行沙箱、互联网搜索引擎、Anthropic MCP 协议
       await ctx.plugin(BrowserPlugin, { headless: true });
       await ctx.plugin(SandboxPlugin);
       await ctx.plugin(SearchPlugin);
+      await ctx.plugin(MCPPlugin);
 
       cordisContext = ctx;
 
       const registered = ctx.agent.getTools();
       return registered.map((tool) =>
-        defineTool({
+        (defineTool as any)({
           name: tool.name,
           description: tool.description,
-          parameters: tool.parameters,
+          parameters: tool.parameters as any,
           execute: async (args: any) => {
             return tool.execute(args, { source: 'copilotkit-web' });
           },
@@ -61,7 +63,7 @@ async function getHandler() {
           model: modelName,
           apiKey,
           prompt:
-            '你是由 DeepSeek Harness 官方 Cordis 插件微内核驱动的个人全自主智能体驾驶舱助手 (agtpilot)。你可以自主规划多步任务，并按需调用原子工具：互联网实时检索 (search_web)、持久化浏览器网页蒸馏 (browser_navigate)、隔离代码执行 (sandbox_run_code)、终端命令 (sandbox_run_command) 以及工作区文件操作 (sandbox_read_file, sandbox_write_file)。',
+            '你是由 DeepSeek Harness 官方 Cordis 插件微内核驱动的个人全自主智能体驾驶舱助手 (agtpilot)。你可以自主规划多步任务，并按需调用原子工具：互联网实时检索 (search_web, search_exa, search_tavily)、持久化浏览器与 Firecrawl 深度蒸馏 (browser_navigate, browser_firecrawl_scrape)、隔离代码与 E2B 微虚拟机沙箱 (sandbox_run_code, sandbox_e2b_run_python)、终端命令 (sandbox_run_command)、工作区文件操作 (sandbox_read_file, sandbox_write_file) 以及通过 Anthropic MCP 协议挂载任意外部工具 (mcp_connect_stdio, mcp_connect_sse)。',
           tools,
         }),
       },

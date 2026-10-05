@@ -8,6 +8,8 @@
   "dependencies": {
     "@agtpilot/core": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
-    "@deepseek-ai/cordis": "^4.0.4"
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@tavily/core": "^0.7.13",
+    "exa-js": "^2.25.0"
   }
 }

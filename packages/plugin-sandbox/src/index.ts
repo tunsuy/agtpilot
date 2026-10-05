@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { promisify } from 'node:util';
+import { Sandbox as E2BSandbox } from '@e2b/code-interpreter';
 
 const execAsync = promisify(exec);
 
@@ -14,6 +15,7 @@ export const inject = ['agent'];
 export interface SandboxConfig {
   workspaceRoot?: string;
   defaultTimeoutMs?: number;
+  e2bApiKey?: string;
 }
 
 export function apply(ctx: Context, config: SandboxConfig = {}) {
@@ -84,7 +86,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
     },
   });
 
-  // 2. 代码片段快速解释执行 (sandbox_run_code)
+  // 2. 本地/云端多语言代码解释执行 (sandbox_run_code)
   ctx.agent.registerTool({
     name: 'sandbox_run_code',
     description: '在隔离沙箱环境中直接执行一段 Node.js (JavaScript/TypeScript) 或 Python 代码片段',
@@ -103,6 +105,31 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       required: ['language', 'code'],
     },
     execute: async ({ language, code, timeoutMs = 15000 }) => {
+      // 若检测到 Python 代码且配置了 E2B_API_KEY，自动走云端 Firecracker 微虚拟机
+      const e2bKey = config.e2bApiKey || process.env.E2B_API_KEY;
+      if (language === 'python' && e2bKey) {
+        let sandbox: any = null;
+        try {
+          sandbox = await E2BSandbox.create({ apiKey: e2bKey });
+          const execution = await sandbox.runCode(code);
+          return {
+            success: true,
+            language: 'python (E2B Cloud MicroVM)',
+            stdout: execution.logs.stdout.join('\n').trim(),
+            stderr: execution.logs.stderr.join('\n').trim(),
+            artifacts: (execution.results || []).map((r: any) => ({
+              text: r.text,
+              hasImage: !!(r.png || r.jpeg),
+            })),
+          };
+        } catch (err: any) {
+          // 优雅降级到本地执行
+        } finally {
+          if (sandbox) await sandbox.kill().catch(() => {});
+        }
+      }
+
+      // 本地隔离目录执行
       const fileExt = language === 'python' ? '.py' : language === 'typescript' ? '.ts' : '.mjs';
       const tempFileName = `snippet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${fileExt}`;
       const tempFilePath = path.join(tempSandboxDir, tempFileName);
@@ -141,13 +168,75 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           error: err.message,
         };
       } finally {
-        // 清理临时文件
         await fs.unlink(tempFilePath).catch(() => {});
       }
     },
   });
 
-  // 3. 安全读取文件 (sandbox_read_file)
+  // 3. E2B 官方云端安全微虚拟机 (Firecracker MicroVM) 沙箱执行 (sandbox_e2b_run_python)
+  ctx.agent.registerTool({
+    name: 'sandbox_e2b_run_python',
+    description: '在 E2B 官方云端安全微虚拟机 (Firecracker MicroVM) 沙箱中执行 Python 代码，支持全套科学计算库 (pandas, numpy, matplotlib) 并能自动捕获生成的图表与可视化图片',
+    dangerLevel: 'high',
+    parameters: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: '待在 E2B 沙箱微虚拟机中执行的 Python 代码' },
+      },
+      required: ['code'],
+    },
+    execute: async ({ code }) => {
+      const apiKey = config.e2bApiKey || process.env.E2B_API_KEY;
+      if (!apiKey) {
+        return {
+          success: false,
+          error: '未配置 E2B_API_KEY。请在环境变量或插件配置中设置 E2B_API_KEY 即可使用云端安全 MicroVM 沙箱。',
+        };
+      }
+
+      ctx.agent.emitEvent({
+        type: 'tool_call',
+        payload: { tool: 'sandbox_e2b_run_python', codeSnippet: code.slice(0, 100) },
+        timestamp: Date.now(),
+      });
+
+      let sandbox: any = null;
+      try {
+        sandbox = await E2BSandbox.create({ apiKey });
+        const execution = await sandbox.runCode(code);
+
+        const logs = {
+          stdout: execution.logs.stdout.join('\n'),
+          stderr: execution.logs.stderr.join('\n'),
+        };
+
+        const artifacts = (execution.results || []).map((r: any) => ({
+          text: r.text,
+          formats: r.formats ? Object.keys(r.formats) : [],
+          isChartOrImage: !!(r.png || r.jpeg || r.svg),
+          pngBase64: r.png,
+        }));
+
+        return {
+          success: true,
+          logs,
+          artifacts,
+          error: execution.error ? execution.error.value : undefined,
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          error: err.message,
+        };
+      } finally {
+        if (sandbox) {
+          await sandbox.kill().catch(() => {});
+        }
+      }
+    },
+  });
+
+  // 4. 安全读取文件 (sandbox_read_file)
   ctx.agent.registerTool({
     name: 'sandbox_read_file',
     description: '读取工作区中指定文件的文本内容 (支持按行读取与防超大文件截断保护)',
@@ -195,7 +284,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
     },
   });
 
-  // 4. 安全写入/更新文件 (sandbox_write_file)
+  // 5. 安全写入/更新文件 (sandbox_write_file)
   ctx.agent.registerTool({
     name: 'sandbox_write_file',
     description: '向工作区指定文件写入内容 (自动创建不存在的父级目录)',
@@ -221,7 +310,6 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           };
         }
 
-        // 确保目录存在
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, content, 'utf-8');
 
@@ -241,7 +329,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
     },
   });
 
-  // 5. 目录浏览 (sandbox_list_dir)
+  // 6. 目录浏览 (sandbox_list_dir)
   ctx.agent.registerTool({
     name: 'sandbox_list_dir',
     description: '列出指定目录下的所有文件与子文件夹详情',

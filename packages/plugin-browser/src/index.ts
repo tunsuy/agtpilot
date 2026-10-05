@@ -1,6 +1,7 @@
 import { Context } from '@deepseek-ai/cordis';
 import '@agtpilot/core';
 import { chromium, BrowserContext, Page } from 'playwright';
+import FirecrawlApp from '@mendable/firecrawl-js';
 import TurndownService from 'turndown';
 import path from 'path';
 import fs from 'fs';
@@ -23,7 +24,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   });
 
   // 过滤脚本、样式等干扰大模型阅读的噪音标签
-  turndown.remove(['script', 'style', 'noscript', 'svg', 'canvas']);
+  turndown.remove(['script', 'style', 'noscript', 'svg', 'canvas'] as any);
 
   // 获取或初始化持久化浏览器环境
   async function getOrCreatePage(): Promise<Page> {
@@ -181,7 +182,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           localBrowserLaunchOptions: {
             headless: config.headless ?? true,
           },
-        });
+        } as any);
 
         const result = await stagehand.act(instruction);
         await stagehand.close();
@@ -222,7 +223,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           localBrowserLaunchOptions: {
             headless: config.headless ?? true,
           },
-        });
+        } as any);
 
         const observations = await stagehand.observe(goal);
         await stagehand.close();
@@ -242,8 +243,59 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     },
   });
 
+  // 6. 顶级 Firecrawl 反爬穿透与纯净 Markdown 抓取 (browser_firecrawl_scrape)
+  ctx.agent.registerTool({
+    name: 'browser_firecrawl_scrape',
+    description: '使用业界顶级的 Firecrawl 网页爬取引擎抓取目标网址，自动执行客户端渲染与反爬穿透，返回纯净的高可读性 Markdown 正文',
+    dangerLevel: 'low',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '需要抓取的目标网页 URL' },
+      },
+      required: ['url'],
+    },
+    execute: async ({ url }) => {
+      const apiKey = process.env.FIRECRAWL_API_KEY;
+      if (!apiKey) {
+        return {
+          success: false,
+          error: '未配置 FIRECRAWL_API_KEY。请在环境变量中设置 FIRECRAWL_API_KEY 即可使用 Firecrawl 爬取引擎。',
+        };
+      }
+
+      ctx.agent.emitEvent({
+        type: 'tool_call',
+        payload: { tool: 'browser_firecrawl_scrape', url },
+        timestamp: Date.now(),
+      });
+
+      try {
+        const firecrawl = new (FirecrawlApp as any)({ apiKey });
+        const res = await firecrawl.scrapeUrl(url, { formats: ['markdown'] });
+
+        if (!res.success) {
+          throw new Error(res.error || 'Firecrawl 抓取失败');
+        }
+
+        return {
+          success: true,
+          url,
+          title: res.metadata?.title || '',
+          markdown: res.markdown || '',
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          url,
+          error: err.message,
+        };
+      }
+    },
+  });
+
   // 进程退出时妥善关闭浏览器
-  ctx.on('dispose', async () => {
+  (ctx as any).on('dispose', async () => {
     if (browserContext) {
       await browserContext.close();
       browserContext = null;

@@ -1,5 +1,5 @@
 {
-  "name": "@agtpilot/plugin-sandbox",
+  "name": "@agtpilot/plugin-mcp",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -9,6 +9,6 @@
     "@agtpilot/core": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
     "@deepseek-ai/cordis": "^4.0.4",
-    "@e2b/code-interpreter": "^2.8.0"
+    "@modelcontextprotocol/sdk": "^1.32.1"
   }
 }

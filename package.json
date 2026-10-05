@@ -1,0 +1,26 @@
+{
+  "name": "agtpilot-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A pluggable, autonomous personal AI agent with browser automation, sandbox execution, and Generative UI.",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "pnpm -r run dev",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint"
+  },
+  "keywords": [
+    "ai-agent",
+    "personal-agent",
+    "browser-automation",
+    "generative-ui",
+    "deepseek",
+    "copilotkit",
+    "ag-ui"
+  ],
+  "author": "tunsuy",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

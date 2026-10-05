@@ -9,6 +9,8 @@
     "@deepseek-ai/cordis": "^4.0.4",
     "@agtpilot/core": "workspace:*",
     "@agtpilot/plugin-browser": "workspace:*",
+    "@agtpilot/plugin-sandbox": "workspace:*",
+    "@agtpilot/plugin-search": "workspace:*",
     "@agtpilot/plugin-model": "workspace:*",
     "@agtpilot/protocol": "workspace:*"
   }

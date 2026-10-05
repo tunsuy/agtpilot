@@ -1,6 +1,8 @@
 import { Context } from '@deepseek-ai/cordis';
 import { AgentService, OrchestratorService } from '@agtpilot/core';
 import * as BrowserPlugin from '@agtpilot/plugin-browser';
+import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
+import * as SearchPlugin from '@agtpilot/plugin-search';
 import * as ModelPlugin from '@agtpilot/plugin-model';
 
 async function main() {
@@ -15,6 +17,8 @@ async function main() {
 
   // 3. 动态加载原子能力插件 (等待其 Fiber 依赖生命周期完成)
   await ctx.plugin(BrowserPlugin, { headless: true });
+  await ctx.plugin(SandboxPlugin);
+  await ctx.plugin(SearchPlugin);
   await ctx.plugin(ModelPlugin);
 
   console.log('\n✅ agtpilot 底座启动成功！已动态装载的服务与工具:');

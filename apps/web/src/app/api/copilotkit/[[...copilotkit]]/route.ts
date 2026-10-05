@@ -5,50 +5,87 @@ import {
   defineTool,
 } from '@copilotkit/runtime/v2';
 import { NextRequest } from 'next/server';
+import { Context } from '@deepseek-ai/cordis';
+import { AgentService, OrchestratorService } from '@agtpilot/core';
+import * as BrowserPlugin from '@agtpilot/plugin-browser';
+import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
+import * as SearchPlugin from '@agtpilot/plugin-search';
 
-// 配置 DeepSeek / OpenAI 模型驱动
+// 1. 初始化并缓存单例 Cordis 微内核底座
+let cordisContext: Context | null = null;
+let initializedToolsPromise: Promise<any[]> | null = null;
+
+async function getCordisTools() {
+  if (!initializedToolsPromise) {
+    initializedToolsPromise = (async () => {
+      const ctx = new Context();
+      new AgentService(ctx);
+      new OrchestratorService(ctx);
+
+      // 加载三大原子插件：浏览器、执行沙箱、互联网搜索引擎
+      await ctx.plugin(BrowserPlugin, { headless: true });
+      await ctx.plugin(SandboxPlugin);
+      await ctx.plugin(SearchPlugin);
+
+      cordisContext = ctx;
+
+      const registered = ctx.agent.getTools();
+      return registered.map((tool) =>
+        defineTool({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+          execute: async (args: any) => {
+            return tool.execute(args, { source: 'copilotkit-web' });
+          },
+        })
+      );
+    })();
+  }
+  return initializedToolsPromise;
+}
+
+// 2. 配置大模型调用凭证 (优先选用 DEEPSEEK 或 OPENAI)
 const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || 'dummy-key';
 const modelName = process.env.DEEPSEEK_API_KEY ? 'openai/deepseek-chat' : 'openai/gpt-4o';
 
-const runtime = new CopilotRuntime({
-  agents: {
-    default: new BuiltInAgent({
-      model: modelName,
-      apiKey,
-      prompt:
-        '你是由 DeepSeek Harness 和 Cordis 微内核驱动的个人自主 Agent 助理。你可以自主规划并调用浏览器自动化工具完成复杂调研任务。',
-      tools: [
-        defineTool({
-          name: 'browser_navigate',
-          description: '使用持久化浏览器导航至指定网址并提取 Markdown 网页正文',
-          parameters: {
-            type: 'object',
-            properties: {
-              url: {
-                type: 'string',
-                description: '需要访问的目标网址 URL',
-              },
-            },
-            required: ['url'],
-          },
-          execute: async ({ url }: { url: string }) => {
-            return {
-              success: true,
-              url,
-              message: `[agtpilot] 页面 ${url} 加载成功，已完成蒸馏。`,
-            };
-          },
+let runtimeHandler: ((req: Request) => Promise<Response>) | null = null;
+
+async function getHandler() {
+  if (!runtimeHandler) {
+    const tools = await getCordisTools();
+
+    const runtime = new CopilotRuntime({
+      agents: {
+        default: new BuiltInAgent({
+          model: modelName,
+          apiKey,
+          prompt:
+            '你是由 DeepSeek Harness 官方 Cordis 插件微内核驱动的个人全自主智能体驾驶舱助手 (agtpilot)。你可以自主规划多步任务，并按需调用原子工具：互联网实时检索 (search_web)、持久化浏览器网页蒸馏 (browser_navigate)、隔离代码执行 (sandbox_run_code)、终端命令 (sandbox_run_command) 以及工作区文件操作 (sandbox_read_file, sandbox_write_file)。',
+          tools,
         }),
-      ],
-    }),
-  },
-});
+      },
+    });
 
-const handler = createCopilotRuntimeHandler({
-  runtime,
-  basePath: '/api/copilotkit',
-});
+    runtimeHandler = createCopilotRuntimeHandler({
+      runtime,
+      basePath: '/api/copilotkit',
+    });
+  }
+  return runtimeHandler;
+}
 
-export const GET = (req: NextRequest) => handler(req);
-export const POST = (req: NextRequest) => handler(req);
-export const OPTIONS = (req: NextRequest) => handler(req);
+export const GET = async (req: NextRequest) => {
+  const handler = await getHandler();
+  return handler(req);
+};
+
+export const POST = async (req: NextRequest) => {
+  const handler = await getHandler();
+  return handler(req);
+};
+
+export const OPTIONS = async (req: NextRequest) => {
+  const handler = await getHandler();
+  return handler(req);
+};

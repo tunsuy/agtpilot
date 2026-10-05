@@ -11,6 +11,8 @@
   "dependencies": {
     "@agtpilot/core": "workspace:*",
     "@agtpilot/plugin-browser": "workspace:*",
+    "@agtpilot/plugin-sandbox": "workspace:*",
+    "@agtpilot/plugin-search": "workspace:*",
     "@agtpilot/plugin-model": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
     "@copilotkit/react-core": "^1.77.0",

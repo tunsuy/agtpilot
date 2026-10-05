@@ -36,6 +36,12 @@ importers:
       '@agtpilot/plugin-model':
         specifier: workspace:*
         version: link:../../packages/plugin-model
+      '@agtpilot/plugin-sandbox':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sandbox
+      '@agtpilot/plugin-search':
+        specifier: workspace:*
+        version: link:../../packages/plugin-search
       '@agtpilot/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -54,6 +60,12 @@ importers:
       '@agtpilot/plugin-model':
         specifier: workspace:*
         version: link:../../packages/plugin-model
+      '@agtpilot/plugin-sandbox':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sandbox
+      '@agtpilot/plugin-search':
+        specifier: workspace:*
+        version: link:../../packages/plugin-search
       '@agtpilot/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -160,6 +172,30 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+
+  packages/plugin-sandbox:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+
+  packages/plugin-search:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
 
   packages/protocol: {}
 

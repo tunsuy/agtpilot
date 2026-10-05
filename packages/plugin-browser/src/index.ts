@@ -154,6 +154,94 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     },
   });
 
+  // 4. Stagehand AI 语义化动作操控 (browser_stagehand_act)
+  ctx.agent.registerTool({
+    name: 'browser_stagehand_act',
+    description: '使用 Stagehand AI 语义理解直接在页面上执行复杂的自然语言动作 (如: "点击搜索框输入 DeepSeek 并回车")',
+    parameters: {
+      type: 'object',
+      properties: {
+        instruction: { type: 'string', description: '想要在网页上完成的自然语言指令描述' },
+      },
+      required: ['instruction'],
+    },
+    execute: async ({ instruction }) => {
+      ctx.agent.emitEvent({
+        type: 'tool_call',
+        payload: { tool: 'browser_stagehand_act', instruction },
+        timestamp: Date.now(),
+      });
+
+      try {
+        const { Stagehand } = await import('@browserbasehq/stagehand');
+        const stagehand = await Stagehand.create({
+          env: 'LOCAL',
+          verbose: 1,
+          debugDom: true,
+          localBrowserLaunchOptions: {
+            headless: config.headless ?? true,
+          },
+        });
+
+        const result = await stagehand.act(instruction);
+        await stagehand.close();
+
+        return {
+          success: true,
+          instruction,
+          actionResult: result,
+          message: `Stagehand 已成功按指令执行动作: "${instruction}"`,
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          instruction,
+          error: err.message,
+        };
+      }
+    },
+  });
+
+  // 5. Stagehand AI 页面语义观察 (browser_stagehand_observe)
+  ctx.agent.registerTool({
+    name: 'browser_stagehand_observe',
+    description: '使用 Stagehand 视觉与 DOM 语义观察当前网页，输出所有可供执行的操作与元素列表',
+    parameters: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: '可选，本次观察希望寻找的目标操作 (如: "寻找登录或注册按钮")' },
+      },
+    },
+    execute: async ({ goal }) => {
+      try {
+        const { Stagehand } = await import('@browserbasehq/stagehand');
+        const stagehand = await Stagehand.create({
+          env: 'LOCAL',
+          verbose: 1,
+          debugDom: true,
+          localBrowserLaunchOptions: {
+            headless: config.headless ?? true,
+          },
+        });
+
+        const observations = await stagehand.observe(goal);
+        await stagehand.close();
+
+        return {
+          success: true,
+          goal,
+          observations,
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          goal,
+          error: err.message,
+        };
+      }
+    },
+  });
+
   // 进程退出时妥善关闭浏览器
   ctx.on('dispose', async () => {
     if (browserContext) {

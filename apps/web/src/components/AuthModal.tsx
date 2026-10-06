@@ -38,26 +38,48 @@ export function AuthModal({
   const [loading, setLoading] = useState(false);
   const [socialLoading, setSocialLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [configuredOAuth, setConfiguredOAuth] = useState<{
+    github: boolean;
+    google: boolean;
+    apple: boolean;
+    wechat: boolean;
+  }>({ github: false, google: false, apple: false, wechat: false });
+  const [unconfiguredNotice, setUnconfiguredNotice] = useState<'github' | 'google' | 'apple' | 'wechat' | null>(null);
+
+  React.useEffect(() => {
+    fetch('/api/auth/configured')
+      .then((res) => res.json())
+      .then((data) => setConfiguredOAuth(data))
+      .catch(() => {});
+  }, []);
 
   if (!isOpen) return null;
 
-  const handleSocialLogin = async (provider: 'github' | 'google' | 'apple' | 'wechat') => {
+  const handleSocialLogin = async (
+    provider: 'github' | 'google' | 'apple' | 'wechat',
+    forceMock = false
+  ) => {
     setError(null);
+    setUnconfiguredNotice(null);
     setSocialLoading(provider);
 
-    try {
-      // 1. 尝试直接调用 NextAuth 标准 OAuth 提供商 (若配置了真实 Client ID/Secret)
-      const res = await signIn(provider, { redirect: false });
-      if (!res?.error) {
-        onClose();
-        return;
-      }
-    } catch {
-      // 真实配置未就绪时，平滑降级至即时全真模拟登录
+    const isRealConfigured = configuredOAuth[provider];
+
+    // 若配置了真实 Client ID/Secret，直接重定向至官方授权中心 (真实调用)
+    if (isRealConfigured && !forceMock) {
+      await signIn(provider);
+      return;
+    }
+
+    // 若未配置真实凭证，且未显式选择沙盒体验，弹出真实配置提示
+    if (!isRealConfigured && !forceMock) {
+      setSocialLoading(null);
+      setUnconfiguredNotice(provider);
+      return;
     }
 
     try {
-      // 2. 即时全真模拟登录验证
+      // 本地开发者全功能联调沙盒体验
       const res = await signIn('credentials', {
         socialProvider: provider,
         redirect: false,
@@ -154,6 +176,41 @@ export function AuthModal({
         {error && (
           <div className="mb-4 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 text-center animate-shake">
             {error}
+          </div>
+        )}
+
+        {/* 尚未配置 Client ID 时的真实指引卡片 */}
+        {unconfiguredNotice && (
+          <div className="mb-4 p-4 rounded-xl bg-amber-50/90 border border-amber-200 text-xs text-zinc-800 space-y-2.5 animate-fadeIn">
+            <div className="flex items-start justify-between">
+              <span className="font-semibold text-amber-900 flex items-center gap-1.5">
+                <span>⚠️</span>
+                <span>真实 {unconfiguredNotice.toUpperCase()} OAuth 接入指引</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setUnconfiguredNotice(null)}
+                className="text-zinc-400 hover:text-zinc-700 text-xs"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-600 leading-relaxed">
+              底层已接入官方真实的 NextAuth 认证提供商。要发起真实的官方登录跳转，需在本地 <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[10px]">.env.local</code> 中配置对应的密钥并重启服务：
+            </p>
+            <div className="p-2 bg-white/90 rounded-lg border border-amber-200/60 font-mono text-[10px] text-zinc-700 space-y-0.5 select-all">
+              <div>AUTH_{unconfiguredNotice.toUpperCase()}_ID=your_client_id</div>
+              <div>AUTH_{unconfiguredNotice.toUpperCase()}_SECRET=your_client_secret</div>
+            </div>
+            <div className="pt-1 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleSocialLogin(unconfiguredNotice, true)}
+                className="flex-1 py-1.5 px-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-[11px] transition"
+              >
+                使用本地开发者联调会话 (Mock)
+              </button>
+            </div>
           </div>
         )}
 

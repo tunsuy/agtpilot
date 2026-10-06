@@ -317,9 +317,12 @@ export function AuthModal({
 
             <div className="p-4 bg-zinc-50/80 rounded-2xl border border-zinc-200/80 space-y-3">
               {/* 二维码图片展示区 */}
-              <div className="h-36 w-36 bg-white p-2.5 rounded-xl border border-zinc-200 shadow-2xs mx-auto flex flex-col items-center justify-center relative">
-                <QrCode className="h-24 w-24 text-zinc-800" />
-                <span className="text-[10px] text-zinc-400 mt-1 font-mono">公众号扫码关注</span>
+              <div className="h-40 w-40 bg-white p-2 rounded-xl border border-zinc-200 shadow-2xs mx-auto flex flex-col items-center justify-center relative overflow-hidden group">
+                <img
+                  src="/wechat-qr.jpg"
+                  alt="微信公众号二维码"
+                  className="h-full w-full object-contain rounded-lg"
+                />
               </div>
 
               {/* 6 位大字验证码卡片 */}

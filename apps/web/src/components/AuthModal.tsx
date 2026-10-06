@@ -359,14 +359,8 @@ export function AuthModal({
               {/* 操作说明三步走 */}
               <div className="text-left text-[11px] text-zinc-500 space-y-1 pt-1 font-sans">
                 <p>1. 使用手机微信扫描上方二维码关注公众号；</p>
-                <p>
-                  2. 在公众号聊天框回复数字验证码{' '}
-                  <code className="bg-zinc-200/70 px-1 py-0.5 rounded font-mono text-zinc-800 font-semibold">
-                    {wechatCode || '839215'}
-                  </code>
-                  ；
-                </p>
-                <p className="text-emerald-600 font-medium">3. 回复后页面将在 1~2 秒内自动登录完成！</p>
+                <p>2. 在公众号发送消息 <code className="bg-zinc-200/70 px-1 py-0.5 rounded font-mono text-zinc-800 font-semibold">登录</code>，点击公众号自动回复的链接；</p>
+                <p>3. 在手机页面输入当前验证码 <code className="bg-emerald-100 text-emerald-800 px-1 py-0.5 rounded font-mono font-bold">{wechatCode || '839215'}</code> 并确认，电脑端将自动登录！</p>
               </div>
             </div>
 

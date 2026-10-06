@@ -12,3 +12,6 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+    volumes:
+      - /opt/agtpilot/data:/app/apps/web/.cache/user_data
+      - /opt/agtpilot/sandbox:/app/apps/web/.cache/sandbox

@@ -172,23 +172,28 @@ class AgentBackend {
       case 'tool_call': {
         const toolName = event.payload.tool;
         if (toolName === 'browser_navigate') {
-          this.state.viewport.url = event.payload.url;
+          this.state.viewport.url = event.payload.url || event.payload.args?.url;
           this.state.viewport.status = 'navigating';
           this.broadcast({ type: 'viewport_update', data: this.state.viewport });
         }
 
-        // 挂载到当前任务的步骤
+        // 挂载到当前任务的步骤（去重逻辑：如果最后一步是相同的处于 RUNNING 状态的工具，则复用更新参数，避免插件与核心双重广播导致的成对重复步骤）
         if (this.state.activeMissionId) {
           const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
           if (mission) {
-            const stepId = `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-            mission.steps.push({
-              id: stepId,
-              title: `Execute ${toolName}`,
-              tool: toolName,
-              status: 'RUNNING',
-              args: event.payload,
-            });
+            const lastStep = mission.steps[mission.steps.length - 1];
+            if (lastStep && lastStep.tool === toolName && lastStep.status === 'RUNNING') {
+              lastStep.args = event.payload.args || event.payload;
+            } else {
+              const stepId = `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+              mission.steps.push({
+                id: stepId,
+                title: `执行工具: ${toolName}`,
+                tool: toolName,
+                status: 'RUNNING',
+                args: event.payload.args || event.payload,
+              });
+            }
             this.broadcast({ type: 'mission_updated', data: mission });
           }
         }
@@ -199,10 +204,12 @@ class AgentBackend {
         if (this.state.activeMissionId) {
           const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
           if (mission && mission.steps.length > 0) {
-            const lastStep = mission.steps[mission.steps.length - 1];
-            if (lastStep.status === 'RUNNING') {
-              lastStep.status = 'DONE';
-              lastStep.duration = '320ms';
+            // 找到最后处于 RUNNING 的该工具步骤并将其标记为完成
+            const toolName = event.payload.tool;
+            const targetStep = [...mission.steps].reverse().find((s) => s.status === 'RUNNING' && (!toolName || s.tool === toolName)) || mission.steps[mission.steps.length - 1];
+            if (targetStep && targetStep.status === 'RUNNING') {
+              targetStep.status = 'DONE';
+              targetStep.duration = '320ms';
               this.broadcast({ type: 'mission_updated', data: mission });
             }
           }

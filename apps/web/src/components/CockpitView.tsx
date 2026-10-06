@@ -586,7 +586,7 @@ export function CockpitView({
                   </div>
 
                   {/* Browser Content */}
-                  <div className="flex-1 w-full bg-white relative overflow-hidden">
+                  <div className="flex-1 w-full bg-white relative overflow-hidden flex flex-col">
                     {viewport.screenshotBase64 ? (
                       <img
                         src={viewport.screenshotBase64}
@@ -594,12 +594,32 @@ export function CockpitView({
                         className="w-full h-full object-contain bg-white"
                       />
                     ) : (
-                      <iframe
-                        src={viewport.url}
-                        title="Browser Viewport"
-                        className="w-full h-full border-none"
-                        sandbox="allow-scripts allow-same-origin allow-forms"
-                      />
+                      <div className="w-full h-full relative flex flex-col">
+                        {/* 优雅提示条：处理外部网站 X-Frame-Options 拦截 */}
+                        <div className="bg-amber-50/80 border-b border-amber-200/60 px-4 py-2 flex items-center justify-between text-xs text-amber-800">
+                          <div className="flex items-center gap-2">
+                            <Shield className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
+                            <span>
+                              部分站点受同源安全策略 (X-Frame-Options) 保护可能禁止内嵌预览。
+                            </span>
+                          </div>
+                          <a
+                            href={viewport.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 font-medium text-amber-900 underline hover:text-black ml-2"
+                          >
+                            <span>在新窗口直接查看</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </div>
+                        <iframe
+                          src={viewport.url}
+                          title="Browser Viewport"
+                          className="flex-1 w-full border-none"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        />
+                      </div>
                     )}
                   </div>
                 </div>

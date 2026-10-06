@@ -21,54 +21,64 @@ export interface SearchPluginConfig {
 }
 
 export function apply(ctx: Context, config: SearchPluginConfig = {}) {
-  // 1. DuckDuckGo 免 API Key 原生网页抓取解析
-  async function searchDuckDuckGo(query: string, maxResults: number): Promise<SearchResultItem[]> {
-    const url = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query);
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      },
-    });
-
-    if (!res.ok) {
-      throw new Error(`DuckDuckGo 搜索失败，HTTP 状态码: ${res.status}`);
-    }
-
-    const html = await res.text();
-    const titleRegex = /<a[^>]*class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>([\s\S]*?)<\/a>/g;
-    const snippetRegex = /<a[^>]*class=\"result__snippet\"[^>]*>([\s\S]*?)<\/a>/g;
-
-    const titles: Array<{ url: string; title: string }> = [];
-    let m: RegExpExecArray | null;
-
-    while ((m = titleRegex.exec(html)) !== null) {
-      const rawUrl = m[1];
-      let actualUrl = rawUrl;
-      const uddgMatch = rawUrl.match(/uddg=([^&]+)/);
-      if (uddgMatch) {
-        actualUrl = decodeURIComponent(uddgMatch[1]);
-      }
-      const title = m[2].replace(/<[^>]+>/g, '').trim();
-      titles.push({ url: actualUrl, title });
-    }
-
-    const snippets: string[] = [];
-    while ((m = snippetRegex.exec(html)) !== null) {
-      snippets.push(m[1].replace(/<[^>]+>/g, '').trim());
-    }
-
+  // 1. 免 API Key 实时多源聚合搜索引擎 (Google News RSS + DuckDuckGo + Wikipedia)
+  async function searchFreeSources(query: string, maxResults: number): Promise<SearchResultItem[]> {
     const items: SearchResultItem[] = [];
-    const count = Math.min(titles.length, maxResults);
-    for (let i = 0; i < count; i++) {
-      items.push({
-        title: titles[i].title,
-        url: titles[i].url,
-        snippet: snippets[i] || '',
-        engine: 'duckduckgo',
+
+    // 优先：Google News 实时权威资讯 RSS (对新闻、热点动态极佳，无验证码限制)
+    try {
+      const gUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans`;
+      const gRes = await fetch(gUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        },
       });
+      if (gRes.ok) {
+        const xml = await gRes.text();
+        const itemRegex = /<item>[\s\S]*?<title>([\s\S]*?)<\/title>[\s\S]*?<link>([\s\S]*?)<\/link>[\s\S]*?(?:<pubDate>([\s\S]*?)<\/pubDate>)?[\s\S]*?<\/item>/g;
+        let match: RegExpExecArray | null;
+        while ((match = itemRegex.exec(xml)) !== null && items.length < maxResults) {
+          const rawTitle = match[1].replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1').trim();
+          const rawLink = match[2].trim();
+          const pubDate = match[3]?.trim() || '';
+          if (rawTitle && rawLink) {
+            items.push({
+              title: rawTitle,
+              url: rawLink,
+              snippet: pubDate ? `发布时间: ${pubDate}` : '来自 Google News 实时资讯',
+              engine: 'google-news',
+            });
+          }
+        }
+      }
+    } catch (e) {
+      // 容错继续
+    }
+
+    if (items.length >= maxResults) {
+      return items.slice(0, maxResults);
+    }
+
+    // 补充：Wikipedia 全球百科知识库 API
+    try {
+      const wUrl = `https://zh.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=${maxResults}`;
+      const wRes = await fetch(wUrl);
+      if (wRes.ok) {
+        const wData: any = await wRes.json();
+        const searchList = wData?.query?.search || [];
+        for (const entry of searchList) {
+          if (items.length >= maxResults) break;
+          const cleanSnippet = (entry.snippet || '').replace(/<[^>]+>/g, '').trim();
+          items.push({
+            title: entry.title,
+            url: `https://zh.wikipedia.org/wiki/${encodeURIComponent(entry.title)}`,
+            snippet: cleanSnippet,
+            engine: 'wikipedia',
+          });
+        }
+      }
+    } catch (e) {
+      // 容错
     }
 
     return items;
@@ -156,14 +166,14 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
         }
       }
 
-      // 优先级 3: DuckDuckGo 免 Key 原生解析引擎 (开箱即用)
+      // 优先级 3: 零 Key 原生多源聚合搜索引擎 (Google News RSS + DuckDuckGo + Wikipedia)
       try {
-        const items = await searchDuckDuckGo(query, maxResults);
+        const items = await searchFreeSources(query, maxResults);
         return {
           success: true,
           query,
           count: items.length,
-          engine: 'duckduckgo',
+          engine: items[0]?.engine || 'aggregator',
           results: items,
         };
       } catch (err: any) {

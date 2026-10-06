@@ -25,6 +25,7 @@ export default function WeChatAuthPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code: code.trim(),
+          nickname: nickname.trim() || undefined,
           mockOpenid: `wx_${nickname.trim() || 'mobile_user'}_${Math.floor(1000 + Math.random() * 9000)}`,
         }),
       });

@@ -42,7 +42,7 @@ export function checkCodeStatus(code: string): WeChatLoginCode | null {
   return item;
 }
 
-export function verifyLoginCode(code: string, openid: string): boolean {
+export function verifyLoginCode(code: string, openid: string, nickname?: string): boolean {
   const item = codeMap.get(code.trim());
   if (!item) return false;
   if (item.status === 'EXPIRED' || Date.now() > item.expiresAt) {
@@ -54,7 +54,7 @@ export function verifyLoginCode(code: string, openid: string): boolean {
   item.openid = openid;
   item.user = {
     id: `usr_wx_${openid.slice(0, 10)}`,
-    name: `微信用户_${shortOpenid}`,
+    name: nickname?.trim() || `微信用户_${shortOpenid}`,
     email: `wx_${shortOpenid}@agtpilot.ai`,
   };
   return true;

@@ -33,13 +33,13 @@ export async function GET(req: NextRequest) {
 // 本地开发模拟扫码验证接口
 export async function POST(req: NextRequest) {
   try {
-    const { code, mockOpenid } = await req.json();
+    const { code, mockOpenid, nickname } = await req.json();
     if (!code) {
       return NextResponse.json({ success: false, error: 'Missing code' }, { status: 400 });
     }
 
     const openid = mockOpenid || `mock_user_${Math.floor(1000 + Math.random() * 9000)}`;
-    const success = verifyLoginCode(code, openid);
+    const success = verifyLoginCode(code, openid, nickname);
 
     if (!success) {
       return NextResponse.json({ success: false, error: 'Code expired or invalid' }, { status: 400 });

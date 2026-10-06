@@ -7,6 +7,8 @@ export const metadata: Metadata = {
   description: 'A pluggable, autonomous personal AI agent with browser automation, sandbox execution, and Generative UI.',
 };
 
+import { Providers } from '../components/Providers';
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -15,7 +17,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="min-h-screen bg-[#fbfbfd] text-zinc-900 antialiased" suppressHydrationWarning>
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

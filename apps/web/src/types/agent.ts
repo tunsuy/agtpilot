@@ -55,3 +55,15 @@ export interface ArtifactState {
   type?: string;
   content: string;
 }
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  avatar?: string;
+  role: 'user' | 'admin';
+  tier: 'Starter' | 'Pro' | 'Enterprise';
+  tokensUsed: number;
+  tokensLimit: number;
+  createdAt: string;
+}

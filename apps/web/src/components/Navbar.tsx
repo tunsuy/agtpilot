@@ -11,7 +11,8 @@ import {
   Sparkles,
   ExternalLink,
 } from 'lucide-react';
-import { Mission, ApprovalRequest } from '../types/agent';
+import { Mission, ApprovalRequest, User } from '../types/agent';
+import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
   activeView: 'home' | 'cockpit' | 'connectors' | 'deliverables';
@@ -21,6 +22,7 @@ interface NavbarProps {
   approvalRequests: ApprovalRequest[];
   hasArtifact: boolean;
   onNewMission: () => void;
+  onOpenAuth: (tab: 'login' | 'register') => void;
 }
 
 export function Navbar({
@@ -31,6 +33,7 @@ export function Navbar({
   approvalRequests,
   hasArtifact,
   onNewMission,
+  onOpenAuth,
 }: NavbarProps) {
   const isMissionActive = currentMission && currentMission.status === 'ACTIVE';
   const hasPendingApproval = approvalRequests.length > 0;
@@ -165,6 +168,11 @@ export function Navbar({
           <Plus className="h-3.5 w-3.5" />
           <span>新建任务</span>
         </button>
+
+        <div className="h-5 w-[1px] bg-zinc-200 mx-0.5" />
+
+        {/* User Auth Profile Menu */}
+        <UserMenu onOpenAuth={onOpenAuth} />
       </div>
     </header>
   );

@@ -7,6 +7,7 @@ import { HomeView } from '../components/HomeView';
 import { CockpitView } from '../components/CockpitView';
 import { ConnectorsView } from '../components/ConnectorsView';
 import { DeliverablesView } from '../components/DeliverablesView';
+import { AuthModal } from '../components/AuthModal';
 import {
   Mission,
   ViewportState,
@@ -20,6 +21,8 @@ export default function Workspace() {
   const [mounted, setMounted] = useState(false);
   const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'connectors' | 'deliverables'>('home');
   const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact'>('browser');
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
 
   // Agent 实时状态流
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -206,6 +209,17 @@ export default function Workspace() {
           onNewMission={() => {
             setActiveView('home');
           }}
+          onOpenAuth={(tab) => {
+            setAuthModalTab(tab);
+            setAuthModalOpen(true);
+          }}
+        />
+
+        {/* NextAuth Authentication Modal */}
+        <AuthModal
+          isOpen={authModalOpen}
+          onClose={() => setAuthModalOpen(false)}
+          initialTab={authModalTab}
         />
 
         {/* Main Content Area */}

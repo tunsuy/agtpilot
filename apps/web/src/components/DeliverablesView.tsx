@@ -18,7 +18,7 @@ import { ArtifactState, Mission } from '../types/agent';
 interface DeliverablesViewProps {
   artifact: ArtifactState | null;
   missions: Mission[];
-  onOpenCockpit: () => void;
+  onOpenCockpit: (missionId?: string) => void;
   onRunMission: (prompt: string, title?: string) => void;
 }
 
@@ -29,28 +29,36 @@ export function DeliverablesView({
   onRunMission,
 }: DeliverablesViewProps) {
   const [copied, setCopied] = useState(false);
+  const [selectedMissionId, setSelectedMissionId] = useState<string | null>(null);
+
+  // 获取所有沉淀了交付成果的任务
+  const missionsWithArtifacts = missions.filter((m) => Boolean(m.artifact?.content));
+
+  const currentDisplayArtifact = selectedMissionId
+    ? missions.find((m) => m.id === selectedMissionId)?.artifact || null
+    : (artifact || missionsWithArtifacts[0]?.artifact || null);
 
   const handleCopy = () => {
-    if (!artifact?.content) return;
-    navigator.clipboard.writeText(artifact.content);
+    if (!currentDisplayArtifact?.content) return;
+    navigator.clipboard.writeText(currentDisplayArtifact.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDownload = () => {
-    if (!artifact?.content) return;
-    const blob = new Blob([artifact.content], { type: 'text/markdown;charset=utf-8;' });
+    if (!currentDisplayArtifact?.content) return;
+    const blob = new Blob([currentDisplayArtifact.content], { type: 'text/markdown;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `${artifact.title || 'deliverable'}.md`);
+    link.setAttribute('download', `${currentDisplayArtifact.title || 'deliverable'}.md`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
+    <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-6 animate-fadeIn">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -62,7 +70,7 @@ export function DeliverablesView({
           </p>
         </div>
 
-        {artifact && (
+        {currentDisplayArtifact && (
           <div className="flex items-center gap-2">
             <button
               onClick={handleCopy}
@@ -87,19 +95,42 @@ export function DeliverablesView({
         )}
       </div>
 
+      {/* 成果任务切换 Tabs（若有多条任务产物） */}
+      {missionsWithArtifacts.length > 1 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+          <span className="text-xs font-medium text-zinc-400 flex-shrink-0">切换会话产物:</span>
+          {missionsWithArtifacts.map((m) => {
+            const isSelected = selectedMissionId === m.id || (!selectedMissionId && (artifact ? m.artifact === artifact : m === missionsWithArtifacts[0]));
+            return (
+              <button
+                key={m.id}
+                onClick={() => setSelectedMissionId(m.id)}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-medium border transition ${
+                  isSelected
+                    ? 'bg-zinc-900 text-white border-zinc-900 shadow-2xs'
+                    : 'bg-white hover:bg-zinc-50 text-zinc-600 border-zinc-200'
+                }`}
+              >
+                {m.title}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Main Deliverable Card */}
-      {artifact ? (
+      {currentDisplayArtifact ? (
         <div className="rounded-2xl border border-zinc-200 bg-white shadow-sm overflow-hidden">
           {/* Card Topbar */}
           <div className="p-6 border-b border-zinc-100 bg-[#fbfbfd] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="text-base font-semibold text-zinc-900">
-                  {artifact.title || '最新交付报告'}
+                  {currentDisplayArtifact.title || '最新交付报告'}
                 </span>
-                {artifact.type && (
+                {currentDisplayArtifact.type && (
                   <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-zinc-200/80 text-zinc-600">
-                    {artifact.type}
+                    {currentDisplayArtifact.type}
                   </span>
                 )}
               </div>
@@ -110,14 +141,14 @@ export function DeliverablesView({
 
             <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono">
               <Calendar className="h-3.5 w-3.5 text-zinc-400" />
-              <span>今天</span>
+              <span>今日</span>
             </div>
           </div>
 
           {/* Markdown Content */}
           <div className="p-6 md:p-10 prose prose-zinc prose-sm max-w-none leading-relaxed">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {artifact.content}
+              {currentDisplayArtifact.content}
             </ReactMarkdown>
           </div>
         </div>

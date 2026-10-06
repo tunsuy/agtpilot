@@ -142,6 +142,20 @@ export default function Workspace() {
     }
   };
 
+  const handleUpdateCronJob = async (job: { id: string; name: string; pattern: string; prompt: string }) => {
+    try {
+      const res = await fetch('/api/cron/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', ...job }),
+      });
+      const data = await res.json();
+      if (data.jobs) setCronJobs(data.jobs);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const loadConnectors = async () => {
     try {
       const res = await fetch('/api/connectors');
@@ -482,6 +496,7 @@ export default function Workspace() {
               <CronJobsView
                 jobs={cronJobs}
                 onCreateJob={handleCreateCronJob}
+                onUpdateJob={handleUpdateCronJob}
                 onToggleJob={handleToggleCronJob}
                 onDeleteJob={handleDeleteCronJob}
               />

@@ -22,11 +22,14 @@ export interface MissionStep {
   id: string;
   title: string;
   tool?: string;
+  role?: 'user' | 'assistant' | 'tool';
+  userPrompt?: string;
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
   duration?: string;
   args?: any;
   answer?: string;
   output?: any;
+  error?: string;
 }
 
 export interface Mission {
@@ -38,6 +41,9 @@ export interface Mission {
   startedAt: number;
   steps: MissionStep[];
   conversationMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
+  viewport?: ViewportState;
+  terminalLogs?: TerminalLog[];
+  artifact?: ArtifactState | null;
 }
 
 export interface ViewportState {

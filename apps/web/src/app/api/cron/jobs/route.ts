@@ -65,6 +65,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, jobs });
     }
 
+    if (action === 'update') {
+      if (!id) {
+        return NextResponse.json({ success: false, error: '缺少任务 ID' }, { status: 400 });
+      }
+      const existing = getUserCronJobs(userId).find((j: any) => j.id === id);
+      if (!existing) {
+        return NextResponse.json({ success: false, error: '任务不存在' }, { status: 404 });
+      }
+      if (name) existing.name = name;
+      if (pattern) existing.pattern = pattern;
+      if (prompt) existing.prompt = prompt;
+      saveUserCronJob(userId, existing);
+      const jobs = getUserCronJobs(userId);
+      return NextResponse.json({ success: true, updatedJob: existing, jobs });
+    }
+
     if (action === 'cancel' || action === 'delete') {
       if (!id) {
         return NextResponse.json({ success: false, error: '缺少任务 ID' }, { status: 400 });

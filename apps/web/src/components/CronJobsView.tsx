@@ -7,6 +7,7 @@ import {
   Play,
   Pause,
   Trash2,
+  Pencil,
   Sparkles,
   Calendar,
   RotateCw,
@@ -20,6 +21,7 @@ import { CronJobItem } from '../types/agent';
 interface CronJobsViewProps {
   jobs: CronJobItem[];
   onCreateJob: (job: { name: string; pattern: string; prompt: string }) => Promise<void>;
+  onUpdateJob?: (job: { id: string; name: string; pattern: string; prompt: string }) => Promise<void>;
   onToggleJob: (id: string) => Promise<void>;
   onDeleteJob: (id: string) => Promise<void>;
 }
@@ -27,10 +29,12 @@ interface CronJobsViewProps {
 export function CronJobsView({
   jobs,
   onCreateJob,
+  onUpdateJob,
   onToggleJob,
   onDeleteJob,
 }: CronJobsViewProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingJobId, setEditingJobId] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState('');
   const [patternInput, setPatternInput] = useState('0 9 * * *');
   const [promptInput, setPromptInput] = useState('');
@@ -59,19 +63,45 @@ export function CronJobsView({
     },
   ];
 
+  const handleOpenCreate = () => {
+    setEditingJobId(null);
+    setNameInput('');
+    setPatternInput('0 9 * * *');
+    setPromptInput('');
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (job: CronJobItem) => {
+    setEditingJobId(job.id);
+    setNameInput(job.name);
+    setPatternInput(job.pattern);
+    setPromptInput(job.prompt);
+    setIsModalOpen(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nameInput.trim() || !patternInput.trim() || !promptInput.trim() || isSaving) return;
     setIsSaving(true);
     try {
-      await onCreateJob({
-        name: nameInput.trim(),
-        pattern: patternInput.trim(),
-        prompt: promptInput.trim(),
-      });
+      if (editingJobId && onUpdateJob) {
+        await onUpdateJob({
+          id: editingJobId,
+          name: nameInput.trim(),
+          pattern: patternInput.trim(),
+          prompt: promptInput.trim(),
+        });
+      } else {
+        await onCreateJob({
+          name: nameInput.trim(),
+          pattern: patternInput.trim(),
+          prompt: promptInput.trim(),
+        });
+      }
       setNameInput('');
       setPromptInput('');
       setPatternInput('0 9 * * *');
+      setEditingJobId(null);
       setIsModalOpen(false);
     } finally {
       setIsSaving(false);
@@ -79,6 +109,7 @@ export function CronJobsView({
   };
 
   const applyPreset = (preset: typeof presets[0]) => {
+    setEditingJobId(null);
     setNameInput(preset.title);
     setPatternInput(preset.pattern);
     setPromptInput(preset.prompt);
@@ -103,7 +134,7 @@ export function CronJobsView({
         </div>
 
         <button
-          onClick={() => setIsModalOpen(true)}
+          onClick={handleOpenCreate}
           className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium shadow-xs transition active:scale-95 self-start sm:self-auto"
         >
           <Plus className="h-3.5 w-3.5" />
@@ -215,6 +246,14 @@ export function CronJobsView({
 
                     <div className="flex items-center gap-1.5">
                       <button
+                        onClick={() => handleOpenEdit(job)}
+                        className="p-2 rounded-lg border border-zinc-200 hover:border-blue-200 hover:bg-blue-50 text-zinc-500 hover:text-blue-600 transition"
+                        title="编辑该巡检任务"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+
+                      <button
                         onClick={() => onToggleJob(job.id)}
                         className={`p-2 rounded-lg border transition text-xs font-medium flex items-center gap-1 ${
                           isActive
@@ -243,14 +282,16 @@ export function CronJobsView({
         )}
       </div>
 
-      {/* 新建弹窗 */}
+      {/* 新建/编辑弹窗 */}
       {isModalOpen && (
         <div className="fixed top-14 inset-x-0 bottom-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-fadeIn">
           <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-zinc-200/80 p-6 space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-zinc-100">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-blue-600" />
-                <h3 className="font-semibold text-sm text-zinc-900">配置自主巡航任务</h3>
+                <h3 className="font-semibold text-sm text-zinc-900">
+                  {editingJobId ? '编辑自主巡航任务' : '配置自主巡航任务'}
+                </h3>
               </div>
               <button
                 onClick={() => setIsModalOpen(false)}
@@ -343,7 +384,7 @@ export function CronJobsView({
                   disabled={isSaving}
                   className="px-4 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium shadow-xs transition disabled:opacity-50"
                 >
-                  {isSaving ? '保存中...' : '启动巡航'}
+                  {isSaving ? '保存中...' : editingJobId ? '保存修改' : '启动巡航'}
                 </button>
               </div>
             </form>

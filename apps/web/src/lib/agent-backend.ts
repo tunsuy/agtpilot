@@ -17,42 +17,7 @@ import * as DesktopPlugin from '@agtpilot/plugin-desktop';
 import * as RouterPlugin from '@agtpilot/plugin-router';
 import * as ModelPlugin from '@agtpilot/plugin-model';
 
-export interface MissionStep {
-  id: string;
-  title: string;
-  tool?: string;
-  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
-  duration?: string;
-  args?: any;
-  answer?: string;
-  output?: any;
-}
-
-export interface Mission {
-  id: string;
-  userId?: string;
-  title: string;
-  status: 'ACTIVE' | 'DONE' | 'QUEUED' | 'WAITING_APPROVAL';
-  progress: number;
-  startedAt: number;
-  steps: MissionStep[];
-  conversationMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
-}
-
-export interface ViewportState {
-  activeTab: 'browser' | 'terminal';
-  url: string;
-  title?: string;
-  status: 'idle' | 'navigating' | 'interacting' | 'scraping';
-  screenshotBase64?: string;
-}
-
-export interface TerminalLog {
-  id: string;
-  timestamp: number;
-  type: 'command' | 'stdout' | 'stderr' | 'system';
-  text: string;
-}
+import { Mission, MissionStep, ViewportState, TerminalLog } from '../types/agent';
 
 export interface AgentBackendState {
   missions: Mission[];
@@ -152,6 +117,15 @@ class AgentBackend {
           this.state.viewport.screenshotBase64 = event.payload.screenshotBase64;
         }
         this.state.viewport.status = 'idle';
+
+        if (this.state.activeMissionId) {
+          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
+          if (mission) {
+            mission.viewport = { ...this.state.viewport };
+            this.broadcast({ type: 'mission_updated', data: mission });
+          }
+        }
+
         this.broadcast({ type: 'viewport_update', data: this.state.viewport });
         break;
       }
@@ -174,6 +148,12 @@ class AgentBackend {
         if (toolName === 'browser_navigate') {
           this.state.viewport.url = event.payload.url || event.payload.args?.url;
           this.state.viewport.status = 'navigating';
+          if (this.state.activeMissionId) {
+            const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
+            if (mission) {
+              mission.viewport = { ...this.state.viewport };
+            }
+          }
           this.broadcast({ type: 'viewport_update', data: this.state.viewport });
         }
 
@@ -190,6 +170,7 @@ class AgentBackend {
                 id: stepId,
                 title: `执行工具: ${toolName}`,
                 tool: toolName,
+                role: 'tool',
                 status: 'RUNNING',
                 args: event.payload.args || event.payload,
               });
@@ -201,14 +182,26 @@ class AgentBackend {
       }
 
       case 'tool_result': {
+        const toolName = event.payload.tool;
+        if (toolName === 'browser_navigate' || !toolName) {
+          this.state.viewport.status = 'idle';
+          if (this.state.activeMissionId) {
+            const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
+            if (mission && mission.viewport) {
+              mission.viewport.status = 'idle';
+            }
+          }
+          this.broadcast({ type: 'viewport_update', data: this.state.viewport });
+        }
+
         if (this.state.activeMissionId) {
           const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
           if (mission && mission.steps.length > 0) {
             // 找到最后处于 RUNNING 的该工具步骤并将其标记为完成
-            const toolName = event.payload.tool;
             const targetStep = [...mission.steps].reverse().find((s) => s.status === 'RUNNING' && (!toolName || s.tool === toolName)) || mission.steps[mission.steps.length - 1];
             if (targetStep && targetStep.status === 'RUNNING') {
               targetStep.status = 'DONE';
+              targetStep.output = event.payload.output;
               targetStep.duration = '320ms';
               this.broadcast({ type: 'mission_updated', data: mission });
             }
@@ -253,6 +246,13 @@ class AgentBackend {
 
       case 'artifact': {
         this.state.latestArtifact = event.payload;
+        if (this.state.activeMissionId) {
+          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
+          if (mission) {
+            mission.artifact = event.payload;
+            this.broadcast({ type: 'mission_updated', data: mission });
+          }
+        }
         this.broadcast({ type: 'artifact_updated', data: event.payload });
         break;
       }
@@ -282,7 +282,7 @@ class AgentBackend {
         if (this.state.activeMissionId) {
           const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
           if (mission) {
-            // 确保未完成的步骤状态标记为 DONE
+            // 确保未完成的工具步骤状态标记为 DONE
             mission.steps.forEach((st) => {
               if (st.status === 'RUNNING' || st.status === 'PENDING') {
                 st.status = 'DONE';
@@ -290,21 +290,26 @@ class AgentBackend {
               }
             });
 
-            // 将最终回答挂载到最后一步（或者意图理解步骤）
-            const lastStep = mission.steps[mission.steps.length - 1];
-            if (lastStep) {
-              lastStep.answer = finalAnswer;
-              if (mission.steps.length === 1 && lastStep.id === 'step_init') {
-                lastStep.title = '智能体回复';
-              }
-            }
+            // 作为独立的 Assistant 回复步骤追加，清晰区分提问、工具调用和最终回复
+            mission.steps.push({
+              id: `step_assistant_${Date.now()}`,
+              role: 'assistant',
+              title: '智能体回复',
+              status: 'DONE',
+              answer: finalAnswer,
+            });
 
             mission.status = 'DONE';
             mission.progress = 100;
+            if (mission.viewport) {
+              mission.viewport.status = 'idle';
+            }
             this.broadcast({ type: 'mission_updated', data: mission });
           }
         }
 
+        this.state.viewport.status = 'idle';
+        this.broadcast({ type: 'viewport_update', data: this.state.viewport });
         this.addTerminalLog('system', `[Agent] 回复完成: ${finalAnswer.slice(0, 100)}`);
         break;
       }
@@ -340,6 +345,18 @@ class AgentBackend {
     if (this.state.terminalLogs.length > 500) {
       this.state.terminalLogs.shift();
     }
+
+    if (this.state.activeMissionId) {
+      const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
+      if (mission) {
+        if (!mission.terminalLogs) mission.terminalLogs = [];
+        mission.terminalLogs.push(entry);
+        if (mission.terminalLogs.length > 300) {
+          mission.terminalLogs.shift();
+        }
+      }
+    }
+
     this.broadcast({ type: 'terminal_log', data: entry });
   }
 
@@ -391,6 +408,19 @@ class AgentBackend {
     if (controller) {
       controller.abort();
       this.activeAbortControllers.delete(missionId);
+    }
+
+    // 清理并拒绝所有挂起的人机协同审批，避免终止后残留授权弹窗
+    if (this.state.approvalRequests.length > 0) {
+      for (const req of this.state.approvalRequests) {
+        try {
+          (this.ctx.orchestrator as any)?.submitApproval?.(req.id, false);
+        } catch {
+          // ignore
+        }
+        this.broadcast({ type: 'approval_resolved', data: { approvalId: req.id } });
+      }
+      this.state.approvalRequests = [];
     }
 
     const mission = this.state.missions.find((m) => m.id === missionId);
@@ -451,8 +481,10 @@ class AgentBackend {
       targetMission.progress = 10;
       targetMission.steps.push({
         id: `step_${Date.now()}`,
-        title: `处理追问指令: ${goal.slice(0, 45)}...`,
-        status: 'RUNNING',
+        role: 'user',
+        title: goal,
+        userPrompt: goal,
+        status: 'DONE',
       });
       this.state.activeMissionId = targetMission.id;
       this.broadcast({ type: 'mission_updated', data: targetMission });
@@ -468,9 +500,11 @@ class AgentBackend {
         startedAt: Date.now(),
         steps: [
           {
-            id: `step_init`,
-            title: `Analyze mission: ${goal.slice(0, 45)}...`,
-            status: 'RUNNING',
+            id: `step_user_init`,
+            role: 'user',
+            title: goal,
+            userPrompt: goal,
+            status: 'DONE',
           },
         ],
         conversationMessages: [],

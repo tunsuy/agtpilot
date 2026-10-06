@@ -2,10 +2,8 @@
 node_modules
 .pnpm-store
 
-# Next.js build artifacts (except standalone if building outside)
-.next
-!.next/standalone
-out
+# Next.js build cache (keep standalone and static)
+.next/cache
 
 # Git & IDE
 .git

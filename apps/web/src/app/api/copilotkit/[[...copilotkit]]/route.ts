@@ -26,18 +26,46 @@ async function getHandler() {
       })
     );
 
-    const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || 'dummy-key';
-    const modelName = process.env.DEEPSEEK_API_KEY ? 'openai/deepseek-chat' : 'openai/gpt-4o';
+    // 动态根据 ACTIVE_MODEL_ID 选取生效模型与对应 Key 与 BaseURL
+    const activeModelId = process.env.ACTIVE_MODEL_ID || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'openai');
+
+    let apiKey = 'dummy-key';
+    let modelName = 'openai/deepseek-chat';
+    let baseUrl: string | undefined = undefined;
+
+    if (activeModelId === 'custom_llm') {
+      apiKey = process.env.CUSTOM_LLM_API_KEY || 'dummy-key';
+      const rawModel = process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o';
+      modelName = rawModel.includes('/') ? rawModel : `openai/${rawModel}`;
+      baseUrl = process.env.CUSTOM_LLM_BASE_URL || undefined;
+    } else if (activeModelId === 'openai') {
+      apiKey = process.env.OPENAI_API_KEY || 'dummy-key';
+      const rawModel = process.env.OPENAI_MODEL_NAME || 'gpt-4o';
+      modelName = rawModel.includes('/') ? rawModel : `openai/${rawModel}`;
+      baseUrl = process.env.OPENAI_BASE_URL || undefined;
+    } else {
+      // deepseek
+      apiKey = process.env.DEEPSEEK_API_KEY || 'dummy-key';
+      const rawModel = process.env.DEEPSEEK_MODEL_NAME || 'deepseek-chat';
+      modelName = rawModel.includes('/') ? rawModel : `openai/${rawModel}`;
+      baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1';
+    }
+
+    const agentConfig: any = {
+      model: modelName,
+      apiKey,
+      prompt:
+        '你是由 DeepSeek Harness 官方 Cordis 插件微内核驱动的个人全自主智能体驾驶舱助手 (agtpilot)。你可以自主规划多步任务，并按需调用原子工具：互联网实时检索 (search_web, search_exa, search_tavily)、持久化浏览器与 Firecrawl 深度蒸馏 (browser_navigate, browser_screenshot, browser_click)、隔离代码与 E2B 微虚拟机沙箱 (sandbox_run_code, sandbox_run_command)、工作区文件操作 (sandbox_read_file, sandbox_write_file) 以及通过 Anthropic MCP 协议挂载任意外部工具。',
+      tools,
+    };
+
+    if (baseUrl) {
+      agentConfig.baseUrl = baseUrl;
+    }
 
     const runtime = new CopilotRuntime({
       agents: {
-        default: new BuiltInAgent({
-          model: modelName,
-          apiKey,
-          prompt:
-            '你是由 DeepSeek Harness 官方 Cordis 插件微内核驱动的个人全自主智能体驾驶舱助手 (agtpilot)。你可以自主规划多步任务，并按需调用原子工具：互联网实时检索 (search_web, search_exa, search_tavily)、持久化浏览器与 Firecrawl 深度蒸馏 (browser_navigate, browser_screenshot, browser_click)、隔离代码与 E2B 微虚拟机沙箱 (sandbox_run_code, sandbox_run_command)、工作区文件操作 (sandbox_read_file, sandbox_write_file) 以及通过 Anthropic MCP 协议挂载任意外部工具。',
-          tools,
-        }),
+        default: new BuiltInAgent(agentConfig),
       },
     });
 
@@ -55,6 +83,8 @@ export const GET = async (req: NextRequest) => {
 };
 
 export const POST = async (req: NextRequest) => {
+  // 保持 handler 随模型环境更新
+  runtimeHandler = null;
   const handler = await getHandler();
   return handler(req);
 };

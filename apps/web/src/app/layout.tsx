@@ -3,8 +3,13 @@ import './globals.css';
 import '@copilotkit/react-ui/styles.css';
 
 export const metadata: Metadata = {
-  title: 'agtpilot | Personal Autonomous AI Agent',
+  title: 'AgtPilot | Personal Autonomous AI Agent',
   description: 'A pluggable, autonomous personal AI agent with browser automation, sandbox execution, and Generative UI.',
+  icons: {
+    icon: '/favicon.png',
+    shortcut: '/favicon.ico',
+    apple: '/favicon.png',
+  },
 };
 
 import { Providers } from '../components/Providers';

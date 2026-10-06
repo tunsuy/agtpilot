@@ -7,6 +7,15 @@ export interface ConnectorApp {
   envVar: string;
   description: string;
   keyMasked?: string;
+  isModel?: boolean;
+  isDefaultModel?: boolean;
+  baseUrl?: string;
+  baseUrlEnvVar?: string;
+  customModelName?: string;
+  modelNameEnvVar?: string;
+  authType?: 'api_key' | 'oauth';
+  oauthProvider?: string;
+  oauthScope?: string;
 }
 
 export interface MissionStep {
@@ -67,3 +76,24 @@ export interface User {
   tokensLimit: number;
   createdAt: string;
 }
+
+export interface MemoryItem {
+  id: string;
+  category: 'preference' | 'project' | 'fact' | 'rule';
+  title: string;
+  content: string;
+  confidence: number;
+  updatedAt: number;
+}
+
+export interface CronJobItem {
+  id: string;
+  name: string;
+  pattern: string;
+  prompt: string;
+  nextRun?: string;
+  runCount: number;
+  lastRunAt?: number;
+  status: 'active' | 'paused' | 'cancelled';
+}
+

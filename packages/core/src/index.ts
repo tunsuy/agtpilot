@@ -10,10 +10,13 @@ export interface ToolDefinition {
 }
 
 export interface TaskOptions {
+  taskId?: string;
   prompt: string;
   system?: string;
   model?: string;
   maxSteps?: number;
+  abortSignal?: AbortSignal;
+  configOverride?: any;
   onEvent?: (event: AgentEvent) => void;
 }
 
@@ -87,7 +90,7 @@ export class OrchestratorService extends Service {
    * 运行完整的自研 ReAct 任务循环 (带死循环熔断、安全审批、标准化事件广播)
    */
   async runTask(options: TaskOptions): Promise<TaskResult> {
-    const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const taskId = options.taskId || `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const maxSteps = options.maxSteps ?? 10;
     const events: AgentEvent[] = [];
 
@@ -109,6 +112,9 @@ export class OrchestratorService extends Service {
 
     try {
       while (currentStep < maxSteps) {
+        if (options.abortSignal?.aborted) {
+          throw new Error('任务已被主动终止 (Cancelled)');
+        }
         currentStep++;
 
         // 1. 调用模型单步驱动 (方案 A: 严格单步)
@@ -116,6 +122,7 @@ export class OrchestratorService extends Service {
           model: options.model,
           system: options.system || '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用浏览器等原子工具来完成任务。',
           messages: messages as any,
+          configOverride: options.configOverride,
         });
 
         // 2. 捕获思考/回复

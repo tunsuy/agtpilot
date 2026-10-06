@@ -55,7 +55,7 @@ export function DeliverablesView({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-            交付物与资产归档 (Deliverables Vault)
+            交付物与资产归档
           </h1>
           <p className="text-xs text-zinc-500 mt-1">
             由 AgtPilot 在自主执行周期中沉淀的结构化研究报告、代码产物与设计文档。
@@ -132,7 +132,7 @@ export function DeliverablesView({
               暂无可交付成果
             </h3>
             <p className="text-xs text-zinc-500">
-              启动一个行业调研或代码执行任务，AgtPilot 将在任务完成后自动生成结构化 Deliverable。
+              启动一个调研或开发任务，AgtPilot 将在任务完成后自动汇总生成正式的报告与成果物。
             </p>
           </div>
           <div className="pt-2">

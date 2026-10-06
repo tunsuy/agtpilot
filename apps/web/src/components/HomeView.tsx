@@ -24,6 +24,7 @@ interface HomeViewProps {
   onRunMission: (prompt: string, title?: string) => void;
   missions: Mission[];
   connectors: ConnectorApp[];
+  onSelectModel?: (modelId: string) => Promise<void>;
   onOpenCockpit: (missionId?: string) => void;
   onOpenConnectors: () => void;
 }
@@ -32,6 +33,7 @@ export function HomeView({
   onRunMission,
   missions,
   connectors,
+  onSelectModel,
   onOpenCockpit,
   onOpenConnectors,
 }: HomeViewProps) {
@@ -79,7 +81,7 @@ export function HomeView({
     setPromptText('');
   };
 
-  const connectedCount = connectors.filter((c) => c.status === 'connected').length;
+  const connectedCount = (connectors || []).filter((c) => c.status === 'connected').length;
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-12 animate-fadeIn">
@@ -135,7 +137,7 @@ export function HomeView({
               value={promptText}
               onChange={(e) => setPromptText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   handleSubmit(e);
                 }
@@ -146,11 +148,31 @@ export function HomeView({
           </div>
 
           {/* Footer Controls */}
-          <div className="px-4 py-3 bg-[#fafafa] border-t border-zinc-100 flex items-center justify-between">
-            <div className="flex items-center gap-3 text-[11px] text-zinc-400 font-mono">
-              <span>快捷指令: ⌘ + Enter 提交</span>
-              <span className="hidden sm:inline">•</span>
-              <span className="hidden sm:inline">深度反思模式已就绪</span>
+          <div className="px-4 py-3 bg-[#fafafa] border-t border-zinc-100 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              {/* 模型选择器 */}
+              {onSelectModel && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-zinc-200/90 shadow-2xs">
+                  <Cpu className="h-3.5 w-3.5 text-blue-600 flex-shrink-0" />
+                  <select
+                    value={(connectors || []).find((c) => c.isModel && c.isDefaultModel)?.id || 'deepseek'}
+                    onChange={(e) => onSelectModel(e.target.value)}
+                    className="bg-transparent text-xs font-medium text-zinc-800 focus:outline-none cursor-pointer"
+                  >
+                    {(connectors || [])
+                      .filter((c) => c.isModel)
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="hidden sm:flex items-center gap-2 text-[11px] text-zinc-400 font-mono ml-1">
+                <span>Enter 发送，Shift + Enter 换行</span>
+              </div>
             </div>
 
             <button
@@ -171,7 +193,6 @@ export function HomeView({
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
             推荐工作流模版
           </h2>
-          <span className="text-xs text-zinc-400">点击卡片快速填入并启动</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -209,7 +230,6 @@ export function HomeView({
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
             系统四大原子支柱
           </h2>
-          <span className="text-xs text-zinc-400">原生插件生态与深层交互引擎</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">

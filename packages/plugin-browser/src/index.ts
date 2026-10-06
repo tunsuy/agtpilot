@@ -93,8 +93,14 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           payload: {
             url,
             title,
-            screenshotBase64,
+            screenshotBase64: screenshotBase64 ? `data:image/jpeg;base64,${screenshotBase64}` : '',
           },
+          timestamp: Date.now(),
+        });
+
+        ctx.agent.emitEvent({
+          type: 'tool_result',
+          payload: { tool: 'browser_navigate', success: true, url },
           timestamp: Date.now(),
         });
 
@@ -106,6 +112,11 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           screenshotBase64: screenshotBase64 ? `data:image/jpeg;base64,${screenshotBase64}` : undefined,
         };
       } catch (err: any) {
+        ctx.agent.emitEvent({
+          type: 'tool_result',
+          payload: { tool: 'browser_navigate', success: false, url, error: err.message },
+          timestamp: Date.now(),
+        });
         return {
           success: false,
           url,

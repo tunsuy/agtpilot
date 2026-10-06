@@ -73,7 +73,7 @@ configuredProviders.push(
         const socialName = typeof credentials.socialName === 'string' ? credentials.socialName : undefined;
         if (p === 'wechat') {
           return {
-            id: `usr_wx_${Date.now()}`,
+            id: 'usr_wechat_default',
             name: socialName || '微信用户_AgtPilot',
             email: 'wechat_user@agtpilot.ai',
             image: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=128&auto=format&fit=crop&q=80',
@@ -85,7 +85,7 @@ configuredProviders.push(
         }
         if (p === 'google') {
           return {
-            id: `usr_goog_${Date.now()}`,
+            id: 'usr_google_default',
             name: socialName || 'Google Account',
             email: 'google_user@gmail.com',
             image: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=128&auto=format&fit=crop&q=80',
@@ -97,7 +97,7 @@ configuredProviders.push(
         }
         if (p === 'github') {
           return {
-            id: `usr_gh_${Date.now()}`,
+            id: 'usr_github_default',
             name: socialName || 'GitHub Developer',
             email: 'developer@github.com',
             image: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=128&auto=format&fit=crop&q=80',
@@ -109,7 +109,7 @@ configuredProviders.push(
         }
         if (p === 'apple') {
           return {
-            id: `usr_apple_${Date.now()}`,
+            id: 'usr_apple_default',
             name: socialName || 'Apple ID User',
             email: 'apple_user@icloud.com',
             image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=128&auto=format&fit=crop&q=80',
@@ -128,8 +128,11 @@ configuredProviders.push(
         return null;
       }
 
+      // 稳定确定性的用户 ID，避免每次用同个邮箱登录变成不同用户
+      const safeId = 'usr_' + Buffer.from(email.toLowerCase().trim()).toString('hex').slice(0, 16);
+
       return {
-        id: `usr_${Date.now()}`,
+        id: safeId,
         name: email.split('@')[0],
         email,
         role: 'user',
@@ -149,6 +152,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   callbacks: {
     jwt({ token, user }) {
       if (user) {
+        token.id = user.id;
         token.role = (user as any).role || 'user';
         token.tier = (user as any).tier || 'Pro';
         token.tokensUsed = (user as any).tokensUsed ?? 3500;
@@ -158,6 +162,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
     session({ session, token }) {
       if (session.user) {
+        session.user.id = (token.id as string) || (token.sub as string);
         (session.user as any).role = token.role;
         (session.user as any).tier = token.tier;
         (session.user as any).tokensUsed = token.tokensUsed;

@@ -147,8 +147,17 @@ export function UserMenu({ onOpenAuth }: UserMenuProps) {
           {/* Logout */}
           <div className="pt-2 border-t border-zinc-100">
             <button
-              onClick={() => {
+              onClick={async () => {
                 setIsOpen(false);
+                try {
+                  await fetch('/api/agent/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                  });
+                } catch (e) {
+                  console.error('Failed to stop missions on logout:', e);
+                }
                 signOut({ redirect: false });
               }}
               className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-red-50 text-red-600 transition text-xs text-left"

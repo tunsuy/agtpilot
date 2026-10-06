@@ -15,6 +15,12 @@ export interface MemoryRecord {
   updatedAt: number;
 }
 
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    memory: MemoryService;
+  }
+}
+
 export class MemoryService extends Service {
   private memoryFilePath: string;
   private memories: Map<string, MemoryRecord> = new Map();
@@ -71,6 +77,19 @@ export class MemoryService extends Service {
     this.memories.set(memoryId, record);
     this.saveToDisk();
     return record;
+  }
+
+  deleteMemory(id: string): boolean {
+    const existed = this.memories.delete(id);
+    if (existed) {
+      this.saveToDisk();
+    }
+    return existed;
+  }
+
+  clearMemories(): void {
+    this.memories.clear();
+    this.saveToDisk();
   }
 
   recall(query: string, category?: MemoryRecord['category']): MemoryRecord[] {

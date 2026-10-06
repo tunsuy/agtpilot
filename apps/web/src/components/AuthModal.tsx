@@ -360,30 +360,11 @@ export function AuthModal({
               </div>
 
               {/* 操作说明三步走 */}
-              <div className="text-left text-[11px] text-zinc-500 space-y-1 pt-1 font-sans">
+              <div className="text-left text-[11px] text-zinc-500 space-y-1.5 pt-1 font-sans">
                 <p>1. 使用手机微信扫描上方二维码关注公众号；</p>
-                <p>2. 在公众号发送消息 <code className="bg-zinc-200/70 px-1 py-0.5 rounded font-mono text-zinc-800 font-semibold">登录</code>，点击公众号自动回复的链接；</p>
-                <p>3. 在手机页面输入当前验证码 <code className="bg-emerald-100 text-emerald-800 px-1 py-0.5 rounded font-mono font-bold">{wechatCode || '839215'}</code> 并确认，电脑端将自动登录！</p>
+                <p>2. 在公众号后台发送 <code className="bg-zinc-200/70 px-1 py-0.5 rounded font-mono text-zinc-800 font-semibold">登录</code> 即可获取验证入口；</p>
+                <p>3. 填入当前验证码 <code className="bg-emerald-100 text-emerald-800 px-1 py-0.5 rounded font-mono font-bold">{wechatCode || '839215'}</code> 完成确认，电脑端将自动登录。</p>
               </div>
-            </div>
-
-            {/* 本地联调模拟触发按钮 */}
-            <div className="pt-1">
-              <button
-                type="button"
-                onClick={handleMockWechatVerify}
-                disabled={mockVerifying}
-                className="w-full py-2 px-3 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/80 text-emerald-800 text-xs font-medium flex items-center justify-center gap-2 transition"
-              >
-                {mockVerifying ? (
-                  <RotateCw className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <>
-                    <MessageSquare className="h-3.5 w-3.5 text-emerald-600" />
-                    <span>本地联调：模拟在公众号回复验证码</span>
-                  </>
-                )}
-              </button>
             </div>
           </div>
         ) : (

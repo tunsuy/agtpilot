@@ -5,6 +5,8 @@ import {
   Compass,
   Cpu,
   Layers,
+  Brain,
+  Clock,
   FileText,
   Plus,
   ShieldAlert,
@@ -15,10 +17,12 @@ import { Mission, ApprovalRequest, User } from '../types/agent';
 import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
-  activeView: 'home' | 'cockpit' | 'connectors' | 'deliverables';
-  onViewChange: (view: 'home' | 'cockpit' | 'connectors' | 'deliverables') => void;
+  activeView: 'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables';
+  onViewChange: (view: 'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => void;
   currentMission: Mission | null;
   connectedCount: number;
+  memoryCount?: number;
+  patrolCount?: number;
   approvalRequests: ApprovalRequest[];
   hasArtifact: boolean;
   onNewMission: () => void;
@@ -30,6 +34,8 @@ export function Navbar({
   onViewChange,
   currentMission,
   connectedCount,
+  memoryCount = 0,
+  patrolCount = 0,
   approvalRequests,
   hasArtifact,
   onNewMission,
@@ -39,17 +45,20 @@ export function Navbar({
   const hasPendingApproval = approvalRequests.length > 0;
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-14 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md z-40 px-4 md:px-6 flex items-center justify-between">
+    <header className="fixed top-0 left-0 right-0 h-14 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md z-50 px-4 md:px-6 flex items-center justify-between">
       {/* Brand & Status */}
       <div className="flex items-center gap-4">
         <button
           onClick={() => onViewChange('home')}
           className="flex items-center gap-2.5 group transition"
         >
-          <div className="h-8 w-8 rounded-xl bg-zinc-950 text-white flex items-center justify-center font-bold text-xs tracking-tight shadow-sm group-hover:scale-105 transition-transform">
-            <span className="bg-gradient-to-tr from-zinc-300 to-white bg-clip-text text-transparent font-black text-sm">
-              P
-            </span>
+          <div className="h-8 w-8 rounded-xl overflow-hidden shadow-xs group-hover:scale-105 transition-transform flex items-center justify-center bg-black border border-zinc-800">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo.png"
+              alt="AgtPilot Logo"
+              className="h-full w-full object-cover scale-110"
+            />
           </div>
           <div className="text-left">
             <div className="flex items-center gap-1.5">
@@ -67,24 +76,23 @@ export function Navbar({
         </button>
 
         {/* Global Agent State Pill */}
-        <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-zinc-50 border border-zinc-200/80">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              hasPendingApproval
-                ? 'bg-amber-500 animate-ping'
-                : isMissionActive
-                ? 'bg-blue-600 animate-pulse'
-                : 'bg-emerald-500'
-            }`}
-          />
-          <span className="text-[11px] font-medium text-zinc-600">
-            {hasPendingApproval
-              ? 'Approval Pending'
-              : isMissionActive
-              ? `Running: ${currentMission?.title.slice(0, 18)}...`
-              : 'Kernel Ready'}
-          </span>
-        </div>
+        {/* Status indicator when active or pending */}
+        {(hasPendingApproval || isMissionActive) && (
+          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-zinc-50 border border-zinc-200/80 animate-fadeIn">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                hasPendingApproval
+                  ? 'bg-amber-500 animate-ping'
+                  : 'bg-blue-600 animate-pulse'
+              }`}
+            />
+            <span className="text-[11px] font-medium text-zinc-600">
+              {hasPendingApproval
+                ? '等待审批授权'
+                : `执行中: ${currentMission?.title.slice(0, 18)}...`}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Navigation Tabs (Manus / Cue minimal style) */}
@@ -129,6 +137,40 @@ export function Navbar({
           {connectedCount > 0 && (
             <span className="text-[10px] bg-zinc-200 text-zinc-700 font-mono px-1 rounded">
               {connectedCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => onViewChange('memories')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'memories'
+              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+          }`}
+        >
+          <Brain className="h-3.5 w-3.5" />
+          <span>记忆库</span>
+          {memoryCount > 0 && (
+            <span className="text-[10px] bg-purple-100 text-purple-700 font-mono px-1.5 rounded-full font-semibold">
+              {memoryCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => onViewChange('patrol')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'patrol'
+              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+          }`}
+        >
+          <Clock className="h-3.5 w-3.5" />
+          <span>主动巡航</span>
+          {patrolCount > 0 && (
+            <span className="text-[10px] bg-blue-100 text-blue-700 font-mono px-1.5 rounded-full font-semibold">
+              {patrolCount}
             </span>
           )}
         </button>

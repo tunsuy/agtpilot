@@ -16,11 +16,80 @@ export interface ScheduledJobInfo {
   status: 'active' | 'paused' | 'cancelled';
 }
 
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    cron: CronService;
+  }
+}
+
+import * as fs from 'fs';
+import * as path from 'path';
+
 export class CronService extends Service {
   private jobs: Map<string, { job: Cron; info: ScheduledJobInfo }> = new Map();
+  private cronFilePath: string;
 
   constructor(ctx: Context) {
     super(ctx, 'cron');
+    const cacheDir = path.resolve(process.cwd(), '.cache');
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+    this.cronFilePath = path.join(cacheDir, 'scheduled_jobs.json');
+    this.loadFromDisk();
+  }
+
+  private loadFromDisk() {
+    try {
+      if (fs.existsSync(this.cronFilePath)) {
+        const raw = fs.readFileSync(this.cronFilePath, 'utf-8');
+        const list: ScheduledJobInfo[] = JSON.parse(raw);
+        for (const item of list) {
+          if (item.status === 'active') {
+            this.registerCron(item);
+          } else {
+            // 已暂停或已取消任务只保留信息
+            this.jobs.set(item.id, { job: null as any, info: item });
+          }
+        }
+      }
+    } catch {
+      // 容错处理
+    }
+  }
+
+  private saveToDisk() {
+    try {
+      const list = Array.from(this.jobs.values()).map(({ info }) => info);
+      fs.writeFileSync(this.cronFilePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch {
+      // 容错处理
+    }
+  }
+
+  private registerCron(info: ScheduledJobInfo) {
+    try {
+      const cronJob = new Cron(info.pattern, { timezone: 'Asia/Shanghai' }, async () => {
+        info.runCount++;
+        info.lastRunAt = Date.now();
+        info.nextRun = cronJob.nextRun()?.toISOString();
+        this.saveToDisk();
+
+        // 自主唤醒智能体执行任务
+        try {
+          await this.ctx.orchestrator.runTask({
+            prompt: `【定时巡检主动触发 - ${info.name}】: ${info.prompt}`,
+          });
+        } catch (err) {
+          // 容错记录
+        }
+      });
+
+      info.nextRun = cronJob.nextRun()?.toISOString();
+      this.jobs.set(info.id, { job: cronJob, info });
+    } catch (e) {
+      console.error(`Failed to register cron job ${info.name}:`, e);
+    }
   }
 
   schedule(name: string, pattern: string, prompt: string): ScheduledJobInfo {
@@ -35,41 +104,45 @@ export class CronService extends Service {
       status: 'active',
     };
 
-    const cronJob = new Cron(pattern, { timezone: 'Asia/Shanghai' }, async () => {
-      info.runCount++;
-      info.lastRunAt = Date.now();
-      info.nextRun = cronJob.nextRun()?.toISOString();
-
-      // 自主唤醒智能体执行任务
-      try {
-        await this.ctx.orchestrator.runTask({
-          prompt: `【定时巡检主动触发 - ${info.name}】: ${info.prompt}`,
-        });
-      } catch (err) {
-        // 容错记录
-      }
-    });
-
-    info.nextRun = cronJob.nextRun()?.toISOString();
-    this.jobs.set(id, { job: cronJob, info });
+    this.registerCron(info);
+    this.saveToDisk();
 
     return info;
+  }
+
+  toggle(id: string): ScheduledJobInfo | null {
+    const entry = this.jobs.get(id);
+    if (!entry) return null;
+
+    if (entry.info.status === 'active') {
+      if (entry.job) {
+        entry.job.stop();
+      }
+      entry.info.status = 'paused';
+    } else {
+      entry.info.status = 'active';
+      this.registerCron(entry.info);
+    }
+    this.saveToDisk();
+    return entry.info;
   }
 
   cancel(id: string): boolean {
     const entry = this.jobs.get(id);
     if (!entry) return false;
 
-    entry.job.stop();
-    entry.info.status = 'cancelled';
+    if (entry.job) {
+      entry.job.stop();
+    }
     this.jobs.delete(id);
+    this.saveToDisk();
     return true;
   }
 
   list(): ScheduledJobInfo[] {
     return Array.from(this.jobs.values()).map(({ job, info }) => ({
       ...info,
-      nextRun: job.nextRun()?.toISOString(),
+      nextRun: job ? job.nextRun()?.toISOString() : info.nextRun,
     }));
   }
 }

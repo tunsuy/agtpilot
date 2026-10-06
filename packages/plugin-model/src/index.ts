@@ -22,6 +22,12 @@ export interface ModelInvokeOptions {
   system?: string;
   messages: CoreMessage[];
   temperature?: number;
+  configOverride?: {
+    activeModelId?: string;
+    apiKey?: string;
+    baseURL?: string;
+    modelName?: string;
+  };
 }
 
 export class ModelService extends Service {
@@ -45,8 +51,7 @@ export class ModelService extends Service {
 
   // 严格执行【方案 A】：单步无状态调用驱动，绝不越权包含循环
   async invokeStep(options: ModelInvokeOptions): Promise<ModelStepResult> {
-    const modelId = options.model || 'deepseek:deepseek-chat';
-    const selectedModel = this.resolveModel(modelId);
+    const selectedModel = this.resolveActiveModel(options.model, options.configOverride);
 
     // 将 ctx.agent 中动态注册的所有原子工具转换为 Vercel AI SDK 的标准 tool 映射
     const toolsMap: Record<string, any> = {};
@@ -84,19 +89,51 @@ export class ModelService extends Service {
     };
   }
 
-  private resolveModel(modelId: string) {
-    const [provider, modelName] = modelId.includes(':')
-      ? modelId.split(':')
-      : ['deepseek', modelId];
+  private resolveActiveModel(
+    modelOverride?: string,
+    configOverride?: { activeModelId?: string; apiKey?: string; baseURL?: string; modelName?: string }
+  ) {
+    const activeModelId =
+      configOverride?.activeModelId ||
+      modelOverride ||
+      process.env.ACTIVE_MODEL_ID ||
+      (process.env.CUSTOM_LLM_API_KEY
+        ? 'custom_llm'
+        : process.env.DEEPSEEK_API_KEY
+        ? 'deepseek'
+        : 'openai');
 
-    switch (provider) {
-      case 'deepseek':
-        return this.deepseekProvider(modelName);
-      case 'openai':
-        return this.openaiProvider(modelName);
-      default:
-        return this.deepseekProvider(modelName);
+    if (activeModelId === 'custom_llm') {
+      const apiKey = configOverride?.apiKey || process.env.CUSTOM_LLM_API_KEY || 'dummy_key';
+      const baseURL = configOverride?.baseURL || process.env.CUSTOM_LLM_BASE_URL || undefined;
+      const modelName = configOverride?.modelName || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o';
+      const provider = createOpenAI({
+        apiKey,
+        baseURL,
+      });
+      return provider(modelName);
     }
+
+    if (activeModelId === 'openai') {
+      const apiKey = configOverride?.apiKey || process.env.OPENAI_API_KEY || 'dummy_key';
+      const baseURL = configOverride?.baseURL || process.env.OPENAI_BASE_URL || undefined;
+      const modelName = configOverride?.modelName || process.env.OPENAI_MODEL_NAME || 'gpt-4o';
+      const provider = createOpenAI({
+        apiKey,
+        baseURL,
+      });
+      return provider(modelName);
+    }
+
+    // deepseek
+    const apiKey = configOverride?.apiKey || process.env.DEEPSEEK_API_KEY || 'dummy_key';
+    const baseURL = configOverride?.baseURL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1';
+    const modelName = configOverride?.modelName || process.env.DEEPSEEK_MODEL_NAME || 'deepseek-chat';
+    const provider = createDeepSeek({
+      apiKey,
+      baseURL,
+    });
+    return provider(modelName);
   }
 }
 

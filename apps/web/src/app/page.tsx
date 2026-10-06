@@ -1,12 +1,15 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
 import { CopilotKit } from '@copilotkit/react-core';
 import { Navbar } from '../components/Navbar';
 import { HomeView } from '../components/HomeView';
 import { CockpitView } from '../components/CockpitView';
 import { ConnectorsView } from '../components/ConnectorsView';
 import { DeliverablesView } from '../components/DeliverablesView';
+import { MemoriesView } from '../components/MemoriesView';
+import { CronJobsView } from '../components/CronJobsView';
 import { AuthModal } from '../components/AuthModal';
 import {
   Mission,
@@ -15,11 +18,13 @@ import {
   ApprovalRequest,
   ArtifactState,
   ConnectorApp,
+  MemoryItem,
+  CronJobItem,
 } from '../types/agent';
 
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
-  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'connectors' | 'deliverables'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables'>('home');
   const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact'>('browser');
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
@@ -41,6 +46,102 @@ export default function Workspace() {
   const [connectors, setConnectors] = useState<ConnectorApp[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // 长效记忆状态
+  const [memories, setMemories] = useState<MemoryItem[]>([]);
+
+  const loadMemories = async () => {
+    try {
+      const res = await fetch('/api/memories');
+      const data = await res.json();
+      if (data.memories) setMemories(data.memories);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleAddMemory = async (memory: { title: string; content: string; category: MemoryItem['category'] }) => {
+    try {
+      const res = await fetch('/api/memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add', memory }),
+      });
+      const data = await res.json();
+      if (data.memories) setMemories(data.memories);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteMemory = async (id: string) => {
+    try {
+      const res = await fetch('/api/memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', id }),
+      });
+      const data = await res.json();
+      if (data.memories) setMemories(data.memories);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // 主动巡航 Cron Jobs 状态
+  const [cronJobs, setCronJobs] = useState<CronJobItem[]>([]);
+
+  const loadCronJobs = async () => {
+    try {
+      const res = await fetch('/api/cron/jobs');
+      const data = await res.json();
+      if (data.jobs) setCronJobs(data.jobs);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleCreateCronJob = async (job: { name: string; pattern: string; prompt: string }) => {
+    try {
+      const res = await fetch('/api/cron/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', ...job }),
+      });
+      const data = await res.json();
+      if (data.jobs) setCronJobs(data.jobs);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleToggleCronJob = async (id: string) => {
+    try {
+      const res = await fetch('/api/cron/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'toggle', id }),
+      });
+      const data = await res.json();
+      if (data.jobs) setCronJobs(data.jobs);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteCronJob = async (id: string) => {
+    try {
+      const res = await fetch('/api/cron/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel', id }),
+      });
+      const data = await res.json();
+      if (data.jobs) setCronJobs(data.jobs);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const loadConnectors = async () => {
     try {
       const res = await fetch('/api/connectors');
@@ -51,12 +152,42 @@ export default function Workspace() {
     }
   };
 
-  const handleSaveKey = async (envVar: string, value: string) => {
+  const handleSaveKey = async (
+    envVar: string,
+    value: string,
+    extra?: { baseUrl?: string; baseUrlEnvVar?: string; modelName?: string; modelNameEnvVar?: string }
+  ) => {
+    try {
+      const payload: any = extra
+        ? {
+            action: 'saveConnectorConfig',
+            envVar,
+            value,
+            baseUrl: extra.baseUrl,
+            baseUrlEnvVar: extra.baseUrlEnvVar,
+            modelName: extra.modelName,
+            modelNameEnvVar: extra.modelNameEnvVar,
+          }
+        : { envVar, value };
+
+      const res = await fetch('/api/connectors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.connectors) setConnectors(data.connectors);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleSetDefaultModel = async (modelId: string) => {
     try {
       const res = await fetch('/api/connectors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ envVar, value }),
+        body: JSON.stringify({ action: 'setDefaultModel', modelId }),
       });
       const data = await res.json();
       if (data.connectors) setConnectors(data.connectors);
@@ -78,8 +209,30 @@ export default function Workspace() {
     }
   };
 
+  const handleStopMission = async (missionId: string) => {
+    try {
+      await fetch('/api/agent/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ missionId }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const { data: session, status: sessionStatus } = useSession();
+
   const handleRun = async (text: string, title?: string) => {
     if (!text.trim() || isSubmitting) return;
+
+    // 检查登录状态：未登录用户直接拦截并弹出登录弹窗
+    if (sessionStatus !== 'loading' && !session?.user) {
+      setAuthModalTab('login');
+      setAuthModalOpen(true);
+      return;
+    }
+
     setIsSubmitting(true);
     setActiveView('cockpit');
     setRightTab('browser');
@@ -99,8 +252,27 @@ export default function Workspace() {
 
   useEffect(() => {
     setMounted(true);
-    loadConnectors();
 
+    if (session?.user?.id) {
+      loadConnectors();
+      loadMemories();
+      loadCronJobs();
+    } else {
+      setConnectors([]);
+      setMemories([]);
+      setCronJobs([]);
+    }
+
+    // 检查 URL 参数（如 OAuth 回调后跳转）
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('tab') === 'connectors') {
+        setActiveView('connectors');
+      }
+    }
+  }, [session?.user?.id]);
+
+  useEffect(() => {
     const eventSource = new EventSource('/api/agent/events');
 
     eventSource.addEventListener('init', (e: MessageEvent) => {
@@ -190,6 +362,16 @@ export default function Workspace() {
     };
   }, []);
 
+  const handleViewChange = (view: 'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => {
+    // 首页允许所有人浏览概览，其余页面（工作台、连接器、记忆库、巡航、交付库）必须登录
+    if (view !== 'home' && sessionStatus !== 'loading' && !session?.user) {
+      setAuthModalTab('login');
+      setAuthModalOpen(true);
+      return;
+    }
+    setActiveView(view);
+  };
+
   const currentMission = missions.find((m) => m.id === activeMissionId) || missions[0] || null;
   const connectedCount = connectors.filter((c) => c.status === 'connected').length;
 
@@ -201,12 +383,19 @@ export default function Workspace() {
         {/* Global Minimalist Topbar */}
         <Navbar
           activeView={activeView}
-          onViewChange={setActiveView}
+          onViewChange={handleViewChange}
           currentMission={currentMission}
           connectedCount={connectedCount}
+          memoryCount={memories.length}
+          patrolCount={cronJobs.filter((j) => j.status === 'active').length}
           approvalRequests={approvalRequests}
           hasArtifact={Boolean(artifact)}
           onNewMission={() => {
+            if (sessionStatus !== 'loading' && !session?.user) {
+              setAuthModalTab('login');
+              setAuthModalOpen(true);
+              return;
+            }
             setActiveView('home');
           }}
           onOpenAuth={(tab) => {
@@ -230,11 +419,12 @@ export default function Workspace() {
                 onRunMission={handleRun}
                 missions={missions}
                 connectors={connectors}
+                onSelectModel={handleSetDefaultModel}
                 onOpenCockpit={(missionId) => {
                   if (missionId) setActiveMissionId(missionId);
-                  setActiveView('cockpit');
+                  handleViewChange('cockpit');
                 }}
-                onOpenConnectors={() => setActiveView('connectors')}
+                onOpenConnectors={() => handleViewChange('connectors')}
               />
             </main>
           )}
@@ -252,7 +442,10 @@ export default function Workspace() {
               rightTab={rightTab}
               onRightTabChange={setRightTab}
               onRunMission={handleRun}
+              onStopMission={handleStopMission}
               isSubmitting={isSubmitting}
+              connectors={connectors}
+              onSelectModel={handleSetDefaultModel}
             />
           )}
 
@@ -261,6 +454,28 @@ export default function Workspace() {
               <ConnectorsView
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
+                onSetDefaultModel={handleSetDefaultModel}
+              />
+            </main>
+          )}
+
+          {activeView === 'memories' && (
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto">
+              <MemoriesView
+                memories={memories}
+                onAddMemory={handleAddMemory}
+                onDeleteMemory={handleDeleteMemory}
+              />
+            </main>
+          )}
+
+          {activeView === 'patrol' && (
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto">
+              <CronJobsView
+                jobs={cronJobs}
+                onCreateJob={handleCreateCronJob}
+                onToggleJob={handleToggleCronJob}
+                onDeleteJob={handleDeleteCronJob}
               />
             </main>
           )}

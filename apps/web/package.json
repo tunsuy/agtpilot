@@ -31,6 +31,7 @@
     "@copilotkit/runtime": "^1.77.0",
     "@deepseek-ai/cordis": "^4.0.4",
     "ai": "^4.0.0",
+    "croner": "^10.0.1",
     "diff": "^7.0.0",
     "lucide-react": "^0.475.0",
     "next": "^15.1.0",

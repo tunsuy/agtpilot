@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getUserCronJobs, saveUserCronJob, deleteUserCronJob } from '@/lib/user-store';
+import { getNextCronRun, isValidCronPattern } from '@/lib/cron-utils';
 
 export async function GET() {
   try {
@@ -14,7 +15,15 @@ export async function GET() {
 
     const userId = session.user.id;
     const jobs = getUserCronJobs(userId);
-    return NextResponse.json({ success: true, jobs });
+    // 动态同步更新 active 状态下的下一次触发时间
+    const updatedJobs = jobs.map((j: any) => {
+      if (j.status === 'active') {
+        const next = getNextCronRun(j.pattern);
+        if (next) j.nextRun = next;
+      }
+      return j;
+    });
+    return NextResponse.json({ success: true, jobs: updatedJobs });
   } catch (err: any) {
     console.error('Error in GET /api/cron/jobs:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
@@ -39,14 +48,20 @@ export async function POST(req: NextRequest) {
       if (!name || !pattern || !prompt) {
         return NextResponse.json({ success: false, error: '缺少必填字段 (name, pattern, prompt)' }, { status: 400 });
       }
+      const trimmedPattern = pattern.trim();
+      if (!isValidCronPattern(trimmedPattern)) {
+        return NextResponse.json({ success: false, error: '无效的 Cron 表达式，请检查格式' }, { status: 400 });
+      }
+
+      const nextRun = getNextCronRun(trimmedPattern) || new Date(Date.now() + 3600 * 1000).toISOString();
       const newJob = {
         id: `cron_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        name,
-        pattern,
-        prompt,
+        name: name.trim(),
+        pattern: trimmedPattern,
+        prompt: prompt.trim(),
         runCount: 0,
         status: 'active',
-        nextRun: new Date(Date.now() + 3600 * 1000).toISOString(),
+        nextRun,
       };
       const jobs = saveUserCronJob(userId, newJob);
       return NextResponse.json({ success: true, newJob, jobs });
@@ -59,6 +74,9 @@ export async function POST(req: NextRequest) {
       const existing = getUserCronJobs(userId).find((j: any) => j.id === id);
       if (existing) {
         existing.status = existing.status === 'active' ? 'paused' : 'active';
+        if (existing.status === 'active') {
+          existing.nextRun = getNextCronRun(existing.pattern) || existing.nextRun;
+        }
         saveUserCronJob(userId, existing);
       }
       const jobs = getUserCronJobs(userId);
@@ -73,9 +91,16 @@ export async function POST(req: NextRequest) {
       if (!existing) {
         return NextResponse.json({ success: false, error: '任务不存在' }, { status: 404 });
       }
-      if (name) existing.name = name;
-      if (pattern) existing.pattern = pattern;
-      if (prompt) existing.prompt = prompt;
+      if (pattern) {
+        const trimmed = pattern.trim();
+        if (!isValidCronPattern(trimmed)) {
+          return NextResponse.json({ success: false, error: '无效的 Cron 表达式，请检查格式' }, { status: 400 });
+        }
+        existing.pattern = trimmed;
+        existing.nextRun = getNextCronRun(trimmed) || existing.nextRun;
+      }
+      if (name) existing.name = name.trim();
+      if (prompt) existing.prompt = prompt.trim();
       saveUserCronJob(userId, existing);
       const jobs = getUserCronJobs(userId);
       return NextResponse.json({ success: true, updatedJob: existing, jobs });

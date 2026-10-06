@@ -17,6 +17,7 @@ import {
   Timer,
 } from 'lucide-react';
 import { CronJobItem } from '../types/agent';
+import { formatCronNextRun, isValidCronPattern } from '@/lib/cron-utils';
 
 interface CronJobsViewProps {
   jobs: CronJobItem[];
@@ -234,7 +235,7 @@ export function CronJobsView({
                         <div className="flex items-center gap-1">
                           <Calendar className="h-3 w-3" />
                           <span>
-                            下一次触发: {job.nextRun ? new Date(job.nextRun).toLocaleString('zh-CN') : '未就绪'}
+                            下一次触发: {formatCronNextRun(job.pattern, job.status, job.nextRun)}
                           </span>
                         </div>
                         <div className="flex items-center gap-1">
@@ -353,6 +354,14 @@ export function CronJobsView({
                     className="px-2 py-0.5 rounded bg-zinc-100 hover:bg-zinc-200 cursor-pointer text-zinc-600"
                   >
                     工作日 18:00
+                  </span>
+                </div>
+                <div className="mt-2 p-2 rounded-lg bg-zinc-50 border border-zinc-100 flex items-center justify-between text-[11px]">
+                  <span className="text-zinc-500">下次预计触发:</span>
+                  <span className={`font-medium ${isValidCronPattern(patternInput) ? 'text-zinc-800 font-mono' : 'text-amber-600'}`}>
+                    {isValidCronPattern(patternInput)
+                      ? formatCronNextRun(patternInput, 'active')
+                      : '格式有误 (请输入如 0 9 * * *)'}
                   </span>
                 </div>
               </div>

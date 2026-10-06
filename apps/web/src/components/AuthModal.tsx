@@ -16,6 +16,9 @@ import {
   QrCode,
   ArrowLeft,
   CheckCircle2,
+  Copy,
+  Check,
+  MessageSquare,
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -46,12 +49,92 @@ export function AuthModal({
   }>({ github: false, google: false, apple: false, wechat: false });
   const [unconfiguredNotice, setUnconfiguredNotice] = useState<'github' | 'google' | 'apple' | 'wechat' | null>(null);
 
+  // 微信个人订阅号 6 位验证码轮询机制
+  const [wechatCode, setWechatCode] = useState<string>('');
+  const [wechatSecondsLeft, setWechatSecondsLeft] = useState<number>(300);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [mockVerifying, setMockVerifying] = useState(false);
+
+  const fetchWechatCode = async () => {
+    try {
+      const res = await fetch('/api/wechat/code');
+      const data = await res.json();
+      if (data.code) {
+        setWechatCode(data.code);
+        setWechatSecondsLeft(300);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   React.useEffect(() => {
     fetch('/api/auth/configured')
       .then((res) => res.json())
       .then((data) => setConfiguredOAuth(data))
       .catch(() => {});
   }, []);
+
+  React.useEffect(() => {
+    if (authMethod === 'wechat_qr' && isOpen) {
+      fetchWechatCode();
+    }
+  }, [authMethod, isOpen]);
+
+  // 轮询核销状态与倒计时
+  React.useEffect(() => {
+    if (authMethod !== 'wechat_qr' || !wechatCode || !isOpen) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/wechat/code?code=${wechatCode}`);
+        const data = await res.json();
+        if (data.status === 'VERIFIED') {
+          clearInterval(interval);
+          await signIn('credentials', {
+            socialProvider: 'wechat',
+            socialName: data.user?.name || '微信订阅号用户',
+            redirect: false,
+          });
+          onClose();
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }, 1500);
+
+    const countdown = setInterval(() => {
+      setWechatSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(countdown);
+    };
+  }, [authMethod, wechatCode, isOpen]);
+
+  const handleCopyCode = () => {
+    if (!wechatCode) return;
+    navigator.clipboard.writeText(wechatCode);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const handleMockWechatVerify = async () => {
+    if (!wechatCode) return;
+    setMockVerifying(true);
+    try {
+      await fetch('/api/wechat/code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: wechatCode }),
+      });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setMockVerifying(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -214,9 +297,9 @@ export function AuthModal({
           </div>
         )}
 
-        {/* 微信扫码模式 (WeChat QR View) */}
+        {/* 微信个人订阅号 扫码回复验证码模式 */}
         {authMethod === 'wechat_qr' ? (
-          <div className="space-y-5 text-center animate-fadeIn">
+          <div className="space-y-4 text-center animate-fadeIn">
             <div className="flex items-center justify-between pb-2 border-b border-zinc-100">
               <button
                 type="button"
@@ -226,47 +309,85 @@ export function AuthModal({
                 <ArrowLeft className="h-3.5 w-3.5" />
                 <span>返回其他方式</span>
               </button>
-              <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                微信开放平台已连接
+              <span className="text-xs font-medium text-emerald-600 flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>微信订阅号通道已就绪</span>
               </span>
             </div>
 
-            {/* 微信二维码卡片 */}
-            <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-200/80 inline-block mx-auto relative group">
-              <div className="h-44 w-44 bg-white p-3 rounded-xl border border-zinc-200 shadow-xs flex flex-col items-center justify-center relative">
-                {/* 微信二维码图案 */}
-                <div className="relative w-full h-full flex flex-col items-center justify-center bg-[#fdfdfd] border border-dashed border-zinc-200 rounded-lg">
-                  <QrCode className="h-28 w-28 text-zinc-800" />
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/90 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
+            <div className="p-4 bg-zinc-50/80 rounded-2xl border border-zinc-200/80 space-y-3">
+              {/* 二维码图片展示区 */}
+              <div className="h-36 w-36 bg-white p-2.5 rounded-xl border border-zinc-200 shadow-2xs mx-auto flex flex-col items-center justify-center relative">
+                <QrCode className="h-24 w-24 text-zinc-800" />
+                <span className="text-[10px] text-zinc-400 mt-1 font-mono">公众号扫码关注</span>
+              </div>
+
+              {/* 6 位大字验证码卡片 */}
+              <div className="bg-white p-3 rounded-xl border border-zinc-200/90 shadow-2xs space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] text-zinc-500">
+                  <span>在公众号对话框发送下方验证码：</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-zinc-400">
+                      {Math.floor(wechatSecondsLeft / 60)}:
+                      {(wechatSecondsLeft % 60).toString().padStart(2, '0')}
+                    </span>
                     <button
-                      onClick={() => handleSocialLogin('wechat')}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium shadow-xs"
+                      type="button"
+                      onClick={fetchWechatCode}
+                      className="text-emerald-600 hover:text-emerald-700 font-medium"
                     >
-                      模拟手机扫码确认
+                      刷新
                     </button>
                   </div>
                 </div>
+
+                <div className="flex items-center justify-between bg-zinc-50 px-3 py-2 rounded-lg border border-zinc-200/80">
+                  <span className="text-xl font-mono font-bold tracking-widest text-zinc-900 select-all">
+                    {wechatCode || '839215'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyCode}
+                    className="flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-900 bg-white px-2 py-1 rounded border border-zinc-200 transition shadow-2xs"
+                  >
+                    {copiedCode ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+                    <span>{copiedCode ? '已复制' : '复制'}</span>
+                  </button>
+                </div>
               </div>
-              <p className="text-[11px] text-zinc-500 mt-3 font-medium">
-                请使用微信客户端扫描二维码登录
-              </p>
+
+              {/* 操作说明三步走 */}
+              <div className="text-left text-[11px] text-zinc-500 space-y-1 pt-1 font-sans">
+                <p>1. 使用手机微信扫描上方二维码关注公众号；</p>
+                <p>
+                  2. 在公众号聊天框回复数字验证码{' '}
+                  <code className="bg-zinc-200/70 px-1 py-0.5 rounded font-mono text-zinc-800 font-semibold">
+                    {wechatCode || '839215'}
+                  </code>
+                  ；
+                </p>
+                <p className="text-emerald-600 font-medium">3. 回复后页面将在 1~2 秒内自动登录完成！</p>
+              </div>
             </div>
 
-            <button
-              onClick={() => handleSocialLogin('wechat')}
-              disabled={Boolean(socialLoading)}
-              className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium flex items-center justify-center gap-2 transition shadow-xs"
-            >
-              {socialLoading === 'wechat' ? (
-                <RotateCw className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <>
-                  <span>一键模拟微信扫码成功</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </>
-              )}
-            </button>
+            {/* 本地联调模拟触发按钮 */}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={handleMockWechatVerify}
+                disabled={mockVerifying}
+                className="w-full py-2 px-3 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/80 text-emerald-800 text-xs font-medium flex items-center justify-center gap-2 transition"
+              >
+                {mockVerifying ? (
+                  <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <>
+                    <MessageSquare className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>本地联调：模拟在公众号回复验证码</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         ) : (
           /* 主界面：支持国内外 OAuth 登录 + 邮箱表单 */

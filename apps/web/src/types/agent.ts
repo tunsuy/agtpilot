@@ -25,15 +25,19 @@ export interface MissionStep {
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
   duration?: string;
   args?: any;
+  answer?: string;
+  output?: any;
 }
 
 export interface Mission {
   id: string;
+  userId?: string;
   title: string;
   status: 'ACTIVE' | 'DONE' | 'QUEUED' | 'WAITING_APPROVAL';
   progress: number;
   startedAt: number;
   steps: MissionStep[];
+  conversationMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
 }
 
 export interface ViewportState {

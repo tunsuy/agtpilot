@@ -150,3 +150,34 @@ export function deleteUserCronJob(userId: string, jobId: string) {
   saveUserData(data);
   return data.cronJobs;
 }
+
+// 辅助方法：任务流记录 (Missions)
+export function getUserMissions(userId: string): any[] {
+  const data = getUserData(userId);
+  return data.missions || [];
+}
+
+export function saveUserMission(userId: string, mission: any) {
+  const data = getUserData(userId);
+  data.missions = data.missions || [];
+  const existingIdx = data.missions.findIndex((m: any) => m.id === mission.id);
+  if (existingIdx >= 0) {
+    data.missions[existingIdx] = { ...data.missions[existingIdx], ...mission };
+  } else {
+    data.missions.unshift(mission);
+    // 仅保留最近 50 条任务记录，避免单文件无限膨胀
+    if (data.missions.length > 50) {
+      data.missions = data.missions.slice(0, 50);
+    }
+  }
+  saveUserData(data);
+  return data.missions;
+}
+
+export function deleteUserMission(userId: string, missionId: string) {
+  const data = getUserData(userId);
+  data.missions = (data.missions || []).filter((m: any) => m.id !== missionId);
+  saveUserData(data);
+  return data.missions;
+}
+

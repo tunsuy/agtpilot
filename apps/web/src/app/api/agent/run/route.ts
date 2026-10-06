@@ -12,14 +12,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { prompt, title } = await req.json();
+    const { prompt, title, missionId } = await req.json();
 
     if (!prompt || typeof prompt !== 'string') {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
     }
 
     const backend = getAgentBackend();
-    const mission = await backend.runMission(prompt.trim(), { title, userId: session.user.id });
+    const mission = await backend.runMission(prompt.trim(), {
+      title,
+      userId: session.user.id,
+      missionId,
+    });
 
     return NextResponse.json({
       success: true,

@@ -24,15 +24,19 @@ export interface MissionStep {
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
   duration?: string;
   args?: any;
+  answer?: string;
+  output?: any;
 }
 
 export interface Mission {
   id: string;
+  userId?: string;
   title: string;
   status: 'ACTIVE' | 'DONE' | 'QUEUED' | 'WAITING_APPROVAL';
   progress: number;
   startedAt: number;
   steps: MissionStep[];
+  conversationMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
 }
 
 export interface ViewportState {
@@ -253,15 +257,15 @@ class AgentBackend {
             const thoughtText = event.payload.text || '';
             // 更新当前第一步或者添加思考步骤
             if (mission.steps.length > 0 && mission.steps[0].id === 'step_init') {
-              mission.steps[0].title = `Agent 推理决策: ${thoughtText.slice(0, 50)}${thoughtText.length > 50 ? '...' : ''}`;
+              mission.steps[0].title = `意图理解与分析: ${thoughtText.slice(0, 60)}${thoughtText.length > 60 ? '...' : ''}`;
               mission.steps[0].status = 'DONE';
-              mission.steps[0].duration = '650ms';
+              mission.steps[0].duration = '450ms';
             }
             this.broadcast({ type: 'mission_updated', data: mission });
           }
         }
         if (event.payload.text) {
-          this.addTerminalLog('system', `[Agent Thought] ${event.payload.text}`);
+          this.addTerminalLog('system', `[AI 思考与回复] ${event.payload.text}`);
         }
         break;
       }
@@ -278,28 +282,23 @@ class AgentBackend {
                 st.duration = st.duration || '320ms';
               }
             });
-            // 如果仅有初始单步，更新其文案
-            if (mission.steps.length === 1 && mission.steps[0].id === 'step_init') {
-              mission.steps[0].title = '完成意图理解并直接回复用户';
-              mission.steps[0].status = 'DONE';
-              mission.steps[0].duration = '520ms';
+
+            // 将最终回答挂载到最后一步（或者意图理解步骤）
+            const lastStep = mission.steps[mission.steps.length - 1];
+            if (lastStep) {
+              lastStep.answer = finalAnswer;
+              if (mission.steps.length === 1 && lastStep.id === 'step_init') {
+                lastStep.title = '智能体回复';
+              }
             }
+
             mission.status = 'DONE';
             mission.progress = 100;
             this.broadcast({ type: 'mission_updated', data: mission });
           }
         }
 
-        // 沉淀交付物 (Artifact Deliverable)
-        const artifactData = {
-          title: `智能体执行报告: ${this.state.missions.find((m) => m.id === this.state.activeMissionId)?.title?.slice(0, 30) || '任务回答'}`,
-          type: 'markdown',
-          content: `# 执行与交付报告\n\n### 目标\n${this.state.missions.find((m) => m.id === this.state.activeMissionId)?.title || '用户问询'}\n\n### 智能体回复 / 结果\n${finalAnswer}\n\n---\n*AgtPilot Autonomous Agent Framework*`,
-        };
-        this.state.latestArtifact = artifactData;
-        this.broadcast({ type: 'artifact_updated', data: artifactData });
-
-        this.addTerminalLog('system', `[Agent] Goal achieved successfully: ${finalAnswer.slice(0, 100)}`);
+        this.addTerminalLog('system', `[Agent] 回复完成: ${finalAnswer.slice(0, 100)}`);
         break;
       }
 
@@ -345,6 +344,15 @@ class AgentBackend {
   }
 
   public broadcast(event: any) {
+    if ((event.type === 'mission_updated' || event.type === 'mission_created') && event.data?.userId) {
+      try {
+        const { saveUserMission } = require('@/lib/user-store');
+        saveUserMission(event.data.userId, event.data);
+      } catch (e) {
+        // ignore
+      }
+    }
+
     for (const sub of this.subscribers) {
       try {
         sub(event);
@@ -424,326 +432,196 @@ class AgentBackend {
     this.addTerminalLog('system', '[System] All active missions terminated upon logout/reset.');
   }
 
-  public async runMission(goal: string, options: { title?: string; userId?: string } = {}): Promise<Mission> {
+  public async runMission(goal: string, options: { title?: string; userId?: string; missionId?: string } = {}): Promise<Mission> {
     await this.initPlugins();
 
-    const missionId = `mission_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const newMission: Mission = {
-      id: missionId,
-      title: options.title || goal,
-      status: 'ACTIVE',
-      progress: 5,
-      startedAt: Date.now(),
-      steps: [
-        {
-          id: `step_init`,
-          title: `Analyze mission: ${goal.slice(0, 45)}...`,
-          status: 'RUNNING',
-        },
-      ],
-    };
+    let targetMission: Mission;
+    const isContinuing = Boolean(options.missionId && this.state.missions.some((m) => m.id === options.missionId));
 
-    this.state.missions.unshift(newMission);
-    this.state.activeMissionId = missionId;
-    this.broadcast({ type: 'mission_created', data: newMission });
+    if (isContinuing) {
+      targetMission = this.state.missions.find((m) => m.id === options.missionId)!;
+      targetMission.status = 'ACTIVE';
+      targetMission.progress = 10;
+      targetMission.steps.push({
+        id: `step_${Date.now()}`,
+        title: `处理追问指令: ${goal.slice(0, 45)}...`,
+        status: 'RUNNING',
+      });
+      this.state.activeMissionId = targetMission.id;
+      this.broadcast({ type: 'mission_updated', data: targetMission });
+      this.addTerminalLog('system', `[Session Continued] ID: ${targetMission.id} | New Goal: ${goal}`);
+    } else {
+      const missionId = `mission_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      targetMission = {
+        id: missionId,
+        userId: options.userId,
+        title: options.title || goal,
+        status: 'ACTIVE',
+        progress: 5,
+        startedAt: Date.now(),
+        steps: [
+          {
+            id: `step_init`,
+            title: `Analyze mission: ${goal.slice(0, 45)}...`,
+            status: 'RUNNING',
+          },
+        ],
+        conversationMessages: [],
+      };
 
-    this.addTerminalLog('system', `[Mission Started] ID: ${missionId} | Goal: ${goal}`);
+      this.state.missions.unshift(targetMission);
+      this.state.activeMissionId = missionId;
+
+      if (options.userId) {
+        try {
+          const { saveUserMission } = await import('@/lib/user-store');
+          saveUserMission(options.userId, targetMission);
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      this.broadcast({ type: 'mission_created', data: targetMission });
+      this.addTerminalLog('system', `[Mission Started] ID: ${missionId} | Goal: ${goal}`);
+    }
 
     const abortController = new AbortController();
-    this.activeAbortControllers.set(missionId, abortController);
+    this.activeAbortControllers.set(targetMission.id, abortController);
 
     // 异步执行任务生命周期
     (async () => {
       try {
-        const hasLlm = Boolean(
-          process.env.CUSTOM_LLM_API_KEY ||
-          process.env.DEEPSEEK_API_KEY ||
-          process.env.OPENAI_API_KEY
-        );
+        // 1. 获取当前登录用户专属沉淀的长效记忆与画像
+        let userMemoryPrompt = '';
+        if (options.userId) {
+          try {
+            const { getUserMemories } = await import('@/lib/user-store');
+            const mems = getUserMemories(options.userId);
+            if (mems.length > 0) {
+              userMemoryPrompt = [
+                '【当前用户的专属个性画像与长期记忆】:',
+                ...mems.map((m: any) => `- [${m.category}] ${m.title}: ${m.content}`),
+                '请严格遵守上述用户的个性偏好与安全规则进行思考与输出。',
+              ].join('\n');
+            }
+          } catch (e) {
+            // fallback
+          }
+        }
+
+        // 2. 获取当前登录用户自定义的连接器密钥与默认模型覆盖
+        let userConfigOverride: any = undefined;
+        let userHasLlm = false;
+
+        if (options.userId) {
+          try {
+            const { getUserConnectors } = await import('@/lib/user-store');
+            const uConfigs = getUserConnectors(options.userId);
+            const activeModelId = uConfigs.activeModelId || 'custom_llm';
+
+            if (activeModelId === 'custom_llm') {
+              const apiKey = uConfigs.configs['CUSTOM_LLM_API_KEY'] || process.env.CUSTOM_LLM_API_KEY;
+              if (apiKey) userHasLlm = true;
+              userConfigOverride = {
+                activeModelId: 'custom_llm',
+                apiKey,
+                baseURL: uConfigs.configs['CUSTOM_LLM_BASE_URL'] || process.env.CUSTOM_LLM_BASE_URL,
+                modelName: uConfigs.configs['CUSTOM_LLM_MODEL_NAME'] || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o',
+              };
+            } else if (activeModelId === 'openai') {
+              const apiKey = uConfigs.configs['OPENAI_API_KEY'] || process.env.OPENAI_API_KEY;
+              if (apiKey) userHasLlm = true;
+              userConfigOverride = {
+                activeModelId: 'openai',
+                apiKey,
+                baseURL: uConfigs.configs['OPENAI_BASE_URL'] || process.env.OPENAI_BASE_URL,
+                modelName: uConfigs.configs['OPENAI_MODEL_NAME'] || process.env.OPENAI_MODEL_NAME || 'gpt-4o',
+              };
+            } else {
+              const apiKey = uConfigs.configs['DEEPSEEK_API_KEY'] || process.env.DEEPSEEK_API_KEY;
+              if (apiKey) userHasLlm = true;
+              userConfigOverride = {
+                activeModelId: 'deepseek',
+                apiKey,
+                baseURL: uConfigs.configs['DEEPSEEK_BASE_URL'] || process.env.DEEPSEEK_BASE_URL,
+                modelName: uConfigs.configs['DEEPSEEK_MODEL_NAME'] || process.env.DEEPSEEK_MODEL_NAME || 'deepseek-chat',
+              };
+            }
+          } catch (e) {
+            // fallback
+          }
+        }
+
+        const hasLlm =
+          userHasLlm ||
+          Boolean(
+            process.env.CUSTOM_LLM_API_KEY ||
+            process.env.DEEPSEEK_API_KEY ||
+            process.env.OPENAI_API_KEY
+          );
 
         if (hasLlm) {
-          // 获取当前登录用户专属沉淀的长效记忆与画像
-          let userMemoryPrompt = '';
-          if (options.userId) {
-            try {
-              const { getUserMemories } = await import('@/lib/user-store');
-              const mems = getUserMemories(options.userId);
-              if (mems.length > 0) {
-                userMemoryPrompt = [
-                  '【当前用户的专属个性画像与长期记忆】:',
-                  ...mems.map((m: any) => `- [${m.category}] ${m.title}: ${m.content}`),
-                  '请严格遵守上述用户的个性偏好与安全规则进行思考与输出。',
-                ].join('\n');
-              }
-            } catch (e) {
-              // fallback
-            }
-          }
-
-          // 获取当前登录用户自定义的连接器密钥与默认模型覆盖
-          let userConfigOverride: any = undefined;
-          if (options.userId) {
-            try {
-              const { getUserConnectors } = await import('@/lib/user-store');
-              const uConfigs = getUserConnectors(options.userId);
-              const activeModelId = uConfigs.activeModelId || 'deepseek';
-              if (activeModelId === 'custom_llm') {
-                userConfigOverride = {
-                  activeModelId: 'custom_llm',
-                  apiKey: uConfigs.configs['CUSTOM_LLM_API_KEY'],
-                  baseURL: uConfigs.configs['CUSTOM_LLM_BASE_URL'],
-                  modelName: uConfigs.configs['CUSTOM_LLM_MODEL_NAME'] || 'gpt-4o',
-                };
-              } else if (activeModelId === 'openai') {
-                userConfigOverride = {
-                  activeModelId: 'openai',
-                  apiKey: uConfigs.configs['OPENAI_API_KEY'],
-                  baseURL: uConfigs.configs['OPENAI_BASE_URL'],
-                  modelName: uConfigs.configs['OPENAI_MODEL_NAME'] || 'gpt-4o',
-                };
-              } else {
-                userConfigOverride = {
-                  activeModelId: 'deepseek',
-                  apiKey: uConfigs.configs['DEEPSEEK_API_KEY'],
-                  baseURL: uConfigs.configs['DEEPSEEK_BASE_URL'],
-                  modelName: uConfigs.configs['DEEPSEEK_MODEL_NAME'] || 'deepseek-chat',
-                };
-              }
-            } catch (e) {
-              // fallback
-            }
-          }
-
-          // 调用真正的大模型 + 工具链编排
+          // 调用真正的大模型 + 工具链编排 (Vercel AI SDK + Cordis 工具集)
           const result = await this.ctx.orchestrator.runTask({
-            taskId: missionId,
+            taskId: targetMission.id,
             abortSignal: abortController.signal,
             configOverride: userConfigOverride,
+            historyMessages: targetMission.conversationMessages,
             prompt: goal,
-            system: `你是由 DeepSeek Harness 官方 Cordis 微内核驱动的个人全自主智能体驾驶舱 (AgtPilot)。
-你可以自主解决用户交办的复杂需求，并在需要时调用原子工具（如浏览器自动化 browser_navigate、沙箱命令执行 sandbox_run_command 等）。
+            system: `你是基于 Cordis 微内核架构驱动的个人全自主智能体驾驶舱 (AgtPilot)。
+你拥有强大的推理能力与丰富的原子工具生态（包括浏览器实时自动化 browser_navigate、沙箱隔离命令执行 sandbox_run_command 等）。
 ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
-重要原则：
-1. 如果用户的问题只是简单对话、询问你的身份（例如「你是谁」、「你好」）或无需外部工具操作的知识性咨询，请直接清晰、自信、亲切地给出回答，不要滥用外部工具！
-2. 只有当任务确实需要访问真实网页、检索最新信息或运行代码时，才调用对应的原子工具。
-3. 请使用地道优美的中文回答。`,
+【核心行为准则 (Behavioral Steering)】：
+1. 【区分对话与执行】：如果用户的请求只是自我介绍、询问你能做什么、概念解释或一般性闲聊，请直接运用你渊博的知识用清晰、亲切、优雅的中文回复，【严禁】无缘无故调用外部搜索或终端工具！
+2. 【按需调用工具】：只有当用户的任务确实需要实时信息检索、网页交互抓取、执行代码或特定环境诊断时，才调用对应的原子工具。
+3. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。`,
           });
 
+          if (result.success && result.messages) {
+            targetMission.conversationMessages = result.messages;
+            this.broadcast({ type: 'mission_updated', data: targetMission });
+          }
+
           if (!result.success && result.error) {
-            newMission.status = 'DONE';
-            newMission.steps.push({
+            targetMission.status = 'DONE';
+            targetMission.steps.push({
               id: `step_err`,
-              title: `Execution error: ${result.error}`,
+              title: `执行异常: ${result.error}`,
               status: 'FAILED',
             });
             this.addTerminalLog('stderr', `[Mission Error] ${result.error}`);
-            this.broadcast({ type: 'mission_updated', data: newMission });
+            this.broadcast({ type: 'mission_updated', data: targetMission });
           }
         } else {
-          // 零密钥自主演示流水线：调度真实原子工具完成任务
-          await this.executeAutonomousZeroKeyPipeline(newMission, goal);
+          // 未配置任何可用大模型时，给出明确配置提示，杜绝乱走假工具流程
+          targetMission.status = 'DONE';
+          targetMission.progress = 100;
+          targetMission.steps = [
+            {
+              id: 'step_no_key',
+              title: '未检测到可用的大模型连接配置',
+              status: 'FAILED',
+              duration: '0ms',
+            },
+          ];
+          this.broadcast({ type: 'mission_updated', data: targetMission });
+          this.addTerminalLog('stderr', '[Config Required] 当前用户未配置大模型 API Key。请前往顶部「连接器」添加自定义 OpenAI、DeepSeek 或中转站 Key。');
         }
       } catch (err: any) {
-        newMission.status = 'DONE';
-        newMission.steps.push({
+        targetMission.status = 'DONE';
+        targetMission.steps.push({
           id: `step_err`,
           title: `Execution error: ${err.message}`,
           status: 'FAILED',
         });
         this.addTerminalLog('stderr', `[Mission Error] ${err.message}`);
-        this.broadcast({ type: 'mission_updated', data: newMission });
+        this.broadcast({ type: 'mission_updated', data: targetMission });
       } finally {
-        this.activeAbortControllers.delete(missionId);
+        this.activeAbortControllers.delete(targetMission.id);
       }
     })();
 
-    return newMission;
-  }
-
-  /**
-   * 零密钥环境下，使用真实底层原子库执行完整的自主闭环（Playwright 访问、真实截图、真实沙箱执行、真实审批）
-   */
-  private async executeAutonomousZeroKeyPipeline(mission: Mission, goal: string) {
-    const isGreeting =
-      goal.includes('你是谁') ||
-      goal.includes('介绍') ||
-      goal.includes('你好') ||
-      goal.toLowerCase().includes('who are you') ||
-      goal.toLowerCase().includes('hello');
-
-    if (isGreeting) {
-      mission.steps = [
-        {
-          id: 'step_intro',
-          title: '识别身份咨询意图并直接生成智能体画像',
-          status: 'DONE',
-          duration: '320ms',
-        },
-      ];
-      mission.progress = 100;
-      mission.status = 'DONE';
-      this.broadcast({ type: 'mission_updated', data: mission });
-
-      const artifactTool = this.ctx.agent.getTool('artifact_render');
-      if (artifactTool) {
-        await artifactTool.execute(
-          {
-            title: '关于 AgtPilot 个人自主智能体',
-            type: 'markdown',
-            content: `# 我是 AgtPilot 🤖\n\n你好！我是基于 **DeepSeek Harness** 官方 Cordis 微内核架构驱动的个人全自主智能体驾驶舱助手。\n\n### 核心能力特性：\n- **自主规划执行**：具备 ReAct 单步思考循环与自适应任务拆解。\n- **真实浏览器自动化**：内置 Playwright 端点，支持无头/可视化网页抓取、交互与结构化提炼。\n- **隔离沙箱计算**：支持安全微虚拟机隔离运行 Node.js、Python、Shell 命令。\n- **安全审批门禁**：高危写操作与外部请求具备 Human-in-the-Loop 人工放行机制。\n- **开放模型驱动**：支持无缝接入 DeepSeek、OpenAI、SiliconFlow、Ollama 及任意 OpenAI 兼容的第三方大模型。`,
-          },
-          { source: 'agent-backend' }
-        );
-      }
-      this.addTerminalLog('system', '[Agent] 成功识别身份问答意图，已输出智能体自画像。');
-      return;
-    }
-
-    const isCode = goal.includes('代码') || goal.includes('脚本') || goal.includes('运行') || goal.includes('测试');
-    const isResearch = goal.includes('调研') || goal.includes('分析') || goal.includes('总结') || goal.includes('报告');
-
-    // 动态根据用户意图拆解任务树 (Planner)
-    mission.steps = [
-      {
-        id: 'step_1',
-        title: isResearch
-          ? `检索目标源与网页内容蒸馏`
-          : `解析目标网络端点与自主导航`,
-        tool: 'browser_navigate',
-        status: 'RUNNING',
-      },
-      {
-        id: 'step_2',
-        title: isCode
-          ? `沙盒虚拟机隔离执行环境验证`
-          : `沙盒数据清洗与结构化推导`,
-        tool: 'sandbox_run_command',
-        status: 'PENDING',
-      },
-      {
-        id: 'step_3',
-        title: `人机协同安全审批门禁`,
-        tool: 'approval_request',
-        status: 'PENDING',
-      },
-      {
-        id: 'step_4',
-        title: `触发多通道消息通告`,
-        tool: 'notify_desktop',
-        status: 'PENDING',
-      },
-      {
-        id: 'step_5',
-        title: `输出并归档交付成果物`,
-        tool: 'artifact_render',
-        status: 'PENDING',
-      },
-    ];
-    mission.progress = 25;
-    this.broadcast({ type: 'mission_updated', data: mission });
-
-    // 步骤 1 执行：真实 Playwright 导航（智能解析用户输入的 URL 或目标）
-    let targetUrl = 'https://news.ycombinator.com';
-    const urlMatch = goal.match(/https?:\/\/[^\s]+/i);
-    if (urlMatch) {
-      targetUrl = urlMatch[0];
-    } else if (goal.toLowerCase().includes('github')) {
-      targetUrl = 'https://github.com/trending';
-    } else if (goal.toLowerCase().includes('agent') || goal.includes('智能体')) {
-      targetUrl = 'https://github.com/trending?since=daily';
-    } else if (goal.includes('搜索') || goal.includes('调研') || goal.includes('资讯') || goal.includes('热点')) {
-      targetUrl = `https://cn.bing.com/search?q=${encodeURIComponent(goal.slice(0, 30))}`;
-    } else {
-      targetUrl = `https://cn.bing.com/search?q=${encodeURIComponent(goal.slice(0, 30))}`;
-    }
-
-    const browserTool = this.ctx.agent.getTool('browser_navigate');
-    if (browserTool) {
-      await browserTool.execute({ url: targetUrl }, { source: 'agent-backend' });
-    }
-    mission.steps[0].status = 'DONE';
-    mission.steps[0].duration = '1.2s';
-    mission.steps[1].status = 'RUNNING';
-    mission.progress = 50;
-    this.broadcast({ type: 'mission_updated', data: mission });
-
-    // 步骤 2 执行：真实沙箱命令执行
-    const sandboxTool = this.ctx.agent.getTool('sandbox_run_command');
-    if (sandboxTool) {
-      await sandboxTool.execute(
-        { command: 'node -v && git --version && echo "Autonomous mission task environment validated."' },
-        { source: 'agent-backend' }
-      );
-    }
-    mission.steps[1].status = 'DONE';
-    mission.steps[1].duration = '450ms';
-    mission.steps[2].status = 'RUNNING';
-    mission.progress = 75;
-    this.broadcast({ type: 'mission_updated', data: mission });
-
-    // 步骤 3 执行：真实安全审批拦截
-    const approvalId = `approval_${Date.now()}`;
-    const approvalReq: ApprovalRequest = {
-      id: approvalId,
-      action: '沙盒环境部署与文件写入',
-      description: `智能体申请对任务「${goal.slice(0, 30)}${goal.length > 30 ? '...' : ''}」执行沙盒写入与部署操作，请确认是否放行。`,
-      dangerLevel: 'high',
-      params: { goal, targetUrl, timestamp: new Date().toISOString() },
-    };
-
-    this.ctx.agent.emitEvent({
-      type: 'approval_request',
-      payload: approvalReq,
-      timestamp: Date.now(),
-    });
-
-    // 等待用户在前端点击 Sign-off
-    await new Promise<boolean>((resolve) => {
-      (this.orchestrator as any).pendingApprovals.set(approvalId, resolve);
-    });
-
-    mission.steps[2].status = 'DONE';
-    mission.steps[2].duration = 'User authorized';
-    mission.steps[3].status = 'RUNNING';
-    mission.progress = 90;
-    this.broadcast({ type: 'mission_updated', data: mission });
-
-    // 步骤 4 执行：系统通知
-    const notifyTool = this.ctx.agent.getTool('notify_send_desktop') || this.ctx.agent.getTool('notify_desktop');
-    if (notifyTool) {
-      await notifyTool.execute(
-        { title: 'AgtPilot Mission Complete', message: `Autonomous mission achieved: ${goal.slice(0, 40)}` },
-        { source: 'agent-backend' }
-      );
-    }
-    mission.steps[3].status = 'DONE';
-    mission.steps[3].duration = '120ms';
-
-    // 步骤 5: 真实产物输出 (Artifact Deliverable)
-    const artifactTool = this.ctx.agent.getTool('artifact_render');
-    if (artifactTool) {
-      await artifactTool.execute(
-        {
-          title: `Mission Deliverable: ${goal.slice(0, 36)}`,
-          type: 'markdown',
-          content: `# Task Execution Summary\n\n**Goal**: ${goal}\n\n### 1. Investigation Findings\n- **Live Web Reconnaissance**: Verified target content via Playwright browser (${targetUrl})\n- **Environment Diagnostics**: Evaluated Node.js, Git, and system isolation\n- **Human Gate Sign-off**: Approved by workspace owner\n\n### 2. Actions Taken\n- Cleaned and distilled raw HTML into structured Markdown.\n- Checked sandbox command constraints without regression.\n- Persisted session state to local memory.\n\n---\n*Delivered autonomously by AgtPilot Agent Platform*`,
-        },
-        { source: 'agent-backend' }
-      );
-    }
-
-    // 确保任务完成时，所有关联步骤全部归档为 DONE
-    mission.steps.forEach((st) => {
-      if (st.status === 'RUNNING' || st.status === 'PENDING') {
-        st.status = 'DONE';
-        st.duration = st.duration || '320ms';
-      }
-    });
-
-    mission.status = 'DONE';
-    mission.progress = 100;
-    this.broadcast({ type: 'mission_updated', data: mission });
-    this.addTerminalLog('system', `[Mission Accomplished] "${goal}" successfully completed end-to-end.`);
+    return targetMission;
   }
 }
 

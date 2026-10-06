@@ -203,16 +203,6 @@ export function Navbar({
           </button>
         )}
 
-        <button
-          onClick={onNewMission}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white shadow-xs transition active:scale-95"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>新建任务</span>
-        </button>
-
-        <div className="h-5 w-[1px] bg-zinc-200 mx-0.5" />
-
         {/* User Auth Profile Menu */}
         <UserMenu onOpenAuth={onOpenAuth} />
       </div>

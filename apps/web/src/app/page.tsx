@@ -223,7 +223,7 @@ export default function Workspace() {
 
   const { data: session, status: sessionStatus } = useSession();
 
-  const handleRun = async (text: string, title?: string) => {
+  const handleRun = async (text: string, title?: string, targetMissionId?: string) => {
     if (!text.trim() || isSubmitting) return;
 
     // 检查登录状态：未登录用户直接拦截并弹出登录弹窗
@@ -235,13 +235,15 @@ export default function Workspace() {
 
     setIsSubmitting(true);
     setActiveView('cockpit');
-    setRightTab('browser');
+
+    // 如果指定了 targetMissionId，或者当前正处于某会话且不是全新发起的，则沿用该会话
+    const missionId = targetMissionId !== undefined ? targetMissionId : activeMissionId || undefined;
 
     try {
       await fetch('/api/agent/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text.trim(), title }),
+        body: JSON.stringify({ prompt: text.trim(), title, missionId }),
       });
     } catch (e) {
       console.error(e);
@@ -261,6 +263,11 @@ export default function Workspace() {
       setConnectors([]);
       setMemories([]);
       setCronJobs([]);
+      setMissions([]);
+      setActiveMissionId(null);
+      setTerminalLogs([]);
+      setApprovalRequests([]);
+      setArtifact(null);
     }
 
     // 检查 URL 参数（如 OAuth 回调后跳转）
@@ -360,7 +367,7 @@ export default function Workspace() {
     return () => {
       eventSource.close();
     };
-  }, []);
+  }, [session?.user?.id]);
 
   const handleViewChange = (view: 'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => {
     // 首页允许所有人浏览概览，其余页面（工作台、连接器、记忆库、巡航、交付库）必须登录
@@ -443,6 +450,7 @@ export default function Workspace() {
               onRightTabChange={setRightTab}
               onRunMission={handleRun}
               onStopMission={handleStopMission}
+              onNewSession={() => setActiveMissionId(null)}
               isSubmitting={isSubmitting}
               connectors={connectors}
               onSelectModel={handleSetDefaultModel}

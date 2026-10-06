@@ -17,6 +17,7 @@ export interface TaskOptions {
   maxSteps?: number;
   abortSignal?: AbortSignal;
   configOverride?: any;
+  historyMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
   onEvent?: (event: AgentEvent) => void;
 }
 
@@ -26,6 +27,7 @@ export interface TaskResult {
   stepsCount: number;
   finalAnswer: string;
   events: AgentEvent[];
+  messages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
   error?: string;
 }
 
@@ -102,9 +104,9 @@ export class OrchestratorService extends Service {
       }
     };
 
-    const messages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = [
-      { role: 'user', content: options.prompt },
-    ];
+    const messages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = options.historyMessages && options.historyMessages.length > 0
+      ? [...options.historyMessages, { role: 'user', content: options.prompt }]
+      : [{ role: 'user', content: options.prompt }];
 
     let currentStep = 0;
     let finalAnswer = '';
@@ -149,13 +151,26 @@ export class OrchestratorService extends Service {
             stepsCount: currentStep,
             finalAnswer,
             events,
+            messages: [...messages, { role: 'assistant', content: finalAnswer }],
           };
         }
 
-        // 把模型的助手的思考/调用指令存入上下文
+        // 把模型的助手的思考/调用指令存入上下文 (包含 tool-call parts 以保证 OpenAI / Vercel AI SDK 规范)
+        const assistantParts: any[] = [];
+        if (stepResult.text) {
+          assistantParts.push({ type: 'text', text: stepResult.text });
+        }
+        for (const tc of stepResult.toolCalls) {
+          assistantParts.push({
+            type: 'tool-call',
+            toolCallId: (tc as any).toolCallId || `call_${Date.now()}`,
+            toolName: tc.toolName,
+            args: tc.args,
+          });
+        }
         messages.push({
-          role: 'assistant',
-          content: stepResult.text || '正在调用工具获取信息...',
+          role: 'assistant' as any,
+          content: assistantParts.length > 0 ? assistantParts : (stepResult.text || ''),
         });
 
         // 4. 逐一执行工具并进行安全防护
@@ -233,10 +248,18 @@ export class OrchestratorService extends Service {
             timestamp: Date.now(),
           });
 
-          // 回填给大模型上下文
+          // 回填给大模型上下文作为 tool_result
+          const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
           messages.push({
-            role: 'tool',
-            content: typeof output === 'string' ? output : JSON.stringify(output),
+            role: 'tool' as any,
+            content: [
+              {
+                type: 'tool-result',
+                toolCallId: (tc as any).toolCallId || `call_${Date.now()}`,
+                toolName: tc.toolName,
+                result: outputStr,
+              },
+            ] as any,
           });
         }
       }

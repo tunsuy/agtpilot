@@ -48,8 +48,9 @@ interface CockpitViewProps {
   artifact: ArtifactState | null;
   rightTab: 'browser' | 'terminal' | 'artifact';
   onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact') => void;
-  onRunMission: (prompt: string, title?: string) => void;
+  onRunMission: (prompt: string, title?: string, missionId?: string) => void;
   onStopMission?: (missionId: string) => Promise<void> | void;
+  onNewSession?: () => void;
   isSubmitting: boolean;
   connectors?: ConnectorApp[];
   onSelectModel?: (modelId: string) => Promise<void>;
@@ -68,12 +69,14 @@ export function CockpitView({
   onRightTabChange,
   onRunMission,
   onStopMission,
+  onNewSession,
   isSubmitting,
   connectors,
   onSelectModel,
 }: CockpitViewProps) {
   const [prompt, setPrompt] = useState('');
   const [copiedArtifact, setCopiedArtifact] = useState(false);
+  const [copiedStepId, setCopiedStepId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isWorkbenchExpanded, setIsWorkbenchExpanded] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -104,12 +107,15 @@ export function CockpitView({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isSubmitting) return;
-    onRunMission(prompt.trim());
+    onRunMission(prompt.trim(), undefined, activeMissionId || undefined);
     setPrompt('');
   };
 
   const handleStartNewMission = () => {
     setPrompt('');
+    if (onNewSession) {
+      onNewSession();
+    }
   };
 
   const suggestions = [
@@ -122,19 +128,24 @@ export function CockpitView({
   return (
     <div className="flex-1 flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-[#fbfbfd]">
       {/* ========================================================= */}
-      {/* 1. 左栏：任务历史列表 (Sessions & History List)              */}
+      {/* 1. 左栏：会话与任务历史列表 (Sessions & History List)       */}
       {/* ========================================================= */}
       {isSidebarOpen && (
         <aside className="w-64 flex-shrink-0 flex flex-col border-r border-zinc-200 bg-white select-none transition-all duration-200">
-          {/* Header: 标题 & 收起 */}
-          <div className="h-12 px-3.5 border-b border-zinc-100 flex items-center justify-between">
-            <span className="text-xs font-semibold text-zinc-800 tracking-tight">
-              任务历史与会话
-            </span>
+          {/* Header: 标题 & 新建会话 & 收起 */}
+          <div className="h-12 px-3 border-b border-zinc-100 flex items-center justify-between gap-1.5">
+            <button
+              onClick={handleStartNewMission}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white shadow-2xs transition"
+              title="开启全新主题会话"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>新建会话</span>
+            </button>
 
             <button
               onClick={() => setIsSidebarOpen(false)}
-              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition"
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition flex-shrink-0"
               title="收起任务侧边栏"
             >
               <PanelLeftClose className="h-4 w-4" />
@@ -144,7 +155,7 @@ export function CockpitView({
           {/* 任务列表 */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             <div className="px-2 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-              任务执行历史 ({missions.length})
+              历史会话 ({missions.length})
             </div>
 
             {missions.length === 0 ? (
@@ -334,6 +345,40 @@ export function CockpitView({
                           {st.duration || (st.status === 'RUNNING' ? 'running...' : st.status === 'FAILED' ? 'aborted' : 'queued')}
                         </span>
                       </div>
+
+                      {/* 智能体回答气泡 (支持 Markdown 格式) */}
+                      {st.answer && (
+                        <div className="mt-2.5 p-3 rounded-lg bg-white border border-zinc-200/90 shadow-2xs text-xs text-zinc-800 leading-relaxed group/ans relative">
+                          <div className="prose prose-zinc prose-xs max-w-none break-words">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {st.answer}
+                            </ReactMarkdown>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(st.answer!);
+                              setCopiedStepId(st.id);
+                              setTimeout(() => setCopiedStepId(null), 2000);
+                            }}
+                            className="absolute top-2 right-2 opacity-0 group-hover/ans:opacity-100 transition-opacity p-1 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-500 hover:text-zinc-800 text-[10px] flex items-center gap-1 shadow-2xs"
+                            title="复制回复内容"
+                          >
+                            {copiedStepId === st.id ? (
+                              <>
+                                <CheckCheck className="h-3 w-3 text-emerald-600" />
+                                <span className="text-emerald-600">已复制</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-3 w-3" />
+                                <span>复制</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

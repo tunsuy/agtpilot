@@ -1,0 +1,57 @@
+export interface ConnectorApp {
+  id: string;
+  name: string;
+  category: string;
+  icon: string;
+  status: 'connected' | 'unconfigured';
+  envVar: string;
+  description: string;
+  keyMasked?: string;
+}
+
+export interface MissionStep {
+  id: string;
+  title: string;
+  tool?: string;
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  duration?: string;
+  args?: any;
+}
+
+export interface Mission {
+  id: string;
+  title: string;
+  status: 'ACTIVE' | 'DONE' | 'QUEUED' | 'WAITING_APPROVAL';
+  progress: number;
+  startedAt: number;
+  steps: MissionStep[];
+}
+
+export interface ViewportState {
+  activeTab: 'browser' | 'terminal';
+  url: string;
+  title?: string;
+  status: 'idle' | 'navigating' | 'interacting' | 'scraping';
+  screenshotBase64?: string;
+}
+
+export interface TerminalLog {
+  id: string;
+  timestamp: number;
+  type: 'command' | 'stdout' | 'stderr' | 'system';
+  text: string;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  action: string;
+  description: string;
+  dangerLevel: 'low' | 'medium' | 'high';
+  params: Record<string, any>;
+}
+
+export interface ArtifactState {
+  title?: string;
+  type?: string;
+  content: string;
+}

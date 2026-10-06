@@ -142,6 +142,7 @@ configuredProviders.push(
 );
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  trustHost: true,
   providers: configuredProviders,
   session: { strategy: 'jwt' },
   secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || 'agtpilot-super-secret-jwt-key-2026',

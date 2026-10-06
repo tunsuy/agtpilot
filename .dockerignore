@@ -1,0 +1,19 @@
+# Dependencies cache
+node_modules
+.pnpm-store
+
+# Next.js build artifacts (except standalone if building outside)
+.next
+!.next/standalone
+out
+
+# Git & IDE
+.git
+.gitignore
+.idea
+.vscode
+*.log
+
+# Local environment
+.env.local
+.env.*.local

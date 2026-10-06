@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  agtpilot:
+    image: ghcr.io/tunsuy/agtpilot:latest
+    container_name: agtpilot-web
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.production
+    environment:
+      - NODE_ENV=production
+      - PORT=3000

@@ -45,9 +45,9 @@ export function Navbar({
   const hasPendingApproval = approvalRequests.length > 0;
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-14 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md z-50 px-4 md:px-6 flex items-center justify-between">
+    <header className="fixed top-0 left-0 right-0 h-14 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md z-50 px-4 md:px-6 flex items-center justify-between relative">
       {/* Brand & Status */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 z-10">
         <button
           onClick={() => onViewChange('home')}
           className="flex items-center gap-2.5 group transition"
@@ -95,8 +95,8 @@ export function Navbar({
         )}
       </div>
 
-      {/* Navigation Tabs (Manus / Cue minimal style) */}
-      <nav className="flex items-center gap-1 bg-zinc-100/80 p-1 rounded-xl border border-zinc-200/60">
+      {/* Navigation Tabs (Manus / Cue minimal style - 严格基于屏幕居中轴对称) */}
+      <nav className="hidden md:flex absolute left-1/2 -translate-x-1/2 items-center gap-1 bg-zinc-100/80 p-1 rounded-xl border border-zinc-200/60 shadow-2xs">
         <button
           onClick={() => onViewChange('home')}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
@@ -192,7 +192,7 @@ export function Navbar({
       </nav>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2.5 z-10">
         {hasPendingApproval && (
           <button
             onClick={() => onViewChange('cockpit')}

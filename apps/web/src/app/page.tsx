@@ -193,7 +193,7 @@ export default function Workspace() {
   if (!mounted) return null;
 
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit">
+    <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false}>
       <div className="min-h-screen w-screen bg-[#fbfbfd] text-zinc-900 font-sans antialiased selection:bg-zinc-200">
         {/* Global Minimalist Topbar */}
         <Navbar

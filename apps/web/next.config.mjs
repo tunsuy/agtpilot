@@ -22,6 +22,7 @@ const nextConfig = {
     '@copilotkit/react-ui',
     '@copilotkit/runtime',
   ],
+  devIndicators: false,
 };
 
 export default nextConfig;

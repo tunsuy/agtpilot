@@ -400,7 +400,7 @@ export default function Workspace() {
 
   return (
     <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false}>
-      <div className="min-h-screen w-screen bg-[#fbfbfd] text-zinc-900 font-sans antialiased selection:bg-zinc-200">
+      <div className="min-h-screen w-full bg-[#fbfbfd] text-zinc-900 font-sans antialiased selection:bg-zinc-200">
         {/* Global Minimalist Topbar */}
         <Navbar
           activeView={activeView}

@@ -84,7 +84,7 @@ export function HomeView({
   const connectedCount = (connectors || []).filter((c) => c.status === 'connected').length;
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-12 animate-fadeIn">
+    <div className="w-full max-w-5xl mx-auto px-4 pt-6 pb-12 md:pt-8 md:pb-16 space-y-10 animate-fadeIn">
       {/* Hero Section */}
       <div className="text-center space-y-4 max-w-2xl mx-auto">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-100/90 border border-zinc-200/80 text-xs text-zinc-600 shadow-2xs">

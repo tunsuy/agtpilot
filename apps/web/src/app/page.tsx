@@ -10,7 +10,18 @@ import { ConnectorsView } from '../components/ConnectorsView';
 import { DeliverablesView } from '../components/DeliverablesView';
 import { MemoriesView } from '../components/MemoriesView';
 import { CronJobsView } from '../components/CronJobsView';
+import { GoalsView } from '../components/GoalsView';
 import { AuthModal } from '../components/AuthModal';
+import { DownloadAppModal } from '../components/DownloadAppModal';
+import {
+  Compass,
+  Cpu,
+  Target,
+  Clock,
+  FileText,
+  Brain,
+  Layers,
+} from 'lucide-react';
 import {
   Mission,
   ViewportState,
@@ -20,14 +31,17 @@ import {
   ConnectorApp,
   MemoryItem,
   CronJobItem,
+  GoalItem,
+  GoalMilestone,
 } from '../types/agent';
 
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
-  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables'>('home');
   const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact'>('browser');
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
 
   // Agent 实时状态流
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -156,6 +170,110 @@ export default function Workspace() {
     }
   };
 
+  const handleTriggerCronJob = async (id: string) => {
+    try {
+      const res = await fetch('/api/cron/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'trigger', id }),
+      });
+      const data = await res.json();
+      if (data.jobs) setCronJobs(data.jobs);
+      setActiveView('cockpit');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // 长期目标与里程碑状态
+  const [goals, setGoals] = useState<GoalItem[]>([]);
+
+  const loadGoals = async () => {
+    try {
+      const res = await fetch('/api/goals');
+      const data = await res.json();
+      if (data.goals) setGoals(data.goals);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleCreateGoal = async (goal: {
+    title: string;
+    description: string;
+    category?: GoalItem['category'];
+    targetDate?: string;
+    milestones: Array<{ title: string; description?: string; status?: GoalMilestone['status'] }>;
+  }) => {
+    try {
+      const res = await fetch('/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', ...goal }),
+      });
+      const data = await res.json();
+      if (data.goals) setGoals(data.goals);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleUpdateGoal = async (goal: {
+    id: string;
+    title?: string;
+    description?: string;
+    category?: GoalItem['category'];
+    targetDate?: string;
+    status?: GoalItem['status'];
+    milestones?: GoalMilestone[];
+  }) => {
+    try {
+      const res = await fetch('/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', ...goal }),
+      });
+      const data = await res.json();
+      if (data.goals) setGoals(data.goals);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteGoal = async (id: string) => {
+    try {
+      const res = await fetch('/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', id }),
+      });
+      const data = await res.json();
+      if (data.goals) setGoals(data.goals);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleToggleMilestone = async (goalId: string, milestoneId: string, status?: GoalMilestone['status']) => {
+    try {
+      const res = await fetch('/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'toggle_milestone', goalId, milestoneId, status }),
+      });
+      const data = await res.json();
+      if (data.goals) setGoals(data.goals);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleAdvanceMilestone = (goal: GoalItem, milestone: GoalMilestone) => {
+    const prompt = `【推进长期目标里程碑】\n目标名称：${goal.title}\n所属领域：${goal.category || '综合'}\n当前阶段：${milestone.title}\n阶段要求与成果：${milestone.description || '按阶段规划推进'}\n\n请作为我的个人超级智能体，围绕此阶段目标为我制定落地行动方案并执行攻坚，产出结构化阶段交付成果。`;
+    handleRun(prompt);
+    setActiveView('cockpit');
+  };
+
   const loadConnectors = async () => {
     try {
       const res = await fetch('/api/connectors');
@@ -273,17 +391,19 @@ export default function Workspace() {
       loadConnectors();
       loadMemories();
       loadCronJobs();
-    } else {
+      loadGoals();
+      loadAgentState();
+    } else if (sessionStatus !== 'loading') {
       setConnectors([]);
       setMemories([]);
       setCronJobs([]);
+      setGoals([]);
       setMissions([]);
       setActiveMissionId(null);
       setTerminalLogs([]);
       setApprovalRequests([]);
       setArtifact(null);
     }
-
     // 检查 URL 参数（如 OAuth 回调后跳转）
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
@@ -291,7 +411,24 @@ export default function Workspace() {
         setActiveView('connectors');
       }
     }
-  }, [session?.user?.id]);
+  }, [session?.user?.id, sessionStatus]);
+
+  const loadAgentState = async () => {
+    try {
+      const res = await fetch('/api/agent/state');
+      const data = await res.json();
+      if (data.state) {
+        if (data.state.missions) setMissions(data.state.missions);
+        if (data.state.activeMissionId) setActiveMissionId(data.state.activeMissionId);
+        if (data.state.viewport) setViewport(data.state.viewport);
+        if (data.state.terminalLogs) setTerminalLogs(data.state.terminalLogs);
+        if (data.state.approvalRequests) setApprovalRequests(data.state.approvalRequests);
+        if (data.state.latestArtifact) setArtifact(data.state.latestArtifact);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   useEffect(() => {
     const eventSource = new EventSource('/api/agent/events');
@@ -383,8 +520,8 @@ export default function Workspace() {
     };
   }, [session?.user?.id]);
 
-  const handleViewChange = (view: 'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => {
-    // 首页允许所有人浏览概览，其余页面（工作台、连接器、记忆库、巡航、交付库）必须登录
+  const handleViewChange = (view: 'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => {
+    // 首页允许所有人浏览概览，其余页面（工作台、连接器、记忆库、巡航、交付库、长期目标）必须登录
     if (view !== 'home' && sessionStatus !== 'loading' && !session?.user) {
       setAuthModalTab('login');
       setAuthModalOpen(true);
@@ -409,6 +546,7 @@ export default function Workspace() {
           connectedCount={connectedCount}
           memoryCount={memories.length}
           patrolCount={cronJobs.filter((j) => j.status === 'active').length}
+          goalCount={goals.length}
           approvalRequests={approvalRequests}
           hasArtifact={Boolean(artifact)}
           onNewMission={() => {
@@ -423,6 +561,7 @@ export default function Workspace() {
             setAuthModalTab(tab);
             setAuthModalOpen(true);
           }}
+          onOpenDownloadApp={() => setDownloadModalOpen(true)}
         />
 
         {/* NextAuth Authentication Modal */}
@@ -430,6 +569,12 @@ export default function Workspace() {
           isOpen={authModalOpen}
           onClose={() => setAuthModalOpen(false)}
           initialTab={authModalTab}
+        />
+
+        {/* Mobile Download Modal */}
+        <DownloadAppModal
+          isOpen={downloadModalOpen}
+          onClose={() => setDownloadModalOpen(false)}
         />
 
         {/* Main Content Area */}
@@ -440,12 +585,23 @@ export default function Workspace() {
                 onRunMission={handleRun}
                 missions={missions}
                 connectors={connectors}
+                goals={goals}
+                memories={memories}
+                cronJobs={cronJobs}
                 onSelectModel={handleSetDefaultModel}
                 onOpenCockpit={(missionId) => {
                   if (missionId) setActiveMissionId(missionId);
                   handleViewChange('cockpit');
                 }}
                 onOpenConnectors={() => handleViewChange('connectors')}
+                onOpenGoals={() => handleViewChange('goals')}
+                onOpenMemories={() => handleViewChange('memories')}
+                onOpenPatrol={() => handleViewChange('patrol')}
+                onOpenDownloadApp={() => setDownloadModalOpen(true)}
+                onOpenAuth={(tab) => {
+                  setAuthModalTab(tab);
+                  setAuthModalOpen(true);
+                }}
               />
             </main>
           )}
@@ -471,8 +627,21 @@ export default function Workspace() {
             />
           )}
 
+          {activeView === 'goals' && (
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
+              <GoalsView
+                goals={goals}
+                onCreateGoal={handleCreateGoal}
+                onUpdateGoal={handleUpdateGoal}
+                onDeleteGoal={handleDeleteGoal}
+                onToggleMilestone={handleToggleMilestone}
+                onAdvanceMilestone={handleAdvanceMilestone}
+              />
+            </main>
+          )}
+
           {activeView === 'connectors' && (
-            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto">
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
               <ConnectorsView
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
@@ -482,7 +651,7 @@ export default function Workspace() {
           )}
 
           {activeView === 'memories' && (
-            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto">
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
               <MemoriesView
                 memories={memories}
                 onAddMemory={handleAddMemory}
@@ -492,19 +661,20 @@ export default function Workspace() {
           )}
 
           {activeView === 'patrol' && (
-            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto">
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
               <CronJobsView
                 jobs={cronJobs}
                 onCreateJob={handleCreateCronJob}
                 onUpdateJob={handleUpdateCronJob}
                 onToggleJob={handleToggleCronJob}
                 onDeleteJob={handleDeleteCronJob}
+                onTriggerJob={handleTriggerCronJob}
               />
             </main>
           )}
 
           {activeView === 'deliverables' && (
-            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto">
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
               <DeliverablesView
                 artifact={artifact}
                 missions={missions}
@@ -513,6 +683,62 @@ export default function Workspace() {
               />
             </main>
           )}
+        </div>
+
+        {/* 移动端沉浸式原生底部导航栏 (Mobile App Tab Bar, 仅在 md 以下小屏幕常驻) */}
+        <div className="md:hidden fixed bottom-0 inset-x-0 h-14 bg-white/95 backdrop-blur-md border-t border-zinc-200/80 z-40 flex items-center justify-around px-2 select-none shadow-[0_-4px_20px_rgba(0,0,0,0.04)]">
+          <button
+            onClick={() => handleViewChange('home')}
+            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+              activeView === 'home' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            <Compass className="h-4 w-4" />
+            <span className="text-[10px] mt-0.5">首页</span>
+          </button>
+
+          <button
+            onClick={() => handleViewChange('cockpit')}
+            className={`relative flex flex-col items-center justify-center flex-1 py-1 transition ${
+              activeView === 'cockpit' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            <Cpu className="h-4 w-4" />
+            <span className="text-[10px] mt-0.5">工作台</span>
+            {missions.some((m) => m.status === 'ACTIVE') && (
+              <span className="absolute top-1 right-1/4 h-1.5 w-1.5 rounded-full bg-blue-600 animate-ping" />
+            )}
+          </button>
+
+          <button
+            onClick={() => handleViewChange('goals')}
+            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+              activeView === 'goals' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            <Target className="h-4 w-4" />
+            <span className="text-[10px] mt-0.5">目标</span>
+          </button>
+
+          <button
+            onClick={() => handleViewChange('deliverables')}
+            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+              activeView === 'deliverables' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            <FileText className="h-4 w-4" />
+            <span className="text-[10px] mt-0.5">交付库</span>
+          </button>
+
+          <button
+            onClick={() => handleViewChange('connectors')}
+            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
+              activeView === 'connectors' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            <Layers className="h-4 w-4" />
+            <span className="text-[10px] mt-0.5">连接器</span>
+          </button>
         </div>
       </div>
     </CopilotKit>

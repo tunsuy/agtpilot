@@ -1,60 +1,9 @@
-<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <!-- Background Gradient -->
-    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#18181b" />
-      <stop offset="100%" stop-color="#09090b" />
-    </linearGradient>
-
-    <!-- Top facet (Isometric Prism) -->
-    <linearGradient id="facet-top" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff" />
-      <stop offset="100%" stop-color="#cbd5e1" />
-    </linearGradient>
-
-    <!-- Left facet (Shaded Prism) -->
-    <linearGradient id="facet-left" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#94a3b8" />
-      <stop offset="100%" stop-color="#475569" />
-    </linearGradient>
-
-    <!-- Right facet (Deep metallic core) -->
-    <linearGradient id="facet-right" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#64748b" />
-      <stop offset="100%" stop-color="#1e293b" />
-    </linearGradient>
-
-    <!-- Laser Cyan / Indigo Pilot Compass Accent -->
-    <linearGradient id="pilot-cyan" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#38bdf8" />
-      <stop offset="100%" stop-color="#2563eb" />
-    </linearGradient>
-
-    <radialGradient id="center-glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8" />
-      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0" />
-    </radialGradient>
-  </defs>
-
-  <!-- Squircle Base Container -->
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bg-grad)" stroke="#27272a" stroke-width="1.5" />
-
-  <!-- Subtle Inner Glow -->
-  <circle cx="32" cy="32" r="20" fill="url(#center-glow)" opacity="0.15" />
-
-  <!-- Isometric Hex-Prism / Geometric AgtPilot Motif -->
-  <!-- Top Face -->
-  <path d="M32 17 L45 24.5 L32 32 L19 24.5 Z" fill="url(#facet-top)" />
-  
-  <!-- Left Face -->
-  <path d="M19 24.5 L32 32 L32 47 L19 39.5 Z" fill="url(#facet-left)" />
-
-  <!-- Right Face -->
-  <path d="M32 32 L45 24.5 L45 39.5 L32 47 Z" fill="url(#facet-right)" />
-
-  <!-- Pilot Navigation Angle Accent (Forward Vector Dart) -->
-  <path d="M32 23 L41 28.2 L32 33.4 L28 31.1 Z" fill="url(#pilot-cyan)" />
-  
-  <!-- Optical Precision Dot (Core Engine) -->
-  <circle cx="32" cy="32" r="2.5" fill="#ffffff" />
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="40" height="40" rx="10" fill="#09090b" />
+  <!-- Pilot Forward Vector Dart -->
+  <path d="M20 8L30.5 28.5L20 23.5L9.5 28.5L20 8Z" fill="#ffffff" />
+  <!-- Precision Cutout -->
+  <path d="M20 13.5L25.5 24.5L20 22L14.5 24.5L20 13.5Z" fill="#09090b" />
+  <!-- Core Engine Guidance Dot -->
+  <circle cx="20" cy="22" r="1.75" fill="#ffffff" />
 </svg>

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
+import { useSession } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -33,7 +34,12 @@ import {
   Search,
   Code,
   AlertCircle,
+  Download,
+  Code2,
+  Eye,
+  Smartphone,
 } from 'lucide-react';
+import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import {
   Mission,
   ViewportState,
@@ -80,14 +86,20 @@ export function CockpitView({
   connectors,
   onSelectModel,
 }: CockpitViewProps) {
+  const { data: session } = useSession();
+  const currentUser = session?.user;
   const [prompt, setPrompt] = useState('');
   const [copiedArtifact, setCopiedArtifact] = useState(false);
   const [copiedStepId, setCopiedStepId] = useState<string | null>(null);
+  const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'source' | 'social'>('preview');
+  const [selectedArtifactIndex, setSelectedArtifactIndex] = useState<number>(0);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isWorkbenchExpanded, setIsWorkbenchExpanded] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const stepsEndRef = useRef<HTMLDivElement>(null);
+
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (rightTab === 'terminal') {
@@ -95,8 +107,10 @@ export function CockpitView({
     }
   }, [terminalLogs, rightTab]);
 
-  const currentMission =
-    missions.find((m) => m.id === activeMissionId) || missions[0] || null;
+  // 如果 activeMissionId 为 null，说明用户点击了“新建会话”，界面应展示空白就绪状态，而不是强行回退到 missions[0]
+  const currentMission = activeMissionId
+    ? (missions.find((m) => m.id === activeMissionId) || null)
+    : null;
 
   // 关键修复：当切换历史会话时，右侧浏览器、终端与交付成果紧密绑定当前选中的会话
   const activeViewport = currentMission?.viewport || (activeMissionId === currentMission?.id ? viewport : {
@@ -135,6 +149,9 @@ export function CockpitView({
     if (onNewSession) {
       onNewSession();
     }
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
   };
 
   const suggestions = [
@@ -335,202 +352,335 @@ export function CockpitView({
           </div>
         )}
 
-        {/* 核心会话与交互流 (Timeline Stream: User Query, Collapsible Tools, Assistant Response) */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* 核心会话与交互流 (Streamlined Manus / Linear Flow) */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
           {currentMission && currentMission.steps && currentMission.steps.length > 0 ? (
-            <div className="space-y-4 max-w-2xl mx-auto w-full">
-              {currentMission.steps.map((st) => {
-                const isUser = st.role === 'user' || st.userPrompt;
-                const isAssistant = st.role === 'assistant' || Boolean(st.answer);
-                const isTool = st.tool || (!isUser && !isAssistant);
-                const isToolExpanded = Boolean(expandedTools[st.id]);
+            <div className="space-y-6 max-w-2xl mx-auto w-full">
+              {(() => {
+                // 将步骤按【连续工具调用】聚合为组，使长串搜索和调用收纳为单条优雅的行动链
+                type RenderBlock =
+                  | { type: 'user'; step: (typeof currentMission.steps)[0] }
+                  | { type: 'tools'; steps: (typeof currentMission.steps); key: string }
+                  | { type: 'assistant'; step: (typeof currentMission.steps)[0] };
 
-                // 1. 用户提问气泡 (清晰明了区分每一轮追问)
-                if (isUser) {
-                  return (
-                    <div key={st.id} className="flex items-start justify-end gap-2.5 pt-2">
-                      <div className="max-w-[85%] bg-zinc-900 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-xs">
-                        <p className="text-xs leading-relaxed whitespace-pre-wrap selection:bg-zinc-700">
-                          {st.userPrompt || st.title}
-                        </p>
-                      </div>
-                      <div className="h-7 w-7 rounded-full bg-zinc-200 text-zinc-700 flex items-center justify-center flex-shrink-0 text-xs font-semibold">
-                        <User className="h-3.5 w-3.5" />
-                      </div>
-                    </div>
-                  );
+                const blocks: RenderBlock[] = [];
+                let currentTools: (typeof currentMission.steps) = [];
+
+                currentMission.steps.forEach((st, idx) => {
+                  const isUser = st.role === 'user' || Boolean(st.userPrompt);
+                  const isAssistant = (st.role === 'assistant' || Boolean(st.answer)) && !isUser;
+                  const isTool = !isUser && !isAssistant;
+
+                  if (isTool) {
+                    currentTools.push(st);
+                  } else {
+                    if (currentTools.length > 0) {
+                      blocks.push({
+                        type: 'tools',
+                        steps: [...currentTools],
+                        key: `tools_group_${idx - currentTools.length}`,
+                      });
+                      currentTools = [];
+                    }
+                    if (isUser) {
+                      blocks.push({ type: 'user', step: st });
+                    } else if (isAssistant) {
+                      blocks.push({ type: 'assistant', step: st });
+                    }
+                  }
+                });
+
+                if (currentTools.length > 0) {
+                  blocks.push({
+                    type: 'tools',
+                    steps: currentTools,
+                    key: `tools_group_final`,
+                  });
                 }
 
-                // 2. 工具调用卡片 (可折叠点击展开查看入参和输出结果，避免强硬塞在界面中央)
-                if (isTool && !st.answer) {
-                  const getToolIcon = () => {
-                    if (st.tool?.includes('search')) return <Search className="h-3.5 w-3.5 text-blue-500" />;
-                    if (st.tool?.includes('browser')) return <Globe className="h-3.5 w-3.5 text-indigo-500" />;
-                    if (st.tool?.includes('sandbox')) return <Code className="h-3.5 w-3.5 text-amber-500" />;
-                    return <Wrench className="h-3.5 w-3.5 text-zinc-500" />;
-                  };
-
-                  return (
-                    <div key={st.id} className="flex items-start gap-2.5 pl-1 my-1.5">
-                      <div className="h-6 w-6 rounded-full bg-zinc-100 border border-zinc-200 flex items-center justify-center flex-shrink-0 mt-0.5">
-                        {getToolIcon()}
+                return blocks.map((block) => {
+                  // ================= 1. 用户提问气泡 (轻量现代感带用户专属头像) =================
+                  if (block.type === 'user') {
+                    const st = block.step;
+                    return (
+                      <div key={st.id} className="flex items-start justify-end gap-2.5 pt-2 group">
+                        <div className="max-w-[85%] rounded-2xl bg-zinc-900 text-zinc-50 px-4 py-2.5 shadow-sm text-xs leading-relaxed selection:bg-zinc-700">
+                          <p className="whitespace-pre-wrap font-normal">
+                            {st.userPrompt || st.title}
+                          </p>
+                        </div>
+                        {currentUser?.image ? (
+                          <img
+                            src={currentUser.image}
+                            alt={currentUser.name || 'User'}
+                            className="h-7 w-7 rounded-full object-cover border border-zinc-200 shadow-2xs flex-shrink-0 mt-0.5"
+                          />
+                        ) : (
+                          <div className="h-7 w-7 rounded-full bg-zinc-200 text-zinc-700 border border-zinc-300/80 flex items-center justify-center flex-shrink-0 text-xs font-semibold mt-0.5 shadow-2xs">
+                            {currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : <User className="h-3.5 w-3.5" />}
+                          </div>
+                        )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div
-                          onClick={() => {
-                            setExpandedTools((prev) => ({ ...prev, [st.id]: !prev[st.id] }));
-                          }}
-                          className={`rounded-lg border px-3 py-2 text-xs transition cursor-pointer select-none ${
-                            st.status === 'RUNNING'
-                              ? 'border-blue-200 bg-blue-50/40 text-blue-900'
-                              : st.status === 'FAILED'
-                              ? 'border-red-200 bg-red-50/40 text-red-800'
-                              : 'border-zinc-200/70 bg-[#fafafa] hover:bg-zinc-100/80 text-zinc-700'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="font-mono text-[11px] font-semibold text-zinc-800 truncate">
-                                {st.tool || 'orchestrator'}
+                    );
+                  }
+
+                  // ================= 2. 工具调用链聚合块 (Manus 风格流线手风琴) =================
+                  if (block.type === 'tools') {
+                    const groupSteps = block.steps;
+                    const groupKey = block.key;
+                    const isAnyRunning = groupSteps.some((s) => s.status === 'RUNNING');
+                    const hasFailed = groupSteps.some((s) => s.status === 'FAILED');
+                    const isGroupExpanded = expandedTools[groupKey] ?? isAnyRunning;
+
+                    // 提取概览信息
+                    const toolTypes = Array.from(new Set(groupSteps.map((s) => s.tool || 'action')));
+                    const lastAction = groupSteps[groupSteps.length - 1];
+                    const summaryLabel = isAnyRunning
+                      ? `正在调度 ${lastAction.tool || '工具'}...`
+                      : hasFailed
+                      ? `执行出现异常 (${groupSteps.length} 步)`
+                      : `已完成 ${groupSteps.length} 项自主探索与分析`;
+
+                    return (
+                      <div key={groupKey} className="my-2.5 max-w-2xl mx-auto w-full animate-fadeIn">
+                        <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/70 hover:bg-zinc-50 transition overflow-hidden shadow-2xs">
+                          {/* 聚合条目头部 */}
+                          <div
+                            onClick={() => {
+                              setExpandedTools((prev) => ({
+                                ...prev,
+                                [groupKey]: !isGroupExpanded,
+                              }));
+                            }}
+                            className="px-3.5 py-2.5 flex items-center justify-between cursor-pointer select-none"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="h-5 w-5 rounded-md bg-white border border-zinc-200/80 flex items-center justify-center flex-shrink-0 shadow-2xs">
+                                {isAnyRunning ? (
+                                  <RotateCw className="h-3 w-3 text-blue-600 animate-spin" />
+                                ) : hasFailed ? (
+                                  <AlertCircle className="h-3 w-3 text-red-500" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3 text-zinc-600" />
+                                )}
+                              </div>
+
+                              <span className="text-[11px] font-medium text-zinc-700 truncate">
+                                {summaryLabel}
                               </span>
-                              <span className="text-[11px] text-zinc-400 truncate hidden sm:inline">
-                                {st.args?.query || st.args?.url || st.args?.command || st.title}
-                              </span>
+
+                              {toolTypes.length > 0 && (
+                                <div className="hidden sm:flex items-center gap-1">
+                                  {toolTypes.slice(0, 3).map((t) => (
+                                    <span
+                                      key={t}
+                                      className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-zinc-200/60 text-zinc-600"
+                                    >
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-2 flex-shrink-0">
-                              {st.status === 'RUNNING' ? (
-                                <span className="flex items-center gap-1 text-[10px] text-blue-600 font-mono">
-                                  <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
-                                  执行中
-                                </span>
-                              ) : st.status === 'FAILED' ? (
-                                <span className="text-[10px] text-red-600 font-mono">失败</span>
-                              ) : (
-                                <span className="text-[10px] text-zinc-400 font-mono">{st.duration || '完成'}</span>
-                              )}
+                              <span className="text-[10px] text-zinc-400 font-mono">
+                                {groupSteps.length} 步行动
+                              </span>
                               <ChevronDown
-                                className={`h-3 w-3 text-zinc-400 transition-transform duration-200 ${
-                                  isToolExpanded ? 'rotate-180' : ''
+                                className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
+                                  isGroupExpanded ? 'rotate-180' : ''
                                 }`}
                               />
                             </div>
                           </div>
 
-                          {/* 折叠展开详情：入参与执行输出结果 */}
-                          {isToolExpanded && (
-                            <div className="mt-2.5 pt-2 border-t border-zinc-200/60 space-y-2 text-[11px] font-mono animate-fadeIn">
-                              {st.args && (
-                                <div>
-                                  <span className="text-zinc-400 block text-[10px] uppercase">调用参数 (Args):</span>
-                                  <pre className="mt-1 p-2 rounded bg-zinc-900 text-zinc-200 overflow-x-auto text-[10px] max-h-40">
-                                    {JSON.stringify(st.args, null, 2)}
-                                  </pre>
-                                </div>
-                              )}
-                              {st.output && (
-                                <div>
-                                  <span className="text-zinc-400 block text-[10px] uppercase">执行结果 (Output):</span>
-                                  <pre className="mt-1 p-2 rounded bg-zinc-900 text-emerald-400 overflow-x-auto text-[10px] max-h-40 whitespace-pre-wrap">
-                                    {typeof st.output === 'string' ? st.output : JSON.stringify(st.output, null, 2)}
-                                  </pre>
-                                </div>
-                              )}
+                          {/* 展开后的各子步骤列表 */}
+                          {isGroupExpanded && (
+                            <div className="px-3 pb-3 pt-1 border-t border-zinc-200/50 space-y-1.5 bg-white/50">
+                              {groupSteps.map((st) => {
+                                const isSubExpanded = Boolean(expandedTools[st.id]);
+                                const getIcon = () => {
+                                  if (st.tool?.includes('search')) return <Search className="h-3 w-3 text-blue-500" />;
+                                  if (st.tool?.includes('browser')) return <Globe className="h-3 w-3 text-indigo-500" />;
+                                  if (st.tool?.includes('sandbox')) return <Code className="h-3 w-3 text-amber-500" />;
+                                  return <Wrench className="h-3 w-3 text-zinc-500" />;
+                                };
+
+                                return (
+                                  <div
+                                    key={st.id}
+                                    className="rounded-lg border border-zinc-200/70 bg-white p-2 text-xs shadow-2xs"
+                                  >
+                                    <div
+                                      onClick={() => {
+                                        setExpandedTools((prev) => ({
+                                          ...prev,
+                                          [st.id]: !isSubExpanded,
+                                        }));
+                                      }}
+                                      className="flex items-center justify-between gap-2 cursor-pointer select-none"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <div className="h-4.5 w-4.5 rounded bg-zinc-50 border border-zinc-100 flex items-center justify-center flex-shrink-0">
+                                          {getIcon()}
+                                        </div>
+                                        <span className="font-mono text-[11px] font-semibold text-zinc-800">
+                                          {st.tool || 'orchestrator'}
+                                        </span>
+                                        <span className="text-[10px] text-zinc-400 truncate">
+                                          {st.args?.query || st.args?.url || st.args?.command || st.title}
+                                        </span>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                                        {st.status === 'RUNNING' ? (
+                                          <span className="text-[9px] text-blue-600 font-mono flex items-center gap-1">
+                                            <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
+                                            执行中
+                                          </span>
+                                        ) : st.status === 'FAILED' ? (
+                                          <span className="text-[9px] text-red-600 font-mono">失败</span>
+                                        ) : (
+                                          <span className="text-[9px] text-zinc-400 font-mono">
+                                            {st.duration || '完成'}
+                                          </span>
+                                        )}
+                                        <ChevronDown
+                                          className={`h-3 w-3 text-zinc-300 transition-transform ${
+                                            isSubExpanded ? 'rotate-180' : ''
+                                          }`}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    {/* 子步骤详细入参与出参 */}
+                                    {isSubExpanded && (
+                                      <div className="mt-2 pt-2 border-t border-zinc-100 space-y-1.5 text-[10px] font-mono animate-fadeIn">
+                                        {st.args && (
+                                          <div>
+                                            <span className="text-zinc-400 uppercase text-[9px]">输入参数 (Args):</span>
+                                            <pre className="mt-0.5 p-1.5 rounded bg-zinc-900 text-zinc-200 overflow-x-auto max-h-36">
+                                              {JSON.stringify(st.args, null, 2)}
+                                            </pre>
+                                          </div>
+                                        )}
+                                        {st.output && (
+                                          <div>
+                                            <span className="text-zinc-400 uppercase text-[9px]">返回结果 (Output):</span>
+                                            <pre className="mt-0.5 p-1.5 rounded bg-zinc-900 text-emerald-400 overflow-x-auto max-h-36 whitespace-pre-wrap">
+                                              {typeof st.output === 'string' ? st.output : JSON.stringify(st.output, null, 2)}
+                                            </pre>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                         </div>
                       </div>
-                    </div>
-                  );
-                }
+                    );
+                  }
 
-                // 3. 智能体回复消息（优雅自然的主交互气泡，支持原生 Markdown、复制与排版）
-                return (
-                  <div key={st.id} className="flex items-start gap-3 pt-1">
-                    <div className="h-7 w-7 rounded-full bg-blue-600 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
-                      <Bot className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="p-4 rounded-2xl rounded-tl-sm bg-white border border-zinc-200/90 shadow-2xs text-xs text-zinc-800 leading-relaxed group/ans relative">
-                        <div className="prose prose-zinc prose-xs max-w-none break-words">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {st.answer || st.title}
-                          </ReactMarkdown>
+                  // ================= 3. 智能体正式回复卡片 (精致沉浸式 Markdown) =================
+                  if (block.type === 'assistant') {
+                    const st = block.step;
+                    return (
+                      <div key={st.id} className="flex items-start gap-3.5 group/ans relative">
+                        <div className="h-7 w-7 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
+                          <Bot className="h-4 w-4" />
                         </div>
-                        {st.answer && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigator.clipboard.writeText(st.answer!);
-                              setCopiedStepId(st.id);
-                              setTimeout(() => setCopiedStepId(null), 2000);
-                            }}
-                            className="absolute top-2.5 right-2.5 opacity-0 group-hover/ans:opacity-100 transition-opacity p-1.5 rounded-lg bg-zinc-50 hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800 text-[10px] flex items-center gap-1 border border-zinc-200/80 shadow-2xs"
-                            title="复制回复内容"
-                          >
-                            {copiedStepId === st.id ? (
-                              <>
-                                <CheckCheck className="h-3 w-3 text-emerald-600" />
-                                <span className="text-emerald-600">已复制</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="h-3 w-3" />
-                                <span>复制</span>
-                              </>
+                        <div className="flex-1 min-w-0">
+                          <div className="rounded-2xl bg-white border border-zinc-200/80 p-5 shadow-2xs text-xs text-zinc-800 leading-relaxed relative">
+                            <div className="prose prose-zinc prose-xs max-w-none break-words">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {st.answer || st.title}
+                              </ReactMarkdown>
+                            </div>
+
+                            {st.answer && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(st.answer!);
+                                  setCopiedStepId(st.id);
+                                  setTimeout(() => setCopiedStepId(null), 2000);
+                                }}
+                                className="absolute top-3 right-3 opacity-0 group-hover/ans:opacity-100 transition-opacity p-1.5 rounded-lg bg-zinc-50 hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800 text-[10px] flex items-center gap-1 border border-zinc-200/80 shadow-2xs"
+                                title="复制回复内容"
+                              >
+                                {copiedStepId === st.id ? (
+                                  <>
+                                    <CheckCheck className="h-3 w-3 text-emerald-600" />
+                                    <span className="text-emerald-600">已复制</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="h-3 w-3" />
+                                    <span>复制</span>
+                                  </>
+                                )}
+                              </button>
                             )}
-                          </button>
-                        )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  }
+
+                  return null;
+                });
+              })()}
               <div ref={stepsEndRef} />
             </div>
           ) : (
-            <div className="py-20 text-center text-zinc-400 space-y-3">
-              <div className="mx-auto w-10 h-10 rounded-2xl bg-zinc-100 flex items-center justify-center text-zinc-500 shadow-2xs">
-                <Bot className="h-5 w-5" />
+            <div className="py-24 text-center text-zinc-400 space-y-4 max-w-sm mx-auto">
+              <div className="mx-auto w-12 h-12 rounded-2xl bg-zinc-100 border border-zinc-200/60 flex items-center justify-center text-zinc-500 shadow-2xs">
+                <Bot className="h-6 w-6 text-zinc-700" />
               </div>
-              <div className="space-y-1">
-                <p className="text-xs font-semibold text-zinc-700">准备启动全自主执行</p>
-                <p className="text-[11px] text-zinc-400 max-w-xs mx-auto">
-                  在下方输入任务目标或补充指令，AgtPilot 将自主调度浏览器、沙箱与模型。
+              <div className="space-y-1.5">
+                <p className="text-sm font-semibold text-zinc-800">智能体待命就绪</p>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  在下方输入探索目标或提问，AgtPilot 将自主规划子步骤、搜索网页、运行代码并交付成果。
                 </p>
               </div>
             </div>
           )}
         </div>
 
-        {/* 中间底部：Linear 风格指令输入框 */}
-        <div className="p-3 border-t border-zinc-200 bg-white space-y-2">
+        {/* 中间底部：Linear 风格流线输入框 */}
+        <div className="p-3 md:p-4 border-t border-zinc-200/80 bg-white space-y-2">
           <form
             onSubmit={handleSubmit}
-            className="flex items-center gap-2 bg-[#f4f4f6] border border-zinc-200 rounded-xl p-1.5 focus-within:border-zinc-400 focus-within:bg-white transition"
+            className="flex items-center gap-2 bg-zinc-50 hover:bg-zinc-50/80 border border-zinc-200 rounded-xl px-3 py-2 focus-within:border-zinc-400 focus-within:bg-white focus-within:shadow-2xs transition"
           >
             <input
+              ref={inputRef}
               type="text"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="指示 AgtPilot 进行网页浏览、代码运行、深入调研..."
-              className="flex-1 bg-transparent border-none text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none px-2"
+              className="flex-1 bg-transparent border-none text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none"
             />
             {currentMission && currentMission.status !== 'DONE' && !prompt.trim() ? (
               <button
                 type="button"
                 onClick={() => onStopMission && onStopMission(currentMission.id)}
-                className="h-7 w-7 rounded-lg bg-red-600 hover:bg-red-700 text-white flex items-center justify-center transition flex-shrink-0 shadow-2xs"
+                className="h-7 px-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 flex items-center gap-1 transition flex-shrink-0 text-[11px] font-medium"
                 title="终止执行当前任务"
               >
-                <Square className="h-3 w-3 fill-white" />
+                <Square className="h-3 w-3 fill-red-600" />
+                <span>停止</span>
               </button>
             ) : (
               <button
                 type="submit"
                 disabled={!prompt.trim() || isSubmitting}
-                className="h-7 w-7 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-20 text-white flex items-center justify-center transition flex-shrink-0"
+                className="h-7 w-7 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-20 text-white flex items-center justify-center transition flex-shrink-0 shadow-2xs"
               >
                 {isSubmitting ? (
                   <RotateCw className="h-3.5 w-3.5 animate-spin" />
@@ -545,8 +695,8 @@ export function CockpitView({
           {onSelectModel && connectors && (
             <div className="flex items-center justify-between px-1 text-[11px] text-zinc-400">
               <div className="flex items-center gap-1.5">
-                <Cpu className="h-3 w-3 text-blue-600" />
-                <span className="text-zinc-500 font-medium">模型:</span>
+                <Cpu className="h-3 w-3 text-zinc-500" />
+                <span className="text-zinc-400">驱动模型:</span>
                 <select
                   value={(connectors || []).find((c) => c.isModel && c.isDefaultModel)?.id || 'deepseek'}
                   onChange={(e) => onSelectModel(e.target.value)}
@@ -561,7 +711,7 @@ export function CockpitView({
                     ))}
                 </select>
               </div>
-              <span className="font-mono">Enter 提交</span>
+              <span className="text-[10px] text-zinc-400 font-mono hidden sm:inline">Enter 发送</span>
             </div>
           )}
         </div>
@@ -782,7 +932,6 @@ export function CockpitView({
                   </div>
                   <span className="text-[11px] text-zinc-400 ml-2">sandbox: bash</span>
                 </div>
-                <span className="text-[10px] text-zinc-500">Node v20.x • Isolated Sandbox</span>
               </div>
 
               <div className="flex-1 p-4 overflow-y-auto space-y-1.5 text-zinc-300">
@@ -811,37 +960,207 @@ export function CockpitView({
             </div>
           )}
 
-          {/* 3. 最终交付物成果 (Deliverable Artifact View) */}
-          {rightTab === 'artifact' && (
-            <div className="h-full max-w-4xl mx-auto rounded-2xl border border-zinc-200 bg-white shadow-sm flex flex-col overflow-hidden">
-              <div className="h-12 border-b border-zinc-100 bg-zinc-50/50 px-6 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-zinc-600" />
-                  <span className="text-xs font-semibold text-zinc-900">
-                    {activeArtifact?.title || '任务交付物'}
-                  </span>
-                </div>
-                {activeArtifact?.type && (
-                  <span className="text-[10px] font-mono uppercase bg-zinc-200/80 text-zinc-600 px-2 py-0.5 rounded">
-                    {activeArtifact.type}
-                  </span>
-                )}
-              </div>
+          {/* 3. 最终交付物成果 (Deliverable Artifact Canvas) */}
+          {rightTab === 'artifact' && (() => {
+            // 提取当前任务中所有生成过的产物（支持多轮输出的多文档产物列表）
+            const missionArtifacts: Array<{ title: string; type: string; content: string; id: string }> = [];
+            const seen = new Set<string>();
 
-              <div className="flex-1 p-6 md:p-8 overflow-y-auto prose prose-zinc prose-sm max-w-none">
-                {activeArtifact?.content ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {activeArtifact.content}
-                  </ReactMarkdown>
-                ) : (
-                  <div className="h-full flex flex-col items-center justify-center text-center py-16 text-zinc-400 space-y-2">
-                    <FileText className="h-8 w-8 text-zinc-300" />
-                    <p className="text-xs">暂无生成的结构化报告。当任务完成后，总结成果将在此展示。</p>
+            // 从 steps 中扫描是否有通过 artifact_render 输出的产物
+            currentMission?.steps?.forEach((st) => {
+              if (st.tool === 'artifact_render' && st.args?.content && !seen.has(st.args.content)) {
+                seen.add(st.args.content);
+                missionArtifacts.push({
+                  id: st.id,
+                  title: st.args.title || '交付产物',
+                  type: st.args.type || 'markdown',
+                  content: st.args.content,
+                });
+              }
+            });
+
+            // 补充绑定的最新主产物
+            if (activeArtifact?.content && !seen.has(activeArtifact.content)) {
+              missionArtifacts.unshift({
+                id: 'active_main',
+                title: activeArtifact.title || '交付产物',
+                type: activeArtifact.type || 'markdown',
+                content: activeArtifact.content,
+              });
+            }
+
+            const currentArtifact = missionArtifacts[selectedArtifactIndex] || missionArtifacts[0] || null;
+
+            const handleDownloadCurrent = () => {
+              if (!currentArtifact?.content) return;
+              const blob = new Blob([currentArtifact.content], { type: 'text/markdown;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.setAttribute('download', `${currentArtifact.title || 'deliverable'}.md`);
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            };
+
+            const handleCopyCurrent = () => {
+              if (!currentArtifact?.content) return;
+              navigator.clipboard.writeText(currentArtifact.content);
+              setCopiedArtifact(true);
+              setTimeout(() => setCopiedArtifact(false), 2000);
+            };
+
+            return (
+              <div className="h-full w-full rounded-2xl border border-zinc-200/90 bg-white shadow-sm flex flex-col overflow-hidden animate-fadeIn">
+                {/* 顶部工具栏：标题、多文档 Tabs、预览/源码模式切换、复制与下载 */}
+                <div className="h-11 border-b border-zinc-200/80 bg-zinc-50/70 px-4 flex items-center justify-between gap-3 select-none flex-shrink-0">
+                  {/* 左侧：多文档标签页（Tabs） */}
+                  <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-none py-1">
+                    {missionArtifacts.length > 0 ? (
+                      missionArtifacts.map((art, idx) => {
+                        const isTabActive = (selectedArtifactIndex === idx) || (selectedArtifactIndex >= missionArtifacts.length && idx === 0);
+                        return (
+                          <button
+                            key={art.id}
+                            onClick={() => setSelectedArtifactIndex(idx)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition whitespace-nowrap ${
+                              isTabActive
+                                ? 'bg-white text-zinc-900 border border-zinc-200 shadow-2xs font-semibold'
+                                : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100/60'
+                            }`}
+                          >
+                            <FileText className="h-3 w-3 text-zinc-500" />
+                            <span className="truncate max-w-[130px]">{art.title}</span>
+                            <span className="text-[9px] uppercase font-mono px-1 py-0.2 rounded bg-zinc-100 text-zinc-500">
+                              {art.type}
+                            </span>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-600">
+                        <FileText className="h-3.5 w-3.5 text-zinc-400" />
+                        <span>交付画布 (Canvas)</span>
+                      </div>
+                    )}
                   </div>
-                )}
+
+                  {/* 右侧：预览/代码切换、复制、下载 */}
+                  {currentArtifact && (
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {/* 预览、源码与真机模拟多模切换 */}
+                      <div className="flex items-center bg-zinc-200/60 p-0.5 rounded-lg text-[11px] font-medium text-zinc-600">
+                        <button
+                          onClick={() => setArtifactViewMode('preview')}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition ${
+                            artifactViewMode === 'preview'
+                              ? 'bg-white text-zinc-900 shadow-2xs font-semibold'
+                              : 'hover:text-zinc-900'
+                          }`}
+                        >
+                          <Eye className="h-3 w-3" />
+                          <span>文档</span>
+                        </button>
+                        <button
+                          onClick={() => setArtifactViewMode('social')}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition ${
+                            artifactViewMode === 'social'
+                              ? 'bg-white text-zinc-900 shadow-2xs font-semibold'
+                              : 'hover:text-zinc-900'
+                          }`}
+                          title="切换至移动端与社交媒体 3:4 视觉卡片模拟器 (小红书/公众号/Twitter等)"
+                        >
+                          <Smartphone className="h-3 w-3 text-zinc-700" />
+                          <span>移动端卡片</span>
+                        </button>
+                        <button
+                          onClick={() => setArtifactViewMode('source')}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition ${
+                            artifactViewMode === 'source'
+                              ? 'bg-white text-zinc-900 shadow-2xs font-semibold'
+                              : 'hover:text-zinc-900'
+                          }`}
+                        >
+                          <Code2 className="h-3 w-3" />
+                          <span>源码</span>
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={handleCopyCurrent}
+                        className="p-1.5 rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-600 transition shadow-2xs"
+                        title="复制 Markdown 内容"
+                      >
+                        {copiedArtifact ? (
+                          <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+
+                      <button
+                        onClick={handleDownloadCurrent}
+                        className="p-1.5 rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-600 transition shadow-2xs"
+                        title="下载文档文件 (.md)"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* 主画布内容区 */}
+                <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                  {currentArtifact ? (
+                    artifactViewMode === 'social' ? (
+                      <div className="animate-fadeIn">
+                        <XiaohongshuPreviewCard
+                          rawContent={currentArtifact.content}
+                          title={currentArtifact.title}
+                        />
+                      </div>
+                    ) : artifactViewMode === 'preview' ? (
+                      <div className="prose prose-zinc prose-sm max-w-none leading-relaxed animate-fadeIn p-2 md:p-4">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {currentArtifact.content}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <div className="animate-fadeIn">
+                        <pre className="p-4 rounded-xl bg-zinc-950 text-zinc-200 text-xs font-mono overflow-x-auto leading-relaxed border border-zinc-800">
+                          <code>{currentArtifact.content}</code>
+                        </pre>
+                      </div>
+                    )
+                  ) : (
+                    /* 实用型引导空状态 */
+                    <div className="h-full flex flex-col items-center justify-center text-center py-16 space-y-4 max-w-xs mx-auto animate-fadeIn">
+                      <div className="h-12 w-12 rounded-2xl bg-zinc-100 border border-zinc-200/80 flex items-center justify-center text-zinc-400 shadow-2xs">
+                        <FileText className="h-6 w-6" />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-zinc-800">暂无结构化交付物</p>
+                        <p className="text-[11px] text-zinc-400 leading-relaxed">
+                          任务执行中生成的完整研报、架构图或独立代码将实时同步到此处。
+                        </p>
+                      </div>
+
+                      <div className="w-full pt-1 space-y-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onRunMission('请根据我们上面的对话，提炼生成一份结构化的总结分析报告并渲染到交付画布。')}
+                          className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-zinc-700 text-xs font-medium transition flex items-center justify-center gap-1.5 shadow-2xs"
+                        >
+                          <Sparkles className="h-3 w-3 text-zinc-500" />
+                          <span>将当前会话提炼为总结报告</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </main>
     </div>

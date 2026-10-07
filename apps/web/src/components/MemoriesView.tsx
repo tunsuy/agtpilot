@@ -107,9 +107,19 @@ export function MemoriesView({
       {/* 头部标题 */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-            个人专属记忆与偏好中心
-          </h1>
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-xl bg-purple-50 text-purple-600 border border-purple-200/60 shadow-2xs">
+              <Brain className="h-5 w-5" />
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
+              个人专属记忆与偏好中心
+            </h1>
+            {memories.length > 0 && (
+              <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 border border-zinc-200/80 text-zinc-600">
+                {memories.length} 条记忆
+              </span>
+            )}
+          </div>
           <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">
             AgtPilot 会跨会话持久沉淀你的工作习惯、开发规范与业务禁忌。执行任务时，大模型将自动加载并严格遵循这些个性化记忆。
           </p>

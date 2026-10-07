@@ -17,6 +17,7 @@ export interface UserScopedData {
   memories: any[];
   cronJobs: any[];
   missions: any[];
+  goals?: any[];
   updatedAt: number;
 }
 
@@ -76,7 +77,9 @@ export function getUserData(userId: string): UserScopedData {
   try {
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, 'utf-8');
-      return JSON.parse(raw);
+      const data = JSON.parse(raw);
+      if (!data.goals) data.goals = [];
+      return data;
     }
   } catch (e) {
     console.error(`Failed to read user data for ${userId}:`, e);
@@ -90,6 +93,7 @@ export function getUserData(userId: string): UserScopedData {
     memories: [],
     cronJobs: [],
     missions: [],
+    goals: [],
     updatedAt: Date.now(),
   };
 }
@@ -215,5 +219,60 @@ export function deleteUserMission(userId: string, missionId: string) {
   data.missions = (data.missions || []).filter((m: any) => m.id !== missionId);
   saveUserData(data);
   return data.missions;
+}
+
+// 辅助方法：长期目标 (Long-term Goals & Milestones)
+export function getUserGoals(userId: string): any[] {
+  const data = getUserData(userId);
+  return data.goals || [];
+}
+
+export function saveUserGoal(userId: string, goal: any) {
+  const data = getUserData(userId);
+  data.goals = data.goals || [];
+  const existingIdx = data.goals.findIndex((g: any) => g.id === goal.id);
+  if (existingIdx >= 0) {
+    data.goals[existingIdx] = { ...data.goals[existingIdx], ...goal, updatedAt: Date.now() };
+  } else {
+    data.goals.unshift({ ...goal, createdAt: goal.createdAt || Date.now(), updatedAt: Date.now() });
+  }
+  saveUserData(data);
+  return data.goals;
+}
+
+export function deleteUserGoal(userId: string, goalId: string) {
+  const data = getUserData(userId);
+  data.goals = (data.goals || []).filter((g: any) => g.id !== goalId);
+  saveUserData(data);
+  return data.goals;
+}
+
+// 辅助方法：读取所有用户数据（用于服务端启动时加载所有后台定时任务等）
+export function getAllUsersData(): UserScopedData[] {
+  const dataDir = getDataDir();
+  try {
+    if (!fs.existsSync(dataDir)) return [];
+    const files = fs.readdirSync(dataDir);
+    const result: UserScopedData[] = [];
+    for (const f of files) {
+      if (f.endsWith('.json')) {
+        try {
+          const raw = fs.readFileSync(path.join(dataDir, f), 'utf-8');
+          const data = JSON.parse(raw);
+          if (data) {
+            if (!data.userId) {
+              data.userId = f.replace(/\.json$/, '');
+            }
+            result.push(data);
+          }
+        } catch {
+          // ignore corrupted user files
+        }
+      }
+    }
+    return result;
+  } catch {
+    return [];
+  }
 }
 

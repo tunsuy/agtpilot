@@ -16,6 +16,13 @@ export interface ConnectorApp {
   authType?: 'api_key' | 'oauth';
   oauthProvider?: string;
   oauthScope?: string;
+  platformType?: 'web' | 'mobile' | 'both';
+  websiteUrl?: string;
+  mobileAction?: {
+    scheme?: string;
+    actionName?: string;
+    canDirectShare?: boolean;
+  };
 }
 
 export interface MissionStep {
@@ -69,10 +76,32 @@ export interface ApprovalRequest {
   params: Record<string, any>;
 }
 
+export interface ArtifactVisualSlide {
+  title?: string;
+  subtitle?: string;
+  badge?: string;
+  points?: string[];
+  quote?: string;
+  footnote?: string;
+  theme?: 'red' | 'amber' | 'emerald' | 'blue' | 'purple' | 'dark';
+}
+
+export interface ArtifactSocialPostMeta {
+  platform?: 'xiaohongshu' | 'wechat' | 'twitter' | 'zhihu' | 'general';
+  title?: string;
+  coverTitle?: string;
+  coverSubtitle?: string;
+  tags?: string[];
+  emojiCount?: number;
+  wordCount?: number;
+  slides?: ArtifactVisualSlide[];
+}
+
 export interface ArtifactState {
   title?: string;
   type?: string;
   content: string;
+  postMeta?: ArtifactSocialPostMeta;
 }
 
 export interface User {
@@ -105,5 +134,29 @@ export interface CronJobItem {
   runCount: number;
   lastRunAt?: number;
   status: 'active' | 'paused' | 'cancelled';
+}
+
+export interface GoalMilestone {
+  id: string;
+  title: string;
+  description?: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  dueDate?: string;
+  completedAt?: number;
+}
+
+export interface GoalItem {
+  id: string;
+  title: string;
+  description: string;
+  category?: 'engineering' | 'learning' | 'career' | 'efficiency' | 'finance' | 'custom';
+  status: 'active' | 'completed' | 'paused';
+  progress: number;
+  targetDate?: string;
+  createdAt: number;
+  updatedAt: number;
+  milestones: GoalMilestone[];
+  linkedMissionIds?: string[];
+  linkedDeliverableIds?: string[];
 }
 

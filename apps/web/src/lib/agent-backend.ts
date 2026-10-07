@@ -16,6 +16,7 @@ import * as RagPlugin from '@agtpilot/plugin-rag';
 import * as DesktopPlugin from '@agtpilot/plugin-desktop';
 import * as RouterPlugin from '@agtpilot/plugin-router';
 import * as ModelPlugin from '@agtpilot/plugin-model';
+import { Cron } from 'croner';
 
 import { Mission, MissionStep, ViewportState, TerminalLog } from '../types/agent';
 
@@ -37,6 +38,8 @@ class AgentBackend {
   private subscribers: Set<(event: any) => void> = new Set();
   private initialized = false;
   private activeAbortControllers: Map<string, AbortController> = new Map();
+  private activeCronJobs: Map<string, { job: Cron; userId: string; info: any }> = new Map();
+  private cronSchedulerInitialized = false;
 
   private constructor() {
     this.ctx = new Context();
@@ -73,6 +76,7 @@ class AgentBackend {
       g.__agtPilotBackend.initPlugins().catch((err: any) => {
         console.error('Failed to init plugins in AgentBackend:', err);
       });
+      g.__agtPilotBackend.initCronScheduler();
     }
     return g.__agtPilotBackend;
   }
@@ -663,6 +667,115 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
     })();
 
     return targetMission;
+  }
+
+  public initCronScheduler() {
+    if (this.cronSchedulerInitialized) return;
+    this.cronSchedulerInitialized = true;
+
+    try {
+      const { getAllUsersData } = require('@/lib/user-store');
+      const allUsers = getAllUsersData();
+      let activeCount = 0;
+      for (const user of allUsers) {
+        if (Array.isArray(user.cronJobs)) {
+          for (const job of user.cronJobs) {
+            if (job.status === 'active') {
+              this.registerUserCronJob(user.userId, job);
+              activeCount++;
+            }
+          }
+        }
+      }
+      this.addTerminalLog('system', `[Cron Scheduler] 调度器已激活，已挂载 ${activeCount} 个后台巡航任务。`);
+    } catch (err: any) {
+      console.error('Failed to init cron scheduler in AgentBackend:', err);
+    }
+  }
+
+  public registerUserCronJob(userId: string, jobInfo: any) {
+    this.unregisterUserCronJob(jobInfo.id);
+
+    if (jobInfo.status !== 'active') return;
+
+    try {
+      const cronJob = new Cron(jobInfo.pattern, { timezone: 'Asia/Shanghai' }, async () => {
+        this.addTerminalLog('system', `[自动巡航触发] 任务 "${jobInfo.name}" 到达预定时间，开始自主执行...`);
+
+        // 更新执行计数与下一次触发时间
+        jobInfo.runCount = (jobInfo.runCount || 0) + 1;
+        jobInfo.lastRunAt = Date.now();
+        jobInfo.nextRun = cronJob.nextRun()?.toISOString();
+
+        try {
+          const { saveUserCronJob } = require('@/lib/user-store');
+          saveUserCronJob(userId, jobInfo);
+        } catch (e) {
+          console.error('Failed to save updated cron job status:', e);
+        }
+
+        this.broadcast({
+          type: 'cron_job_triggered',
+          data: { jobId: jobInfo.id, userId, runCount: jobInfo.runCount, nextRun: jobInfo.nextRun },
+        });
+
+        // 启动真正智能体生命周期执行任务
+        try {
+          await this.runMission(jobInfo.prompt, {
+            title: `【自动巡航】${jobInfo.name}`,
+            userId,
+          });
+        } catch (err: any) {
+          this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`);
+        }
+      });
+
+      jobInfo.nextRun = cronJob.nextRun()?.toISOString();
+      this.activeCronJobs.set(jobInfo.id, { job: cronJob, userId, info: jobInfo });
+      this.addTerminalLog(
+        'system',
+        `[Cron] 任务 "${jobInfo.name}" (${jobInfo.pattern}) 已挂载，下次触发: ${cronJob.nextRun()?.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) || '无'}`
+      );
+    } catch (e: any) {
+      console.error(`Failed to register cron job ${jobInfo.name}:`, e);
+    }
+  }
+
+  public unregisterUserCronJob(jobId: string) {
+    const existing = this.activeCronJobs.get(jobId);
+    if (existing) {
+      try {
+        existing.job.stop();
+      } catch {}
+      this.activeCronJobs.delete(jobId);
+      this.addTerminalLog('system', `[Cron] 任务 "${existing.info?.name || jobId}" 已从后台定时池注销。`);
+    }
+  }
+
+  public async triggerUserCronJob(userId: string, jobId: string) {
+    const { getUserCronJobs, saveUserCronJob } = require('@/lib/user-store');
+    const jobs = getUserCronJobs(userId);
+    const jobInfo = jobs.find((j: any) => j.id === jobId);
+    if (!jobInfo) return;
+
+    this.addTerminalLog('system', `[手动触发巡航] 任务 "${jobInfo.name}" 开始立即执行...`);
+    jobInfo.runCount = (jobInfo.runCount || 0) + 1;
+    jobInfo.lastRunAt = Date.now();
+    saveUserCronJob(userId, jobInfo);
+
+    this.broadcast({
+      type: 'cron_job_triggered',
+      data: { jobId: jobInfo.id, userId, runCount: jobInfo.runCount },
+    });
+
+    try {
+      await this.runMission(jobInfo.prompt, {
+        title: `【自动巡航】${jobInfo.name}`,
+        userId,
+      });
+    } catch (err: any) {
+      this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`);
+    }
   }
 }
 

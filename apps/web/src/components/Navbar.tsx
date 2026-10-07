@@ -8,25 +8,30 @@ import {
   Brain,
   Clock,
   FileText,
+  Target,
   Plus,
   ShieldAlert,
   Sparkles,
   ExternalLink,
+  Smartphone,
+  Download,
 } from 'lucide-react';
 import { Mission, ApprovalRequest, User } from '../types/agent';
 import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
-  activeView: 'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables';
-  onViewChange: (view: 'home' | 'cockpit' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => void;
+  activeView: 'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables';
+  onViewChange: (view: 'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => void;
   currentMission: Mission | null;
   connectedCount: number;
   memoryCount?: number;
   patrolCount?: number;
+  goalCount?: number;
   approvalRequests: ApprovalRequest[];
   hasArtifact: boolean;
   onNewMission: () => void;
   onOpenAuth: (tab: 'login' | 'register') => void;
+  onOpenDownloadApp?: () => void;
 }
 
 export function Navbar({
@@ -36,10 +41,12 @@ export function Navbar({
   connectedCount,
   memoryCount = 0,
   patrolCount = 0,
+  goalCount = 0,
   approvalRequests,
   hasArtifact,
   onNewMission,
   onOpenAuth,
+  onOpenDownloadApp,
 }: NavbarProps) {
   const isMissionActive = currentMission && currentMission.status === 'ACTIVE';
   const hasPendingApproval = approvalRequests.length > 0;
@@ -51,29 +58,19 @@ export function Navbar({
         <div className="flex items-center gap-4 z-10">
         <button
           onClick={() => onViewChange('home')}
-          className="flex items-center gap-2.5 group transition"
+          className="flex items-center gap-2 group transition"
         >
-          <div className="h-8 w-8 rounded-xl overflow-hidden shadow-xs group-hover:scale-105 transition-transform flex items-center justify-center bg-black border border-zinc-800">
+          <div className="h-7 w-7 rounded-lg overflow-hidden shadow-2xs group-hover:scale-105 transition-transform flex items-center justify-center bg-zinc-950 border border-zinc-900 flex-shrink-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/logo.png"
+              src="/logo.svg"
               alt="AgtPilot Logo"
-              className="h-full w-full object-cover scale-110"
+              className="h-full w-full object-cover"
             />
           </div>
-          <div className="text-left">
-            <div className="flex items-center gap-1.5">
-              <span className="font-semibold text-sm tracking-tight text-zinc-900 group-hover:text-black">
-                AgtPilot
-              </span>
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200/60">
-                v1.2
-              </span>
-            </div>
-            <p className="text-[10px] text-zinc-400 font-mono tracking-tight leading-none hidden sm:block">
-              Autonomous Agent OS
-            </p>
-          </div>
+          <span className="font-semibold text-sm tracking-tight text-zinc-900 group-hover:text-black">
+            AgtPilot
+          </span>
         </button>
 
         {/* Global Agent State Pill */}
@@ -126,35 +123,18 @@ export function Navbar({
         </button>
 
         <button
-          onClick={() => onViewChange('connectors')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-            activeView === 'connectors'
+          onClick={() => onViewChange('goals')}
+          className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'goals'
               ? 'bg-white text-zinc-900 shadow-xs font-semibold'
               : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
           }`}
         >
-          <Layers className="h-3.5 w-3.5" />
-          <span>连接器</span>
-          {connectedCount > 0 && (
-            <span className="text-[10px] bg-zinc-200 text-zinc-700 font-mono px-1 rounded">
-              {connectedCount}
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => onViewChange('memories')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-            activeView === 'memories'
-              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
-              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
-          }`}
-        >
-          <Brain className="h-3.5 w-3.5" />
-          <span>记忆库</span>
-          {memoryCount > 0 && (
-            <span className="text-[10px] bg-purple-100 text-purple-700 font-mono px-1.5 rounded-full font-semibold">
-              {memoryCount}
+          <Target className="h-3.5 w-3.5" />
+          <span>长期目标</span>
+          {typeof goalCount === 'number' && goalCount > 0 && (
+            <span className="text-[10px] bg-rose-100 text-rose-700 font-mono px-1.5 rounded-full font-semibold">
+              {goalCount}
             </span>
           )}
         </button>
@@ -190,10 +170,55 @@ export function Navbar({
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
           )}
         </button>
+
+        <button
+          onClick={() => onViewChange('memories')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'memories'
+              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+          }`}
+        >
+          <Brain className="h-3.5 w-3.5" />
+          <span>记忆库</span>
+          {memoryCount > 0 && (
+            <span className="text-[10px] bg-purple-100 text-purple-700 font-mono px-1.5 rounded-full font-semibold">
+              {memoryCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => onViewChange('connectors')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'connectors'
+              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+          }`}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span>连接器</span>
+          {connectedCount > 0 && (
+            <span className="text-[10px] bg-zinc-200 text-zinc-700 font-mono px-1 rounded">
+              {connectedCount}
+            </span>
+          )}
+        </button>
       </nav>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-2.5 z-10">
+      <div className="flex items-center gap-2 z-10">
+        {onOpenDownloadApp && (
+          <button
+            onClick={onOpenDownloadApp}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 border border-zinc-200/70 transition shadow-2xs"
+            title="获取 AgtPilot 移动端 (Android / iOS / PWA)"
+          >
+            <Smartphone className="h-3.5 w-3.5 text-zinc-800" />
+            <span className="hidden sm:inline">下载移动版</span>
+          </button>
+        )}
+
         {hasPendingApproval && (
           <button
             onClick={() => onViewChange('cockpit')}

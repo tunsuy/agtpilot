@@ -15,6 +15,7 @@ import {
   AlertCircle,
   HelpCircle,
   Timer,
+  Zap,
 } from 'lucide-react';
 import { CronJobItem } from '../types/agent';
 import { formatCronNextRun, isValidCronPattern } from '@/lib/cron-utils';
@@ -25,6 +26,7 @@ interface CronJobsViewProps {
   onUpdateJob?: (job: { id: string; name: string; pattern: string; prompt: string }) => Promise<void>;
   onToggleJob: (id: string) => Promise<void>;
   onDeleteJob: (id: string) => Promise<void>;
+  onTriggerJob?: (id: string) => Promise<void>;
 }
 
 export function CronJobsView({
@@ -33,6 +35,7 @@ export function CronJobsView({
   onUpdateJob,
   onToggleJob,
   onDeleteJob,
+  onTriggerJob,
 }: CronJobsViewProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
@@ -121,9 +124,19 @@ export function CronJobsView({
       {/* 顶部标题栏 */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-            主动巡航中心
-          </h1>
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-xl bg-amber-50 text-amber-600 border border-amber-200/60 shadow-2xs">
+              <Clock className="h-5 w-5" />
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
+              主动巡航中心
+            </h1>
+            {jobs.length > 0 && (
+              <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 border border-zinc-200/80 text-zinc-600">
+                {jobs.filter((j) => j.status === 'active').length} 活跃 / {jobs.length} 总计
+              </span>
+            )}
+          </div>
           <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">
             赋予智能体按计划或周期自动触发执行的能力，支持定时巡检、情报汇总与自动交付。
           </p>
@@ -241,6 +254,16 @@ export function CronJobsView({
                     </div>
 
                     <div className="flex items-center gap-1.5">
+                      {onTriggerJob && (
+                        <button
+                          onClick={() => onTriggerJob(job.id)}
+                          className="p-2 rounded-lg border border-zinc-200 hover:border-purple-200 hover:bg-purple-50 text-zinc-500 hover:text-purple-600 transition"
+                          title="立即手动触发一次执行"
+                        >
+                          <Zap className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
                       <button
                         onClick={() => handleOpenEdit(job)}
                         className="p-2 rounded-lg border border-zinc-200 hover:border-blue-200 hover:bg-blue-50 text-zinc-500 hover:text-blue-600 transition"

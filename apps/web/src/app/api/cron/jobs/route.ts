@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getUserCronJobs, saveUserCronJob, deleteUserCronJob } from '@/lib/user-store';
 import { getNextCronRun, isValidCronPattern } from '@/lib/cron-utils';
+import { getAgentBackend } from '@/lib/agent-backend';
 
 export async function GET() {
   try {
@@ -14,6 +15,10 @@ export async function GET() {
     }
 
     const userId = session.user.id;
+    // 确保后台调度器已经完成激活与挂载
+    const backend = getAgentBackend();
+    backend.initCronScheduler();
+
     const jobs = getUserCronJobs(userId);
     // 动态同步更新 active 状态下的下一次触发时间
     const updatedJobs = jobs.map((j: any) => {
@@ -43,6 +48,7 @@ export async function POST(req: NextRequest) {
     const userId = session.user.id;
     const body = await req.json();
     const { action, id, name, pattern, prompt } = body;
+    const backend = getAgentBackend();
 
     if (action === 'create') {
       if (!name || !pattern || !prompt) {
@@ -64,6 +70,9 @@ export async function POST(req: NextRequest) {
         nextRun,
       };
       const jobs = saveUserCronJob(userId, newJob);
+      // 同步注册到后台 Node.js 内存定时调度器
+      backend.registerUserCronJob(userId, newJob);
+
       return NextResponse.json({ success: true, newJob, jobs });
     }
 
@@ -76,8 +85,12 @@ export async function POST(req: NextRequest) {
         existing.status = existing.status === 'active' ? 'paused' : 'active';
         if (existing.status === 'active') {
           existing.nextRun = getNextCronRun(existing.pattern) || existing.nextRun;
+          saveUserCronJob(userId, existing);
+          backend.registerUserCronJob(userId, existing);
+        } else {
+          saveUserCronJob(userId, existing);
+          backend.unregisterUserCronJob(id);
         }
-        saveUserCronJob(userId, existing);
       }
       const jobs = getUserCronJobs(userId);
       return NextResponse.json({ success: true, jobs });
@@ -102,6 +115,13 @@ export async function POST(req: NextRequest) {
       if (name) existing.name = name.trim();
       if (prompt) existing.prompt = prompt.trim();
       saveUserCronJob(userId, existing);
+
+      if (existing.status === 'active') {
+        backend.registerUserCronJob(userId, existing);
+      } else {
+        backend.unregisterUserCronJob(id);
+      }
+
       const jobs = getUserCronJobs(userId);
       return NextResponse.json({ success: true, updatedJob: existing, jobs });
     }
@@ -110,8 +130,22 @@ export async function POST(req: NextRequest) {
       if (!id) {
         return NextResponse.json({ success: false, error: '缺少任务 ID' }, { status: 400 });
       }
+      backend.unregisterUserCronJob(id);
       const jobs = deleteUserCronJob(userId, id);
       return NextResponse.json({ success: true, jobs });
+    }
+
+    if (action === 'trigger') {
+      if (!id) {
+        return NextResponse.json({ success: false, error: '缺少任务 ID' }, { status: 400 });
+      }
+      const existing = getUserCronJobs(userId).find((j: any) => j.id === id);
+      if (!existing) {
+        return NextResponse.json({ success: false, error: '任务不存在' }, { status: 404 });
+      }
+      backend.triggerUserCronJob(userId, id);
+      const jobs = getUserCronJobs(userId);
+      return NextResponse.json({ success: true, message: '已触发立即执行', jobs });
     }
 
     return NextResponse.json({ success: false, error: '未知 action' }, { status: 400 });

@@ -6,3 +6,6 @@ dist/
 *.log
 .next/
 .cache/
+apps/web/out/
+apps/web/android/
+apps/web/ios/

@@ -6,7 +6,10 @@ export const metadata: Metadata = {
   title: 'AgtPilot | Personal Autonomous AI Agent',
   description: 'A pluggable, autonomous personal AI agent with browser automation, sandbox execution, and Generative UI.',
   icons: {
-    icon: '/favicon.png',
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon.png', type: 'image/png' },
+    ],
     shortcut: '/favicon.ico',
     apple: '/favicon.png',
   },

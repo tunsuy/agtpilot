@@ -18,6 +18,12 @@ export interface ConnectorInfo {
   authType?: 'api_key' | 'oauth';
   oauthProvider?: string;
   oauthScope?: string;
+  platformType?: 'web' | 'mobile' | 'both';
+  mobileAction?: {
+    scheme?: string;
+    actionName?: string;
+    canDirectShare?: boolean;
+  };
 }
 
 const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefaultModel'>> = [
@@ -90,6 +96,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'SLACK_WEBHOOK_URL',
     authType: 'oauth',
     oauthProvider: 'slack',
+    platformType: 'both',
     description: 'Direct channel broadcasts, escalation alerts, and approval notifications.',
   },
   {
@@ -98,6 +105,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     icon: 'Bell',
     category: 'Communication',
     envVar: 'FEISHU_WEBHOOK_URL',
+    platformType: 'both',
     description: 'Enterprise IM webhook notifications and card messaging.',
   },
   {
@@ -106,6 +114,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     icon: 'Search',
     category: 'Productivity',
     envVar: 'EXA_API_KEY',
+    platformType: 'web',
     description: 'Semantic neural search engine for real-time web intelligence.',
   },
   {
@@ -114,6 +123,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     icon: 'Globe',
     category: 'Productivity',
     envVar: 'TAVILY_API_KEY',
+    platformType: 'web',
     description: 'Search engine designed for autonomous agent RAG scraping.',
   },
   {
@@ -122,7 +132,50 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     icon: 'Layers',
     category: 'Productivity',
     envVar: 'FIRECRAWL_API_KEY',
+    platformType: 'web',
     description: 'Deep web scraping, dynamic JS rendering, and markdown distillation.',
+  },
+  {
+    id: 'xiaohongshu',
+    name: '小红书创作者服务',
+    icon: 'Share2',
+    category: 'Communication',
+    envVar: 'XHS_SESSION_TOKEN',
+    platformType: 'both',
+    mobileAction: {
+      scheme: 'xhsdiscover://',
+      actionName: '唤起手机小红书 App',
+      canDirectShare: true,
+    },
+    description: '网页端支持 Session/Cookie 凭证与草稿箱；移动端支持直接唤起手机 App 发布与相册图集导入。',
+  },
+  {
+    id: 'wechat_mp',
+    name: '微信公众平台 / 移动端微信',
+    icon: 'Share2',
+    category: 'Communication',
+    envVar: 'WECHAT_MP_APP_SECRET',
+    platformType: 'both',
+    mobileAction: {
+      scheme: 'weixin://',
+      actionName: '唤起微信直接分享',
+      canDirectShare: true,
+    },
+    description: '网页端支持公众号 AppSecret 草稿箱；移动端支持一键唤起微信会话与朋友圈分享。',
+  },
+  {
+    id: 'twitter',
+    name: 'X / Twitter API 与客户端',
+    icon: 'Share2',
+    category: 'Communication',
+    envVar: 'TWITTER_API_KEY',
+    platformType: 'both',
+    mobileAction: {
+      scheme: 'twitter://',
+      actionName: '唤起 X App 发推',
+      canDirectShare: true,
+    },
+    description: '网页端支持 Developer API 自动发推；移动端支持唤起 X 客户端直接带参编辑。',
   },
 ];
 

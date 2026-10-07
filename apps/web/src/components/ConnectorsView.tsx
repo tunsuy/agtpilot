@@ -21,8 +21,12 @@ import {
   Globe,
   Flame,
   Zap,
+  Share2,
+  Smartphone,
+  Laptop,
 } from 'lucide-react';
 import { ConnectorApp } from '../types/agent';
+import { openAppScheme } from '../utils/nativeBridge';
 
 function renderConnectorIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -46,6 +50,12 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <Globe className={`${className} text-teal-600`} />;
     case 'firecrawl':
       return <Flame className={`${className} text-orange-600`} />;
+    case 'xiaohongshu':
+      return <Share2 className={`${className} text-rose-600`} />;
+    case 'wechat_mp':
+      return <Share2 className={`${className} text-emerald-600`} />;
+    case 'twitter':
+      return <Share2 className={`${className} text-zinc-900`} />;
     default:
       return <Zap className={`${className} text-zinc-600`} />;
   }
@@ -67,18 +77,24 @@ export function ConnectorsView({
   onSetDefaultModel,
 }: ConnectorsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [platformFilter, setPlatformFilter] = useState<'all' | 'web' | 'mobile'>('all');
   const [configuringApp, setConfiguringApp] = useState<ConnectorApp | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [baseUrlInput, setBaseUrlInput] = useState('');
   const [modelNameInput, setModelNameInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
-  const filtered = connectors.filter(
-    (c) =>
+  const filtered = connectors.filter((c) => {
+    const matchSearch =
       c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       c.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+      c.category.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    if (!matchSearch) return false;
+    if (platformFilter === 'mobile') return c.platformType === 'mobile' || c.platformType === 'both' || Boolean(c.mobileAction);
+    if (platformFilter === 'web') return c.platformType === 'web' || c.platformType === 'both' || !c.platformType;
+    return true;
+  });
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,31 +125,79 @@ export function ConnectorsView({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-            连接器与原子能力中心
-          </h1>
-          <p className="text-xs text-zinc-500 mt-1">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-xl bg-blue-50 text-blue-600 border border-blue-200/60 shadow-2xs">
+              <Layers className="h-5 w-5" />
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
+              连接器与原子能力中心
+            </h1>
+            <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 border border-zinc-200/80 text-zinc-600">
+              已就绪 {connectedCount}/{connectors.length}
+            </span>
+          </div>
+          <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">
             为 AgtPilot 授权外部 SaaS、网络搜索和模型凭据，拓展自主行动边界。
           </p>
         </div>
-
-        <div className="flex items-center gap-2">
-          <div className="px-3 py-1.5 rounded-xl bg-zinc-100 text-xs text-zinc-600 font-medium border border-zinc-200">
-            已就绪: <span className="font-semibold text-zinc-900">{connectedCount}</span> / {connectors.length}
-          </div>
-        </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="搜索连接器（如 GitHub, Firecrawl, Tavily）..."
-          className="w-full pl-9 pr-4 py-2 rounded-xl border border-zinc-200 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 transition"
-        />
+      {/* Filter Tabs & Search Bar */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+          <button
+            onClick={() => setPlatformFilter('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+              platformFilter === 'all'
+                ? 'bg-zinc-900 text-white shadow-xs'
+                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
+            }`}
+          >
+            <span>全部授权渠道</span>
+            <span className="opacity-75 font-mono text-[11px]">({connectors.length})</span>
+          </button>
+
+          <button
+            onClick={() => setPlatformFilter('web')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+              platformFilter === 'web'
+                ? 'bg-zinc-900 text-white shadow-xs'
+                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
+            }`}
+          >
+            <Laptop className="h-3.5 w-3.5" />
+            <span>网页/API 授权</span>
+            <span className="opacity-75 font-mono text-[11px]">
+              ({connectors.filter((c) => c.platformType === 'web' || c.platformType === 'both' || !c.platformType).length})
+            </span>
+          </button>
+
+          <button
+            onClick={() => setPlatformFilter('mobile')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+              platformFilter === 'mobile'
+                ? 'bg-zinc-900 text-white shadow-xs'
+                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
+            }`}
+          >
+            <Smartphone className="h-3.5 w-3.5 text-rose-500" />
+            <span>移动端/真机 App 免密直连</span>
+            <span className="opacity-75 font-mono text-[11px]">
+              ({connectors.filter((c) => c.platformType === 'mobile' || c.platformType === 'both' || Boolean(c.mobileAction)).length})
+            </span>
+          </button>
+        </div>
+
+        <div className="relative w-full sm:w-64 flex-shrink-0">
+          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索连接器..."
+            className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-zinc-200 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400 transition"
+          />
+        </div>
       </div>
 
       {/* Connectors Grid */}
@@ -151,9 +215,22 @@ export function ConnectorsView({
                   </div>
                   <div>
                     <h3 className="text-xs font-semibold text-zinc-900">{app.name}</h3>
-                    <span className="text-[10px] text-zinc-400 uppercase font-mono">
-                      {app.category}
-                    </span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-zinc-400 uppercase font-mono">
+                        {app.category}
+                      </span>
+                      {app.platformType === 'mobile' || app.mobileAction ? (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-rose-50 text-rose-600 border border-rose-200 flex items-center gap-0.5">
+                          <Smartphone className="h-2.5 w-2.5" />
+                          <span>支持真机免密</span>
+                        </span>
+                      ) : (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-zinc-100 text-zinc-500 flex items-center gap-0.5">
+                          <Laptop className="h-2.5 w-2.5" />
+                          <span>Web 凭证</span>
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -192,6 +269,25 @@ export function ConnectorsView({
                     className="px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition"
                   >
                     设为默认
+                  </button>
+                )}
+
+                {/* 移动端专属一键唤起真机 App 按钮 */}
+                {app.mobileAction && (
+                  <button
+                    onClick={async () => {
+                      if (app.mobileAction?.scheme) {
+                        await openAppScheme(
+                          app.mobileAction.scheme,
+                          app.websiteUrl
+                        );
+                      }
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition shadow-2xs"
+                    title="在手机端可直接唤起已登录的原生 App"
+                  >
+                    <Smartphone className="h-3 w-3" />
+                    <span>真机唤起</span>
                   </button>
                 )}
 

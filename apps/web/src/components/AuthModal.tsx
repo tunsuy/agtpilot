@@ -97,6 +97,7 @@ export function AuthModal({
             redirect: false,
           });
           onClose();
+          window.location.reload();
         }
       } catch (err) {
         console.error(err);
@@ -172,6 +173,7 @@ export function AuthModal({
         setError(`${provider} 认证未成功，请重试`);
       } else {
         onClose();
+        window.location.reload();
       }
     } catch (err: any) {
       setError(err.message || '认证失败');
@@ -197,6 +199,7 @@ export function AuthModal({
         setError('登录失败：邮箱或密码错误');
       } else {
         onClose();
+        window.location.reload();
       }
     } catch (err: any) {
       setError(err.message || '操作失败');
@@ -218,6 +221,7 @@ export function AuthModal({
         setError('Demo 快速登录失败');
       } else {
         onClose();
+        window.location.reload();
       }
     } catch (err: any) {
       setError(err.message);

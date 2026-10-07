@@ -20,19 +20,55 @@ export interface UserScopedData {
   updatedAt: number;
 }
 
-const DATA_DIR = path.resolve(process.cwd(), '.cache', 'user_data');
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+export function getDataDir(): string {
+  // 1. 优先读取显式环境变量
+  if (process.env.USER_DATA_DIR) {
+    const custom = path.resolve(process.env.USER_DATA_DIR);
+    if (!fs.existsSync(custom)) {
+      try { fs.mkdirSync(custom, { recursive: true }); } catch {}
+    }
+    return custom;
   }
+
+  // 2. 自动检测多个可能存在已有数据的候选路径（优先选已有 .json 数据的目录）
+  const candidates = [
+    '/app/.cache/user_data',
+    '/app/apps/web/.cache/user_data',
+    path.resolve(process.cwd(), '.cache', 'user_data'),
+    path.resolve(process.cwd(), '..', '..', '.cache', 'user_data'),
+  ];
+
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) {
+        const files = fs.readdirSync(c);
+        if (files.some((f) => f.endsWith('.json'))) {
+          return c;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. 若无已有 json，取已存在的目录
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+
+  // 4. 回退
+  const fallback = path.resolve(process.cwd(), '.cache', 'user_data');
+  if (!fs.existsSync(fallback)) {
+    try { fs.mkdirSync(fallback, { recursive: true }); } catch {}
+  }
+  return fallback;
 }
 
 function getUserFilePath(userId: string): string {
-  ensureDataDir();
+  const dataDir = getDataDir();
   // 对 userId 做安全文件名转义
   const safeFilename = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return path.join(DATA_DIR, `${safeFilename}.json`);
+  return path.join(dataDir, `${safeFilename}.json`);
 }
 
 export function getUserData(userId: string): UserScopedData {

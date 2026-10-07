@@ -117,26 +117,21 @@ export function CronJobsView({
   };
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+    <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
       {/* 顶部标题栏 */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-200/80 pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
-              <Clock className="h-5 w-5" />
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-zinc-900">
-              主动巡航中心
-            </h1>
-          </div>
-          <p className="text-xs text-zinc-500 mt-1 max-w-xl">
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
+            主动巡航中心
+          </h1>
+          <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">
             赋予智能体按计划或周期自动触发执行的能力，支持定时巡检、情报汇总与自动交付。
           </p>
         </div>
 
         <button
           onClick={handleOpenCreate}
-          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium shadow-xs transition active:scale-95 self-start sm:self-auto"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium shadow-xs transition active:scale-95 self-start sm:self-auto flex-shrink-0"
         >
           <Plus className="h-3.5 w-3.5" />
           <span>新建自主巡航</span>

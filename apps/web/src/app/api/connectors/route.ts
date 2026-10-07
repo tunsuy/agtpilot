@@ -18,6 +18,8 @@ export interface ConnectorInfo {
   authType?: 'api_key' | 'oauth';
   oauthProvider?: string;
   oauthScope?: string;
+  /** OAuth 授权后 token 实际保存的键（与 envVar 不同时用于状态判断，如 Slack） */
+  oauthTokenEnvVar?: string;
   platformType?: 'web' | 'mobile' | 'both';
   mobileAction?: {
     scheme?: string;
@@ -96,6 +98,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'SLACK_WEBHOOK_URL',
     authType: 'oauth',
     oauthProvider: 'slack',
+    oauthTokenEnvVar: 'SLACK_TOKEN',
     platformType: 'both',
     description: 'Direct channel broadcasts, escalation alerts, and approval notifications.',
   },
@@ -191,24 +194,39 @@ function getActiveModelId(): string {
 import { auth } from '@/auth';
 import { getUserConnectors, saveUserConnector, setUserActiveModel } from '@/lib/user-store';
 
+/** 允许用户写入的凭证键白名单（防止 POST 任意 envVar 键名注入配置） */
+const ALLOWED_ENV_VARS = new Set<string>(
+  CONNECTOR_DEFS.flatMap((d) =>
+    [d.envVar, d.baseUrlEnvVar, d.modelNameEnvVar, d.oauthTokenEnvVar].filter(
+      (v): v is string => Boolean(v)
+    )
+  )
+);
+
+/** 合法的默认模型 ID */
+const VALID_MODEL_IDS = new Set<string>(
+  CONNECTOR_DEFS.filter((d) => d.isModel).map((d) => d.id)
+);
+
+/** 脱敏：只保留末 4 位，其余全部打码（原实现暴露首 4 + 尾 4，泄露面过大） */
+function maskSecret(val: string): string {
+  return val.length > 8 ? `****${val.slice(-4)}` : '****';
+}
+
 function getConnectorStatusList(userId?: string): ConnectorInfo[] {
   const userConfigs = userId ? getUserConnectors(userId) : { configs: {}, activeModelId: 'deepseek' };
   const activeModel = userConfigs.activeModelId || getActiveModelId();
 
   return CONNECTOR_DEFS.map((def) => {
     // 优先读取用户独立配置，若未设置则回退全局默认配置
-    const val = (userId && userConfigs.configs[def.envVar]) || process.env[def.envVar] || '';
+    const lookup = (key?: string) =>
+      key ? (userId && userConfigs.configs[key]) || process.env[key] || '' : '';
+    const val = lookup(def.envVar) || lookup(def.oauthTokenEnvVar);
     const isSet = Boolean(val && val.trim().length > 0 && !val.includes('dummy'));
-    const keyMasked = isSet
-      ? `${val.slice(0, 4)}...${val.slice(-4)}`
-      : undefined;
+    const keyMasked = isSet ? maskSecret(val) : undefined;
 
-    const baseUrl = def.baseUrlEnvVar
-      ? (userId && userConfigs.configs[def.baseUrlEnvVar]) || process.env[def.baseUrlEnvVar] || ''
-      : undefined;
-    const customModelName = def.modelNameEnvVar
-      ? (userId && userConfigs.configs[def.modelNameEnvVar]) || process.env[def.modelNameEnvVar] || ''
-      : undefined;
+    const baseUrl = lookup(def.baseUrlEnvVar) || undefined;
+    const customModelName = lookup(def.modelNameEnvVar) || undefined;
 
     return {
       ...def,
@@ -258,6 +276,12 @@ export async function POST(req: NextRequest) {
 
     // 1. 设置默认模型
     if (body.action === 'setDefaultModel' && typeof body.modelId === 'string') {
+      if (!VALID_MODEL_IDS.has(body.modelId)) {
+        return NextResponse.json(
+          { success: false, error: `无效的模型 ID: ${body.modelId}` },
+          { status: 400 }
+        );
+      }
       setUserActiveModel(userId, body.modelId);
       return NextResponse.json({
         success: true,
@@ -270,13 +294,19 @@ export async function POST(req: NextRequest) {
     // 2. 支持批量更新（针对带有 API Key, Base URL, Model Name 的连接器）
     if (body.action === 'saveConnectorConfig' && typeof body.envVar === 'string') {
       const { envVar, value, baseUrlEnvVar, baseUrl, modelNameEnvVar, modelName } = body;
+      if (!ALLOWED_ENV_VARS.has(envVar)) {
+        return NextResponse.json(
+          { success: false, error: `不允许写入的配置键: ${envVar}` },
+          { status: 400 }
+        );
+      }
       if (typeof value === 'string') {
         saveUserConnector(userId, envVar, value.trim());
       }
-      if (baseUrlEnvVar && typeof baseUrl === 'string') {
+      if (baseUrlEnvVar && typeof baseUrl === 'string' && ALLOWED_ENV_VARS.has(baseUrlEnvVar)) {
         saveUserConnector(userId, baseUrlEnvVar, baseUrl.trim());
       }
-      if (modelNameEnvVar && typeof modelName === 'string') {
+      if (modelNameEnvVar && typeof modelName === 'string' && ALLOWED_ENV_VARS.has(modelNameEnvVar)) {
         saveUserConnector(userId, modelNameEnvVar, modelName.trim());
       }
       const userConfigs = getUserConnectors(userId);
@@ -292,6 +322,12 @@ export async function POST(req: NextRequest) {
     const { envVar, value } = body;
     if (!envVar || typeof value !== 'string') {
       return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+    }
+    if (!ALLOWED_ENV_VARS.has(envVar)) {
+      return NextResponse.json(
+        { success: false, error: `不允许写入的配置键: ${envVar}` },
+        { status: 400 }
+      );
     }
 
     saveUserConnector(userId, envVar, value.trim());

@@ -3,6 +3,23 @@
  * 统一抽象层，隔离具体的 OAuth 实现（Native, Composio, Nango 等）
  */
 
+/** 当前原生适配器支持的 OAuth 提供商白名单 */
+export const SUPPORTED_OAUTH_PROVIDERS = ['github', 'notion', 'slack'] as const;
+
+/** start → callback 之间传递 CSRF state 的 httpOnly cookie 名 */
+export const OAUTH_STATE_COOKIE = 'connector_oauth_state';
+
+/**
+ * 计算应用对外 Base URL。
+ * 优先使用部署侧显式配置（APP_BASE_URL / NEXTAUTH_URL / AUTH_URL），
+ * 避免直接信任可被伪造的 Host 请求头（host header injection / open redirect）。
+ */
+export function getAppBaseUrl(req: { url: string }): string {
+  const fromEnv = process.env.APP_BASE_URL || process.env.NEXTAUTH_URL || process.env.AUTH_URL;
+  if (fromEnv) return fromEnv.replace(/\/+$/, '');
+  return new URL(req.url).origin;
+}
+
 export interface OAuthAuthorizeUrlParams {
   provider: string;
   callbackUrl: string;
@@ -209,39 +226,30 @@ export class NativeConnectorOAuthAdapter implements IConnectorOAuthAdapter {
 }
 
 /**
- * 2. 外部统一平台适配器（Composio / Nango 准备层）
- * 当后续需要对接上千个 SaaS 时，直接配置 CONNECTOR_AUTH_DRIVER=composio 或 nango 即可平滑切换
+ * 2. 外部统一平台适配器（Composio / Nango 预留位）
+ * 尚未与真实平台 API 对接。为避免静默产生假 token / 假授权链接，
+ * 所有方法在被调用时显式抛错，直到真实实现落地。
  */
 export class UnifiedPlatformOAuthAdapter implements IConnectorOAuthAdapter {
   readonly name: string;
-  private apiKey: string;
-  private serverUrl: string;
 
   constructor(driver: 'composio' | 'nango') {
     this.name = driver;
-    this.apiKey = (driver === 'composio' ? process.env.COMPOSIO_API_KEY : process.env.NANGO_SECRET_KEY) || '';
-    this.serverUrl = (driver === 'composio' ? process.env.COMPOSIO_BASE_URL : process.env.NANGO_SERVER_URL) || '';
   }
 
-  async getAuthorizationUrl({ provider, callbackUrl, state }: OAuthAuthorizeUrlParams): Promise<string> {
-    // 预留与 Composio / Nango Connect API 的通信协议
-    if (!this.apiKey) {
-      throw new Error(`已启用 ${this.name} 驱动，但尚未配置 ${this.name.toUpperCase()}_API_KEY`);
-    }
-    // 演示代理调用：未来通过平台 SDK 或 REST API 直接获取统一托管授权 URL
-    return `${this.serverUrl || 'https://api.' + this.name + '.dev'}/connect/${provider}?redirect_uri=${encodeURIComponent(callbackUrl)}&state=${state}`;
+  async getAuthorizationUrl(_params: OAuthAuthorizeUrlParams): Promise<string> {
+    throw new Error(
+      `${this.name} 驱动尚未实现：请将 CONNECTOR_AUTH_DRIVER 设为 native，或等待 Composio/Nango 对接完成`
+    );
   }
 
-  async exchangeCodeForToken(params: OAuthCallbackParams): Promise<OAuthTokenResult> {
-    // 预留与统一平台交换托管连接的逻辑
-    return {
-      accessToken: `token_from_${this.name}_${params.provider}`,
-    };
+  async exchangeCodeForToken(_params: OAuthCallbackParams): Promise<OAuthTokenResult> {
+    throw new Error(`${this.name} 驱动尚未实现，无法交换 Token`);
   }
 }
 
 /**
- * 驱动工厂单例：根据环境变量自动选择适配器
+ * 驱动工厂：根据环境变量选择适配器
  */
 export function getConnectorOAuthAdapter(): IConnectorOAuthAdapter {
   const driver = (process.env.CONNECTOR_AUTH_DRIVER || 'native').toLowerCase();

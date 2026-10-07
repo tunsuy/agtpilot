@@ -102,7 +102,10 @@ export function saveUserData(data: UserScopedData) {
   const filePath = getUserFilePath(data.userId);
   try {
     data.updatedAt = Date.now();
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    // 原子写入：先写临时文件再 rename，避免写入中途崩溃/并发读导致 JSON 损坏
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, filePath);
   } catch (e) {
     console.error(`Failed to save user data for ${data.userId}:`, e);
   }

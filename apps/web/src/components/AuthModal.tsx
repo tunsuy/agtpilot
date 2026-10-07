@@ -91,11 +91,17 @@ export function AuthModal({
         const data = await res.json();
         if (data.status === 'VERIFIED') {
           clearInterval(interval);
-          await signIn('credentials', {
-            socialProvider: 'wechat',
+          // 带上验证码本身，由服务端一次性核销并换取公众号绑定的真实微信身份
+          const authRes = await signIn('credentials', {
+            wechatCode: wechatCode,
             socialName: data.user?.name || '微信订阅号用户',
             redirect: false,
           });
+          if (authRes?.error) {
+            setError('微信授权登录失败，请重新获取验证码');
+            fetchWechatCode();
+            return;
+          }
           onClose();
           window.location.reload();
         }

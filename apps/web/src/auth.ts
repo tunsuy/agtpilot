@@ -4,6 +4,8 @@ import GitHub from 'next-auth/providers/github';
 import Google from 'next-auth/providers/google';
 import Apple from 'next-auth/providers/apple';
 import WeChat from 'next-auth/providers/wechat';
+import { consumeVerifiedCode } from './lib/wechat-store';
+import { isMockAuthAllowed } from './lib/auth-mock';
 
 const configuredProviders: any[] = [];
 
@@ -53,8 +55,31 @@ configuredProviders.push(
       isDemo: { label: 'Demo', type: 'text' },
       socialProvider: { label: 'SocialProvider', type: 'text' },
       socialName: { label: 'SocialName', type: 'text' },
+      wechatCode: { label: 'WechatCode', type: 'text' },
     },
     async authorize(credentials) {
+      // 微信验证码登录：服务端核销一次性验证码，换取公众号回调绑定的真实 openid 身份
+      if (credentials?.wechatCode) {
+        const wxUser = consumeVerifiedCode(String(credentials.wechatCode));
+        if (!wxUser) return null;
+        return {
+          id: wxUser.id,
+          name: wxUser.name,
+          email: wxUser.email,
+          role: 'user',
+          tier: 'Pro',
+          tokensUsed: 0,
+          tokensLimit: 100000,
+        };
+      }
+
+      // 以下 isDemo / socialProvider 均为沙盒模拟身份，生产环境默认关闭（AUTH_ALLOW_MOCK 控制）
+      if (!isMockAuthAllowed()) {
+        if (credentials?.isDemo === 'true' || credentials?.socialProvider) {
+          return null;
+        }
+      }
+
       if (credentials?.isDemo === 'true') {
         return {
           id: 'usr_marshal_01',

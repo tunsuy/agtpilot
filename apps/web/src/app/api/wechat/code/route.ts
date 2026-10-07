@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateLoginCode, checkCodeStatus, verifyLoginCode } from '../../../../lib/wechat-store';
+import { isMockAuthAllowed } from '../../../../lib/auth-mock';
 
 // 生成新的 6 位验证码
 export async function GET(req: NextRequest) {
@@ -30,8 +31,14 @@ export async function GET(req: NextRequest) {
   });
 }
 
-// 本地开发模拟扫码验证接口
+// 本地开发模拟扫码验证接口（生产环境默认关闭，AUTH_ALLOW_MOCK=true 可显式开启）
 export async function POST(req: NextRequest) {
+  if (!isMockAuthAllowed()) {
+    return NextResponse.json(
+      { success: false, error: 'Mock verification is disabled in this environment' },
+      { status: 403 }
+    );
+  }
   try {
     const { code, mockOpenid, nickname } = await req.json();
     if (!code) {

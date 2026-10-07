@@ -1,6 +1,6 @@
 export interface WeChatLoginCode {
   code: string;
-  status: 'PENDING' | 'VERIFIED' | 'EXPIRED';
+  status: 'PENDING' | 'VERIFIED' | 'CONSUMED' | 'EXPIRED';
   openid?: string;
   user?: {
     id: string;
@@ -58,4 +58,22 @@ export function verifyLoginCode(code: string, openid: string, nickname?: string)
     email: `wx_${shortOpenid}@agtpilot.ai`,
   };
   return true;
+}
+
+/**
+ * 一次性核销已验证的登录码，返回绑定的微信身份。
+ * 供 Credentials authorize 在服务端换取真实用户身份，
+ * 核销后立即从字典删除，防止同一验证码被重放登录。
+ */
+export function consumeVerifiedCode(code: string): WeChatLoginCode['user'] | null {
+  const key = code.trim();
+  const item = codeMap.get(key);
+  if (!item || item.status !== 'VERIFIED' || !item.user) return null;
+  if (Date.now() > item.expiresAt) {
+    item.status = 'EXPIRED';
+    return null;
+  }
+  const user = item.user;
+  codeMap.delete(key);
+  return user;
 }

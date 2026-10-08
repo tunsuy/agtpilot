@@ -38,6 +38,7 @@ import {
   Code2,
   Eye,
   Smartphone,
+  Plug,
 } from 'lucide-react';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import {
@@ -45,6 +46,7 @@ import {
   ViewportState,
   TerminalLog,
   ApprovalRequest,
+  ConnectorSuggestion,
   ArtifactState,
   ConnectorApp,
 } from '../types/agent';
@@ -57,6 +59,9 @@ interface CockpitViewProps {
   terminalLogs: TerminalLog[];
   approvalRequests: ApprovalRequest[];
   onApproval: (id: string, approved: boolean) => void;
+  connectorSuggestions?: ConnectorSuggestion[];
+  onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
+  onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
   artifact: ArtifactState | null;
   rightTab: 'browser' | 'terminal' | 'artifact';
   onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact') => void;
@@ -76,6 +81,9 @@ export function CockpitView({
   terminalLogs,
   approvalRequests,
   onApproval,
+  connectorSuggestions = [],
+  onConnectorAuthorize,
+  onSkipConnectorSuggestion,
   artifact,
   rightTab,
   onRightTabChange,
@@ -317,6 +325,40 @@ export function CockpitView({
             <p className="text-xs text-zinc-400">准备就绪，随时可启动新任务或提问。</p>
           )}
         </div>
+
+        {/* 任务中途连接器授权横幅（一键授权后任务原地继续） */}
+        {connectorSuggestions.length > 0 && (
+          <div className="m-3 p-3.5 rounded-xl border border-violet-200 bg-violet-50/90 shadow-xs flex items-center justify-between animate-fadeIn">
+            <div className="flex items-center gap-2.5">
+              <div className="h-8 w-8 rounded-lg bg-violet-100 text-violet-700 flex items-center justify-center flex-shrink-0">
+                <Plug className="h-4 w-4" />
+              </div>
+              <div>
+                <span className="text-xs font-semibold text-zinc-900 block">
+                  任务需要「{connectorSuggestions[0].connectorName}」授权
+                </span>
+                <p className="text-[11px] text-zinc-600 mt-0.5">
+                  {connectorSuggestions[0].reason} · 授权后任务原地继续，跳过则用浏览器兜底
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <button
+                onClick={() => onSkipConnectorSuggestion?.(connectorSuggestions[0])}
+                className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 transition"
+              >
+                跳过
+              </button>
+              <button
+                onClick={() => onConnectorAuthorize?.(connectorSuggestions[0])}
+                className="px-3 py-1 rounded-lg text-xs font-medium bg-violet-600 hover:bg-violet-500 text-white transition shadow-xs"
+              >
+                {connectorSuggestions[0].authType === 'oauth' ? '一键授权' : '去配置'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* 人机协同安全授权横幅 (如在中间流也需要响应) */}
         {approvalRequests.length > 0 && (

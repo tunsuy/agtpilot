@@ -130,9 +130,10 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       },
       required: ['language', 'code'],
     },
-    execute: async ({ language, code, timeoutMs = 15000 }) => {
+    execute: async ({ language, code, timeoutMs = 15000 }, session?: any) => {
       // 若检测到 Python 代码且配置了 E2B_API_KEY，自动走云端 Firecracker 微虚拟机
-      const e2bKey = config.e2bApiKey || process.env.E2B_API_KEY;
+      // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离）
+      const e2bKey = session?.env?.E2B_API_KEY || config.e2bApiKey || process.env.E2B_API_KEY;
       if (language === 'python' && e2bKey) {
         let sandbox: any = null;
         try {
@@ -211,8 +212,9 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       },
       required: ['code'],
     },
-    execute: async ({ code }) => {
-      const apiKey = config.e2bApiKey || process.env.E2B_API_KEY;
+    execute: async ({ code }, session?: any) => {
+      // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离）
+      const apiKey = session?.env?.E2B_API_KEY || config.e2bApiKey || process.env.E2B_API_KEY;
       if (!apiKey) {
         return {
           success: false,

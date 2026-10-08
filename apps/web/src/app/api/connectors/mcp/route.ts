@@ -7,12 +7,13 @@ import {
   getMcpConnectorDef,
 } from '@/lib/mcp-connectors';
 import { getAgentBackend } from '@/lib/agent-backend';
+import { resolveConnectorAuth } from '@/lib/connector-bridge';
 import type { McpConnectorInfo } from '@/types/agent';
 
 /**
  * MCP 连接器管理 API
  * GET  /api/connectors/mcp —— 列出全部 MCP 连接器与当前用户的连接状态
- * POST /api/connectors/mcp —— { action: 'saveToken' | 'disconnect' | 'connect', connectorId, token? }
+ * POST /api/connectors/mcp —— { action: 'saveToken' | 'disconnect' | 'connect' | 'skipSuggestion', connectorId, token? }
  */
 
 function maskSecret(val: string): string {
@@ -126,6 +127,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { action, connectorId, token } = body;
 
+    // 跳过任务中途授权请求（解冻等待中的 connector_authorize 工具，Agent 转浏览器兜底）
+    if (action === 'skipSuggestion') {
+      if (typeof connectorId !== 'string' || !connectorId) {
+        return NextResponse.json({ success: false, error: '缺少 connectorId' }, { status: 400 });
+      }
+      const resolved = resolveConnectorAuth(userId, connectorId, 'skipped');
+      return NextResponse.json({ success: true, resolved });
+    }
+
     const def = typeof connectorId === 'string' ? getMcpConnectorDef(connectorId) : undefined;
     if (!def) {
       return NextResponse.json({ success: false, error: `未知的 MCP 连接器: ${connectorId}` }, { status: 400 });
@@ -143,6 +153,8 @@ export async function POST(req: NextRequest) {
       }
       saveUserConnector(userId, def.tokenEnvVar, token.trim());
       await resyncUserServers(userId);
+      // 若此刻有任务正在等待该连接器授权（中途授权卡片 → 用户来连接器中心粘贴了凭证），解冻它
+      resolveConnectorAuth(userId, def.id, 'authorized');
       return NextResponse.json({ success: true, connectors: buildStatusList(userId) });
     }
 

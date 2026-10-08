@@ -95,6 +95,17 @@ export interface ApprovalRequest {
   params: Record<string, any>;
 }
 
+/** 任务中途连接器授权建议（驾驶舱实时弹卡片，一键授权后任务原地继续） */
+export interface ConnectorSuggestion {
+  /** 去重键：`${userId}::${connectorId}` */
+  id: string;
+  connectorId: string;
+  connectorName: string;
+  authType: 'oauth' | 'token' | 'none';
+  reason: string;
+  authorizeUrl?: string;
+}
+
 export interface ArtifactVisualSlide {
   title?: string;
   subtitle?: string;

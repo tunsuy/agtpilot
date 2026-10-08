@@ -30,6 +30,10 @@ export async function GET() {
     activeMissionId,
     terminalLogs: userId ? backend.state.terminalLogs : [],
     approvalRequests: userId ? backend.state.approvalRequests : [],
+    // 授权建议卡片按用户过滤（id 形如 `${userId}::${connectorId}`）
+    connectorSuggestions: userId
+      ? backend.state.connectorSuggestions.filter((s) => s.id.startsWith(`${userId}::`))
+      : [],
   };
 
   return NextResponse.json({

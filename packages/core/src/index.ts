@@ -160,6 +160,12 @@ export interface TaskOptions {
    * 连接器工具泄漏给 B 用户的任务。同名时覆盖全局注册的同名工具。
    */
   taskTools?: ToolDefinition[];
+  /**
+   * 任务级环境变量（如当前用户在个人空间保存的 EXA_API_KEY 等非 LLM 服务密钥）。
+   * 通过工具 execute 的 session.env 透传，插件优先读取 —— 多用户部署时
+   * 绝不写入 process.env，避免 A 用户的 Key 被 B 用户的请求使用。
+   */
+  taskEnv?: Record<string, string>;
   abortSignal?: AbortSignal;
   configOverride?: any;
   historyMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
@@ -374,7 +380,7 @@ export class OrchestratorService extends Service {
         // 真实调用工具
         let output: any;
         try {
-          output = await toolDef.execute(args, { taskId, step: currentStep });
+          output = await toolDef.execute(args, { taskId, step: currentStep, env: options.taskEnv });
         } catch (err: any) {
           output = { error: err.message };
         }

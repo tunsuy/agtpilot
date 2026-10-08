@@ -1,6 +1,6 @@
 import { Context } from '@deepseek-ai/cordis';
 import { AgentService, OrchestratorService } from '@agtpilot/core';
-import { ApprovalRequest, PlanData, PlanTask } from '@agtpilot/protocol';
+import { ApprovalRequest, ConnectorSuggestion, PlanData, PlanTask } from '@agtpilot/protocol';
 import * as BrowserPlugin from '@agtpilot/plugin-browser';
 import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
 import * as SearchPlugin from '@agtpilot/plugin-search';
@@ -26,6 +26,8 @@ export interface AgentBackendState {
   viewport: ViewportState;
   terminalLogs: TerminalLog[];
   approvalRequests: ApprovalRequest[];
+  /** 任务中途连接器授权建议（等待用户一键授权/跳过） */
+  connectorSuggestions: ConnectorSuggestion[];
   latestArtifact?: any;
 }
 
@@ -64,6 +66,7 @@ class AgentBackend {
         },
       ],
       approvalRequests: [],
+      connectorSuggestions: [],
     };
 
     this.bindEvents();
@@ -245,6 +248,28 @@ class AgentBackend {
           }
         }
         this.broadcast({ type: 'approval_requested', data: req });
+        break;
+      }
+
+      case 'connector_suggestion': {
+        // 任务中途请求连接器授权：入 state 并广播，前端驾驶舱弹授权卡片
+        const suggestion: ConnectorSuggestion = event.payload;
+        this.state.connectorSuggestions = [
+          ...this.state.connectorSuggestions.filter((s) => s.id !== suggestion.id),
+          suggestion,
+        ];
+        this.broadcast({ type: 'connector_suggested', data: suggestion });
+        break;
+      }
+
+      case 'connector_suggestion_resolved': {
+        // 授权完成/跳过/超时：移除卡片
+        const { id, outcome } = event.payload;
+        this.state.connectorSuggestions = this.state.connectorSuggestions.filter((s) => s.id !== id);
+        this.broadcast({ type: 'connector_suggestion_resolved', data: { id, outcome } });
+        if (outcome === 'authorized') {
+          this.addTerminalLog('system', '[Connector] 用户已完成中途授权，任务继续执行');
+        }
         break;
       }
 
@@ -662,29 +687,61 @@ class AgentBackend {
         // 2.5 挂载当前用户的 MCP 连接器（一键授权/粘贴凭证/免凭证直连）
         // 任务级注入（taskTools）：不进全局注册表，多用户互不可见
         let taskTools: any[] | undefined;
+        let taskEnv: Record<string, string> | undefined;
         if (options.userId) {
+          const uid = options.userId;
           try {
             const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
+            const { buildConnectorBridgeTools } = await import('@/lib/connector-bridge');
             const mcpSvc = (this.ctx as any).mcp;
+            const injectedTools: any[] = [];
+
             if (mcpSvc?.syncUserServers) {
-              const servers = buildUserMcpServers(options.userId);
+              const servers = buildUserMcpServers(uid);
               if (servers.length > 0) {
-                const sync = await mcpSvc.syncUserServers(options.userId, servers);
-                const userTools = await mcpSvc.getUserTools(options.userId);
-                if (userTools.length > 0) {
-                  taskTools = userTools;
-                  this.addTerminalLog(
-                    'system',
-                    `[MCP] 用户连接器挂载: 新连 ${sync.connected.length} / 复用 ${sync.reused.length}，共 ${userTools.length} 个工具`
-                  );
-                }
+                const sync = await mcpSvc.syncUserServers(uid, servers);
+                const userTools = await mcpSvc.getUserTools(uid);
+                injectedTools.push(...userTools);
+                this.addTerminalLog(
+                  'system',
+                  `[MCP] 用户连接器挂载: 新连 ${sync.connected.length} / 复用 ${sync.reused.length}，共 ${userTools.length} 个工具`
+                );
                 for (const f of sync.failed) {
                   this.addTerminalLog('stderr', `[MCP] 连接 ${f.name} 失败: ${f.error}`);
                 }
               }
             }
+
+            // 中途授权桥：connector_authorize（弹卡片等授权）+ mcp_call（代理调用中途新授权的工具）
+            // 始终注入 —— 即使当前一个连接器都没配，Agent 也能在任务中引导用户授权
+            injectedTools.push(
+              ...buildConnectorBridgeTools({
+                userId: uid,
+                emit: (e) => this.ctx.agent.emitEvent(e as any),
+                getMcpSvc: () => (this.ctx as any).mcp,
+              })
+            );
+            taskTools = injectedTools;
           } catch (e: any) {
             this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`);
+          }
+
+          // 用户级非 LLM 服务 Key（搜索/爬取/云端沙箱）：经 runTask taskEnv → session.env
+          // 透传给插件，绝不写 process.env（多用户隔离）
+          try {
+            const { getUserConnectors } = await import('@/lib/user-store');
+            const cfgs = getUserConnectors(uid).configs;
+            const env: Record<string, string> = {};
+            for (const k of ['EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'E2B_API_KEY']) {
+              const v = (cfgs[k] || '').trim();
+              if (v) env[k] = v;
+            }
+            if (Object.keys(env).length > 0) {
+              taskEnv = env;
+              this.addTerminalLog('system', `[Key] 用户级服务密钥注入: ${Object.keys(env).join(', ')}`);
+            }
+          } catch (e) {
+            // ignore
           }
         }
 
@@ -697,14 +754,16 @@ class AgentBackend {
             historyMessages: targetMission.conversationMessages,
             prompt: goal,
             taskTools,
+            taskEnv,
             system: `你是基于 Cordis 微内核架构驱动的个人全自主智能体驾驶舱 (AgtPilot)。
 你拥有强大的推理能力与丰富的原子工具生态（包括浏览器实时自动化 browser_navigate、沙箱隔离命令执行 sandbox_run_command 等）。
 ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 【核心行为准则 (Behavioral Steering)】：
 1. 【区分对话与执行】：如果用户的请求只是自我介绍、询问你能做什么、概念解释或一般性闲聊，请直接运用你渊博的知识用清晰、亲切、优雅的中文回复，【严禁】无缘无故调用外部搜索或终端工具！
 2. 【按需调用工具】：只有当用户的任务确实需要实时信息检索、网页交互抓取、执行代码或特定环境诊断时，才调用对应的原子工具。
-3. 【连接器工具优先】：mcp_ 前缀的工具来自用户已授权的外部服务连接器（如地图、文档、日程），涉及对应平台的能力时优先使用它们；若缺少专用工具或连接器未授权，优先使用 browser_ 系列工具在网页上直接完成操作作为兜底，并在结果中提示用户可到「连接器中心」一键授权以获得更好体验。
-4. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。`,
+3. 【连接器工具优先】：mcp_ 前缀的工具来自用户已授权的外部服务连接器（如地图、文档、日程），涉及对应平台的能力时优先使用它们。
+4. 【中途授权】：当任务确实需要某平台专用能力（如读写 Notion、管理滴答清单日程）但对应连接器未授权时，调用 connector_authorize（action=request，附 connectorId 与一句话理由）向用户发起授权请求 —— 用户会看到授权卡片，工具会等待结果：授权成功则返回新工具清单，用 mcp_call 按名字调用；用户跳过或超时则立即改用 browser_ 系列工具在网页上直接完成操作作为兜底，不要空等或放弃任务。不确定有哪些连接器时先用 connector_authorize（action=list）查看。
+5. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。`,
           });
 
           if (result.success && result.messages) {

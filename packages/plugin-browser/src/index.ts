@@ -296,8 +296,9 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       },
       required: ['url'],
     },
-    execute: async ({ url }) => {
-      const apiKey = process.env.FIRECRAWL_API_KEY;
+    execute: async ({ url }, session?: any) => {
+      // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离）
+      const apiKey = session?.env?.FIRECRAWL_API_KEY || process.env.FIRECRAWL_API_KEY;
       if (!apiKey) {
         return {
           success: false,

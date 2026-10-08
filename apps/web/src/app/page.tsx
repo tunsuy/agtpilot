@@ -26,6 +26,7 @@ import {
   ViewportState,
   TerminalLog,
   ApprovalRequest,
+  ConnectorSuggestion,
   ArtifactState,
   ConnectorApp,
   MemoryItem,
@@ -57,6 +58,9 @@ export default function Workspace() {
   });
   const [terminalLogs, setTerminalLogs] = useState<TerminalLog[]>([]);
   const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([]);
+  const [connectorSuggestions, setConnectorSuggestions] = useState<ConnectorSuggestion[]>([]);
+  // 中途授权（粘贴凭证类）：跳到连接器中心并自动打开对应配置弹窗
+  const [mcpAutoConfigure, setMcpAutoConfigure] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<ArtifactState | null>(null);
 
   // 连接器状态
@@ -344,6 +348,30 @@ export default function Workspace() {
     }
   };
 
+  // 任务中途授权卡片：oauth → 直接跳一键授权；token → 连接器中心自动打开配置弹窗
+  const handleConnectorAuthorize = (s: ConnectorSuggestion) => {
+    if (s.authType === 'oauth' && s.authorizeUrl) {
+      window.location.href = s.authorizeUrl;
+      return;
+    }
+    setMcpAutoConfigure(s.connectorId);
+    setActiveView('connectors');
+    setMobileOverlay('connectors');
+  };
+
+  const handleSkipConnectorSuggestion = async (s: ConnectorSuggestion) => {
+    setConnectorSuggestions((prev) => prev.filter((x) => x.id !== s.id));
+    try {
+      await fetch('/api/connectors/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'skipSuggestion', connectorId: s.connectorId }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleStopMission = async (missionId: string) => {
     try {
       await fetch('/api/agent/stop', {
@@ -406,6 +434,7 @@ export default function Workspace() {
       setActiveMissionId(null);
       setTerminalLogs([]);
       setApprovalRequests([]);
+      setConnectorSuggestions([]);
       setArtifact(null);
     }
     // 检查 URL 参数（如 OAuth 回调后跳转、PWA 快捷方式/推送通知深链）
@@ -430,6 +459,7 @@ export default function Workspace() {
         if (data.state.viewport) setViewport(data.state.viewport);
         if (data.state.terminalLogs) setTerminalLogs(data.state.terminalLogs);
         if (data.state.approvalRequests) setApprovalRequests(data.state.approvalRequests);
+        if (data.state.connectorSuggestions) setConnectorSuggestions(data.state.connectorSuggestions);
         if (data.state.latestArtifact) setArtifact(data.state.latestArtifact);
       }
     } catch (e) {
@@ -448,6 +478,7 @@ export default function Workspace() {
         if (state.viewport) setViewport(state.viewport);
         if (state.terminalLogs) setTerminalLogs(state.terminalLogs);
         if (state.approvalRequests) setApprovalRequests(state.approvalRequests);
+        if (state.connectorSuggestions) setConnectorSuggestions(state.connectorSuggestions);
         if (state.latestArtifact) setArtifact(state.latestArtifact);
       } catch (err) {
         console.error(err);
@@ -509,6 +540,27 @@ export default function Workspace() {
       try {
         const { approvalId } = JSON.parse(e.data);
         setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    // 任务中途连接器授权建议：弹卡片等用户一键授权/跳过
+    eventSource.addEventListener('connector_suggested', (e: MessageEvent) => {
+      try {
+        const s: ConnectorSuggestion = JSON.parse(e.data);
+        setConnectorSuggestions((prev) => [...prev.filter((x) => x.id !== s.id), s]);
+        setActiveView('cockpit');
+        setMobileTab('activity');
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    eventSource.addEventListener('connector_suggestion_resolved', (e: MessageEvent) => {
+      try {
+        const { id } = JSON.parse(e.data);
+        setConnectorSuggestions((prev) => prev.filter((x) => x.id !== id));
       } catch (err) {
         console.error(err);
       }
@@ -597,6 +649,8 @@ export default function Workspace() {
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
+                autoConfigureId={mcpAutoConfigure}
+                onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
               />
             )}
             {mobileOverlay === 'memories' && (
@@ -665,6 +719,9 @@ export default function Workspace() {
                   onSelectMission={setActiveMissionId}
                   approvalRequests={approvalRequests}
                   onApproval={handleApproval}
+                  connectorSuggestions={connectorSuggestions}
+                  onConnectorAuthorize={handleConnectorAuthorize}
+                  onSkipConnectorSuggestion={handleSkipConnectorSuggestion}
                   terminalLogs={terminalLogs}
                 />
               )}
@@ -788,6 +845,9 @@ export default function Workspace() {
               terminalLogs={terminalLogs}
               approvalRequests={approvalRequests}
               onApproval={handleApproval}
+              connectorSuggestions={connectorSuggestions}
+              onConnectorAuthorize={handleConnectorAuthorize}
+              onSkipConnectorSuggestion={handleSkipConnectorSuggestion}
               artifact={artifact}
               rightTab={rightTab}
               onRightTabChange={setRightTab}
@@ -819,6 +879,8 @@ export default function Workspace() {
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
+                autoConfigureId={mcpAutoConfigure}
+                onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
               />
             </main>
           )}

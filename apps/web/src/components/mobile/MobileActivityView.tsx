@@ -13,8 +13,9 @@ import {
   ChevronDown,
   ChevronUp,
   Inbox,
+  Plug,
 } from 'lucide-react';
-import { ApprovalRequest, Mission, TerminalLog } from '../../types/agent';
+import { ApprovalRequest, ConnectorSuggestion, Mission, TerminalLog } from '../../types/agent';
 
 interface MobileActivityViewProps {
   missions: Mission[];
@@ -22,6 +23,9 @@ interface MobileActivityViewProps {
   onSelectMission: (id: string) => void;
   approvalRequests: ApprovalRequest[];
   onApproval: (approvalId: string, approved: boolean) => void;
+  connectorSuggestions?: ConnectorSuggestion[];
+  onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
+  onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
   terminalLogs: TerminalLog[];
 }
 
@@ -63,6 +67,9 @@ export function MobileActivityView({
   onSelectMission,
   approvalRequests,
   onApproval,
+  connectorSuggestions = [],
+  onConnectorAuthorize,
+  onSkipConnectorSuggestion,
   terminalLogs,
 }: MobileActivityViewProps) {
   const [logsExpanded, setLogsExpanded] = useState(false);
@@ -134,6 +141,47 @@ export function MobileActivityView({
                     className="flex-1 h-10 rounded-lg bg-zinc-900 text-sm font-medium text-white flex items-center justify-center gap-1.5 active:bg-zinc-700 transition"
                   >
                     <Check className="h-4 w-4" /> 批准
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* 任务中途连接器授权请求 */}
+      {connectorSuggestions.length > 0 && (
+        <section className="mb-5">
+          <h2 className="text-xs font-semibold text-violet-400 uppercase tracking-wider mb-2 px-1">
+            待你授权 · {connectorSuggestions.length}
+          </h2>
+          <ul className="space-y-2.5">
+            {connectorSuggestions.map((s) => (
+              <li key={s.id} className="rounded-xl border border-violet-200 bg-violet-50/60 px-4 py-3.5 shadow-sm">
+                <div className="flex items-start gap-2.5">
+                  <Plug className="h-5 w-5 shrink-0 mt-0.5 text-violet-500" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-zinc-900">任务需要「{s.connectorName}」</p>
+                    <p className="text-xs text-zinc-500 mt-1 break-words">{s.reason}</p>
+                    <p className="text-[11px] text-zinc-400 mt-1.5">
+                      授权后任务原地继续；跳过后 Agent 将用浏览器兜底完成。
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onSkipConnectorSuggestion?.(s)}
+                    className="flex-1 h-10 rounded-lg border border-zinc-200 bg-white text-sm font-medium text-zinc-600 flex items-center justify-center gap-1.5 active:bg-zinc-50 transition"
+                  >
+                    <X className="h-4 w-4" /> 跳过
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onConnectorAuthorize?.(s)}
+                    className="flex-1 h-10 rounded-lg bg-violet-600 text-sm font-medium text-white flex items-center justify-center gap-1.5 active:bg-violet-500 transition"
+                  >
+                    <Plug className="h-4 w-4" /> {s.authType === 'oauth' ? '一键授权' : '去配置'}
                   </button>
                 </div>
               </li>

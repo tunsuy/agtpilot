@@ -40,6 +40,10 @@ export async function GET() {
         // 如果未登录，终端日志与视口状态保持清空
         terminalLogs: userId ? backend.state.terminalLogs : [],
         approvalRequests: userId ? backend.state.approvalRequests : [],
+        // 授权建议卡片按用户过滤（id 形如 `${userId}::${connectorId}`）
+        connectorSuggestions: userId
+          ? backend.state.connectorSuggestions.filter((s) => s.id.startsWith(`${userId}::`))
+          : [],
       };
 
       const initialPayload = `event: init\ndata: ${JSON.stringify(userScopedState)}\n\n`;
@@ -51,6 +55,13 @@ export async function GET() {
           if (event.type === 'mission_created' || event.type === 'mission_updated') {
             if (event.data?.userId && event.data.userId !== userId) {
               return; // 不推送其他用户的任务
+            }
+          }
+          // 连接器授权建议卡片按用户过滤（id 形如 `${userId}::${connectorId}`）
+          if (event.type === 'connector_suggested' || event.type === 'connector_suggestion_resolved') {
+            const sid = String(event.data?.id || '');
+            if (!userId || !sid.startsWith(`${userId}::`)) {
+              return;
             }
           }
           const sseEvent = `event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`;

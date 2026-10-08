@@ -5,6 +5,7 @@ import { getAppBaseUrl } from '@/lib/connector-oauth';
 import { getMcpConnectorDef, MCP_OAUTH_STATE_COOKIE } from '@/lib/mcp-connectors';
 import { UserMcpOAuthProvider } from '@/lib/mcp-oauth-provider';
 import { getAgentBackend } from '@/lib/agent-backend';
+import { resolveConnectorAuth } from '@/lib/connector-bridge';
 
 /**
  * GET /api/connectors/mcp/callback?code=...&state=...
@@ -76,6 +77,9 @@ export async function GET(req: NextRequest) {
     } catch (e: any) {
       console.error(`[mcp-oauth] warm connect failed for ${def.id}:`, e?.message);
     }
+
+    // 若有任务正在中途等待该连接器授权（connector_authorize 挂起中），解冻并让其继续
+    resolveConnectorAuth(userId, def.id, 'authorized');
 
     const okRes = NextResponse.redirect(
       `${baseUrl}/?tab=connectors&authorized=${encodeURIComponent(def.id)}`

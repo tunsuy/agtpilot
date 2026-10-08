@@ -132,15 +132,16 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       },
       required: ['query'],
     },
-    execute: async ({ query, maxResults = 5 }) => {
+    execute: async ({ query, maxResults = 5 }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
         payload: { tool: 'search_web', query, maxResults },
         timestamp: Date.now(),
       });
 
-      const exaKey = config.exaApiKey || process.env.EXA_API_KEY;
-      const tavilyKey = config.tavilyApiKey || process.env.TAVILY_API_KEY;
+      // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离，绝不进 process.env）
+      const exaKey = session?.env?.EXA_API_KEY || config.exaApiKey || process.env.EXA_API_KEY;
+      const tavilyKey = session?.env?.TAVILY_API_KEY || config.tavilyApiKey || process.env.TAVILY_API_KEY;
 
       // 优先级 1: Exa.ai 语义神经搜索 (若配置了 Key)
       if (exaKey && config.defaultEngine !== 'duckduckgo' && config.defaultEngine !== 'tavily') {
@@ -199,8 +200,8 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       },
       required: ['query'],
     },
-    execute: async ({ query, maxResults = 5 }) => {
-      const exaKey = config.exaApiKey || process.env.EXA_API_KEY;
+    execute: async ({ query, maxResults = 5 }, session?: any) => {
+      const exaKey = session?.env?.EXA_API_KEY || config.exaApiKey || process.env.EXA_API_KEY;
       if (!exaKey) {
         return {
           success: false,
@@ -230,8 +231,8 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       },
       required: ['query'],
     },
-    execute: async ({ query, maxResults = 5 }) => {
-      const tavilyKey = config.tavilyApiKey || process.env.TAVILY_API_KEY;
+    execute: async ({ query, maxResults = 5 }, session?: any) => {
+      const tavilyKey = session?.env?.TAVILY_API_KEY || config.tavilyApiKey || process.env.TAVILY_API_KEY;
       if (!tavilyKey) {
         return {
           success: false,

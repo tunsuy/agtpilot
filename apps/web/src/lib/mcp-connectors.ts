@@ -83,6 +83,16 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     scope: 'mcp:tools',
     servers: [{ name: 'qcc', url: 'https://agent.qcc.com/mcp/company/stream', label: '企业工商' }],
   },
+  {
+    id: 'ardot',
+    name: '腾讯设计 Ardot',
+    icon: 'Palette',
+    category: 'Productivity',
+    description: '腾讯设计平台官方 MCP：设计稿读写、设计系统与导出，一键授权直连。',
+    authType: 'oauth',
+    docUrl: 'https://docs.ardot.tencent.com/ardot-mcp/introduction.html',
+    servers: [{ name: 'ardot', url: 'https://ardot.tencent.com/mcp' }],
+  },
 
   // ---- 打开授权页粘贴凭证 ----
   {
@@ -150,6 +160,78 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     ],
   },
 
+  {
+    id: 'didi',
+    name: '滴滴出行',
+    icon: 'Car',
+    category: 'Cloud',
+    description: '网约车预估/叫车、地点检索与出行路线规划（官方 MCP，粘贴 Key 即用）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_DIDI_KEY',
+    quickAuthUrl: 'https://mcp.didichuxing.com',
+    authHint: '打开滴滴开发者控制台登录并激活个人 MCP Key，复制后粘贴到下方',
+    docUrl: 'https://mcp.didichuxing.com/api',
+    servers: [{ name: 'didi', url: (cred) => `https://mcp.didichuxing.com/mcp-servers?key=${encodeURIComponent(cred)}` }],
+  },
+  {
+    id: 'tencent_weiyun',
+    name: '腾讯微云',
+    icon: 'Cloud',
+    category: 'Cloud',
+    description: '网盘文件管理：列表、上传、下载、分享链接与目录整理（官方 MCP，粘贴 Token 即用）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_WEIYUN_TOKEN',
+    quickAuthUrl: 'https://www.weiyun.com/act/openclaw',
+    authHint: '打开微云 Skill 配置页登录，复制 MCP Token 并粘贴到下方（整段 env 粘贴也可以，会自动提取）',
+    docUrl: 'https://www.weiyun.com/act/openclaw',
+    servers: [
+      {
+        name: 'tencent_weiyun',
+        url: 'https://www.weiyun.com/api/v3/mcpserver',
+        headers: (cred) => ({ WyHeader: `mcp_token=${normalizeWeiyunToken(cred)}` }),
+      },
+    ],
+  },
+  {
+    id: 'tencent_lexiang',
+    name: '腾讯乐享',
+    icon: 'Library',
+    category: 'Productivity',
+    description: '企业知识库检索、阅读、创建与文档管理（官方 MCP，粘贴 Token 即用）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_LEXIANG_TOKEN',
+    quickAuthUrl: 'https://lexiangla.com/ai/claw',
+    authHint: '打开乐享凭证页登录，复制访问令牌粘贴到下方',
+    docUrl: 'https://qclaw.qq.com/docs/211858629271314432',
+    servers: [
+      {
+        name: 'tencent_lexiang',
+        url: 'https://mcp.lexiang-app.com/mcp?preset=meta',
+        headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
+      },
+    ],
+  },
+  {
+    id: 'youdao_note',
+    name: '有道云笔记',
+    icon: 'NotebookPen',
+    category: 'Productivity',
+    description: '笔记创建、搜索、整理与管理（官方 MCP，粘贴 API Key 即用）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_YOUDAO_NOTE_KEY',
+    quickAuthUrl: 'https://mopen.163.com/#/dashboard',
+    authHint: '打开授权页登录 MCP 平台，在 API 管理创建 API Key 并粘贴到下方',
+    docUrl: 'https://qclaw.qq.com/docs/207508177113886720',
+    servers: [
+      {
+        name: 'youdao_note',
+        transport: 'sse',
+        url: 'https://open.mail.163.com/api/ynote/mcp/sse',
+        headers: (cred) => ({ 'x-api-key': cred }),
+      },
+    ],
+  },
+
   // ---- 免凭证直连 ----
   {
     id: 'deepwiki',
@@ -164,6 +246,14 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
 
 export function getMcpConnectorDef(id: string): McpConnectorDef | undefined {
   return MCP_CONNECTOR_DEFS.find((d) => d.id === id);
+}
+
+/** 微云 Token 归一化：用户可能整段粘贴 `WEIYUN_MCP_TOKEN=xx` / `mcp_token=xx` 片段，自动提取裸 token */
+export function normalizeWeiyunToken(raw: string): string {
+  const text = (raw || '').trim().replace(/^["']|["']$/g, '');
+  if (!text) return '';
+  const m = text.match(/mcp_token=([^\s;,&"']+)/i) || text.match(/WEIYUN_MCP_TOKEN\s*=\s*['"]?([^'"\s]+)/i);
+  return m ? m[1].trim() : text;
 }
 
 /** MCP OAuth start → callback 之间传递 CSRF state 的 httpOnly cookie 名 */

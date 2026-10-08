@@ -32,6 +32,11 @@ import {
   BookOpen,
   Plug,
   Unplug,
+  Car,
+  Cloud,
+  Library,
+  NotebookPen,
+  Palette,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme } from '../utils/nativeBridge';
@@ -54,6 +59,16 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <FileSpreadsheet className={`${className} text-blue-500`} />;
     case 'tencent_meeting':
       return <Video className={`${className} text-indigo-600`} />;
+    case 'ardot':
+      return <Palette className={`${className} text-violet-600`} />;
+    case 'didi':
+      return <Car className={`${className} text-orange-600`} />;
+    case 'tencent_weiyun':
+      return <Cloud className={`${className} text-sky-500`} />;
+    case 'tencent_lexiang':
+      return <Library className={`${className} text-cyan-600`} />;
+    case 'youdao_note':
+      return <NotebookPen className={`${className} text-emerald-600`} />;
     case 'deepwiki':
       return <BookOpen className={`${className} text-zinc-700`} />;
     default:
@@ -102,12 +117,17 @@ interface ConnectorsViewProps {
     extra?: { baseUrl?: string; baseUrlEnvVar?: string; modelName?: string; modelNameEnvVar?: string }
   ) => Promise<void>;
   onSetDefaultModel: (modelId: string) => Promise<void>;
+  /** 任务中途授权跳转过来时自动打开对应连接器的配置弹窗 */
+  autoConfigureId?: string | null;
+  onAutoConfigureHandled?: () => void;
 }
 
 export function ConnectorsView({
   connectors,
   onSaveKey,
   onSetDefaultModel,
+  autoConfigureId,
+  onAutoConfigureHandled,
 }: ConnectorsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [platformFilter, setPlatformFilter] = useState<'all' | 'web' | 'mobile'>('all');
@@ -136,6 +156,31 @@ export function ConnectorsView({
   useEffect(() => {
     loadMcpConnectors();
   }, []);
+
+  // OAuth 回跳结果提示（/?tab=connectors&authorized=xxx / &error=xxx）
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const authorized = params.get('authorized');
+    const error = params.get('error');
+    if (authorized) {
+      setMcpNotice(`✅ 「${authorized}」授权成功，工具已挂载，任务可继续使用。`);
+    } else if (error) {
+      setMcpNotice(`⚠️ ${error}`);
+    }
+  }, []);
+
+  // 任务中途授权（粘贴凭证类）：自动打开对应连接器的配置弹窗
+  useEffect(() => {
+    if (!autoConfigureId) return;
+    const target = mcpConnectors.find((c) => c.id === autoConfigureId);
+    if (target) {
+      setMcpConfiguring(target);
+      setMcpTokenInput('');
+      setMcpNotice('');
+      onAutoConfigureHandled?.();
+    }
+  }, [autoConfigureId, mcpConnectors]);
 
   const mcpPost = async (body: any): Promise<boolean> => {
     setMcpSaving(true);

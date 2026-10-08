@@ -25,6 +25,25 @@ export interface ConnectorApp {
   };
 }
 
+/** MCP 连接器（一键授权/粘贴凭证/免凭证直连）状态信息 */
+export interface McpConnectorInfo {
+  id: string;
+  name: string;
+  icon: string;
+  category: string;
+  description: string;
+  authType: 'oauth' | 'token' | 'none';
+  status: 'connected' | 'unconfigured';
+  keyMasked?: string;
+  quickAuthUrl?: string;
+  authHint?: string;
+  docUrl?: string;
+  /** 已挂载的工具数（连接成功后） */
+  toolCount?: number;
+  /** 最近一次连接失败原因（排障用） */
+  lastError?: string;
+}
+
 export interface MissionStep {
   id: string;
   title: string;

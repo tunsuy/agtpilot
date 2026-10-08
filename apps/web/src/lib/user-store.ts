@@ -1,10 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { encryptSecret, decryptSecret, isEncrypted } from './secret-box';
 
 /**
  * 用户级别数据持久化隔离存储引擎 (User Scoped Data Store)
  * 每个用户独占自己的数据空间，包含：
- * - 连接器 API Key 与环境变量配置 (connectors)
+ * - 连接器 API Key 与环境变量配置 (connectors) —— 落盘一律 AES-256-GCM 加密（secret-box）
+ * - MCP OAuth 授权记录 (mcpAuth) —— token/客户端注册信息/PKCE verifier，整条加密
  * - 个人长效记忆与画像 (memories)
  * - 主动巡航定时任务 (cron jobs)
  * - 执行会话历史任务 (missions)
@@ -19,14 +21,24 @@ export interface PushSubscriptionRecord {
 
 export interface UserScopedData {
   userId: string;
-  connectors: Record<string, string>; // envVar -> value
+  connectors: Record<string, string>; // envVar -> value（密文 `enc:v1:...`，历史明文读取时自动迁移）
   activeModelId?: string;
+  /** MCP OAuth 授权记录：connectorId -> 加密后的 JSON 串（tokens/clientInfo/codeVerifier） */
+  mcpAuth?: Record<string, string>;
   memories: any[];
   cronJobs: any[];
   missions: any[];
   goals?: any[];
   pushSubscriptions?: PushSubscriptionRecord[];
   updatedAt: number;
+}
+
+/** MCP OAuth 单连接器授权记录（明文形态，落盘前整体 JSON 加密） */
+export interface McpAuthRecord {
+  tokens?: any; // OAuthTokens（access/refresh/expires/issuer）
+  clientInfo?: any; // DCR 动态注册获得的客户端信息
+  codeVerifier?: string; // PKCE verifier（start → callback 之间短暂存在）
+  updatedAt?: number;
 }
 
 export function getDataDir(): string {
@@ -87,6 +99,31 @@ export function getUserData(userId: string): UserScopedData {
       const raw = fs.readFileSync(filePath, 'utf-8');
       const data = JSON.parse(raw);
       if (!data.goals) data.goals = [];
+      // 凭证解密 + 历史明文自动迁移加密（首次读取时用当前密钥补加密并回写）
+      const plaintextFound = new Map<string, string>();
+      if (data.connectors && typeof data.connectors === 'object') {
+        for (const [k, v] of Object.entries<string>(data.connectors)) {
+          if (typeof v !== 'string' || !v) continue;
+          if (isEncrypted(v)) {
+            data.connectors[k] = decryptSecret(v);
+          } else {
+            plaintextFound.set(k, v); // 内存里保持明文可直接用
+          }
+        }
+      }
+      if (plaintextFound.size > 0) {
+        try {
+          const toPersist = { ...data, connectors: { ...data.connectors }, updatedAt: Date.now() };
+          for (const [k, plain] of plaintextFound) {
+            toPersist.connectors[k] = encryptSecret(plain);
+          }
+          const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+          fs.writeFileSync(tmpPath, JSON.stringify(toPersist, null, 2), 'utf-8');
+          fs.renameSync(tmpPath, filePath);
+        } catch (e) {
+          console.error(`Failed to migrate plaintext connectors for ${userId}:`, e);
+        }
+      }
       return data;
     }
   } catch (e) {
@@ -110,9 +147,18 @@ export function saveUserData(data: UserScopedData) {
   const filePath = getUserFilePath(data.userId);
   try {
     data.updatedAt = Date.now();
+    // 凭证落盘前统一加密（单一收口：所有写路径都经过这里；内存对象不受影响）
+    const toWrite: UserScopedData = { ...data };
+    if (toWrite.connectors) {
+      const enc: Record<string, string> = {};
+      for (const [k, v] of Object.entries(toWrite.connectors)) {
+        enc[k] = typeof v === 'string' && v && !isEncrypted(v) ? encryptSecret(v) : v;
+      }
+      toWrite.connectors = enc;
+    }
     // 原子写入：先写临时文件再 rename，避免写入中途崩溃/并发读导致 JSON 损坏
     const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.writeFileSync(tmpPath, JSON.stringify(toWrite, null, 2), 'utf-8');
     fs.renameSync(tmpPath, filePath);
   } catch (e) {
     console.error(`Failed to save user data for ${data.userId}:`, e);
@@ -284,6 +330,36 @@ export function removeUserPushSubscription(userId: string, endpoint: string) {
   return data.pushSubscriptions;
 }
 
+// 辅助方法：MCP OAuth 授权记录（tokens / clientInfo / PKCE verifier，整条加密落盘）
+export function getMcpAuth(userId: string, connectorId: string): McpAuthRecord | undefined {
+  const data = getUserData(userId);
+  const raw = data.mcpAuth?.[connectorId];
+  if (!raw) return undefined;
+  try {
+    const json = decryptSecret(raw);
+    if (!json) return undefined; // 解密失败（密钥变更）视为未授权
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveMcpAuth(userId: string, connectorId: string, record: McpAuthRecord) {
+  const data = getUserData(userId);
+  data.mcpAuth = data.mcpAuth || {};
+  data.mcpAuth[connectorId] = encryptSecret(JSON.stringify({ ...record, updatedAt: Date.now() }));
+  saveUserData(data);
+  return record;
+}
+
+export function deleteMcpAuth(userId: string, connectorId: string) {
+  const data = getUserData(userId);
+  if (data.mcpAuth) {
+    delete data.mcpAuth[connectorId];
+    saveUserData(data);
+  }
+}
+
 // 辅助方法：读取所有用户数据（用于服务端启动时加载所有后台定时任务等）
 export function getAllUsersData(): UserScopedData[] {
   const dataDir = getDataDir();
@@ -299,6 +375,14 @@ export function getAllUsersData(): UserScopedData[] {
           if (data) {
             if (!data.userId) {
               data.userId = f.replace(/\.json$/, '');
+            }
+            // 凭证解密（只读路径，不触发迁移写盘）
+            if (data.connectors && typeof data.connectors === 'object') {
+              for (const [k, v] of Object.entries<string>(data.connectors)) {
+                if (typeof v === 'string' && isEncrypted(v)) {
+                  data.connectors[k] = decryptSecret(v);
+                }
+              }
             }
             result.push(data);
           }

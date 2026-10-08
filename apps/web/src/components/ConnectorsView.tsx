@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Layers,
   Key,
@@ -24,9 +24,42 @@ import {
   Share2,
   Smartphone,
   Laptop,
+  MapPin,
+  Map,
+  Building2,
+  Video,
+  FileSpreadsheet,
+  BookOpen,
+  Plug,
+  Unplug,
 } from 'lucide-react';
-import { ConnectorApp } from '../types/agent';
+import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme } from '../utils/nativeBridge';
+
+function renderMcpIcon(id: string, className = 'h-5 w-5') {
+  switch (id) {
+    case 'notion_mcp':
+      return <FileText className={`${className} text-zinc-800`} />;
+    case 'dida365':
+      return <Check className={`${className} text-emerald-600`} />;
+    case 'openalex':
+      return <Search className={`${className} text-amber-600`} />;
+    case 'qcc':
+      return <Building2 className={`${className} text-blue-700`} />;
+    case 'amap':
+      return <MapPin className={`${className} text-sky-600`} />;
+    case 'baidu_map':
+      return <Map className={`${className} text-blue-600`} />;
+    case 'tencent_docs':
+      return <FileSpreadsheet className={`${className} text-blue-500`} />;
+    case 'tencent_meeting':
+      return <Video className={`${className} text-indigo-600`} />;
+    case 'deepwiki':
+      return <BookOpen className={`${className} text-zinc-700`} />;
+    default:
+      return <Plug className={`${className} text-zinc-600`} />;
+  }
+}
 
 function renderConnectorIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -83,6 +116,72 @@ export function ConnectorsView({
   const [baseUrlInput, setBaseUrlInput] = useState('');
   const [modelNameInput, setModelNameInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+
+  // ---- MCP 连接器（官方托管直连，自取数据，独立于外部 props）----
+  const [mcpConnectors, setMcpConnectors] = useState<McpConnectorInfo[]>([]);
+  const [mcpConfiguring, setMcpConfiguring] = useState<McpConnectorInfo | null>(null);
+  const [mcpTokenInput, setMcpTokenInput] = useState('');
+  const [mcpSaving, setMcpSaving] = useState(false);
+  const [mcpNotice, setMcpNotice] = useState('');
+
+  const loadMcpConnectors = async () => {
+    try {
+      const res = await fetch('/api/connectors/mcp');
+      const data = await res.json();
+      if (data.success) setMcpConnectors(data.connectors || []);
+    } catch {
+      // 未登录/后端未就绪时静默
+    }
+  };
+  useEffect(() => {
+    loadMcpConnectors();
+  }, []);
+
+  const mcpPost = async (body: any): Promise<boolean> => {
+    setMcpSaving(true);
+    setMcpNotice('');
+    try {
+      const res = await fetch('/api/connectors/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMcpConnectors(data.connectors || []);
+        return true;
+      }
+      setMcpNotice(data.error || '操作失败');
+      return false;
+    } catch (e: any) {
+      setMcpNotice(e?.message || '网络错误');
+      return false;
+    } finally {
+      setMcpSaving(false);
+    }
+  };
+
+  const handleSaveMcpToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mcpConfiguring || !mcpTokenInput.trim()) return;
+    const ok = await mcpPost({
+      action: 'saveToken',
+      connectorId: mcpConfiguring.id,
+      token: mcpTokenInput.trim(),
+    });
+    if (ok) {
+      setMcpConfiguring(null);
+      setMcpTokenInput('');
+    }
+  };
+
+  const filteredMcp = mcpConnectors.filter(
+    (c) =>
+      !searchQuery ||
+      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.category.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const filtered = connectors.filter((c) => {
     const matchSearch =
@@ -323,6 +422,229 @@ export function ConnectorsView({
           </div>
         ))}
       </div>
+
+      {/* MCP 连接器区（官方托管直连：一键授权 / 粘贴凭证 / 免凭证） */}
+      {filteredMcp.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-xl bg-violet-50 text-violet-600 border border-violet-200/60 shadow-2xs">
+              <Plug className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-900">MCP 连接器 · 官方托管直连</h2>
+              <p className="text-[11px] text-zinc-500">
+                免安装、免命令行：能一键授权的绝不让填 Key，授权后工具自动挂载进任务。
+              </p>
+            </div>
+          </div>
+
+          {mcpNotice && (
+            <div className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+              {mcpNotice}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredMcp.map((app) => (
+              <div
+                key={app.id}
+                className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-xl bg-zinc-50 border border-zinc-200/80 flex items-center justify-center shadow-2xs">
+                        {renderMcpIcon(app.id, 'h-5 w-5')}
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-semibold text-zinc-900">{app.name}</h3>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-[10px] text-zinc-400 uppercase font-mono">
+                            {app.category}
+                          </span>
+                          <span
+                            className={`text-[9px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5 ${
+                              app.authType === 'oauth'
+                                ? 'bg-violet-50 text-violet-600 border border-violet-200'
+                                : app.authType === 'none'
+                                ? 'bg-sky-50 text-sky-600 border border-sky-200'
+                                : 'bg-amber-50 text-amber-600 border border-amber-200'
+                            }`}
+                          >
+                            {app.authType === 'oauth' ? '一键授权' : app.authType === 'none' ? '免凭证直连' : '粘贴凭证'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
+                        app.status === 'connected'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-zinc-100 text-zinc-500'
+                      }`}
+                    >
+                      {app.status === 'connected'
+                        ? app.toolCount
+                          ? `已挂载 ${app.toolCount} 工具`
+                          : '已连接'
+                        : '未配置'}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-zinc-500 leading-relaxed mb-2">{app.description}</p>
+                  {app.lastError && (
+                    <p className="text-[10px] text-red-500 leading-relaxed mb-2 break-all">
+                      连接异常: {app.lastError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="pt-3 border-t border-zinc-100 flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
+                    {app.authType === 'oauth' ? 'OAuth 2.1 + PKCE' : app.authType === 'none' ? 'MCP Streamable HTTP' : app.keyMasked || 'MCP Streamable HTTP'}
+                  </span>
+
+                  <div className="flex items-center gap-1.5">
+                    {app.authType === 'oauth' && (
+                      <a
+                        href={`/api/connectors/mcp/start?connector=${app.id}`}
+                        className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition shadow-2xs ${
+                          app.status === 'connected'
+                            ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                            : 'bg-zinc-900 hover:bg-zinc-800 text-white'
+                        }`}
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        <span>{app.status === 'connected' ? '重新授权' : '一键授权'}</span>
+                      </a>
+                    )}
+
+                    {app.authType === 'token' && (
+                      <button
+                        onClick={() => {
+                          setMcpConfiguring(app);
+                          setMcpTokenInput('');
+                          setMcpNotice('');
+                        }}
+                        className="px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                      >
+                        {app.status === 'connected' ? '更新凭证' : '打开授权页'}
+                      </button>
+                    )}
+
+                    {app.authType === 'none' && (
+                      <button
+                        onClick={() => mcpPost({ action: 'connect', connectorId: app.id })}
+                        disabled={mcpSaving}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
+                        title="立即重连并刷新工具列表"
+                      >
+                        <RotateCw className={`h-3 w-3 ${mcpSaving ? 'animate-spin' : ''}`} />
+                        <span>重连</span>
+                      </button>
+                    )}
+
+                    {app.status === 'connected' && app.authType !== 'none' && (
+                      <button
+                        onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
+                        disabled={mcpSaving}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-red-600 hover:bg-red-50 transition"
+                        title="清除凭证并断开连接"
+                      >
+                        <Unplug className="h-3 w-3" />
+                        <span>断开</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* MCP Token Config Modal */}
+      {mcpConfiguring && (
+        <div className="fixed inset-0 bg-black/30 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl animate-fadeIn space-y-4">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shadow-2xs">
+                  {renderMcpIcon(mcpConfiguring.id, 'h-4 w-4')}
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-900">
+                    连接 {mcpConfiguring.name}
+                  </h3>
+                  <p className="text-xs text-zinc-500 mt-0.5">粘贴凭证，即刻挂载官方 MCP 工具</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setMcpConfiguring(null)}
+                className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {mcpConfiguring.authHint && (
+              <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200/70 text-xs text-amber-800 leading-relaxed">
+                {mcpConfiguring.authHint}
+                {mcpConfiguring.quickAuthUrl && (
+                  <a
+                    href={mcpConfiguring.quickAuthUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1.5 flex items-center gap-1 font-medium text-amber-900 underline underline-offset-2"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    打开官方授权页获取凭证
+                  </a>
+                )}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveMcpToken} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-700 block">
+                  Token / Key <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={mcpTokenInput}
+                  onChange={(e) => setMcpTokenInput(e.target.value)}
+                  placeholder={mcpConfiguring.keyMasked || '粘贴从授权页复制的凭证'}
+                  autoFocus
+                  className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                />
+                <p className="text-[10px] text-zinc-400 flex items-center gap-1">
+                  <ShieldCheck className="h-3 w-3" />
+                  凭证经 AES-256-GCM 加密后仅存储在你的个人空间，任务执行时才解密使用
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setMcpConfiguring(null)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={!mcpTokenInput.trim() || mcpSaving}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-medium transition shadow-xs"
+                >
+                  {mcpSaving && <RotateCw className="h-3.5 w-3.5 animate-spin" />}
+                  <span>保存并连接</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Key Config Modal */}
       {configuringApp && (

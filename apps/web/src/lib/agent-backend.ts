@@ -659,6 +659,35 @@ class AgentBackend {
             process.env.OPENAI_API_KEY
           );
 
+        // 2.5 挂载当前用户的 MCP 连接器（一键授权/粘贴凭证/免凭证直连）
+        // 任务级注入（taskTools）：不进全局注册表，多用户互不可见
+        let taskTools: any[] | undefined;
+        if (options.userId) {
+          try {
+            const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
+            const mcpSvc = (this.ctx as any).mcp;
+            if (mcpSvc?.syncUserServers) {
+              const servers = buildUserMcpServers(options.userId);
+              if (servers.length > 0) {
+                const sync = await mcpSvc.syncUserServers(options.userId, servers);
+                const userTools = await mcpSvc.getUserTools(options.userId);
+                if (userTools.length > 0) {
+                  taskTools = userTools;
+                  this.addTerminalLog(
+                    'system',
+                    `[MCP] 用户连接器挂载: 新连 ${sync.connected.length} / 复用 ${sync.reused.length}，共 ${userTools.length} 个工具`
+                  );
+                }
+                for (const f of sync.failed) {
+                  this.addTerminalLog('stderr', `[MCP] 连接 ${f.name} 失败: ${f.error}`);
+                }
+              }
+            }
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`);
+          }
+        }
+
         if (hasLlm) {
           // 调用真正的大模型 + 工具链编排 (Vercel AI SDK + Cordis 工具集)
           const result = await this.ctx.orchestrator.runTask({
@@ -667,13 +696,15 @@ class AgentBackend {
             configOverride: userConfigOverride,
             historyMessages: targetMission.conversationMessages,
             prompt: goal,
+            taskTools,
             system: `你是基于 Cordis 微内核架构驱动的个人全自主智能体驾驶舱 (AgtPilot)。
 你拥有强大的推理能力与丰富的原子工具生态（包括浏览器实时自动化 browser_navigate、沙箱隔离命令执行 sandbox_run_command 等）。
 ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 【核心行为准则 (Behavioral Steering)】：
 1. 【区分对话与执行】：如果用户的请求只是自我介绍、询问你能做什么、概念解释或一般性闲聊，请直接运用你渊博的知识用清晰、亲切、优雅的中文回复，【严禁】无缘无故调用外部搜索或终端工具！
 2. 【按需调用工具】：只有当用户的任务确实需要实时信息检索、网页交互抓取、执行代码或特定环境诊断时，才调用对应的原子工具。
-3. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。`,
+3. 【连接器工具优先】：mcp_ 前缀的工具来自用户已授权的外部服务连接器（如地图、文档、日程），涉及对应平台的能力时优先使用它们；若缺少专用工具或连接器未授权，优先使用 browser_ 系列工具在网页上直接完成操作作为兜底，并在结果中提示用户可到「连接器中心」一键授权以获得更好体验。
+4. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。`,
           });
 
           if (result.success && result.messages) {

@@ -154,6 +154,12 @@ export interface TaskOptions {
   maxSteps?: number;
   /** 显式指定本次任务向模型声明的工具子集；缺省时仅当工具声明 tokens 超阈值才按关键词路由，否则全量挂载 */
   activeTools?: string[];
+  /**
+   * 任务级附加工具（如 MCP 用户连接器工具）。
+   * 只注入本次 runTask，不进全局注册表 —— 多用户部署时避免 A 用户的
+   * 连接器工具泄漏给 B 用户的任务。同名时覆盖全局注册的同名工具。
+   */
+  taskTools?: ToolDefinition[];
   abortSignal?: AbortSignal;
   configOverride?: any;
   historyMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
@@ -291,7 +297,12 @@ export class OrchestratorService extends Service {
     let currentStep = 1;
 
     // ---- 工具包装层：熔断 + 审批门 + 事件广播 + 结果截断 + 效率统计 ----
-    const allTools = this.ctx.agent.getTools();
+    // 全局注册工具 + 任务级附加工具（taskTools，如 MCP 用户连接器）；同名时任务级优先
+    const globalTools = this.ctx.agent.getTools();
+    const taskOnlyTools = (options.taskTools || []).filter(
+      (t) => !globalTools.some((g) => g.name === t.name)
+    );
+    const allTools = [...globalTools, ...taskOnlyTools];
     const loopTools = allTools.map((toolDef) => ({
       name: toolDef.name,
       description: toolDef.description,
@@ -428,7 +439,7 @@ export class OrchestratorService extends Service {
         model: options.model,
         system:
           options.system ||
-          '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用浏览器等原子工具来完成任务。',
+          '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用浏览器等原子工具来完成任务。\n当缺少某个平台的专用工具或连接器未授权时，优先使用 browser_ 系列工具直接在网页上完成操作作为兜底，而不是放弃任务。',
         messages: baseMessages as any,
         configOverride: options.configOverride,
         maxSteps,

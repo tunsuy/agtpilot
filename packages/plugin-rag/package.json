@@ -4,9 +4,9 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.4",
-    "@agtpilot/protocol": "workspace:*",
     "@agtpilot/core": "workspace:*",
-    "ai": "^4.0.0"
+    "@agtpilot/protocol": "workspace:*",
+    "@deepseek-ai/cordis": "^4.0.4",
+    "ai": "^5.0.273"
   }
 }

@@ -94,7 +94,13 @@ export class OrchestratorService extends Service {
   }
 
   /**
-   * 运行完整的自研 ReAct 任务循环 (带死循环熔断、安全审批、标准化事件广播)
+   * 运行任务循环。
+   *
+   * 架构分工（AI SDK v5 迁移后）：
+   * - 通用逻辑（多步循环、消息拼装、tool-call/result 配对、provider 协议）
+   *   全部交给 Vercel AI SDK 内置 agent loop（stopWhen: stepCountIs）；
+   * - 产品差异化逻辑保留在本层：死循环熔断、高危操作审批（HITL）、
+   *   标准化事件广播、工具结果截断、步数耗尽强制总结收尾。
    */
   async runTask(options: TaskOptions): Promise<TaskResult> {
     const taskId = options.taskId || `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -109,236 +115,211 @@ export class OrchestratorService extends Service {
       }
     };
 
-    const messages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = options.historyMessages && options.historyMessages.length > 0
-      ? [...options.historyMessages, { role: 'user', content: options.prompt }]
-      : [{ role: 'user', content: options.prompt }];
+    const baseMessages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> =
+      options.historyMessages && options.historyMessages.length > 0
+        ? [...options.historyMessages, { role: 'user', content: options.prompt }]
+        : [{ role: 'user', content: options.prompt }];
 
-    let currentStep = 0;
-    let finalAnswer = '';
-    // 死循环熔断状态：只统计【连续】相同调用（滑动窗口），与防护意图一致
+    // 死循环熔断状态：只统计【连续】相同调用（滑动窗口）
     let lastSignature = '';
     let repeatCount = 0;
+    // 当前步序号（1-based，供工具会话上下文使用）
+    let currentStep = 1;
 
-    try {
-      while (currentStep < maxSteps) {
-        if (options.abortSignal?.aborted) {
-          throw new Error('任务已被主动终止 (Cancelled)');
+    // ---- 工具包装层：熔断 + 审批门 + 事件广播 + 结果截断 ----
+    const loopTools = this.ctx.agent.getTools().map((toolDef) => ({
+      name: toolDef.name,
+      description: toolDef.description,
+      execute: async (args: any): Promise<any> => {
+        // 死循环检测 (Loop Detector): 同一工具+同一参数【连续】3 次才熔断；
+        // 熔断降级为跳过本次调用并返回提醒，让模型换思路，而非终止整个任务
+        const toolSignature = `${toolDef.name}:${JSON.stringify(args)}`;
+        if (toolSignature === lastSignature) {
+          repeatCount++;
+        } else {
+          lastSignature = toolSignature;
+          repeatCount = 1;
         }
-        currentStep++;
-
-        // 1. 调用模型单步驱动 (方案 A: 严格单步)
-        const stepResult: ModelStepResult = await (this.ctx as any).model.invokeStep({
-          model: options.model,
-          system: options.system || '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用浏览器等原子工具来完成任务。',
-          messages: messages as any,
-          configOverride: options.configOverride,
-        });
-
-        // 2. 捕获思考/回复
-        if (stepResult.text) {
-          broadcast({
-            type: 'thought',
-            payload: { step: currentStep, text: stepResult.text },
-            timestamp: Date.now(),
-          });
-        }
-
-        // 3. 判断是否需要调用工具
-        if (!stepResult.toolCalls || stepResult.toolCalls.length === 0) {
-          // 没有工具调用，任务完成
-          finalAnswer = stepResult.text;
-          broadcast({
-            type: 'done',
-            payload: { taskId, stepsCount: currentStep, finalAnswer },
-            timestamp: Date.now(),
-          });
+        if (repeatCount >= 3) {
           return {
-            taskId,
-            success: true,
-            stepsCount: currentStep,
-            finalAnswer,
-            events,
-            messages: [...messages, { role: 'assistant', content: finalAnswer }],
+            skipped: true,
+            message: `[Loop Detector] 该工具已连续 ${repeatCount} 次以完全相同的参数调用，本次已被跳过。请更换思路（调整参数、改用其他工具，或基于已有信息直接总结给出最终回答），不要重复相同调用。`,
           };
         }
 
-        // 为本轮每个工具调用预生成稳定的 toolCallId（模型未提供时兜底），
-        // 确保 assistant 的 tool-call 与 tool-result 严格配对，避免 provider 协议错误
-        const resolvedCalls = stepResult.toolCalls.map((tc: any, idx: number) => ({
-          ...tc,
-          resolvedId: tc.toolCallId || `call_${currentStep}_${idx}_${Date.now()}`,
-        }));
+        // 安全审批拦截 (Human-in-the-Loop)：冻结挂起等待外部审批；
+        // 任务被主动终止时自动拒绝并释放挂起，避免永久悬挂
+        if (toolDef.dangerLevel === 'high') {
+          const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+          const approvalReq: ApprovalRequest = {
+            id: approvalId,
+            action: toolDef.name,
+            description: `Agent 正在尝试执行高危操作: ${toolDef.description}`,
+            dangerLevel: 'high',
+            params: args,
+          };
 
-        // 把模型的助手的思考/调用指令存入上下文 (包含 tool-call parts 以保证 OpenAI / Vercel AI SDK 规范)
-        const assistantParts: any[] = [];
-        if (stepResult.text) {
-          assistantParts.push({ type: 'text', text: stepResult.text });
-        }
-        for (const tc of resolvedCalls) {
-          assistantParts.push({
-            type: 'tool-call',
-            toolCallId: tc.resolvedId,
-            toolName: tc.toolName,
-            args: tc.args,
+          broadcast({
+            type: 'approval_request',
+            payload: approvalReq,
+            timestamp: Date.now(),
           });
+
+          const approved = await new Promise<boolean>((resolve) => {
+            this.pendingApprovals.set(approvalId, resolve);
+            const onAbort = () => {
+              if (this.pendingApprovals.delete(approvalId)) {
+                resolve(false);
+              }
+            };
+            if (options.abortSignal?.aborted) {
+              onAbort();
+            } else {
+              options.abortSignal?.addEventListener('abort', onAbort, { once: true });
+            }
+          });
+
+          if (!approved) {
+            return { rejected: true, message: `用户拒绝了执行工具 [${toolDef.name}] 的请求。` };
+          }
         }
-        messages.push({
-          role: 'assistant' as any,
-          content: assistantParts.length > 0 ? assistantParts : (stepResult.text || ''),
+
+        // 广播工具执行开始
+        broadcast({
+          type: 'tool_call',
+          payload: { tool: toolDef.name, args },
+          timestamp: Date.now(),
         });
 
-        // 统一回填 tool-result（符合 AI SDK CoreToolMessage 规范；超长结果截断，防上下文膨胀）
-        const pushToolResult = (tc: any, result: string) => {
-          messages.push({
-            role: 'tool' as any,
-            content: [
-              {
-                type: 'tool-result',
-                toolCallId: tc.resolvedId,
-                toolName: tc.toolName,
-                result:
-                  result.length > TOOL_OUTPUT_LIMIT
-                    ? `${result.slice(0, TOOL_OUTPUT_LIMIT)}\n...[结果过长已截断，原始长度 ${result.length} 字符]`
-                    : result,
-              },
-            ] as any,
-          });
-        };
+        // 真实调用工具
+        let output: any;
+        try {
+          output = await toolDef.execute(args, { taskId, step: currentStep });
+        } catch (err: any) {
+          output = { error: err.message };
+        }
 
-        // 4. 逐一执行工具并进行安全防护
-        for (const tc of resolvedCalls) {
-          const toolDef = this.ctx.agent.getTool(tc.toolName);
+        // 广播工具执行结果
+        broadcast({
+          type: 'tool_result',
+          payload: { tool: toolDef.name, output },
+          timestamp: Date.now(),
+        });
 
-          // 死循环检测 (Loop Detector): 同一工具+同一参数【连续】3 次才熔断；
-          // 熔断降级为跳过本次调用并注入提醒，让模型换思路，而非终止整个任务
-          const toolSignature = `${tc.toolName}:${JSON.stringify(tc.args)}`;
-          if (toolSignature === lastSignature) {
-            repeatCount++;
-          } else {
-            lastSignature = toolSignature;
-            repeatCount = 1;
-          }
-          if (repeatCount >= 3) {
-            pushToolResult(
-              tc,
-              JSON.stringify({
-                skipped: true,
-                message: `[Loop Detector] 该工具已连续 ${repeatCount} 次以完全相同的参数调用，本次已被跳过。请更换思路（调整参数、改用其他工具，或基于已有信息直接总结给出最终回答），不要重复相同调用。`,
-              })
-            );
-            continue;
-          }
+        // 超长结果截断，防上下文膨胀导致模型退化
+        const serialized = typeof output === 'string' ? output : JSON.stringify(output);
+        if (serialized.length > TOOL_OUTPUT_LIMIT) {
+          return `${serialized.slice(0, TOOL_OUTPUT_LIMIT)}\n...[结果过长已截断，原始长度 ${serialized.length} 字符]`;
+        }
+        return output;
+      },
+    }));
 
-          if (!toolDef) {
-            pushToolResult(tc, JSON.stringify({ error: `工具 [${tc.toolName}] 不存在或未注册。` }));
-            continue;
-          }
-
-          // 安全审批拦截 (Human-in-the-Loop)
-          if (toolDef.dangerLevel === 'high') {
-            const approvalId = `approval_${Date.now()}`;
-            const approvalReq: ApprovalRequest = {
-              id: approvalId,
-              action: tc.toolName,
-              description: `Agent 正在尝试执行高危操作: ${toolDef.description}`,
-              dangerLevel: 'high',
-              params: tc.args,
-            };
-
+    try {
+      // ---- 主循环：完全交给 AI SDK v5 内置 agent loop ----
+      const loopResult = await (this.ctx as any).model.runAgentLoop({
+        model: options.model,
+        system:
+          options.system ||
+          '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用浏览器等原子工具来完成任务。',
+        messages: baseMessages as any,
+        configOverride: options.configOverride,
+        maxSteps,
+        tools: loopTools,
+        abortSignal: options.abortSignal,
+        onStepFinish: (info: { stepNumber: number; text: string; finishReason: string }) => {
+          currentStep = (info.stepNumber || 1) + 1;
+          if (info.text) {
             broadcast({
-              type: 'approval_request',
-              payload: approvalReq,
+              type: 'thought',
+              payload: { step: info.stepNumber || currentStep, text: info.text },
               timestamp: Date.now(),
             });
-
-            // 状态机冻结挂起，等待外部审批
-            const approved = await new Promise<boolean>((resolve) => {
-              this.pendingApprovals.set(approvalId, resolve);
-            });
-
-            if (!approved) {
-              pushToolResult(
-                tc,
-                JSON.stringify({ rejected: true, message: `用户拒绝了执行工具 [${tc.toolName}] 的请求。` })
-              );
-              continue;
-            }
           }
+        },
+      });
 
-          // 广播工具执行开始
+      const stepsCount = Math.max(1, loopResult.stepsCount || 1);
+      let finalAnswer: string = loopResult.text || '';
+
+      // 会话历史 = 输入消息 + SDK 产出的标准 assistant/tool 消息
+      const conversation: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = [
+        ...baseMessages,
+        ...(loopResult.responseMessages || []),
+      ];
+
+      // 步数耗尽（模型仍想调工具被 stopWhen 截停）或没有文本产出：
+      // 追加一轮【禁用工具】的强制总结，尽力交付结论而非报错
+      const needsWrapUp = Boolean(loopResult.stepsExhausted) || !finalAnswer;
+      if (needsWrapUp) {
+        if (loopResult.stepsExhausted) {
           broadcast({
-            type: 'tool_call',
-            payload: { tool: tc.toolName, args: tc.args },
+            type: 'thought',
+            payload: { step: stepsCount, text: `已达步数上限（${maxSteps} 步），正在做最终总结…` },
             timestamp: Date.now(),
           });
-
-          // 真实调用工具
-          let output: any;
-          try {
-            output = await toolDef.execute(tc.args, { taskId, step: currentStep });
-          } catch (err: any) {
-            output = { error: err.message };
-          }
-
-          // 广播工具执行结果
-          broadcast({
-            type: 'tool_result',
-            payload: { tool: tc.toolName, output },
-            timestamp: Date.now(),
+        }
+        try {
+          const wrapResult: ModelStepResult = await (this.ctx as any).model.invokeStep({
+            model: options.model,
+            system: `${options.system || '你是一个专业高效的自主执行智能体。'}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`,
+            messages: conversation as any,
+            configOverride: options.configOverride,
+            disableTools: true,
           });
-
-          // 回填给大模型上下文作为 tool_result
-          pushToolResult(tc, typeof output === 'string' ? output : JSON.stringify(output));
+          finalAnswer = wrapResult.text || finalAnswer;
+        } catch {
+          // 总结调用失败时，回退到已有的最后一段文本
         }
       }
 
-      // 步数用尽：不再直接报错终止，而是追加一轮【禁用工具】的强制总结，尽力交付结论
-      broadcast({
-        type: 'thought',
-        payload: { step: currentStep, text: `已达步数上限（${maxSteps} 步），正在做最终总结…` },
-        timestamp: Date.now(),
-      });
-      try {
-        const wrapResult: ModelStepResult = await (this.ctx as any).model.invokeStep({
-          model: options.model,
-          system: `${options.system || '你是一个专业高效的自主执行智能体。'}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`,
-          messages: messages as any,
-          configOverride: options.configOverride,
-          disableTools: true,
-        });
-        finalAnswer = wrapResult.text || finalAnswer;
-      } catch {
-        // 总结调用失败时，回退到已有的最后一段文本
-      }
       if (!finalAnswer) {
-        finalAnswer = `任务达到步数上限（${maxSteps} 步），未能生成完整结论。建议将任务拆小后重试。`;
+        finalAnswer = loopResult.stepsExhausted
+          ? `任务达到步数上限（${maxSteps} 步），未能生成完整结论。建议将任务拆小后重试。`
+          : '任务已结束，但未生成文本结论。';
       }
+
+      // 保证会话历史以最终 assistant 回复收尾（正常文本收尾时 SDK 已含该消息，避免重复追加）
+      const lastMessage: any = conversation[conversation.length - 1];
+      const endsWithFinalAssistant =
+        !loopResult.stepsExhausted &&
+        Boolean(loopResult.text) &&
+        lastMessage &&
+        lastMessage.role === 'assistant';
+      if (!endsWithFinalAssistant) {
+        conversation.push({ role: 'assistant', content: finalAnswer });
+      }
+
       broadcast({
         type: 'done',
-        payload: { taskId, stepsCount: currentStep, finalAnswer, stepsExhausted: true },
+        payload: { taskId, stepsCount, finalAnswer, stepsExhausted: Boolean(loopResult.stepsExhausted) },
         timestamp: Date.now(),
       });
+
       return {
         taskId,
         success: true,
-        stepsCount: currentStep,
+        stepsCount,
         finalAnswer,
         events,
-        messages: [...messages, { role: 'assistant', content: finalAnswer }],
+        messages: conversation,
       };
     } catch (err: any) {
+      const message = options.abortSignal?.aborted
+        ? '任务已被主动终止 (Cancelled)'
+        : err?.message || String(err);
       broadcast({
         type: 'error',
-        payload: { taskId, error: err.message },
+        payload: { taskId, error: message },
         timestamp: Date.now(),
       });
       return {
         taskId,
         success: false,
-        stepsCount: currentStep,
-        finalAnswer,
+        stepsCount: Math.max(0, currentStep - 1),
+        finalAnswer: '',
         events,
-        error: err.message,
+        error: message,
       };
     }
   }

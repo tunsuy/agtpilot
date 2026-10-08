@@ -6,10 +6,15 @@ const DEFAULT_MAX_STEPS = Math.max(1, Number(process.env.AGTPILOT_MAX_STEPS) || 
 /** 单个工具结果回填模型上下文的字符上限，超长截断，防止上下文膨胀导致模型退化。 */
 const TOOL_OUTPUT_LIMIT = 16 * 1024;
 
-// ---- 工具按需挂载（Tool Routing）----
-// 全量 49 个工具的描述+参数 Schema 每次请求都要占几千 tokens，而且工具越多
-// 模型选错的概率越高。按 prompt 关键词只挂载相关工具组；拿不准就全量挂载，
-// 宁可多花 tokens 不可饿死任务。AGTPILOT_TOOL_ROUTING=0 可整体关闭。
+// ---- 工具按需挂载（阈值触发式 Tool Routing）----
+// 对齐业界实践（Claude Code / 腾讯 Octop）：工具目录不大时全量挂载，
+// 保证跨任务前缀稳定、共享 provider 缓存；只有当工具声明 tokens 超过
+// 上下文窗口的一定比例（Claude Code 二进制内为 10%）才启用筛选。
+// 本实现：低于阈值 → 全量挂载（现状 49 工具 ≈6K tokens，64K 窗口的 9.4%）；
+// 超过阈值（MCP 动态工具接入后会发生）→ 按 prompt 关键词只挂载相关工具组，
+// 拿不准仍全量兜底，宁可多花 tokens 不可饿死任务。
+// 可调参数：AGTPILOT_TOOL_ROUTING=0 整体关闭；
+// AGTPILOT_CONTEXT_WINDOW（默认 64000）；AGTPILOT_TOOL_SEARCH_THRESHOLD（默认 10，单位 %）。
 
 /** 任何任务都挂载的基线工具（规划/交付/记忆，体积小且通用） */
 const BASELINE_TOOLS = [
@@ -39,21 +44,63 @@ const TOOL_GROUPS: Array<{ test: RegExp; prefixes: string[] }> = [
   { test: /(通知|推送|webhook|notify)/i, prefixes: ['notify_'] },
 ];
 
+/** 参与路由决策的工具元信息（名字 + 声明体积） */
+export interface RoutableTool {
+  name: string;
+  description?: string;
+  parameters?: Record<string, any>;
+}
+
 /**
- * 依据 prompt 选出本次任务需要声明的工具子集。
- * 返回 undefined 表示全量挂载（未命中任何规则 / 路由被关闭）。
+ * 估算工具声明占用的 tokens（name + description + 参数 Schema）。
+ * 启发式：CJK 字符按 1 token/字，其余按 1 token/4 字符。
+ */
+export function estimateToolTokens(tools: RoutableTool[]): number {
+  let cjk = 0;
+  let total = 0;
+  for (const t of tools) {
+    const s = JSON.stringify({
+      name: t.name,
+      description: t.description ?? '',
+      parameters: t.parameters ?? {},
+    });
+    total += s.length;
+    for (const ch of s) {
+      if (/[㐀-䶿一-鿿豈-﫿]/.test(ch)) cjk++;
+    }
+  }
+  return Math.ceil(cjk + (total - cjk) / 4);
+}
+
+/** 当前配置的阈值门：工具声明 tokens 低于该值时全量挂载（调用时读 env，便于测试/热调） */
+export function toolSearchTokenThreshold(): number {
+  const contextWindow = Math.max(1024, Number(process.env.AGTPILOT_CONTEXT_WINDOW) || 64_000);
+  const pct = Number(process.env.AGTPILOT_TOOL_SEARCH_THRESHOLD) || 10;
+  return Math.floor((contextWindow * pct) / 100);
+}
+
+/**
+ * 依据阈值与 prompt 选出本次任务需要声明的工具子集。
+ * 返回 undefined 表示全量挂载（未超阈值 / 未命中任何规则 / 路由被关闭）。
+ * 决策顺序：显式指定 > 路由开关 > 阈值门（Claude Code 同款：工具 tokens
+ * < 上下文 10% 时全量挂载，前缀恒定跨任务共享缓存）> 关键词分组路由。
  */
 export function selectActiveTools(
   prompt: string,
-  allToolNames: string[],
+  allTools: RoutableTool[],
   explicit?: string[]
 ): string[] | undefined {
+  const allToolNames = allTools.map((t) => t.name);
   if (explicit && explicit.length > 0) {
     const filtered = explicit.filter((n) => allToolNames.includes(n));
     return filtered.length > 0 ? filtered : undefined;
   }
   if (process.env.AGTPILOT_TOOL_ROUTING === '0') return undefined;
 
+  // 阈值门：工具目录还小 → 全量挂载，保证前缀稳定
+  if (estimateToolTokens(allTools) < toolSearchTokenThreshold()) return undefined;
+
+  // 超阈值：关键词 → 工具组路由
   const matched = new Set<string>();
   for (const group of TOOL_GROUPS) {
     if (group.test.test(prompt)) {
@@ -105,7 +152,7 @@ export interface TaskOptions {
   system?: string;
   model?: string;
   maxSteps?: number;
-  /** 显式指定本次任务向模型声明的工具子集；缺省时按 prompt 启发式路由，路由不中则全量挂载 */
+  /** 显式指定本次任务向模型声明的工具子集；缺省时仅当工具声明 tokens 超阈值才按关键词路由，否则全量挂载 */
   activeTools?: string[];
   abortSignal?: AbortSignal;
   configOverride?: any;
@@ -357,12 +404,8 @@ export class OrchestratorService extends Service {
       },
     }));
 
-    // 工具按需挂载：显式指定 > prompt 启发式路由 > 全量（保守兜底）
-    const routedTools = selectActiveTools(
-      options.prompt,
-      allTools.map((t) => t.name),
-      options.activeTools
-    );
+    // 工具按需挂载：显式指定 > 阈值门（未超线全量）> prompt 关键词路由 > 全量兜底
+    const routedTools = selectActiveTools(options.prompt, allTools, options.activeTools);
     const toolsMounted = routedTools ? routedTools.length : allTools.length;
     const buildEfficiency = (stepsCount: number): TaskEfficiency => ({
       stepsCount,

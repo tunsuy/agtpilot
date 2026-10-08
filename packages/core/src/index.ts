@@ -6,6 +6,91 @@ const DEFAULT_MAX_STEPS = Math.max(1, Number(process.env.AGTPILOT_MAX_STEPS) || 
 /** 单个工具结果回填模型上下文的字符上限，超长截断，防止上下文膨胀导致模型退化。 */
 const TOOL_OUTPUT_LIMIT = 16 * 1024;
 
+// ---- 工具按需挂载（Tool Routing）----
+// 全量 49 个工具的描述+参数 Schema 每次请求都要占几千 tokens，而且工具越多
+// 模型选错的概率越高。按 prompt 关键词只挂载相关工具组；拿不准就全量挂载，
+// 宁可多花 tokens 不可饿死任务。AGTPILOT_TOOL_ROUTING=0 可整体关闭。
+
+/** 任何任务都挂载的基线工具（规划/交付/记忆，体积小且通用） */
+const BASELINE_TOOLS = [
+  'planner_create_plan',
+  'planner_update_task',
+  'artifact_render',
+  'memory_recall',
+  'memory_store',
+];
+
+/** 关键词 → 工具组前缀映射 */
+const TOOL_GROUPS: Array<{ test: RegExp; prefixes: string[] }> = [
+  {
+    test: /(网页|网站|浏览|抓取|爬取|打开链接|https?:\/\/|www\.|\.(com|cn|org|net|io)\b|browser|webpage|scrape|crawl)/i,
+    prefixes: ['browser_'],
+  },
+  { test: /(搜索|检索|查一下|查下|搜一下|查查|最新|新闻|资讯|search|news|look\s?up)/i, prefixes: ['search_'] },
+  {
+    test: /(代码|脚本|运行|执行|命令|编译|部署|python|javascript|node|shell|sql|code|script|run|execute)/i,
+    prefixes: ['sandbox_'],
+  },
+  { test: /(git|仓库|提交代码|分支|回滚|commit|repo|diff|patch|merge)/i, prefixes: ['git_'] },
+  { test: /(文件|目录|读写|截图|剪贴板|桌面|file|directory|screenshot|clipboard|desktop)/i, prefixes: ['sandbox_', 'desktop_'] },
+  { test: /(定时|每天|每小时|每周|每晚|提醒|cron|schedule|remind)/i, prefixes: ['cron_', 'notify_'] },
+  { test: /(知识库|向量|索引文档|rag)/i, prefixes: ['rag_'] },
+  { test: /(mcp|外部工具服务)/i, prefixes: ['mcp_'] },
+  { test: /(通知|推送|webhook|notify)/i, prefixes: ['notify_'] },
+];
+
+/**
+ * 依据 prompt 选出本次任务需要声明的工具子集。
+ * 返回 undefined 表示全量挂载（未命中任何规则 / 路由被关闭）。
+ */
+export function selectActiveTools(
+  prompt: string,
+  allToolNames: string[],
+  explicit?: string[]
+): string[] | undefined {
+  if (explicit && explicit.length > 0) {
+    const filtered = explicit.filter((n) => allToolNames.includes(n));
+    return filtered.length > 0 ? filtered : undefined;
+  }
+  if (process.env.AGTPILOT_TOOL_ROUTING === '0') return undefined;
+
+  const matched = new Set<string>();
+  for (const group of TOOL_GROUPS) {
+    if (group.test.test(prompt)) {
+      for (const prefix of group.prefixes) {
+        for (const name of allToolNames) {
+          if (name.startsWith(prefix)) matched.add(name);
+        }
+      }
+    }
+  }
+  if (matched.size === 0) return undefined; // 拿不准 → 全量，保守兜底
+
+  // prompt 里显式提到的工具名直接保留
+  for (const name of allToolNames) {
+    if (prompt.includes(name)) matched.add(name);
+  }
+  // 基线工具（仅取系统里真实注册的）
+  for (const name of BASELINE_TOOLS) {
+    if (allToolNames.includes(name)) matched.add(name);
+  }
+  return Array.from(matched);
+}
+
+/** 参数归一化：递归排序 key、字符串去空白标点小写化，用于模糊死循环检测 */
+function stableStringify(value: any): any {
+  if (Array.isArray(value)) return value.map(stableStringify);
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const k of Object.keys(value).sort()) out[k] = stableStringify(value[k]);
+    return out;
+  }
+  if (typeof value === 'string') {
+    return value.toLowerCase().replace(/[\s.,;:!?'""()\[\]{}~`@#$%^&*+=|\\/-]+/g, '');
+  }
+  return value;
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -20,10 +105,34 @@ export interface TaskOptions {
   system?: string;
   model?: string;
   maxSteps?: number;
+  /** 显式指定本次任务向模型声明的工具子集；缺省时按 prompt 启发式路由，路由不中则全量挂载 */
+  activeTools?: string[];
   abortSignal?: AbortSignal;
   configOverride?: any;
   historyMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
   onEvent?: (event: AgentEvent) => void;
+}
+
+/** 单任务执行效率统计（识别"本该 2 步却跑了很多步"的空转任务） */
+export interface TaskEfficiency {
+  /** 实际模型步数 */
+  stepsCount: number;
+  /** 工具调用尝试总次数（含被熔断跳过的） */
+  toolCalls: number;
+  /** 执行报错的次数 */
+  failedCalls: number;
+  /** 被死循环熔断跳过的次数 */
+  skippedCalls: number;
+  /** 审批被拒绝的次数 */
+  approvalRejected: number;
+  /** 有效调用率 = (总调用 - 失败 - 跳过) / 总调用，无调用时为 1 */
+  effectiveRate: number;
+  /** 本次实际向模型声明的工具数 */
+  toolsMounted: number;
+  /** 系统注册的工具总数 */
+  toolsTotal: number;
+  /** 是否启用了按需挂载（false = 全量声明） */
+  routed: boolean;
 }
 
 export interface TaskResult {
@@ -33,6 +142,7 @@ export interface TaskResult {
   finalAnswer: string;
   events: AgentEvent[];
   messages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
+  efficiency?: TaskEfficiency;
   error?: string;
 }
 
@@ -120,20 +230,30 @@ export class OrchestratorService extends Service {
         ? [...options.historyMessages, { role: 'user', content: options.prompt }]
         : [{ role: 'user', content: options.prompt }];
 
-    // 死循环熔断状态：只统计【连续】相同调用（滑动窗口）
+    // 死循环熔断状态：只统计【连续】相同调用（滑动窗口）。
+    // 签名做归一化（排序 key/去空白标点/小写），模型微调参数的重试也能被识别
     let lastSignature = '';
     let repeatCount = 0;
+    // 连续失败守卫：同一工具连续报错达到阈值后，在结果里注入换思路提示
+    let lastFailedTool = '';
+    let consecutiveFailures = 0;
+    const FAILURE_GUARD_THRESHOLD = 3;
+    // 效率统计（识别空转任务）
+    const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0 };
     // 当前步序号（1-based，供工具会话上下文使用）
     let currentStep = 1;
 
-    // ---- 工具包装层：熔断 + 审批门 + 事件广播 + 结果截断 ----
-    const loopTools = this.ctx.agent.getTools().map((toolDef) => ({
+    // ---- 工具包装层：熔断 + 审批门 + 事件广播 + 结果截断 + 效率统计 ----
+    const allTools = this.ctx.agent.getTools();
+    const loopTools = allTools.map((toolDef) => ({
       name: toolDef.name,
       description: toolDef.description,
+      parameters: toolDef.parameters, // 透传真实 JSON Schema，模型不再盲猜参数
       execute: async (args: any): Promise<any> => {
-        // 死循环检测 (Loop Detector): 同一工具+同一参数【连续】3 次才熔断；
+        stats.toolCalls++;
+        // 死循环检测 (Loop Detector): 同一工具+归一化后相同参数【连续】3 次才熔断；
         // 熔断降级为跳过本次调用并返回提醒，让模型换思路，而非终止整个任务
-        const toolSignature = `${toolDef.name}:${JSON.stringify(args)}`;
+        const toolSignature = `${toolDef.name}:${JSON.stringify(stableStringify(args))}`;
         if (toolSignature === lastSignature) {
           repeatCount++;
         } else {
@@ -141,6 +261,7 @@ export class OrchestratorService extends Service {
           repeatCount = 1;
         }
         if (repeatCount >= 3) {
+          stats.skippedCalls++;
           return {
             skipped: true,
             message: `[Loop Detector] 该工具已连续 ${repeatCount} 次以完全相同的参数调用，本次已被跳过。请更换思路（调整参数、改用其他工具，或基于已有信息直接总结给出最终回答），不要重复相同调用。`,
@@ -180,6 +301,7 @@ export class OrchestratorService extends Service {
           });
 
           if (!approved) {
+            stats.approvalRejected++;
             return { rejected: true, message: `用户拒绝了执行工具 [${toolDef.name}] 的请求。` };
           }
         }
@@ -199,6 +321,26 @@ export class OrchestratorService extends Service {
           output = { error: err.message };
         }
 
+        // 失败统计 + 连续失败守卫：同一工具连续失败达阈值时注入换思路提示
+        //（仍然返回真实报错，不拦截执行，避免误杀合法的重试序列）
+        const callFailed = Boolean(output && typeof output === 'object' && 'error' in output);
+        if (callFailed) {
+          stats.failedCalls++;
+          if (toolDef.name === lastFailedTool) {
+            consecutiveFailures++;
+          } else {
+            lastFailedTool = toolDef.name;
+            consecutiveFailures = 1;
+          }
+          if (consecutiveFailures >= FAILURE_GUARD_THRESHOLD) {
+            const hint = `[Efficiency Guard] 工具 [${toolDef.name}] 已连续失败 ${consecutiveFailures} 次。请停止简单重试：检查参数是否正确、改用其他工具，或基于已有信息直接总结。`;
+            output = { ...output, guardHint: hint };
+          }
+        } else {
+          lastFailedTool = '';
+          consecutiveFailures = 0;
+        }
+
         // 广播工具执行结果
         broadcast({
           type: 'tool_result',
@@ -215,6 +357,28 @@ export class OrchestratorService extends Service {
       },
     }));
 
+    // 工具按需挂载：显式指定 > prompt 启发式路由 > 全量（保守兜底）
+    const routedTools = selectActiveTools(
+      options.prompt,
+      allTools.map((t) => t.name),
+      options.activeTools
+    );
+    const toolsMounted = routedTools ? routedTools.length : allTools.length;
+    const buildEfficiency = (stepsCount: number): TaskEfficiency => ({
+      stepsCount,
+      toolCalls: stats.toolCalls,
+      failedCalls: stats.failedCalls,
+      skippedCalls: stats.skippedCalls,
+      approvalRejected: stats.approvalRejected,
+      effectiveRate:
+        stats.toolCalls > 0
+          ? Math.round(((stats.toolCalls - stats.failedCalls - stats.skippedCalls) / stats.toolCalls) * 100) / 100
+          : 1,
+      toolsMounted,
+      toolsTotal: allTools.length,
+      routed: Boolean(routedTools),
+    });
+
     try {
       // ---- 主循环：完全交给 AI SDK v5 内置 agent loop ----
       const loopResult = await (this.ctx as any).model.runAgentLoop({
@@ -226,6 +390,7 @@ export class OrchestratorService extends Service {
         configOverride: options.configOverride,
         maxSteps,
         tools: loopTools,
+        activeTools: routedTools,
         abortSignal: options.abortSignal,
         onStepFinish: (info: { stepNumber: number; text: string; finishReason: string }) => {
           currentStep = (info.stepNumber || 1) + 1;
@@ -290,9 +455,16 @@ export class OrchestratorService extends Service {
         conversation.push({ role: 'assistant', content: finalAnswer });
       }
 
+      const efficiency = buildEfficiency(stepsCount);
       broadcast({
         type: 'done',
-        payload: { taskId, stepsCount, finalAnswer, stepsExhausted: Boolean(loopResult.stepsExhausted) },
+        payload: {
+          taskId,
+          stepsCount,
+          finalAnswer,
+          stepsExhausted: Boolean(loopResult.stepsExhausted),
+          efficiency,
+        },
         timestamp: Date.now(),
       });
 
@@ -303,6 +475,7 @@ export class OrchestratorService extends Service {
         finalAnswer,
         events,
         messages: conversation,
+        efficiency,
       };
     } catch (err: any) {
       const message = options.abortSignal?.aborted
@@ -319,6 +492,7 @@ export class OrchestratorService extends Service {
         stepsCount: Math.max(0, currentStep - 1),
         finalAnswer: '',
         events,
+        efficiency: buildEfficiency(Math.max(0, currentStep - 1)),
         error: message,
       };
     }

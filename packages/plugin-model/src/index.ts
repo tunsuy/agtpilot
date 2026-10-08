@@ -1,5 +1,5 @@
 import { Context, Service } from '@deepseek-ai/cordis';
-import { generateText, stepCountIs, CoreMessage, ModelMessage, tool } from 'ai';
+import { generateText, stepCountIs, jsonSchema, CoreMessage, ModelMessage, tool } from 'ai';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
@@ -36,7 +36,35 @@ export interface ModelInvokeOptions {
 export interface AgentLoopTool {
   name: string;
   description: string;
+  /** 工具的 JSON Schema 参数定义，透传给模型（缺失时退化为自由参数） */
+  parameters?: Record<string, any>;
   execute: (args: any) => Promise<any>;
+}
+
+/**
+ * 把工具注册时声明的 JSON Schema 参数定义透传给模型。
+ * 之前用空 Schema 兜底导致模型看不到参数名/必填项，只能盲猜参数、
+ * 失败重试，白白烧掉步数。无 Schema 时退化为 passthrough（自由参数）。
+ * 附带轻量校验：缺少必填参数时在触达真实 execute 前拦截为 tool-error，
+ * 模型可当步自纠，也避免非法参数触发副作用。
+ */
+function toInputSchema(params?: Record<string, any>) {
+  if (params && typeof params === 'object' && params.type === 'object') {
+    const required: string[] = Array.isArray(params.required) ? params.required : [];
+    return jsonSchema(params as any, {
+      validate: (value: any) => {
+        if (typeof value !== 'object' || value === null) {
+          return { success: false, error: new Error('工具参数必须是 JSON 对象') };
+        }
+        const missing = required.filter((k) => value[k] === undefined);
+        if (missing.length > 0) {
+          return { success: false, error: new Error(`缺少必填参数: ${missing.join(', ')}`) };
+        }
+        return { success: true, value };
+      },
+    });
+  }
+  return z.object({}).passthrough();
 }
 
 export interface AgentLoopStepInfo {
@@ -55,6 +83,8 @@ export interface AgentLoopOptions {
   /** 多步循环的最大步数（stopWhen: stepCountIs(N)） */
   maxSteps?: number;
   tools?: AgentLoopTool[];
+  /** 本次调用只向模型声明的工具子集（其余仍可执行但不进上下文），缺省为全量 */
+  activeTools?: string[];
   abortSignal?: AbortSignal;
   configOverride?: ModelInvokeOptions['configOverride'];
   /** 每步完成回调（模型文本 + 工具调用/结果），供上层做事件广播 */
@@ -106,7 +136,7 @@ export class ModelService extends Service {
       for (const t of this.ctx.agent.getTools()) {
         toolsMap[t.name] = tool({
           description: t.description,
-          inputSchema: z.object({}).passthrough(), // 兼容动态参数验证
+          inputSchema: toInputSchema(t.parameters), // 透传真实参数定义
         });
       }
     }
@@ -148,10 +178,15 @@ export class ModelService extends Service {
     for (const t of options.tools ?? []) {
       toolsMap[t.name] = tool({
         description: t.description,
-        inputSchema: z.object({}).passthrough(), // 兼容动态参数验证
+        inputSchema: toInputSchema(t.parameters), // 透传真实参数定义
         execute: async (args: any) => t.execute(args),
       });
     }
+
+    // activeTools 只保留真实存在的名字，防止 SDK 校验报错
+    const activeTools = options.activeTools?.length
+      ? options.activeTools.filter((n) => n in toolsMap)
+      : undefined;
 
     let stepCounter = 0;
     const response = await generateText({
@@ -159,6 +194,7 @@ export class ModelService extends Service {
       system: options.system,
       messages: options.messages,
       tools: Object.keys(toolsMap).length > 0 ? toolsMap : undefined,
+      activeTools: activeTools && activeTools.length > 0 ? activeTools : undefined,
       temperature: options.temperature ?? 0.7,
       stopWhen: stepCountIs(maxSteps),
       abortSignal: options.abortSignal,

@@ -303,6 +303,16 @@ class AgentBackend {
               answer: finalAnswer,
             });
 
+            // 执行效率摘要：让"本该 2 步却空转了很多步"的任务一眼可见
+            const eff = event.payload?.efficiency;
+            if (eff && typeof eff === 'object' && eff.toolCalls > 0) {
+              mission.steps.push({
+                id: `step_eff_${Date.now()}`,
+                title: `执行效率: ${eff.stepsCount} 步 · 工具调用 ${eff.toolCalls} 次 · 失败 ${eff.failedCalls} · 熔断跳过 ${eff.skippedCalls} · 有效率 ${Math.round((eff.effectiveRate ?? 1) * 100)}% · 挂载工具 ${eff.toolsMounted}/${eff.toolsTotal}${eff.routed ? ' (按需)' : ''}`,
+                status: eff.effectiveRate < 0.5 ? 'FAILED' : 'DONE',
+              });
+            }
+
             mission.status = 'DONE';
             mission.progress = 100;
             if (mission.viewport) {

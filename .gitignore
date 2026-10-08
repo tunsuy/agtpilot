@@ -9,3 +9,4 @@ dist/
 apps/web/out/
 apps/web/android/
 apps/web/ios/
+*.tsbuildinfo

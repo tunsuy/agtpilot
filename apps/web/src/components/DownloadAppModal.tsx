@@ -4,18 +4,14 @@ import React, { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 import {
   Smartphone,
-  Download,
   QrCode,
   Check,
   Copy,
-  ExternalLink,
   X,
   Apple,
   Share2,
-  Sparkles,
   Zap,
   ShieldCheck,
-  Globe,
   RefreshCw,
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/nativeBridge';
@@ -197,39 +193,44 @@ export function DownloadAppModal({ isOpen, onClose }: DownloadAppModalProps) {
                 <div className="flex-1 min-w-0 space-y-1">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-zinc-900">
-                      AgtPilot Android 官方安装包 (.apk)
+                      Android 安装方式
                     </span>
                     <span className="text-[10px] font-mono text-zinc-400">
-                      v1.2.0 • 官方正式版
+                      PWA 已支持
                     </span>
                   </div>
                   <p className="text-[11px] text-zinc-500 leading-relaxed">
-                    专为移动端打造，支持真机免密快捷唤起主流社交与生产力 App，系统级一键分享图文与数据。
+                    在 Chrome / Edge 中打开本站，菜单中选择<strong>“添加到主屏幕 / 安装应用”</strong>，
+                    即获得带独立图标、全屏运行、支持推送通知的 App 体验。独立 APK 安装包在规划中，发布后此处提供下载。
                   </p>
                 </div>
               </div>
 
-              {/* 动作区 */}
-              <div className="flex items-center gap-2.5">
-                <a
-                  href="/downloads/agtpilot-release.apk"
-                  download="agtpilot-release.apk"
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium transition shadow-xs"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>立即下载 APK 安装包</span>
-                </a>
+              <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-zinc-800">
+                    Chrome 安装步骤
+                  </span>
+                  <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    约 10 秒
+                  </span>
+                </div>
+                <ol className="text-[11px] text-zinc-500 leading-relaxed list-decimal pl-4 space-y-0.5">
+                  <li>用手机 Chrome 打开 {currentOrigin.replace(/^https?:\/\//, '')}</li>
+                  <li>点右上角  菜单 → “添加到主屏幕”或“安装应用”</li>
+                  <li>从桌面图标打开 → 我的 → 消息通知 → 开启推送</li>
+                </ol>
               </div>
 
               {/* 核心亮点 */}
               <div className="pt-2 border-t border-zinc-100 grid grid-cols-2 gap-2 text-[11px] text-zinc-600">
                 <div className="flex items-center gap-1.5">
                   <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-                  <span>安全免密 App 联动</span>
+                  <span>与网页端账号数据实时同步</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Share2 className="h-3.5 w-3.5 text-blue-500" />
-                  <span>系统级原生分享直达</span>
+                  <span>系统分享面板直达微信/小红书</span>
                 </div>
               </div>
             </div>
@@ -244,14 +245,14 @@ export function DownloadAppModal({ isOpen, onClose }: DownloadAppModalProps) {
                 <div className="flex-1 min-w-0 space-y-1">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-zinc-900">
-                      AgtPilot iOS 客户端
+                      iPhone / iPad 安装方式
                     </span>
                     <span className="text-[10px] font-mono text-zinc-400">
-                      TestFlight 内测中
+                      PWA 已支持
                     </span>
                   </div>
                   <p className="text-[11px] text-zinc-500 leading-relaxed">
-                    App Store 正式版正在审核中。您可以通过 TestFlight 参与内测，或直接通过手机浏览器极速添加到桌面。
+                    通过 Safari 添加到主屏幕，全屏沉浸式运行，iOS 16.4+ 支持锁屏推送通知。无需 App Store、无需开发者账号。
                   </p>
                 </div>
               </div>
@@ -259,14 +260,20 @@ export function DownloadAppModal({ isOpen, onClose }: DownloadAppModalProps) {
               <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-zinc-800">
-                    一键添加到手机主屏幕 (推荐)
+                    Safari 添加到主屏幕步骤
                   </span>
                   <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    秒开即用
+                    约 10 秒
                   </span>
                 </div>
-                <p className="text-[11px] text-zinc-500 leading-relaxed">
-                  在手机任意浏览器（Safari、Chrome、Edge 或系统自带浏览器）中打开本站，点击菜单中的<strong>“分享”或“更多设置” ➔ 选择“添加到主屏幕”</strong>，即可获得全屏沉浸式的 App 体验。
+                <ol className="text-[11px] text-zinc-500 leading-relaxed list-decimal pl-4 space-y-0.5">
+                  <li>用 <strong>Safari</strong> 打开 {currentOrigin.replace(/^https?:\/\//, '')}（微信内打开需先点 ⋯ → 在 Safari 中打开）</li>
+                  <li>点底部中间的分享按钮（方框带向上箭头）</li>
+                  <li>下滑选择<strong>“添加到主屏幕”</strong> → 右上角“添加”</li>
+                  <li>从桌面 AgtPilot 图标打开 → 我的 → 消息通知 → 开启推送</li>
+                </ol>
+                <p className="text-[10px] text-amber-600 leading-relaxed">
+                  注意：iOS 的推送通知只在从主屏幕图标打开时才可用（苹果系统限制）。
                 </p>
               </div>
             </div>

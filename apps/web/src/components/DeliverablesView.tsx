@@ -19,9 +19,11 @@ import {
   SlidersHorizontal,
   Smartphone,
   Eye,
+  Share2,
 } from 'lucide-react';
 import { ArtifactState, Mission } from '../types/agent';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
+import { shareToApp } from '../utils/nativeBridge';
 
 interface DeliverablesViewProps {
   artifact: ArtifactState | null;
@@ -124,6 +126,21 @@ export function DeliverablesView({
     document.body.removeChild(link);
   };
 
+  // 原生分享：App 内唤起系统分享面板（微信/小红书/备忘录等），Web 端降级为 Web Share / 复制
+  const [shared, setShared] = useState(false);
+  const handleShare = async () => {
+    if (!activeItem?.content) return;
+    const ok = await shareToApp({
+      title: activeItem.title || 'AgtPilot 交付物',
+      text: `${activeItem.title ? activeItem.title + '\n\n' : ''}${activeItem.content}`.slice(0, 4000),
+      dialogTitle: '分享交付物到',
+    });
+    if (ok) {
+      setShared(true);
+      setTimeout(() => setShared(false), 2000);
+    }
+  };
+
   const getTypeIcon = (type: string) => {
     if (type === 'code') return <Code2 className="h-3.5 w-3.5 text-blue-500" />;
     if (type === 'chart') return <PieChart className="h-3.5 w-3.5 text-purple-500" />;
@@ -153,6 +170,18 @@ export function DeliverablesView({
 
         {activeItem && (
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleShare}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 shadow-2xs transition"
+            >
+              {shared ? (
+                <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
+              ) : (
+                <Share2 className="h-3.5 w-3.5 text-zinc-400" />
+              )}
+              <span>{shared ? '已分享' : '分享'}</span>
+            </button>
+
             <button
               onClick={handleCopy}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 shadow-2xs transition"

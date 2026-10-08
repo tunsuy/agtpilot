@@ -381,12 +381,56 @@ class AgentBackend {
       }
     }
 
+    // PWA Web Push：关键事件推送到用户已订阅的移动设备（审批请求 / 任务完成）
+    this.maybePushNotification(event);
+
     for (const sub of this.subscribers) {
       try {
         sub(event);
       } catch {
         // ignore subscriber errors
       }
+    }
+  }
+
+  /** 已推送过"完成"通知的任务，避免重复推送 */
+  private pushedDoneMissions: Set<string> = new Set();
+
+  private maybePushNotification(event: any) {
+    try {
+      const { sendPushToUser } = require('@/lib/push');
+
+      if (event.type === 'approval_requested') {
+        const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
+        const userId = mission?.userId || event.data?.userId;
+        if (!userId) return;
+        const req = event.data || {};
+        sendPushToUser(userId, {
+          title: '需要你审批',
+          body: `${req.action || '敏感操作'}：${(req.description || '').slice(0, 80)}`,
+          tag: `approval-${req.id || Date.now()}`,
+          url: '/',
+        }).catch(() => {});
+        return;
+      }
+
+      if (event.type === 'mission_updated' && event.data?.status === 'DONE' && event.data?.userId) {
+        const missionId = event.data.id;
+        if (!missionId || this.pushedDoneMissions.has(missionId)) return;
+        this.pushedDoneMissions.add(missionId);
+        // 控制集合大小
+        if (this.pushedDoneMissions.size > 500) {
+          this.pushedDoneMissions = new Set([...this.pushedDoneMissions].slice(-250));
+        }
+        sendPushToUser(event.data.userId, {
+          title: '任务完成',
+          body: `${event.data.title || '任务'}：${(event.data.steps?.slice(-1)?.[0]?.answer || '').toString().slice(0, 80) || '点击查看交付成果'}`,
+          tag: `mission-done-${missionId}`,
+          url: '/',
+        }).catch(() => {});
+      }
+    } catch {
+      // push 不可用不影响主流程
     }
   }
 

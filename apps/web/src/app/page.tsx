@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
+import { useState, useEffect, useRef } from 'react';
+import { useSession, signOut } from 'next-auth/react';
 import { CopilotKit } from '@copilotkit/react-core';
 import { Navbar } from '../components/Navbar';
 import { HomeView } from '../components/HomeView';
@@ -13,14 +13,13 @@ import { CronJobsView } from '../components/CronJobsView';
 import { GoalsView } from '../components/GoalsView';
 import { AuthModal } from '../components/AuthModal';
 import { DownloadAppModal } from '../components/DownloadAppModal';
+import { useIsMobile } from '../components/mobile/useIsMobile';
+import { MobileTabBar, MobileTab } from '../components/mobile/MobileTabBar';
+import { MobileHomeView } from '../components/mobile/MobileHomeView';
+import { MobileActivityView } from '../components/mobile/MobileActivityView';
+import { MobileProfileView } from '../components/mobile/MobileProfileView';
 import {
-  Compass,
-  Cpu,
-  Target,
-  Clock,
-  FileText,
-  Brain,
-  Layers,
+  ChevronLeft,
 } from 'lucide-react';
 import {
   Mission,
@@ -37,7 +36,11 @@ import {
 
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
+  const { isMobile, mounted: mobileReady } = useIsMobile();
   const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables'>('home');
+  // 移动端专属状态：底部 tab + 全屏覆盖层（复用桌面视图做"更多"入口）
+  const [mobileTab, setMobileTab] = useState<MobileTab>('home');
+  const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'patrol' | null>(null);
   const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact'>('browser');
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
@@ -367,6 +370,7 @@ export default function Workspace() {
 
     setIsSubmitting(true);
     setActiveView('cockpit');
+    setMobileTab('activity');
 
     // 如果指定了 targetMissionId，或者当前正处于某会话且不是全新发起的，则沿用该会话
     const missionId = targetMissionId !== undefined ? targetMissionId : activeMissionId || undefined;
@@ -404,11 +408,14 @@ export default function Workspace() {
       setApprovalRequests([]);
       setArtifact(null);
     }
-    // 检查 URL 参数（如 OAuth 回调后跳转）
+    // 检查 URL 参数（如 OAuth 回调后跳转、PWA 快捷方式/推送通知深链）
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.get('tab') === 'connectors') {
+      const tab = urlParams.get('tab');
+      if (tab === 'connectors') {
         setActiveView('connectors');
+      } else if (tab === 'home' || tab === 'deliverables' || tab === 'activity' || tab === 'profile') {
+        setMobileTab(tab);
       }
     }
   }, [session?.user?.id, sessionStatus]);
@@ -472,6 +479,7 @@ export default function Workspace() {
         setMissions((prev) => [mission, ...prev.filter((m) => m.id !== mission.id)]);
         setActiveMissionId(mission.id);
         setActiveView('cockpit');
+        setMobileTab('activity');
       } catch (err) {
         console.error(err);
       }
@@ -491,6 +499,7 @@ export default function Workspace() {
         const req: ApprovalRequest = JSON.parse(e.data);
         setApprovalRequests((prev) => [...prev.filter((r) => r.id !== req.id), req]);
         setActiveView('cockpit');
+        setMobileTab('activity');
       } catch (err) {
         console.error(err);
       }
@@ -533,7 +542,171 @@ export default function Workspace() {
   const currentMission = missions.find((m) => m.id === activeMissionId) || missions[0] || null;
   const connectedCount = connectors.filter((c) => c.status === 'connected').length;
 
-  if (!mounted) return null;
+  if (!mounted || !mobileReady) return null;
+
+  const isLoggedIn = Boolean(session?.user);
+  const userName = (session?.user?.name as string) || null;
+  const userEmail = (session?.user?.email as string) || null;
+  const userAvatar = ((session?.user as any)?.image as string) || null;
+  const hasActiveMission = missions.some((m) => m.status === 'ACTIVE');
+
+  // ============ 移动端专属布局：遥控器 + 收件箱 ============
+  if (isMobile) {
+    const openAuth = (tab: 'login' | 'register') => {
+      setAuthModalTab(tab);
+      setAuthModalOpen(true);
+    };
+
+    // 全屏覆盖层里复用的桌面视图（做"更多"入口），带返回条
+    const renderOverlay = () => {
+      if (!mobileOverlay) return null;
+      const titles: Record<string, string> = {
+        goals: '长期目标',
+        connectors: '连接器',
+        memories: '记忆库',
+        patrol: '定时巡航',
+      };
+      return (
+        <div className="fixed inset-0 z-40 bg-[#fbfbfd] flex flex-col">
+          <header
+            className="h-13 shrink-0 flex items-center gap-2 px-2 bg-white/92 backdrop-blur-lg border-b border-zinc-200/70"
+            style={{ paddingTop: 'env(safe-area-inset-top, 0px)', height: 'calc(3.25rem + env(safe-area-inset-top, 0px))' }}
+          >
+            <button
+              type="button"
+              onClick={() => setMobileOverlay(null)}
+              className="h-9 px-2 -ml-1 flex items-center gap-0.5 text-sm text-zinc-600 active:text-zinc-900 transition"
+            >
+              <ChevronLeft className="h-5 w-5" /> 返回
+            </button>
+            <span className="text-sm font-semibold text-zinc-900">{titles[mobileOverlay]}</span>
+          </header>
+          <div className="flex-1 overflow-y-auto">
+            {mobileOverlay === 'goals' && (
+              <GoalsView
+                goals={goals}
+                onCreateGoal={handleCreateGoal}
+                onUpdateGoal={handleUpdateGoal}
+                onDeleteGoal={handleDeleteGoal}
+                onToggleMilestone={handleToggleMilestone}
+                onAdvanceMilestone={handleAdvanceMilestone}
+              />
+            )}
+            {mobileOverlay === 'connectors' && (
+              <ConnectorsView
+                connectors={connectors}
+                onSaveKey={handleSaveKey}
+                onSetDefaultModel={handleSetDefaultModel}
+              />
+            )}
+            {mobileOverlay === 'memories' && (
+              <MemoriesView
+                memories={memories}
+                onAddMemory={handleAddMemory}
+                onDeleteMemory={handleDeleteMemory}
+              />
+            )}
+            {mobileOverlay === 'patrol' && (
+              <CronJobsView
+                jobs={cronJobs}
+                onCreateJob={handleCreateCronJob}
+                onUpdateJob={handleUpdateCronJob}
+                onToggleJob={handleToggleCronJob}
+                onDeleteJob={handleDeleteCronJob}
+                onTriggerJob={handleTriggerCronJob}
+              />
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false}>
+        <div className="min-h-[100dvh] w-full bg-[#fbfbfd] text-zinc-900 font-sans antialiased selection:bg-zinc-200">
+          <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} initialTab={authModalTab} />
+          <DownloadAppModal isOpen={downloadModalOpen} onClose={() => setDownloadModalOpen(false)} />
+
+          {!mobileOverlay && (
+            <>
+              {mobileTab === 'home' && (
+                <MobileHomeView
+                  missions={missions}
+                  isSubmitting={isSubmitting}
+                  userName={userName}
+                  isLoggedIn={isLoggedIn}
+                  approvalCount={approvalRequests.length}
+                  onRunMission={handleRun}
+                  onStopMission={handleStopMission}
+                  onOpenMission={(id) => {
+                    setActiveMissionId(id);
+                    setMobileTab('activity');
+                  }}
+                  onOpenApprovals={() => setMobileTab('activity')}
+                  onRequireLogin={() => openAuth('login')}
+                />
+              )}
+
+              {mobileTab === 'deliverables' && (
+                <div className="pb-16">
+                  <DeliverablesView
+                    artifact={artifact}
+                    missions={missions}
+                    onOpenCockpit={() => setMobileTab('activity')}
+                    onRunMission={handleRun}
+                  />
+                </div>
+              )}
+
+              {mobileTab === 'activity' && (
+                <MobileActivityView
+                  missions={missions}
+                  activeMissionId={activeMissionId}
+                  onSelectMission={setActiveMissionId}
+                  approvalRequests={approvalRequests}
+                  onApproval={handleApproval}
+                  terminalLogs={terminalLogs}
+                />
+              )}
+
+              {mobileTab === 'profile' && (
+                <MobileProfileView
+                  userName={userName}
+                  userEmail={userEmail}
+                  userAvatar={userAvatar}
+                  isLoggedIn={isLoggedIn}
+                  goals={goals}
+                  cronJobs={cronJobs}
+                  connectors={connectors}
+                  memoryCount={memories.length}
+                  onToggleCronJob={handleToggleCronJob}
+                  onTriggerCronJob={handleTriggerCronJob}
+                  onOpenFullView={(v) => {
+                    if (!isLoggedIn) {
+                      openAuth('login');
+                      return;
+                    }
+                    setMobileOverlay(v);
+                  }}
+                  onOpenAuth={openAuth}
+                  onLogout={() => signOut()}
+                />
+              )}
+
+              <MobileTabBar
+                activeTab={mobileTab}
+                onChange={setMobileTab}
+                approvalCount={approvalRequests.length}
+                hasActiveMission={hasActiveMission}
+              />
+            </>
+          )}
+
+          {renderOverlay()}
+        </div>
+      </CopilotKit>
+    );
+  }
 
   return (
     <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false}>
@@ -683,62 +856,6 @@ export default function Workspace() {
               />
             </main>
           )}
-        </div>
-
-        {/* 移动端沉浸式原生底部导航栏 (Mobile App Tab Bar, 仅在 md 以下小屏幕常驻) */}
-        <div className="md:hidden fixed bottom-0 inset-x-0 h-14 bg-white/95 backdrop-blur-md border-t border-zinc-200/80 z-40 flex items-center justify-around px-2 select-none shadow-[0_-4px_20px_rgba(0,0,0,0.04)]">
-          <button
-            onClick={() => handleViewChange('home')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
-              activeView === 'home' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
-            }`}
-          >
-            <Compass className="h-4 w-4" />
-            <span className="text-[10px] mt-0.5">首页</span>
-          </button>
-
-          <button
-            onClick={() => handleViewChange('cockpit')}
-            className={`relative flex flex-col items-center justify-center flex-1 py-1 transition ${
-              activeView === 'cockpit' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
-            }`}
-          >
-            <Cpu className="h-4 w-4" />
-            <span className="text-[10px] mt-0.5">工作台</span>
-            {missions.some((m) => m.status === 'ACTIVE') && (
-              <span className="absolute top-1 right-1/4 h-1.5 w-1.5 rounded-full bg-blue-600 animate-ping" />
-            )}
-          </button>
-
-          <button
-            onClick={() => handleViewChange('goals')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
-              activeView === 'goals' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
-            }`}
-          >
-            <Target className="h-4 w-4" />
-            <span className="text-[10px] mt-0.5">目标</span>
-          </button>
-
-          <button
-            onClick={() => handleViewChange('deliverables')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
-              activeView === 'deliverables' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
-            }`}
-          >
-            <FileText className="h-4 w-4" />
-            <span className="text-[10px] mt-0.5">交付库</span>
-          </button>
-
-          <button
-            onClick={() => handleViewChange('connectors')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 transition ${
-              activeView === 'connectors' ? 'text-zinc-900 font-bold' : 'text-zinc-400 hover:text-zinc-600'
-            }`}
-          >
-            <Layers className="h-4 w-4" />
-            <span className="text-[10px] mt-0.5">连接器</span>
-          </button>
         </div>
       </div>
     </CopilotKit>

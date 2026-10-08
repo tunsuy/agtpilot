@@ -10,6 +10,13 @@ import * as path from 'path';
  * - 执行会话历史任务 (missions)
  */
 
+export interface PushSubscriptionRecord {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  userAgent?: string;
+  createdAt: number;
+}
+
 export interface UserScopedData {
   userId: string;
   connectors: Record<string, string>; // envVar -> value
@@ -18,6 +25,7 @@ export interface UserScopedData {
   cronJobs: any[];
   missions: any[];
   goals?: any[];
+  pushSubscriptions?: PushSubscriptionRecord[];
   updatedAt: number;
 }
 
@@ -248,6 +256,32 @@ export function deleteUserGoal(userId: string, goalId: string) {
   data.goals = (data.goals || []).filter((g: any) => g.id !== goalId);
   saveUserData(data);
   return data.goals;
+}
+
+// 辅助方法：Web Push 订阅 (PWA 推送通知)
+export function getUserPushSubscriptions(userId: string): PushSubscriptionRecord[] {
+  return getUserData(userId).pushSubscriptions || [];
+}
+
+export function addUserPushSubscription(userId: string, sub: PushSubscriptionRecord) {
+  const data = getUserData(userId);
+  data.pushSubscriptions = data.pushSubscriptions || [];
+  // 同一 endpoint 去重（浏览器重新订阅时 endpoint 可能变化，旧的自然过期清理）
+  data.pushSubscriptions = data.pushSubscriptions.filter((s) => s.endpoint !== sub.endpoint);
+  data.pushSubscriptions.push(sub);
+  // 单用户最多保留 10 个订阅端点，防止僵尸订阅堆积
+  if (data.pushSubscriptions.length > 10) {
+    data.pushSubscriptions = data.pushSubscriptions.slice(-10);
+  }
+  saveUserData(data);
+  return data.pushSubscriptions;
+}
+
+export function removeUserPushSubscription(userId: string, endpoint: string) {
+  const data = getUserData(userId);
+  data.pushSubscriptions = (data.pushSubscriptions || []).filter((s) => s.endpoint !== endpoint);
+  saveUserData(data);
+  return data.pushSubscriptions;
 }
 
 // 辅助方法：读取所有用户数据（用于服务端启动时加载所有后台定时任务等）

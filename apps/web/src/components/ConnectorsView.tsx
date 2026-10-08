@@ -37,6 +37,7 @@ import {
   Library,
   NotebookPen,
   Palette,
+  MessagesSquare,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme } from '../utils/nativeBridge';
@@ -69,6 +70,8 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <Library className={`${className} text-cyan-600`} />;
     case 'youdao_note':
       return <NotebookPen className={`${className} text-emerald-600`} />;
+    case 'zhihu':
+      return <MessagesSquare className={`${className} text-blue-600`} />;
     case 'deepwiki':
       return <BookOpen className={`${className} text-zinc-700`} />;
     default:

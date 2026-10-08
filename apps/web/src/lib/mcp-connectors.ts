@@ -232,6 +232,43 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     ],
   },
 
+  {
+    id: 'zhihu',
+    name: '知乎',
+    icon: 'MessagesSquare',
+    category: 'Productivity',
+    description:
+      '知乎数据开放平台官方 MCP：站内搜索问答/文章、全网聚合搜索、实时热榜（粘贴 Access Secret 即用，每天免费 1000 次）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_ZHIHU_SECRET',
+    quickAuthUrl: 'https://developer.zhihu.com/profile',
+    authHint: '登录知乎数据开放平台个人页，复制 Access Secret 粘贴到下方（一处密钥同时开通搜索/全网/热榜三个能力）',
+    docUrl: 'https://developer.zhihu.com/',
+    servers: [
+      {
+        name: 'zhihu_search',
+        transport: 'sse',
+        url: 'https://developer.zhihu.com/api/mcp/zhihu_search/v1/sse',
+        headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
+        label: '站内搜索',
+      },
+      {
+        name: 'zhihu_global',
+        transport: 'sse',
+        url: 'https://developer.zhihu.com/api/mcp/global_search/v1/sse',
+        headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
+        label: '全网搜索',
+      },
+      {
+        name: 'zhihu_hot',
+        transport: 'sse',
+        url: 'https://developer.zhihu.com/api/mcp/hot_list/v1/sse',
+        headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
+        label: '热榜',
+      },
+    ],
+  },
+
   // ---- 免凭证直连 ----
   {
     id: 'deepwiki',

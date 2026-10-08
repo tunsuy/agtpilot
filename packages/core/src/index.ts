@@ -1,6 +1,11 @@
 import { Context, Service } from '@deepseek-ai/cordis';
 import { AgentEvent, ApprovalRequest, ModelStepResult } from '@agtpilot/protocol';
 
+/** 默认步数上限（一步 = 一轮模型调用）。可用环境变量 AGTPILOT_MAX_STEPS 或单任务 maxSteps 覆盖。 */
+const DEFAULT_MAX_STEPS = Math.max(1, Number(process.env.AGTPILOT_MAX_STEPS) || 40);
+/** 单个工具结果回填模型上下文的字符上限，超长截断，防止上下文膨胀导致模型退化。 */
+const TOOL_OUTPUT_LIMIT = 16 * 1024;
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -93,7 +98,7 @@ export class OrchestratorService extends Service {
    */
   async runTask(options: TaskOptions): Promise<TaskResult> {
     const taskId = options.taskId || `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const maxSteps = options.maxSteps ?? 10;
+    const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
     const events: AgentEvent[] = [];
 
     const broadcast = (event: AgentEvent) => {
@@ -110,7 +115,9 @@ export class OrchestratorService extends Service {
 
     let currentStep = 0;
     let finalAnswer = '';
-    const toolCallHistory: string[] = [];
+    // 死循环熔断状态：只统计【连续】相同调用（滑动窗口），与防护意图一致
+    let lastSignature = '';
+    let repeatCount = 0;
 
     try {
       while (currentStep < maxSteps) {
@@ -155,15 +162,22 @@ export class OrchestratorService extends Service {
           };
         }
 
+        // 为本轮每个工具调用预生成稳定的 toolCallId（模型未提供时兜底），
+        // 确保 assistant 的 tool-call 与 tool-result 严格配对，避免 provider 协议错误
+        const resolvedCalls = stepResult.toolCalls.map((tc: any, idx: number) => ({
+          ...tc,
+          resolvedId: tc.toolCallId || `call_${currentStep}_${idx}_${Date.now()}`,
+        }));
+
         // 把模型的助手的思考/调用指令存入上下文 (包含 tool-call parts 以保证 OpenAI / Vercel AI SDK 规范)
         const assistantParts: any[] = [];
         if (stepResult.text) {
           assistantParts.push({ type: 'text', text: stepResult.text });
         }
-        for (const tc of stepResult.toolCalls) {
+        for (const tc of resolvedCalls) {
           assistantParts.push({
             type: 'tool-call',
-            toolCallId: (tc as any).toolCallId || `call_${Date.now()}`,
+            toolCallId: tc.resolvedId,
             toolName: tc.toolName,
             args: tc.args,
           });
@@ -173,24 +187,50 @@ export class OrchestratorService extends Service {
           content: assistantParts.length > 0 ? assistantParts : (stepResult.text || ''),
         });
 
+        // 统一回填 tool-result（符合 AI SDK CoreToolMessage 规范；超长结果截断，防上下文膨胀）
+        const pushToolResult = (tc: any, result: string) => {
+          messages.push({
+            role: 'tool' as any,
+            content: [
+              {
+                type: 'tool-result',
+                toolCallId: tc.resolvedId,
+                toolName: tc.toolName,
+                result:
+                  result.length > TOOL_OUTPUT_LIMIT
+                    ? `${result.slice(0, TOOL_OUTPUT_LIMIT)}\n...[结果过长已截断，原始长度 ${result.length} 字符]`
+                    : result,
+              },
+            ] as any,
+          });
+        };
+
         // 4. 逐一执行工具并进行安全防护
-        for (const tc of stepResult.toolCalls) {
+        for (const tc of resolvedCalls) {
           const toolDef = this.ctx.agent.getTool(tc.toolName);
 
-          // 死循环检测 (Loop Detector): 连续调用相同参数的同一工具超过 3 次触发熔断
+          // 死循环检测 (Loop Detector): 同一工具+同一参数【连续】3 次才熔断；
+          // 熔断降级为跳过本次调用并注入提醒，让模型换思路，而非终止整个任务
           const toolSignature = `${tc.toolName}:${JSON.stringify(tc.args)}`;
-          toolCallHistory.push(toolSignature);
-          const recentRepeats = toolCallHistory.filter((sig) => sig === toolSignature).length;
-          if (recentRepeats >= 3) {
-            throw new Error(`[Loop Detector] 检测到对工具 [${tc.toolName}] 的死循环调用，已主动熔断以防资损。`);
+          if (toolSignature === lastSignature) {
+            repeatCount++;
+          } else {
+            lastSignature = toolSignature;
+            repeatCount = 1;
+          }
+          if (repeatCount >= 3) {
+            pushToolResult(
+              tc,
+              JSON.stringify({
+                skipped: true,
+                message: `[Loop Detector] 该工具已连续 ${repeatCount} 次以完全相同的参数调用，本次已被跳过。请更换思路（调整参数、改用其他工具，或基于已有信息直接总结给出最终回答），不要重复相同调用。`,
+              })
+            );
+            continue;
           }
 
           if (!toolDef) {
-            const errorMsg = `工具 [${tc.toolName}] 不存在或未注册。`;
-            messages.push({
-              role: 'tool',
-              content: JSON.stringify({ error: errorMsg }),
-            });
+            pushToolResult(tc, JSON.stringify({ error: `工具 [${tc.toolName}] 不存在或未注册。` }));
             continue;
           }
 
@@ -217,11 +257,10 @@ export class OrchestratorService extends Service {
             });
 
             if (!approved) {
-              const rejectMsg = `用户拒绝了执行工具 [${tc.toolName}] 的请求。`;
-              messages.push({
-                role: 'tool',
-                content: JSON.stringify({ rejected: true, message: rejectMsg }),
-              });
+              pushToolResult(
+                tc,
+                JSON.stringify({ rejected: true, message: `用户拒绝了执行工具 [${tc.toolName}] 的请求。` })
+              );
               continue;
             }
           }
@@ -249,22 +288,44 @@ export class OrchestratorService extends Service {
           });
 
           // 回填给大模型上下文作为 tool_result
-          const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
-          messages.push({
-            role: 'tool' as any,
-            content: [
-              {
-                type: 'tool-result',
-                toolCallId: (tc as any).toolCallId || `call_${Date.now()}`,
-                toolName: tc.toolName,
-                result: outputStr,
-              },
-            ] as any,
-          });
+          pushToolResult(tc, typeof output === 'string' ? output : JSON.stringify(output));
         }
       }
 
-      throw new Error(`任务执行超出最大步数限制 (${maxSteps} 步)，已终止。`);
+      // 步数用尽：不再直接报错终止，而是追加一轮【禁用工具】的强制总结，尽力交付结论
+      broadcast({
+        type: 'thought',
+        payload: { step: currentStep, text: `已达步数上限（${maxSteps} 步），正在做最终总结…` },
+        timestamp: Date.now(),
+      });
+      try {
+        const wrapResult: ModelStepResult = await (this.ctx as any).model.invokeStep({
+          model: options.model,
+          system: `${options.system || '你是一个专业高效的自主执行智能体。'}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`,
+          messages: messages as any,
+          configOverride: options.configOverride,
+          disableTools: true,
+        });
+        finalAnswer = wrapResult.text || finalAnswer;
+      } catch {
+        // 总结调用失败时，回退到已有的最后一段文本
+      }
+      if (!finalAnswer) {
+        finalAnswer = `任务达到步数上限（${maxSteps} 步），未能生成完整结论。建议将任务拆小后重试。`;
+      }
+      broadcast({
+        type: 'done',
+        payload: { taskId, stepsCount: currentStep, finalAnswer, stepsExhausted: true },
+        timestamp: Date.now(),
+      });
+      return {
+        taskId,
+        success: true,
+        stepsCount: currentStep,
+        finalAnswer,
+        events,
+        messages: [...messages, { role: 'assistant', content: finalAnswer }],
+      };
     } catch (err: any) {
       broadcast({
         type: 'error',

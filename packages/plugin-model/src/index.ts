@@ -22,6 +22,8 @@ export interface ModelInvokeOptions {
   system?: string;
   messages: CoreMessage[];
   temperature?: number;
+  /** 本次调用禁用全部工具声明（用于步数耗尽后的强制纯文本总结收尾） */
+  disableTools?: boolean;
   configOverride?: {
     activeModelId?: string;
     apiKey?: string;
@@ -55,7 +57,7 @@ export class ModelService extends Service {
 
     // 将 ctx.agent 中动态注册的所有原子工具转换为 Vercel AI SDK 的标准 tool 映射
     const toolsMap: Record<string, any> = {};
-    const registeredTools = this.ctx.agent.getTools();
+    const registeredTools = options.disableTools ? [] : this.ctx.agent.getTools();
 
     for (const t of registeredTools) {
       toolsMap[t.name] = tool({

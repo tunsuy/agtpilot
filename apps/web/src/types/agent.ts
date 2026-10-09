@@ -37,6 +37,8 @@ export interface McpConnectorInfo {
   category: string;
   description: string;
   authType: 'oauth' | 'token' | 'none';
+  /** opt-in 免凭证连接器（如浏览器自动化）：需用户显式启用后才挂载本地子进程 */
+  optIn?: boolean;
   status: 'connected' | 'unconfigured';
   keyMasked?: string;
   quickAuthUrl?: string;

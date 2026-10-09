@@ -39,6 +39,7 @@ import {
   Palette,
   MessagesSquare,
   Mail,
+  Feather,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
@@ -76,6 +77,12 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <MessagesSquare className={`${className} text-blue-600`} />;
     case 'deepwiki':
       return <BookOpen className={`${className} text-zinc-700`} />;
+    case 'lark_suite':
+      return <Feather className={`${className} text-sky-500`} />;
+    case 'dingtalk_mcp':
+      return <Zap className={`${className} text-blue-600`} />;
+    case 'browser_auto':
+      return <Globe className={`${className} text-emerald-600`} />;
     default:
       return <Plug className={`${className} text-zinc-600`} />;
   }
@@ -127,10 +134,10 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
 const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'models', label: '模型推理', ids: ['deepseek', 'openai', 'custom_llm'] },
   { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
-  { key: 'office', label: '办公协作', ids: ['notion_mcp', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
+  { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
   { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'wechat_mp', 'xiaohongshu', 'twitter'] },
-  { key: 'dev', label: '开发与云', ids: ['github', 'e2b'] },
+  { key: 'dev', label: '开发与云', ids: ['github', 'e2b', 'browser_auto'] },
 ];
 const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));
 
@@ -587,7 +594,7 @@ export function ConnectorsView({
                                 : 'bg-amber-50 text-amber-600 border border-amber-200'
                             }`}
                           >
-                            {app.authType === 'oauth' ? '一键授权' : app.authType === 'none' ? '免凭证直连' : '粘贴凭证'}
+                            {app.authType === 'oauth' ? '一键授权' : app.optIn ? '手动启用' : app.authType === 'none' ? '免凭证直连' : '粘贴凭证'}
                           </span>
                         </div>
                       </div>
@@ -603,7 +610,11 @@ export function ConnectorsView({
                       {app.status === 'connected'
                         ? app.toolCount
                           ? `已挂载 ${app.toolCount} 工具`
+                          : app.optIn
+                          ? '已启用'
                           : '已连接'
+                        : app.optIn
+                        ? '未启用'
                         : '未配置'}
                     </span>
                   </div>
@@ -618,7 +629,7 @@ export function ConnectorsView({
 
                 <div className="pt-3 border-t border-zinc-100 flex items-center justify-between">
                   <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
-                    {app.authType === 'oauth' ? 'OAuth 2.1 + PKCE' : app.authType === 'none' ? 'MCP Streamable HTTP' : app.keyMasked || 'MCP Streamable HTTP'}
+                    {app.authType === 'oauth' ? 'OAuth 2.1 + PKCE' : app.optIn ? '本地 stdio 子进程' : app.authType === 'none' ? 'MCP Streamable HTTP' : app.keyMasked || 'MCP Streamable HTTP'}
                   </span>
 
                   <div className="flex items-center gap-1.5">
@@ -649,7 +660,7 @@ export function ConnectorsView({
                       </button>
                     )}
 
-                    {app.authType === 'none' && (
+                    {app.authType === 'none' && !app.optIn && (
                       <button
                         onClick={() => mcpPost({ action: 'connect', connectorId: app.id })}
                         disabled={mcpSaving}
@@ -658,6 +669,30 @@ export function ConnectorsView({
                       >
                         <RotateCw className={`h-3 w-3 ${mcpSaving ? 'animate-spin' : ''}`} />
                         <span>重连</span>
+                      </button>
+                    )}
+
+                    {app.optIn && app.status !== 'connected' && (
+                      <button
+                        onClick={() => mcpPost({ action: 'saveToken', connectorId: app.id, token: '1' })}
+                        disabled={mcpSaving}
+                        className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                        title="启用后为你的任务挂载本地浏览器子进程(需服务器已装 Chrome/Chromium)"
+                      >
+                        {mcpSaving ? <RotateCw className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                        <span>启用</span>
+                      </button>
+                    )}
+
+                    {app.optIn && app.status === 'connected' && (
+                      <button
+                        onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
+                        disabled={mcpSaving}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-red-600 hover:bg-red-50 transition"
+                        title="停用并断开本地子进程"
+                      >
+                        <Unplug className="h-3 w-3" />
+                        <span>停用</span>
                       </button>
                     )}
 

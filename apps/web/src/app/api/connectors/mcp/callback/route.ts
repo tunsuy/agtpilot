@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const serverUrl =
-      typeof def.servers[0].url === 'function' ? def.servers[0].url('') : def.servers[0].url;
+      typeof def.servers[0].url === 'function' ? def.servers[0].url('') : def.servers[0].url || '';
     const provider = new UserMcpOAuthProvider(userId, def.id, serverUrl, def.scope);
 
     // SDK 用已保存的 codeVerifier 完成 token 交换，tokens 经 provider 加密落盘

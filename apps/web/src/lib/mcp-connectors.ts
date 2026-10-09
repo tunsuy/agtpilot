@@ -15,11 +15,17 @@ import { UserMcpOAuthProvider } from './mcp-oauth-provider';
 export interface McpServerDef {
   /** 服务器别名（工具名前缀：mcp_{alias}_{tool}），同一连接器多服务器时区分 */
   name: string;
-  /** 端点 URL；token 类可为模板函数（凭证拼进 query 或 header） */
-  url: string | ((cred: string) => string);
-  transport?: 'http' | 'sse';
+  /** 端点 URL；token 类可为模板函数（凭证拼进 query 或 header）。http/sse 必填，stdio 忽略 */
+  url?: string | ((cred: string) => string);
+  transport?: 'http' | 'sse' | 'stdio';
   /** token 类的静态凭证头模板（如腾讯文档 Authorization 原始 token、腾讯会议自定义头） */
   headers?: (cred: string) => Record<string, string>;
+  /** stdio：本地子进程启动命令（如 npx） */
+  command?: string;
+  /** stdio：命令参数；token 类可为模板函数（把凭证拆分注入，如 lark -a <appId> -s <secret>） */
+  args?: string[] | ((cred: string) => string[]);
+  /** stdio：子进程环境变量；token 类可为模板函数（凭证经 env 注入，避免出现在命令行/进程列表） */
+  env?: (cred: string) => Record<string, string>;
   label?: string;
 }
 
@@ -31,7 +37,13 @@ export interface McpConnectorDef {
   description: string;
   /** oauth = 一键授权；token = 打开授权页粘贴凭证；none = 免凭证直连 */
   authType: 'oauth' | 'token' | 'none';
-  /** token 类凭证在 user-store connectors 里的存储键 */
+  /**
+   * opt-in（authType='none' 时有效）：默认不连接,需用户在卡片上显式「启用」后才挂载。
+   * 用于本地子进程类重型连接器(如浏览器自动化),避免为每个用户/任务默认拉起子进程。
+   * 启用状态存于 tokenEnvVar 指向的键(值为 '1')。
+   */
+  optIn?: boolean;
+  /** token 类凭证 / optIn 开关在 user-store connectors 里的存储键 */
   tokenEnvVar?: string;
   /** OAuth scope（如企查查 mcp:tools） */
   scope?: string;
@@ -279,6 +291,85 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     authType: 'none',
     servers: [{ name: 'deepwiki', url: 'https://mcp.deepwiki.com/mcp' }],
   },
+  {
+    id: 'browser_auto',
+    name: '浏览器自动化 (Playwright)',
+    icon: 'Globe',
+    category: 'Engineering',
+    description:
+      'Playwright 官方 MCP：让 Agent 打开网页、点击、填表、截图、抓取动态渲染内容（本地 stdio 无头 Chromium，免凭证）。需服务器已安装 Chrome/Chromium；因是重型本地子进程，默认关闭，点「启用」后才为你的任务挂载。',
+    authType: 'none',
+    optIn: true,
+    tokenEnvVar: 'MCP_BROWSER_OPTIN',
+    docUrl: 'https://github.com/microsoft/playwright-mcp',
+    servers: [
+      {
+        name: 'browser_auto',
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated'],
+      },
+    ],
+  },
+
+  // ---- 官方 stdio MCP（本地子进程，凭证按用户注入 env/args，绝不进 process.env）----
+  {
+    id: 'lark_suite',
+    name: '飞书 / Lark（官方全家桶）',
+    icon: 'Feather',
+    category: 'Productivity',
+    description:
+      '飞书官方 lark-mcp：消息、云文档、多维表格、日历、任务、邮箱等全套办公能力（本地 stdio 运行，粘贴企业自建应用 AppID:AppSecret）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_LARK_APP_CRED',
+    quickAuthUrl: 'https://open.feishu.cn/app',
+    authHint:
+      '飞书开放平台 → 创建/选择「企业自建应用」→「凭证与基础信息」页复制 App ID 与 App Secret，按 AppID:AppSecret 格式填写到下方；并在「权限管理」开通所需 API 权限（如消息、云文档、日历）。',
+    docUrl: 'https://github.com/larksuite/lark-openapi-mcp',
+    servers: [
+      {
+        name: 'lark_suite',
+        transport: 'stdio',
+        command: 'npx',
+        args: (cred) => {
+          const c = parseAppCredential(cred);
+          return ['-y', '@larksuiteoapi/lark-mcp', 'mcp', '-a', c?.id || '', '-s', c?.secret || ''];
+        },
+      },
+    ],
+  },
+  {
+    id: 'dingtalk_mcp',
+    name: '钉钉（官方 MCP）',
+    icon: 'Zap',
+    category: 'Productivity',
+    description:
+      '钉钉官方 dingtalk-mcp：待办、日历、通讯录、群机器人消息、考勤、日志等能力（本地 stdio 运行，粘贴企业内部应用 ClientID:ClientSecret）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_DINGTALK_APP_CRED',
+    quickAuthUrl: 'https://open-dev.dingtalk.com/fe/app',
+    authHint:
+      '钉钉开放平台 → 应用开发 → 创建/选择「企业内部应用」→「凭证与基础信息」复制 Client ID 与 Client Secret，按 ClientID:ClientSecret 格式填写到下方；并在「权限管理」添加所需接口权限。',
+    docUrl: 'https://github.com/open-dingtalk/dingtalk-mcp',
+    servers: [
+      {
+        name: 'dingtalk_mcp',
+        transport: 'stdio',
+        command: 'npx',
+        // 凭证经 env 注入（不出现在命令行，避免进程列表泄露）
+        args: ['-y', 'dingtalk-mcp@latest'],
+        env: (cred) => {
+          const c = parseAppCredential(cred);
+          return {
+            DINGTALK_Client_ID: c?.id || '',
+            DINGTALK_Client_Secret: c?.secret || '',
+            ACTIVE_PROFILES:
+              'dingtalk-tasks,dingtalk-calendar,dingtalk-robot-send-message,dingtalk-contacts',
+          };
+        },
+      },
+    ],
+  },
 ];
 
 export function getMcpConnectorDef(id: string): McpConnectorDef | undefined {
@@ -293,18 +384,57 @@ export function normalizeWeiyunToken(raw: string): string {
   return m ? m[1].trim() : text;
 }
 
+/** 解析「ID:Secret」组合凭证（飞书 AppID:AppSecret / 钉钉 ClientID:ClientSecret），容忍中文冒号与空格 */
+export function parseAppCredential(raw: string): { id: string; secret: string } | null {
+  const t = (raw || '').trim();
+  if (!t) return null;
+  const parts = t.split(/\s*[:：]\s*/);
+  if (parts.length < 2 || !parts[0].trim() || !parts[1].trim()) return null;
+  return { id: parts[0].trim(), secret: parts.slice(1).join(':').trim() };
+}
+
 /** MCP OAuth start → callback 之间传递 CSRF state 的 httpOnly cookie 名 */
 export const MCP_OAUTH_STATE_COOKIE = 'mcp_oauth_state';
 
-/** token 类凭证键白名单（POST 校验用） */
+/** token 类凭证键 + optIn 开关键白名单（POST saveToken 校验用） */
 export const MCP_TOKEN_ENV_VARS = new Set(
-  MCP_CONNECTOR_DEFS.filter((d) => d.authType === 'token' && d.tokenEnvVar).map((d) => d.tokenEnvVar!)
+  MCP_CONNECTOR_DEFS.filter((d) => (d.authType === 'token' || d.optIn) && d.tokenEnvVar).map(
+    (d) => d.tokenEnvVar!
+  )
 );
+
+/** 把 McpServerDef 按凭证展开成 plugin-mcp 的 MCPServerConfig（http/sse 拼 url+headers，stdio 拼 command/args/env） */
+function serverConfigFromDef(
+  s: McpServerDef,
+  cred: string,
+  authProvider?: MCPServerConfig['authProvider']
+): MCPServerConfig {
+  const transport = s.transport || 'http';
+  if (transport === 'stdio') {
+    if (!s.command) throw new Error(`stdio 类型 MCP Server ${s.name} 缺少 command`);
+    return {
+      name: s.name,
+      transport: 'stdio',
+      command: s.command,
+      args: typeof s.args === 'function' ? s.args(cred) : s.args || [],
+      env: s.env ? s.env(cred) : undefined,
+    };
+  }
+  const url = typeof s.url === 'function' ? s.url(cred) : s.url || '';
+  return {
+    name: s.name,
+    transport,
+    url,
+    headers: s.headers ? s.headers(cred) : undefined,
+    authProvider,
+  };
+}
 
 /**
  * 依据用户已配置的凭证，构建该用户当前应连接的 MCP Server 清单。
- * - none：无条件直连；
- * - token：已保存凭证才连（URL 模板 / 静态头注入）；
+ * - none（非 optIn）：无条件直连；
+ * - none + optIn：用户显式启用（configs[key]==='1'）才连；
+ * - token：已保存凭证才连（URL 模板 / 静态头注入 / stdio args+env 注入）；
  * - oauth：已完成一键授权才连（挂 OAuthClientProvider，SDK 自动带 token + 401 刷新）。
  */
 export function buildUserMcpServers(userId: string): MCPServerConfig[] {
@@ -315,34 +445,20 @@ export function buildUserMcpServers(userId: string): MCPServerConfig[] {
     if (def.authType === 'token') {
       const cred = (configs[def.tokenEnvVar!] || '').trim();
       if (!cred) continue;
-      for (const s of def.servers) {
-        servers.push({
-          name: s.name,
-          transport: s.transport || 'http',
-          url: typeof s.url === 'function' ? s.url(cred) : s.url,
-          headers: s.headers ? s.headers(cred) : undefined,
-        });
-      }
+      for (const s of def.servers) servers.push(serverConfigFromDef(s, cred));
     } else if (def.authType === 'oauth') {
       const record = getMcpAuth(userId, def.id);
       if (!record?.tokens?.access_token) continue;
       for (const s of def.servers) {
-        const url = typeof s.url === 'function' ? s.url('') : s.url;
-        servers.push({
-          name: s.name,
-          transport: s.transport || 'http',
-          url,
-          authProvider: new UserMcpOAuthProvider(userId, def.id, url, def.scope),
-        });
+        const url = typeof s.url === 'function' ? s.url('') : s.url || '';
+        servers.push(
+          serverConfigFromDef(s, '', new UserMcpOAuthProvider(userId, def.id, url, def.scope))
+        );
       }
     } else {
-      for (const s of def.servers) {
-        servers.push({
-          name: s.name,
-          transport: s.transport || 'http',
-          url: typeof s.url === 'function' ? s.url('') : s.url,
-        });
-      }
+      // none
+      if (def.optIn && def.tokenEnvVar && (configs[def.tokenEnvVar] || '').trim() !== '1') continue;
+      for (const s of def.servers) servers.push(serverConfigFromDef(s, ''));
     }
   }
   return servers;

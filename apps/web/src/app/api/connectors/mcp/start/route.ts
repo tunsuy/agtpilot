@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const serverUrl =
-      typeof def.servers[0].url === 'function' ? def.servers[0].url('') : def.servers[0].url;
+      typeof def.servers[0].url === 'function' ? def.servers[0].url('') : def.servers[0].url || '';
     const provider = new UserMcpOAuthProvider(userId, def.id, serverUrl, def.scope);
 
     // SDK 编排完整授权流程；REDIRECT 时授权 URL 被 provider 捕获

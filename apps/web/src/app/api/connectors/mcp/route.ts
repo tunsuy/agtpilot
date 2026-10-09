@@ -48,6 +48,10 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
       const record = getMcpAuth(userId, def.id);
       connected = Boolean(record?.tokens?.access_token);
       if (connected) keyMasked = '****已授权';
+    } else if (def.optIn && def.tokenEnvVar) {
+      // opt-in 免凭证连接器:用户显式启用(存 '1')才算已连接
+      connected = (configs[def.tokenEnvVar] || '').trim() === '1';
+      if (connected) keyMasked = '已启用';
     } else {
       connected = true; // 免凭证直连，永远可用
     }
@@ -70,6 +74,7 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
       category: def.category,
       description: def.description,
       authType: def.authType,
+      optIn: def.optIn,
       status: connected ? 'connected' : 'unconfigured',
       keyMasked,
       quickAuthUrl: def.quickAuthUrl,
@@ -142,7 +147,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'saveToken') {
-      if (def.authType !== 'token' || !def.tokenEnvVar || !MCP_TOKEN_ENV_VARS.has(def.tokenEnvVar)) {
+      // token 类粘贴凭证;optIn 类借同一通道存开关值 '1'(键同样受白名单约束)
+      if ((def.authType !== 'token' && !def.optIn) || !def.tokenEnvVar || !MCP_TOKEN_ENV_VARS.has(def.tokenEnvVar)) {
         return NextResponse.json(
           { success: false, error: `连接器 ${def.id} 不支持粘贴凭证方式` },
           { status: 400 }

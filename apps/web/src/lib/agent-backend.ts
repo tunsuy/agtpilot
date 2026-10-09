@@ -3,7 +3,6 @@ import { OrchestratorService, AgentService } from '@agtpilot/core';
 import { createAgentRuntime } from '@agtpilot/app-kit';
 import { ApprovalRequest, ConnectorSuggestion, PlanData, PlanTask } from '@agtpilot/protocol';
 import type { MCPService } from '@agtpilot/plugin-mcp';
-import { Cron } from 'croner';
 
 import { Mission, MissionStep, ViewportState, TerminalLog } from '../types/agent';
 
@@ -28,7 +27,8 @@ class AgentBackend {
   /** 装配 Promise（resolve 即全部插件就绪；单插件失败只跳过不拖垮内核） */
   private runtimePromise: Promise<void> | null = null;
   private activeAbortControllers: Map<string, AbortController> = new Map();
-  private activeCronJobs: Map<string, { job: Cron; userId: string; info: any }> = new Map();
+  /** 已挂进调度池的 cron 任务：jobId → 归属用户（调度本体在 plugin-cron 的 CronService） */
+  private activeCronJobs: Map<string, { userId: string; name?: string }> = new Map();
   private cronSchedulerInitialized = false;
   /** 各任务检查点最近一次落盘时间（节流：≥5s 一次） */
   private checkpointSavedAt: Map<string, number> = new Map();
@@ -797,6 +797,22 @@ class AgentBackend {
             this.addTerminalLog('stderr', `[Memory] 用户记忆工具挂载异常: ${e?.message || e}`);
           }
 
+          // 2.45 用户级定时巡航工具（同名命名空间 cron_*，与插件路由前缀约定一致）：
+          // 读写该用户 user-store、注册进本调度池（闭包捕获 userId）—— 模型经工具
+          // 创建的任务与 UI cron 管理页创建的任务同一套存储与调度，无双轨
+          try {
+            const { buildUserCronTools } = await import('@/lib/cron-service');
+            taskTools = [
+              ...(taskTools || []),
+              ...buildUserCronTools(uid, {
+                register: (u, job) => this.registerUserCronJob(u, job),
+                unregister: (jobId) => this.unregisterUserCronJob(jobId),
+              }),
+            ];
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`);
+          }
+
           try {
             const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
             const { buildConnectorBridgeTools } = await import('@/lib/connector-bridge');
@@ -1016,83 +1032,95 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
     if (this.cronSchedulerInitialized) return;
     this.cronSchedulerInitialized = true;
 
-    try {
-      const { getAllUsersData } = require('@/lib/user-store');
-      const allUsers = getAllUsersData();
-      let activeCount = 0;
-      for (const user of allUsers) {
-        if (Array.isArray(user.cronJobs)) {
-          for (const job of user.cronJobs) {
-            if (job.status === 'active') {
-              this.registerUserCronJob(user.userId, job);
-              activeCount++;
+    // 调度本体在 plugin-cron 的 CronService（无头引擎，ctx.cron），
+    // 必须等微内核就绪后才能注册 —— 这里异步自驱动，不阻塞调用方
+    this.whenReady()
+      .then(() => {
+        const { getAllUsersData } = require('@/lib/user-store');
+        const allUsers = getAllUsersData();
+        let activeCount = 0;
+        for (const user of allUsers) {
+          if (Array.isArray(user.cronJobs)) {
+            for (const job of user.cronJobs) {
+              if (job.status === 'active') {
+                this.registerUserCronJob(user.userId, job);
+                activeCount++;
+              }
             }
           }
         }
-      }
-      this.addTerminalLog('system', `[Cron Scheduler] 调度器已激活，已挂载 ${activeCount} 个后台巡航任务。`);
-    } catch (err: any) {
-      console.error('Failed to init cron scheduler in AgentBackend:', err);
-    }
+        this.addTerminalLog('system', `[Cron Scheduler] 调度器已激活，已挂载 ${activeCount} 个后台巡航任务。`);
+      })
+      .catch((err: any) => {
+        console.error('Failed to init cron scheduler in AgentBackend:', err);
+      });
   }
 
+  /**
+   * 把用户级 cron 任务挂进调度池。
+   * 调度交给 ctx.cron（plugin-cron 无头引擎）；执行策略在这里：
+   * 闭包捕获 userId，触发时以该用户身份 runMission（用其 API Key、
+   * mission 归其名下），并回写 user-store 的执行计数与下次触发时间。
+   */
   public registerUserCronJob(userId: string, jobInfo: any) {
-    this.unregisterUserCronJob(jobInfo.id);
-
     if (jobInfo.status !== 'active') return;
 
-    try {
-      const cronJob = new Cron(jobInfo.pattern, { timezone: 'Asia/Shanghai' }, async () => {
-        this.addTerminalLog('system', `[自动巡航触发] 任务 "${jobInfo.name}" 到达预定时间，开始自主执行...`);
+    const cronSvc = this.ctx?.cron;
+    if (!cronSvc) {
+      this.addTerminalLog('stderr', `[Cron] 调度引擎未就绪，任务 "${jobInfo.name}" 暂未挂载（重启后将自动恢复）。`);
+      return;
+    }
 
-        // 更新执行计数与下一次触发时间
-        jobInfo.runCount = (jobInfo.runCount || 0) + 1;
-        jobInfo.lastRunAt = Date.now();
-        jobInfo.nextRun = cronJob.nextRun()?.toISOString();
+    const ok = cronSvc.register(jobInfo.id, jobInfo.pattern, async () => {
+      this.addTerminalLog('system', `[自动巡航触发] 任务 "${jobInfo.name}" 到达预定时间，开始自主执行...`);
 
-        try {
-          const { saveUserCronJob } = require('@/lib/user-store');
-          saveUserCronJob(userId, jobInfo);
-        } catch (e) {
-          console.error('Failed to save updated cron job status:', e);
-        }
+      // 更新执行计数与下一次触发时间
+      jobInfo.runCount = (jobInfo.runCount || 0) + 1;
+      jobInfo.lastRunAt = Date.now();
+      jobInfo.nextRun = cronSvc.nextRun(jobInfo.id) || undefined;
 
-        this.broadcast({
-          type: 'cron_job_triggered',
-          data: { jobId: jobInfo.id, userId, runCount: jobInfo.runCount, nextRun: jobInfo.nextRun },
-        });
+      try {
+        const { saveUserCronJob } = require('@/lib/user-store');
+        saveUserCronJob(userId, jobInfo);
+      } catch (e) {
+        console.error('Failed to save updated cron job status:', e);
+      }
 
-        // 启动真正智能体生命周期执行任务
-        try {
-          await this.runMission(jobInfo.prompt, {
-            title: `【自动巡航】${jobInfo.name}`,
-            userId,
-          });
-        } catch (err: any) {
-          this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`);
-        }
+      this.broadcast({
+        type: 'cron_job_triggered',
+        data: { jobId: jobInfo.id, userId, runCount: jobInfo.runCount, nextRun: jobInfo.nextRun },
       });
 
-      jobInfo.nextRun = cronJob.nextRun()?.toISOString();
-      this.activeCronJobs.set(jobInfo.id, { job: cronJob, userId, info: jobInfo });
-      this.addTerminalLog(
-        'system',
-        `[Cron] 任务 "${jobInfo.name}" (${jobInfo.pattern}) 已挂载，下次触发: ${cronJob.nextRun()?.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) || '无'}`
-      );
-    } catch (e: any) {
-      console.error(`Failed to register cron job ${jobInfo.name}:`, e);
+      // 以任务归属用户的身份启动智能体生命周期执行
+      try {
+        await this.runMission(jobInfo.prompt, {
+          title: `【自动巡航】${jobInfo.name}`,
+          userId,
+        });
+      } catch (err: any) {
+        this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`);
+      }
+    });
+
+    if (!ok) {
+      this.addTerminalLog('stderr', `[Cron] 任务 "${jobInfo.name}" 挂载失败（表达式 "${jobInfo.pattern}" 无效）。`);
+      return;
     }
+
+    jobInfo.nextRun = cronSvc.nextRun(jobInfo.id) || jobInfo.nextRun;
+    this.activeCronJobs.set(jobInfo.id, { userId, name: jobInfo.name });
+    this.addTerminalLog(
+      'system',
+      `[Cron] 任务 "${jobInfo.name}" (${jobInfo.pattern}) 已挂载，下次触发: ${jobInfo.nextRun || '无'}`
+    );
   }
 
   public unregisterUserCronJob(jobId: string) {
     const existing = this.activeCronJobs.get(jobId);
-    if (existing) {
-      try {
-        existing.job.stop();
-      } catch {}
-      this.activeCronJobs.delete(jobId);
-      this.addTerminalLog('system', `[Cron] 任务 "${existing.info?.name || jobId}" 已从后台定时池注销。`);
-    }
+    if (!existing) return;
+    this.ctx?.cron?.cancel(jobId);
+    this.activeCronJobs.delete(jobId);
+    this.addTerminalLog('system', `[Cron] 任务 "${existing.name || jobId}" 已从后台定时池注销。`);
   }
 
   public async triggerUserCronJob(userId: string, jobId: string) {

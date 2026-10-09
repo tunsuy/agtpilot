@@ -56,6 +56,7 @@ flowchart TD
 
 - **plugin-model**：实现 `ModelGateway`，以 `model` 服务名注册。模型解析优先级链：`configOverride > 显式 model 参数 > preferred（router 写入）> 环境变量`。预算经 `setBudget` 设置，agent loop `stopWhen` 双闸门（步数 + token）强制收尾。
 - **plugin-router**：`inject: ['agent', 'model']`，能级切换通过 `ModelGateway.setPreferredModel()` 推送 —— router 依赖 model，但 model 不依赖 router。
+- **plugin-cron**：无头调度引擎样板 —— 只提供 `ctx.cron.register/cancel` 能力（包装 croner 库），持久化、执行身份（以哪个用户跑）、工具暴露全部由应用层决定（Web 见 `apps/web/src/lib/cron-service.ts`，CLI 见 `apps/cli/src/bin.ts` 的包装）。工具路由规则仍由插件注册（`cron_` 前缀），工具本体由应用层按前缀约定提供。
 - **其余插件**：注册工具 + `registerToolRoute({ id, prefixes, test })` 自描述路由规则；通用小工具标 `baseline: true` 常驻。
 
 ### 应用层
@@ -85,6 +86,7 @@ flowchart TD
 | 7 | 任务状态只存内存单例 | 进程重启即全部丢失 | checkpoint 事件节流落盘 + 启动僵尸清扫 + rehydrate 续跑 |
 | 8 | `test: 'echo \"no tests\"'` 静默通过 | CI 绿灯但零覆盖 | vitest 真实跑，30 用例守护 routing/text/compaction |
 | 9 | 插件侧 `declare module` 增强 `Context.model` | 与 core 的声明接口合并冲突、类型漂移 | 声明全部收敛 core |
+| 10 | 插件自带执行策略（plugin-cron 旧形态：自持久化 + 硬编码 `runTask` + 自注册工具） | 多用户化后应用层被迫另建一套，双轨分裂：模型经工具建的任务与 UI 建的任务互不可见 | 插件只留无头能力引擎（`ctx.cron.register/cancel`），持久化/执行身份/工具暴露归应用层（Web: `cron-service.ts` + taskTools；CLI: `bin.ts` 包装） |
 
 ## 事件清单（cordis 事件 ≠ AgentEvent）
 

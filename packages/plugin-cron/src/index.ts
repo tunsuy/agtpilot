@@ -3,18 +3,19 @@ import { Cron } from 'croner';
 import '@agtpilot/core';
 
 export const name = 'agtpilot-plugin-cron';
-export const inject = ['agent', 'orchestrator'];
 
-export interface ScheduledJobInfo {
-  id: string;
-  name: string;
-  pattern: string;
-  prompt: string;
-  nextRun?: string;
-  runCount: number;
-  lastRunAt?: number;
-  status: 'active' | 'paused' | 'cancelled';
-}
+/**
+ * 无头调度引擎（headless scheduling engine）。
+ *
+ * 只提供"能力"：cron 表达式解析、定时触发、注销。三件事刻意不做：
+ * - 不做持久化（存哪、谁可见是应用层的事 —— Web 存 user-store，CLI 可存本地文件）
+ * - 不做执行（触发后干什么、以谁的身份跑，由注册方注入 onFire 回调闭包捕获）
+ * - 不注册工具（工具暴露给谁、参数怎么定义由应用层决定 —— Web 用 taskTools
+ *   注入用户级同名工具，CLI 自行包装全局工具）
+ *
+ * 这是 ARCHITECTURE.md「插件是能力提供者，不是策略所有者」的正面样板。
+ */
+export const inject = ['agent'];
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -22,212 +23,69 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-import * as fs from 'fs';
-import * as path from 'path';
-
 export class CronService extends Service {
-  private jobs: Map<string, { job: Cron; info: ScheduledJobInfo }> = new Map();
-  private cronFilePath: string;
+  private jobs: Map<string, { job: Cron; onFire: () => Promise<void> }> = new Map();
 
   constructor(ctx: Context) {
     super(ctx, 'cron');
-    const cacheDir = path.resolve(process.cwd(), '.cache');
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
-    }
-    this.cronFilePath = path.join(cacheDir, 'scheduled_jobs.json');
-    this.loadFromDisk();
   }
 
-  private loadFromDisk() {
+  /**
+   * 注册（或重新注册）一个调度任务。同 id 重复注册自动替换旧调度。
+   * 触发时只调用 onFire —— 执行什么、以谁的身份执行，全由回调决定。
+   */
+  register(id: string, pattern: string, onFire: () => Promise<void>, timezone = 'Asia/Shanghai'): boolean {
     try {
-      if (fs.existsSync(this.cronFilePath)) {
-        const raw = fs.readFileSync(this.cronFilePath, 'utf-8');
-        const list: ScheduledJobInfo[] = JSON.parse(raw);
-        for (const item of list) {
-          if (item.status === 'active') {
-            this.registerCron(item);
-          } else {
-            // 已暂停或已取消任务只保留信息
-            this.jobs.set(item.id, { job: null as any, info: item });
-          }
-        }
-      }
-    } catch {
-      // 容错处理
-    }
-  }
-
-  private saveToDisk() {
-    try {
-      const list = Array.from(this.jobs.values()).map(({ info }) => info);
-      fs.writeFileSync(this.cronFilePath, JSON.stringify(list, null, 2), 'utf-8');
-    } catch {
-      // 容错处理
-    }
-  }
-
-  private registerCron(info: ScheduledJobInfo) {
-    try {
-      const cronJob = new Cron(info.pattern, { timezone: 'Asia/Shanghai' }, async () => {
-        info.runCount++;
-        info.lastRunAt = Date.now();
-        info.nextRun = cronJob.nextRun()?.toISOString();
-        this.saveToDisk();
-
-        // 自主唤醒智能体执行任务
+      this.cancel(id);
+      const job = new Cron(pattern, { timezone }, async () => {
         try {
-          await this.ctx.orchestrator.runTask({
-            prompt: `【定时巡检主动触发 - ${info.name}】: ${info.prompt}`,
-          });
-        } catch (err) {
-          // 容错记录
+          await onFire();
+        } catch (err: any) {
+          console.error(`[plugin-cron] 任务 ${id} 触发回调异常:`, err?.message || err);
         }
       });
-
-      info.nextRun = cronJob.nextRun()?.toISOString();
-      this.jobs.set(info.id, { job: cronJob, info });
-    } catch (e) {
-      console.error(`Failed to register cron job ${info.name}:`, e);
+      this.jobs.set(id, { job, onFire });
+      return true;
+    } catch (e: any) {
+      console.error(`[plugin-cron] 注册任务 ${id} 失败（表达式 "${pattern}"）:`, e?.message || e);
+      return false;
     }
   }
 
-  schedule(name: string, pattern: string, prompt: string): ScheduledJobInfo {
-    const id = `cron_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-
-    const info: ScheduledJobInfo = {
-      id,
-      name,
-      pattern,
-      prompt,
-      runCount: 0,
-      status: 'active',
-    };
-
-    this.registerCron(info);
-    this.saveToDisk();
-
-    return info;
-  }
-
-  toggle(id: string): ScheduledJobInfo | null {
-    const entry = this.jobs.get(id);
-    if (!entry) return null;
-
-    if (entry.info.status === 'active') {
-      if (entry.job) {
-        entry.job.stop();
-      }
-      entry.info.status = 'paused';
-    } else {
-      entry.info.status = 'active';
-      this.registerCron(entry.info);
-    }
-    this.saveToDisk();
-    return entry.info;
-  }
-
+  /** 注销调度（不删除调用方自己持久化的任务信息） */
   cancel(id: string): boolean {
     const entry = this.jobs.get(id);
     if (!entry) return false;
-
-    if (entry.job) {
+    try {
       entry.job.stop();
+    } catch {
+      // 容错
     }
     this.jobs.delete(id);
-    this.saveToDisk();
     return true;
   }
 
-  list(): ScheduledJobInfo[] {
-    return Array.from(this.jobs.values()).map(({ job, info }) => ({
-      ...info,
-      nextRun: job ? job.nextRun()?.toISOString() : info.nextRun,
-    }));
+  /** 下一次触发时间（未注册返回 null） */
+  nextRun(id: string): string | null {
+    const entry = this.jobs.get(id);
+    if (!entry) return null;
+    return entry.job.nextRun()?.toISOString() ?? null;
+  }
+
+  /** 当前在调度的任务 id 列表 */
+  activeIds(): string[] {
+    return Array.from(this.jobs.keys());
   }
 }
 
 export function apply(ctx: Context) {
-  // 工具路由自注册：prompt 命中定时/提醒类关键词时挂载定时与通知工具组
+  new CronService(ctx);
+
+  // 工具路由自注册照旧保留：路由只声明"定时/提醒类 prompt → 挂载 cron_ 前缀工具"，
+  // 工具本体由应用层提供（Web 的用户级 taskTools / CLI 的全局包装，均用 cron_ 前缀）
   ctx.agent.registerToolRoute({
     id: 'cron',
     prefixes: ['cron_'],
     test: /(定时|每天|每小时|每周|每晚|提醒|cron|schedule|remind)/i,
-  });
-
-  const cronService = new CronService(ctx);
-
-  // 1. 创建定时主动巡检任务 (cron_schedule_task)
-  ctx.agent.registerTool({
-    name: 'cron_schedule_task',
-    description: '设置自主定时/周期性主动执行任务 (Cron Job)。例如："每天早上9点搜索AI论文"、"每小时检查某系统状态并告警"。Agent 会在后台无人值守自动唤醒执行。',
-    parameters: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: '定时任务名称 (如: "每日GitHub趋势早报", "系统健康巡检")' },
-        cronPattern: {
-          type: 'string',
-          description: '标准 5 位 Cron 表达式 (如: "0 9 * * *" 表示每天9点, "*/30 * * * *" 表示每30分钟)',
-        },
-        taskPrompt: { type: 'string', description: '触发时自动派发给 Agent 执行的完整自然语言任务指令' },
-      },
-      required: ['name', 'cronPattern', 'taskPrompt'],
-    },
-    execute: async ({ name, cronPattern, taskPrompt }) => {
-      try {
-        const info = cronService.schedule(name, cronPattern, taskPrompt);
-        return {
-          success: true,
-          jobId: info.id,
-          name: info.name,
-          pattern: info.pattern,
-          nextRun: info.nextRun,
-          message: `已成功安排定时巡检任务 [${info.name}]，下次预计执行时间: ${info.nextRun || '未知'}。`,
-        };
-      } catch (err: any) {
-        return {
-          success: false,
-          error: `创建定时任务失败: ${err.message}`,
-        };
-      }
-    },
-  });
-
-  // 2. 列出正在运行的所有定时任务 (cron_list_tasks)
-  ctx.agent.registerTool({
-    name: 'cron_list_tasks',
-    description: '查看当前后台已激活的所有定时巡检任务列表、执行次数与下一次触发时间。',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    execute: async () => {
-      const tasks = cronService.list();
-      return {
-        success: true,
-        total: tasks.length,
-        tasks,
-      };
-    },
-  });
-
-  // 3. 取消定时任务 (cron_cancel_task)
-  ctx.agent.registerTool({
-    name: 'cron_cancel_task',
-    description: '取消已登记的定时巡检任务，停止后续自动触发。',
-    parameters: {
-      type: 'object',
-      properties: {
-        jobId: { type: 'string', description: '要取消的定时任务 ID' },
-      },
-      required: ['jobId'],
-    },
-    execute: async ({ jobId }) => {
-      const ok = cronService.cancel(jobId);
-      return {
-        success: ok,
-        message: ok ? `任务 [${jobId}] 已成功取消并停止。` : `未找到 ID 为 [${jobId}] 的定时任务。`,
-      };
-    },
   });
 }

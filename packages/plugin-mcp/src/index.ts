@@ -441,6 +441,13 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export function apply(ctx: Context, config: MCPPluginConfig = {}) {
+  // 工具路由自注册：prompt 命中外部工具服务类关键词时挂载本插件工具组
+  ctx.agent.registerToolRoute({
+    id: 'mcp',
+    prefixes: ['mcp_'],
+    test: /(mcp|外部工具服务)/i,
+  });
+
   const svc = new MCPService(ctx);
 
   // 1. 暴露 mcp_connect_stdio 工具供 Agent 自主挂载本地 MCP Server

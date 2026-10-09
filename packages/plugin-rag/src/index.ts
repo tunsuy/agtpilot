@@ -139,6 +139,13 @@ export class RagService extends Service {
 }
 
 export function apply(ctx: Context) {
+  // 工具路由自注册：prompt 命中知识库/向量检索类关键词时挂载本插件工具组
+  ctx.agent.registerToolRoute({
+    id: 'rag',
+    prefixes: ['rag_'],
+    test: /(知识库|向量|索引文档|rag)/i,
+  });
+
   const ragService = new RagService(ctx);
 
   // 1. 索引本地私有文档 (rag_index_document)

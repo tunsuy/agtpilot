@@ -13,6 +13,13 @@ export const name = 'agtpilot-plugin-git';
 export const inject = ['agent'];
 
 export function apply(ctx: Context) {
+  // 工具路由自注册：prompt 命中版本控制类关键词时挂载本插件工具组
+  ctx.agent.registerToolRoute({
+    id: 'git',
+    prefixes: ['git_'],
+    test: /(git|仓库|提交代码|分支|回滚|commit|repo|diff|patch|merge)/i,
+  });
+
   const cwd = process.cwd();
 
   // 1. git_status: 查看当前 Git 工作区与分支状态

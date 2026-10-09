@@ -8,5 +8,11 @@
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
     "@agtpilot/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  },
+  "scripts": {
+    "test": "vitest run"
   }
 }

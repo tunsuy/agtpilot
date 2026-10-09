@@ -12,6 +12,13 @@ export const name = 'agtpilot-plugin-desktop';
 export const inject = ['agent'];
 
 export function apply(ctx: Context) {
+  // 工具路由自注册：prompt 命中文件/桌面操作类关键词时挂载本插件工具组
+  ctx.agent.registerToolRoute({
+    id: 'desktop',
+    prefixes: ['desktop_'],
+    test: /(文件|目录|读写|截图|剪贴板|桌面|file|directory|screenshot|clipboard|desktop)/i,
+  });
+
   const cacheDir = path.resolve(process.cwd(), '.cache');
   if (!fs.existsSync(cacheDir)) {
     fs.mkdirSync(cacheDir, { recursive: true });

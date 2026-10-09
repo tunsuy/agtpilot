@@ -22,8 +22,8 @@ export class ObservabilityService extends Service {
   constructor(ctx: Context) {
     super(ctx, 'observability');
 
-    // 监听核心智能体流转事件
-    (this.ctx as any).on('agtpilot/event', (event: AgentEvent) => {
+    // 监听核心智能体流转事件（'agtpilot/event' 由 core 的 Events 增强声明）
+    ctx.on('agtpilot/event', (event: AgentEvent) => {
       this.recordEvent(event);
     });
   }

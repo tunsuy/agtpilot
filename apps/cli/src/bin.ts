@@ -1,58 +1,29 @@
-import { Context } from '@deepseek-ai/cordis';
-import { AgentService, OrchestratorService } from '@agtpilot/core';
-import * as BrowserPlugin from '@agtpilot/plugin-browser';
-import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
-import * as SearchPlugin from '@agtpilot/plugin-search';
-import * as MCPPlugin from '@agtpilot/plugin-mcp';
-import * as ModelPlugin from '@agtpilot/plugin-model';
-import * as ArtifactPlugin from '@agtpilot/plugin-artifact';
-import * as PlannerPlugin from '@agtpilot/plugin-planner';
-import * as MemoryPlugin from '@agtpilot/plugin-memory';
-import * as CronPlugin from '@agtpilot/plugin-cron';
-import * as ObservabilityPlugin from '@agtpilot/plugin-observability';
-import * as GitPlugin from '@agtpilot/plugin-git';
-import * as NotifyPlugin from '@agtpilot/plugin-notify';
-import * as RagPlugin from '@agtpilot/plugin-rag';
-import * as DesktopPlugin from '@agtpilot/plugin-desktop';
-import * as RouterPlugin from '@agtpilot/plugin-router';
+import { createAgentRuntime } from '@agtpilot/app-kit';
 
 async function main() {
-  console.log('🚀 启动 agtpilot (基于 DeepSeek Harness 官方 Cordis 插件微内核)...');
+  console.log('🚀 启动 agtpilot (基于 Cordis 插件微内核 + app-kit 统一装配)...');
 
-  // 1. 初始化 Cordis 微内核上下文
-  const ctx = new Context();
+  // 1. 微内核 + 全套原子能力插件统一装配（composition root 在 @agtpilot/app-kit）
+  //    Promise resolve 即全部插件就绪；单个插件失败只跳过并记录，不拖垮内核
+  const runtime = await createAgentRuntime();
+  const ctx = runtime.ctx;
 
-  // 2. 注入核心服务 (Agent 原子工具管理 + 自研 Orchestrator 编排器)
-  new AgentService(ctx);
-  new OrchestratorService(ctx);
-
-  // 3. 动态加载全套业界顶级原子能力插件
-  await ctx.plugin(BrowserPlugin, { headless: true });
-  await ctx.plugin(SandboxPlugin);
-  await ctx.plugin(SearchPlugin);
-  await ctx.plugin(MCPPlugin);
-  await ctx.plugin(ModelPlugin);
-  await ctx.plugin(ArtifactPlugin);
-  await ctx.plugin(PlannerPlugin);
-  await ctx.plugin(MemoryPlugin);
-  await ctx.plugin(CronPlugin);
-  await ctx.plugin(ObservabilityPlugin);
-  await ctx.plugin(GitPlugin);
-  await ctx.plugin(NotifyPlugin);
-  await ctx.plugin(RagPlugin);
-  await ctx.plugin(DesktopPlugin);
-  await ctx.plugin(RouterPlugin);
+  const failed = runtime.loaded.filter((l) => !l.ok);
+  if (failed.length > 0) {
+    console.log(`\n⚠️  ${failed.length} 个插件加载失败（已跳过）:`);
+    failed.forEach((f) => console.log(`   - ${f.plugin}: ${f.error}`));
+  }
 
   console.log('\n✅ agtpilot 底座启动成功！已动态装载的服务与工具:');
-  console.log(` - 🧠 模型驱动服务: ctx.model 已就绪 (基于 Vercel AI SDK 方案 A 单步驱动)`);
-  console.log(` - 🔄 编排调度服务: ctx.orchestrator 已就绪 (自研透明 ReAct 状态机)`);
-  
+  console.log(' - 🧠 模型网关服务: ctx.model (ModelGateway, Vercel AI SDK v5 agent loop)');
+  console.log(' - 🔄 编排调度服务: ctx.orchestrator (熔断/审批/压缩/检查点)');
+
   const tools = ctx.agent.getTools();
   tools.forEach((t) => {
     console.log(` - 🛠️ 原子工具 [${t.name}]: ${t.description}`);
   });
 
-  // 4. 模拟注册一个带有高危安全级别的测试工具，验证 Human-in-the-Loop 审批拦截
+  // 2. 模拟注册一个带有高危安全级别的测试工具，验证 Human-in-the-Loop 审批拦截
   ctx.agent.registerTool({
     name: 'delete_local_data',
     description: '删除本地缓存或敏感数据',
@@ -65,12 +36,13 @@ async function main() {
   });
 
   console.log('\n✨ 自研 Orchestrator 编排器关键能力验证:');
-  console.log(' - 1. 原生支持死循环熔断器 (Loop Detector, 重复调用 3 次即熔断)');
+  console.log(' - 1. 原生支持死循环熔断器 (Loop Detector, 滑动窗口同签名计数)');
   console.log(' - 2. 原生支持安全审批拦截 (Human-in-the-Loop, 高危工具挂起等前端确认)');
   console.log(' - 3. 全链路事件流广播 (AgentEvent: thought/tool_call/approval_request/done)');
-  console.log(' - 4. 完美保持插件化解耦：未来想插 LangGraph 插件随时可无缝替换！');
+  console.log(' - 4. 运行中消息检查点 (agtpilot/checkpoint, 重启后可续跑)');
+  console.log(' - 5. 微内核依赖倒置：内核只依赖 ModelGateway/PlannerNotifier 契约');
 
-  console.log('\n🎉 自研 ReAct 状态机编排引擎装配就绪！');
+  console.log('\n🎉 ReAct 编排引擎装配就绪！');
 }
 
 main().catch(console.error);

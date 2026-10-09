@@ -148,6 +148,13 @@ export class CronService extends Service {
 }
 
 export function apply(ctx: Context) {
+  // 工具路由自注册：prompt 命中定时/提醒类关键词时挂载定时与通知工具组
+  ctx.agent.registerToolRoute({
+    id: 'cron',
+    prefixes: ['cron_'],
+    test: /(定时|每天|每小时|每周|每晚|提醒|cron|schedule|remind)/i,
+  });
+
   const cronService = new CronService(ctx);
 
   // 1. 创建定时主动巡检任务 (cron_schedule_task)

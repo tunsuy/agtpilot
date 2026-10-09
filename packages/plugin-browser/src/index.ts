@@ -15,6 +15,13 @@ export interface BrowserPluginConfig {
 }
 
 export function apply(ctx: Context, config: BrowserPluginConfig = { headless: true }) {
+  // 工具路由自注册：prompt 命中网页/浏览类关键词时挂载本插件工具组（内核不维护前缀表）
+  ctx.agent.registerToolRoute({
+    id: 'browser',
+    prefixes: ['browser_'],
+    test: /(网页|网站|浏览|抓取|爬取|打开链接|https?:\/\/|www\.|\.(com|cn|org|net|io)\b|browser|webpage|scrape|crawl)/i,
+  });
+
   let browserContext: BrowserContext | null = null;
   let activePage: Page | null = null;
 
@@ -368,8 +375,8 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     },
   });
 
-  // 进程退出时妥善关闭浏览器
-  (ctx as any).on('dispose', async () => {
+  // 进程退出时妥善关闭浏览器（'dispose' 事件由 core 的 Events 增强声明）
+  ctx.on('dispose', async () => {
     if (browserContext) {
       await browserContext.close();
       browserContext = null;

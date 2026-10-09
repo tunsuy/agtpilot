@@ -19,6 +19,13 @@ export interface SandboxConfig {
 }
 
 export function apply(ctx: Context, config: SandboxConfig = {}) {
+  // 工具路由自注册：prompt 命中代码/命令执行类关键词时挂载本插件工具组
+  ctx.agent.registerToolRoute({
+    id: 'sandbox',
+    prefixes: ['sandbox_'],
+    test: /(代码|脚本|运行|执行|命令|编译|部署|python|javascript|node|shell|sql|code|script|run|execute)/i,
+  });
+
   const workspaceRoot = config.workspaceRoot || process.cwd();
   const defaultTimeoutMs = config.defaultTimeoutMs || 30000;
   const tempSandboxDir = path.resolve(workspaceRoot, '.cache/sandbox');

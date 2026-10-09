@@ -8,13 +8,15 @@
  */
 import { Context } from '@deepseek-ai/cordis';
 import { AgentService, OrchestratorService, ToolDefinition } from './index';
+import type { ModelGateway, PlannerNotifier } from './index';
 
 async function main() {
   const ctx = new Context();
   new AgentService(ctx);
   const orch = new OrchestratorService(ctx);
 
-  // ---- stub model service：驱动 A/B 交替空转，然后给最终文本 ----
+  // ---- stub 模型网关（实现 ModelGateway 契约，编译期防契约漂移）：
+  // 驱动 A/B 交替空转，然后给最终文本 ----
   // 每轮先走 prepareStep（模拟 AI SDK v5 每步前的准备回调），验证任务内压缩
   let round = 0;
   let midLoopCompacted = false;
@@ -22,7 +24,9 @@ async function main() {
   let longOutputTruncated = false;
   let longOutputKeepsTail = false;
   let longOutputKeepsHead = false;
-  (ctx as any).model = {
+  const stubModel: ModelGateway = {
+    setPreferredModel: () => {},
+    setBudget: () => {},
     runAgentLoop: async (opts: any) => {
       const tools = opts.tools as Array<{ name: string; execute: (args: any) => Promise<any> }>;
       const find = (n: string) => tools.find((t) => t.name === n)!;
@@ -64,8 +68,10 @@ async function main() {
       usage: { promptTokens: 0, completionTokens: 0 },
     }),
   };
+  // 以 'model' 服务名注册（内核经 ctx.reflect.get('model') 类型化读取）
+  ctx.reflect.provide('model', stubModel);
 
-  // ---- stub planner：验证 noteToolResult 自动推进 ----
+  // ---- stub 规划器（实现 PlannerNotifier 契约）：验证 noteToolResult 自动推进 ----
   const plan = {
     goal: 'g',
     tasks: [
@@ -76,7 +82,7 @@ async function main() {
     currentTaskId: 't1',
   };
   let advances = 0;
-  (ctx as any).planner = {
+  const stubPlanner: PlannerNotifier = {
     noteToolResult: (_taskId: string, toolName: string) => {
       const cur = plan.tasks.find((t: any) => t.id === plan.currentTaskId && t.status === 'in_progress');
       if (cur) {
@@ -90,6 +96,7 @@ async function main() {
       }
     },
   };
+  ctx.reflect.provide('planner', stubPlanner);
 
   const seenEvents: string[] = [];
   ctx.on('agtpilot/event', (e: any) => seenEvents.push(e.type));

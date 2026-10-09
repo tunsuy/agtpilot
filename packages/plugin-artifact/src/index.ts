@@ -33,8 +33,8 @@ export class ArtifactService extends Service {
     this.artifacts.set(id, artifact);
     this.latestArtifactId = id;
 
-    // 广播产物创建/更新事件
-    (this.ctx as any).emit('agtpilot/artifact', artifact);
+    // 广播产物创建/更新事件（Events 增强已在本文件声明）
+    this.ctx.emit('agtpilot/artifact', artifact);
     this.ctx.agent.emitEvent({
       type: 'artifact',
       payload: artifact,
@@ -64,6 +64,7 @@ export function apply(ctx: Context) {
   // 注册核心原子工具：artifact_render
   ctx.agent.registerTool({
     name: 'artifact_render',
+    baseline: true,
     description: '在中心画布(Canvas/Artifact)中渲染高保真产物。支持代码高亮(code)、富文本报告(markdown)、交互式HTML/React组件(html)以及Mermaid架构/流程图(chart)。当生成完整代码、编写综合调研报告、绘制架构图或制作前端页面时务必调用此工具呈现。',
     parameters: {
       type: 'object',

@@ -92,6 +92,13 @@ export function resolveWebhookUrl(
 }
 
 export function apply(ctx: Context) {
+  // 工具路由自注册：prompt 命中通知/推送类关键词时挂载本插件工具组
+  ctx.agent.registerToolRoute({
+    id: 'notify',
+    prefixes: ['notify_'],
+    test: /(通知|推送|提醒|webhook|notify)/i,
+  });
+
   const notifyService = new NotifyService(ctx);
 
   // 1. notify_send_desktop: 发送操作系统原生桌面弹窗通知

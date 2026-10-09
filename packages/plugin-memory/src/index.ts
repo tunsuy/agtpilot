@@ -130,6 +130,7 @@ export function apply(ctx: Context) {
   // 1. 存储长期记忆 (memory_store)
   ctx.agent.registerTool({
     name: 'memory_store',
+    baseline: true,
     description: '长期记住用户的习惯偏好、技术栈规范、专属业务知识或踩坑经验。存储后的记忆会持久化到磁盘并在未来的跨会话任务中永久生效。',
     parameters: {
       type: 'object',
@@ -159,6 +160,7 @@ export function apply(ctx: Context) {
   // 2. 检索长期记忆 (memory_recall)
   ctx.agent.registerTool({
     name: 'memory_recall',
+    baseline: true,
     description: '在执行任务前检索长期记忆库，主动获取过去沉淀的用户偏好、项目知识与历史踩坑规则。',
     parameters: {
       type: 'object',

@@ -1,20 +1,21 @@
 import { Context, Service } from '@deepseek-ai/cordis';
 import { PlanData, PlanTask } from '@agtpilot/protocol';
+import type { PlannerNotifier } from '@agtpilot/core';
 import '@agtpilot/core';
 
 export const name = 'agtpilot-plugin-planner';
 export const inject = ['agent'];
 
+// Context.planner 的类型声明在 core（PlannerNotifier，依赖倒置）：
+// 内核只需要 noteToolResult；本服务的完整 API（createPlan 等）留在插件内部。
+
 declare module '@deepseek-ai/cordis' {
-  interface Context {
-    planner: PlannerService;
-  }
   interface Events {
     'agtpilot/plan'(plan: PlanData): void;
   }
 }
 
-export class PlannerService extends Service {
+export class PlannerService extends Service implements PlannerNotifier {
   /** 计划按任务键（orchestrator taskId）隔离：多用户并发任务各自持有独立看板，互不串台 */
   private plans: Array<PlanData & { taskKey?: string }> = [];
 
@@ -107,7 +108,7 @@ export class PlannerService extends Service {
   }
 
   private broadcastPlan(plan: PlanData) {
-    (this.ctx as any).emit('agtpilot/plan', plan);
+    this.ctx.emit('agtpilot/plan', plan);
     this.ctx.agent.emitEvent({
       type: 'plan',
       payload: plan,
@@ -119,9 +120,10 @@ export class PlannerService extends Service {
 export function apply(ctx: Context) {
   const plannerService = new PlannerService(ctx);
 
-  // 1. 创建结构化任务看板 (planner_create_plan)
+  // 1. 创建结构化任务看板 (planner_create_plan) —— 基线工具：路由启用时也始终挂载
   ctx.agent.registerTool({
     name: 'planner_create_plan',
+    baseline: true,
     description:
       '仅当任务确实需要多个异构动作（如"检索 + 浏览网页 + 生成图表"）时才调用，为执行过程建立可视化的任务看板。' +
       '简单任务（单次搜索、单次问答、两步以内的操作）【不要】建看板，直接执行即可。' +
@@ -158,9 +160,10 @@ export function apply(ctx: Context) {
     },
   });
 
-  // 2. 修正看板状态 (planner_update_task) —— 正常推进无需调用
+  // 2. 修正看板状态 (planner_update_task) —— 正常推进无需调用；基线工具
   ctx.agent.registerTool({
     name: 'planner_update_task',
+    baseline: true,
     description:
       '仅在需要显式修正看板状态时调用（如某步骤确认无法完成需标记 failed、或需回退状态）。' +
       '看板会随工具执行成功【自动推进】，正常完成步骤、进入下一阶段都【不需要】调用本工具 —— 请直接执行下一步动作。',

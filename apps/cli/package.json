@@ -6,23 +6,8 @@
     "agtpilot": "src/bin.ts"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.4",
-    "@agtpilot/core": "workspace:*",
-    "@agtpilot/plugin-browser": "workspace:*",
-    "@agtpilot/plugin-sandbox": "workspace:*",
-    "@agtpilot/plugin-search": "workspace:*",
-    "@agtpilot/plugin-mcp": "workspace:*",
-    "@agtpilot/plugin-model": "workspace:*",
-    "@agtpilot/plugin-artifact": "workspace:*",
-    "@agtpilot/plugin-planner": "workspace:*",
-    "@agtpilot/plugin-memory": "workspace:*",
-    "@agtpilot/plugin-cron": "workspace:*",
-    "@agtpilot/plugin-observability": "workspace:*",
-    "@agtpilot/plugin-git": "workspace:*",
-    "@agtpilot/plugin-notify": "workspace:*",
-    "@agtpilot/plugin-rag": "workspace:*",
-    "@agtpilot/plugin-desktop": "workspace:*",
-    "@agtpilot/plugin-router": "workspace:*",
-    "@agtpilot/protocol": "workspace:*"
+    "@agtpilot/app-kit": "workspace:*",
+    "@agtpilot/protocol": "workspace:*",
+    "@deepseek-ai/cordis": "^4.0.4"
   }
 }

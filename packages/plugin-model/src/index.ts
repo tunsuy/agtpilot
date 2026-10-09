@@ -1,121 +1,40 @@
 import { Context, Service } from '@deepseek-ai/cordis';
-import { generateText, stepCountIs, jsonSchema, CoreMessage, ModelMessage, tool } from 'ai';
+import { generateText, stepCountIs, jsonSchema, tool } from 'ai';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import { ModelStepResult } from '@agtpilot/protocol';
+import type {
+  ModelGateway,
+  ModelInvokeOptions,
+  AgentLoopOptions,
+  AgentLoopResult,
+  AgentLoopStepInfo,
+} from '@agtpilot/core';
 import '@agtpilot/core';
 
 export const name = 'agtpilot-plugin-model';
 export const inject = ['agent'];
 
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    model: ModelService;
-  }
-}
-
 export type { ModelStepResult };
 
-export interface ModelInvokeOptions {
-  model?: string;
-  system?: string;
-  messages: CoreMessage[];
-  temperature?: number;
-  /** 本次调用禁用全部工具声明（用于步数耗尽后的强制纯文本总结收尾） */
-  disableTools?: boolean;
-  configOverride?: {
-    activeModelId?: string;
-    apiKey?: string;
-    baseURL?: string;
-    modelName?: string;
-  };
-}
-
-/** 交给内置 agent loop 执行的工具（真实 execute 由上层编排器包装注入） */
-export interface AgentLoopTool {
-  name: string;
-  description: string;
-  /** 工具的 JSON Schema 参数定义，透传给模型（缺失时退化为自由参数） */
-  parameters?: Record<string, any>;
-  execute: (args: any) => Promise<any>;
-}
-
 /**
- * 把工具注册时声明的 JSON Schema 参数定义透传给模型。
- * 之前用空 Schema 兜底导致模型看不到参数名/必填项，只能盲猜参数、
- * 失败重试，白白烧掉步数。无 Schema 时退化为 passthrough（自由参数）。
- * 附带轻量校验：缺少必填参数时在触达真实 execute 前拦截为 tool-error，
- * 模型可当步自纠，也避免非法参数触发副作用。
+ * 模型驱动服务：实现内核的 ModelGateway 契约（@agtpilot/core contracts）。
+ *
+ * 依赖方向：内核只依赖 ModelGateway 接口，本插件提供实现并以 'model'
+ * 服务名注册 —— Context.model 的类型声明在 core（依赖倒置），
+ * 本包不再做模块增强。
  */
-function toInputSchema(params?: Record<string, any>) {
-  if (params && typeof params === 'object' && params.type === 'object') {
-    const required: string[] = Array.isArray(params.required) ? params.required : [];
-    return jsonSchema(params as any, {
-      validate: (value: any) => {
-        if (typeof value !== 'object' || value === null) {
-          return { success: false, error: new Error('工具参数必须是 JSON 对象') };
-        }
-        const missing = required.filter((k) => value[k] === undefined);
-        if (missing.length > 0) {
-          return { success: false, error: new Error(`缺少必填参数: ${missing.join(', ')}`) };
-        }
-        return { success: true, value };
-      },
-    });
-  }
-  return z.object({}).passthrough();
-}
-
-export interface AgentLoopStepInfo {
-  stepNumber: number;
-  text: string;
-  toolCalls: Array<{ toolCallId: string; toolName: string; args: Record<string, any> }>;
-  toolResults: Array<{ toolCallId: string; toolName: string; result: any }>;
-  finishReason: string;
-}
-
-export interface AgentLoopOptions {
-  model?: string;
-  system?: string;
-  messages: CoreMessage[];
-  temperature?: number;
-  /** 多步循环的最大步数（stopWhen: stepCountIs(N)） */
-  maxSteps?: number;
-  tools?: AgentLoopTool[];
-  /** 本次调用只向模型声明的工具子集（其余仍可执行但不进上下文），缺省为全量 */
-  activeTools?: string[];
-  abortSignal?: AbortSignal;
-  configOverride?: ModelInvokeOptions['configOverride'];
-  /**
-   * 每步准备回调（对应 AI SDK v5 prepareStep）：进入每一步前由上层做两件事 ——
-   * 依据近期消息重算本步可见工具子集（任务中途的动态工具路由），
-   * 以及超阈值时重写本步消息（任务内的会话压缩）。
-   */
-  prepareStep?: (info: { stepNumber: number; messages: ModelMessage[] }) =>
-    | { activeTools?: string[]; messages?: ModelMessage[] }
-    | undefined
-    | Promise<{ activeTools?: string[]; messages?: ModelMessage[] } | undefined>;
-  /** 每步完成回调（模型文本 + 工具调用/结果），供上层做事件广播 */
-  onStepFinish?: (info: AgentLoopStepInfo) => void;
-}
-
-export interface AgentLoopResult {
-  /** 最后一步的文本输出 */
-  text: string;
-  finishReason: string;
-  /** 实际执行步数 */
-  stepsCount: number;
-  /** 是否因触达步数上限而停止（此时模型可能仍想继续调工具） */
-  stepsExhausted: boolean;
-  /** 循环期间产生的标准 assistant/tool 消息（可拼回会话历史） */
-  responseMessages: ModelMessage[];
-  usage?: { promptTokens: number; completionTokens: number };
-}
-
-export class ModelService extends Service {
+export class ModelService extends Service implements ModelGateway {
   private deepseekProvider: ReturnType<typeof createDeepSeek>;
   private openaiProvider: ReturnType<typeof createOpenAI>;
+
+  /** 运行时偏好模型（plugin-router 的能级切换写入；优先级高于环境变量默认） */
+  private preferred: { activeModelId?: string; modelName?: string; reason?: string } = {};
+  /** Token 预算（超出时 agent loop 主动收尾）；0 = 未设置 */
+  private budgetMaxTokens = 0;
+  /** 进程内累计 token 用量（runAgentLoop 每次上报） */
+  private usedTokens = 0;
 
   constructor(ctx: Context) {
     super(ctx, 'model');
@@ -160,6 +79,8 @@ export class ModelService extends Service {
       temperature: options.temperature ?? 0,
       stopWhen: stepCountIs(1), // 严格单步，绝不越权包含循环
     });
+
+    this.recordUsage(response.usage?.inputTokens ?? 0, response.usage?.outputTokens ?? 0);
 
     return {
       text: response.text,
@@ -209,15 +130,17 @@ export class ModelService extends Service {
       // 工具循环默认低温：高温会降低工具选择与 JSON 参数生成的稳定性，
       // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
       temperature: options.temperature ?? 0,
-      stopWhen: stepCountIs(maxSteps),
+      // 步数上限 + Token 预算双闸门：任一触达即停止循环（预算由 setBudget 设置）
+      stopWhen: ({ steps }: { steps: any[] }) =>
+        steps.length >= maxSteps || this.isBudgetExceeded(),
       abortSignal: options.abortSignal,
       // 每步动态路由 + 任务内压缩：上层可重算本步可见工具（初始 activeTools 仍作默认），
       // 也可重写本步消息（超阈值时压缩历史）；两者都缺省时返回 undefined 不干预
       prepareStep: options.prepareStep
         ? async ({ stepNumber, messages }: any) => {
-            const result = await options.prepareStep!({ stepNumber, messages: messages as ModelMessage[] });
+            const result = await options.prepareStep!({ stepNumber, messages });
             if (!result) return undefined;
-            const out: { activeTools?: string[]; messages?: ModelMessage[] } = {};
+            const out: { activeTools?: string[]; messages?: any[] } = {};
             if (result.activeTools?.length) {
               const filtered = result.activeTools.filter((n) => n in toolsMap);
               if (filtered.length > 0) out.activeTools = filtered;
@@ -243,9 +166,11 @@ export class ModelService extends Service {
             result: (tr as any).output,
           })),
           finishReason: step.finishReason,
-        });
+        } satisfies AgentLoopStepInfo);
       },
     });
+
+    this.recordUsage(response.usage?.inputTokens ?? 0, response.usage?.outputTokens ?? 0);
 
     return {
       text: response.text,
@@ -253,7 +178,7 @@ export class ModelService extends Service {
       stepsCount: response.steps?.length ?? stepCounter,
       // finishReason 仍为 tool-calls 说明是 stopWhen 截停（模型还想继续调工具）
       stepsExhausted: response.finishReason === 'tool-calls',
-      responseMessages: (response.response?.messages ?? []) as ModelMessage[],
+      responseMessages: response.response?.messages ?? [],
       usage: {
         promptTokens: response.usage?.inputTokens ?? 0,
         completionTokens: response.usage?.outputTokens ?? 0,
@@ -261,14 +186,41 @@ export class ModelService extends Service {
     };
   }
 
+  /**
+   * 设置偏好模型（plugin-router 能级切换入口）。
+   * 优先级：configOverride > 显式 model 参数 > 本偏好 > 环境变量默认。
+   */
+  setPreferredModel(pref: { activeModelId?: string; modelName?: string; reason?: string }): void {
+    this.preferred = { ...this.preferred, ...pref };
+  }
+
+  /** 设置 Token 预算：超出后 agent loop 主动收尾，防止失控计费 */
+  setBudget(budget: { maxTokens?: number; maxCostUsd?: number }): void {
+    if (budget.maxTokens && budget.maxTokens > 0) this.budgetMaxTokens = budget.maxTokens;
+    // maxCostUsd 保留接口位：成本换算依赖具体模型定价，当前按 token 预算约束
+  }
+
+  getUsage() {
+    return { usedTokens: this.usedTokens, budgetMaxTokens: this.budgetMaxTokens };
+  }
+
+  private isBudgetExceeded(): boolean {
+    return this.budgetMaxTokens > 0 && this.usedTokens >= this.budgetMaxTokens;
+  }
+
+  private recordUsage(promptTokens: number, completionTokens: number) {
+    this.usedTokens += promptTokens + completionTokens;
+  }
+
   private resolveActiveModel(
     modelOverride?: string,
     configOverride?: { activeModelId?: string; apiKey?: string; baseURL?: string; modelName?: string }
   ) {
+    // 优先级：用户级覆盖 > 任务显式指定 > 运行时偏好（router 能级切换）> 环境变量默认
     const activeModelId =
       configOverride?.activeModelId ||
       modelOverride ||
-      process.env.ACTIVE_MODEL_ID ||
+      this.preferred.activeModelId ||
       (process.env.CUSTOM_LLM_API_KEY
         ? 'custom_llm'
         : process.env.DEEPSEEK_API_KEY
@@ -278,18 +230,30 @@ export class ModelService extends Service {
     if (activeModelId === 'custom_llm') {
       const apiKey = configOverride?.apiKey || process.env.CUSTOM_LLM_API_KEY || 'dummy_key';
       const baseURL = configOverride?.baseURL || process.env.CUSTOM_LLM_BASE_URL || undefined;
-      const modelName = configOverride?.modelName || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o';
+      const modelName =
+        configOverride?.modelName || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o';
       const provider = createOpenAI({
         apiKey,
         baseURL,
       });
+      return provider(modelName);
+    }
+
+    if (activeModelId === 'local_llm') {
+      // 本地推理（Ollama 等 OpenAI 兼容端点）：敏感数据不出机
+      const apiKey = configOverride?.apiKey || process.env.LOCAL_LLM_API_KEY || 'ollama';
+      const baseURL = configOverride?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1';
+      const modelName =
+        configOverride?.modelName || this.preferred.modelName || process.env.LOCAL_LLM_MODEL_NAME || 'qwen2.5:14b';
+      const provider = createOpenAI({ apiKey, baseURL });
       return provider(modelName);
     }
 
     if (activeModelId === 'openai') {
       const apiKey = configOverride?.apiKey || process.env.OPENAI_API_KEY || 'dummy_key';
       const baseURL = configOverride?.baseURL || process.env.OPENAI_BASE_URL || undefined;
-      const modelName = configOverride?.modelName || process.env.OPENAI_MODEL_NAME || 'gpt-4o';
+      const modelName =
+        configOverride?.modelName || this.preferred.modelName || process.env.OPENAI_MODEL_NAME || 'gpt-4o';
       const provider = createOpenAI({
         apiKey,
         baseURL,
@@ -297,16 +261,46 @@ export class ModelService extends Service {
       return provider(modelName);
     }
 
-    // deepseek
+    // deepseek（默认）
     const apiKey = configOverride?.apiKey || process.env.DEEPSEEK_API_KEY || 'dummy_key';
     const baseURL = configOverride?.baseURL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1';
-    const modelName = configOverride?.modelName || process.env.DEEPSEEK_MODEL_NAME || 'deepseek-chat';
+    const modelName =
+      configOverride?.modelName ||
+      this.preferred.modelName ||
+      process.env.DEEPSEEK_MODEL_NAME ||
+      'deepseek-chat';
     const provider = createDeepSeek({
       apiKey,
       baseURL,
     });
     return provider(modelName);
   }
+}
+
+/**
+ * 把工具注册时声明的 JSON Schema 参数定义透传给模型。
+ * 之前用空 Schema 兜底导致模型看不到参数名/必填项，只能盲猜参数、
+ * 失败重试，白白烧掉步数。无 Schema 时退化为 passthrough（自由参数）。
+ * 附带轻量校验：缺少必填参数时在触达真实 execute 前拦截为 tool-error，
+ * 模型可当步自纠，也避免非法参数触发副作用。
+ */
+function toInputSchema(params?: Record<string, any>) {
+  if (params && typeof params === 'object' && params.type === 'object') {
+    const required: string[] = Array.isArray(params.required) ? params.required : [];
+    return jsonSchema(params as any, {
+      validate: (value: any) => {
+        if (typeof value !== 'object' || value === null) {
+          return { success: false, error: new Error('工具参数必须是 JSON 对象') };
+        }
+        const missing = required.filter((k) => value[k] === undefined);
+        if (missing.length > 0) {
+          return { success: false, error: new Error(`缺少必填参数: ${missing.join(', ')}`) };
+        }
+        return { success: true, value };
+      },
+    });
+  }
+  return z.object({}).passthrough();
 }
 
 export function apply(ctx: Context) {

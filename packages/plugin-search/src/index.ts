@@ -21,6 +21,13 @@ export interface SearchPluginConfig {
 }
 
 export function apply(ctx: Context, config: SearchPluginConfig = {}) {
+  // 工具路由自注册：prompt 命中搜索/资讯类关键词时挂载本插件工具组
+  ctx.agent.registerToolRoute({
+    id: 'search',
+    prefixes: ['search_'],
+    test: /(搜索|检索|查一下|查下|搜一下|查查|最新|新闻|资讯|search|news|look\s?up)/i,
+  });
+
   // 1. 免 API Key 实时多源聚合搜索引擎 (Google News RSS + DuckDuckGo + Wikipedia)
   async function searchFreeSources(query: string, maxResults: number): Promise<SearchResultItem[]> {
     const items: SearchResultItem[] = [];

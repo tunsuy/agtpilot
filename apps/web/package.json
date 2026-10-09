@@ -7,12 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "vitest run",
     "cap": "cap",
     "cap:sync": "cap sync",
     "cap:android": "cap open android",
     "cap:ios": "cap open ios"
   },
   "dependencies": {
+    "@agtpilot/app-kit": "workspace:*",
     "@agtpilot/core": "workspace:*",
     "@agtpilot/plugin-mcp": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
@@ -43,8 +45,7 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "web-push": "^3.6.7",
-    "@agtpilot/app-kit": "workspace:*"
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.20",
@@ -56,6 +57,7 @@
     "autoprefixer": "^10.6.1",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
   }
 }

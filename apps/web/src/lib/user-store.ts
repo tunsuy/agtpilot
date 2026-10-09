@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { encryptSecret, decryptSecret, isEncrypted } from './secret-box';
+import { getGovernanceBus } from './governance-bus';
 
 /**
  * 用户级别数据持久化隔离存储引擎 (User Scoped Data Store)
@@ -30,7 +31,46 @@ export interface UserScopedData {
   missions: any[];
   goals?: any[];
   pushSubscriptions?: PushSubscriptionRecord[];
+  /** 删除台账（持久状态治理 I3：删除必须传导到所有衍生副本，台账是传导与追责的依据） */
+  deletionLedger?: DeletionLedgerEntry[];
+  /** 权限纪元：key(connectorId 或 envVar) -> 单调递增纪元。撤销凭证后 +1，旧纪元的授权/承诺失效 */
+  authorityEpochs?: Record<string, number>;
   updatedAt: number;
+}
+
+/**
+ * 删除台账条目（docs/design/persistent-state-governance.md §3.2）：
+ * 每次(软)删除都留下「删了什么、谁删的、何时删、传导了哪些下游动作」,
+ * 只增不改 —— AOEP「删除台账还在吗」考题的直接答案。
+ */
+export interface DeletionLedgerEntry {
+  id: string;
+  target: { kind: 'memory' | 'connector-auth' | 'rag-doc'; id: string; userId: string };
+  requestedBy: 'user' | 'auto' | 'propagated';
+  reason?: string;
+  at: number;
+  /** I3 传导:由本次删除派生的下游删除/失效/待审动作 */
+  propagated: Array<{ kind: string; id: string; action: 'soft-delete' | 'invalidate' | 'flag-review' }>;
+  status: 'done' | 'partial';
+}
+
+/** 记忆审计日志条目（只增不改，落盘为独立 jsonl,与用户数据文件分离） */
+export interface MemoryAuditEntry {
+  at: number;
+  actor: 'user' | 'agent' | 'auto-distill' | 'system';
+  op:
+    | 'add'
+    | 'update'
+    | 'supersede'
+    | 'soft-delete'
+    | 'restore'
+    | 'purge'
+    | 'write-rejected'
+    | 'authority-revoked';
+  memoryId?: string;
+  connectorId?: string;
+  epoch?: number;
+  detail?: string;
 }
 
 /** MCP OAuth 单连接器授权记录（明文形态，落盘前整体 JSON 加密） */
@@ -186,6 +226,11 @@ export function saveUserConnector(userId: string, envVar: string, value: string,
     data.activeModelId = extra.activeModelId;
   }
   saveUserData(data);
+  // 权限纪元（治理 I1：权威只能收窄,且收窄即时生效）：清空凭证 = 撤销授权,
+  // 纪元 +1 并广播 —— in-flight 任务的 session.env 同步移除该 Key
+  if (!value) {
+    bumpAuthorityEpoch(userId, envVar, { envVars: [envVar] });
+  }
   return data;
 }
 
@@ -357,6 +402,102 @@ export function deleteMcpAuth(userId: string, connectorId: string) {
   if (data.mcpAuth) {
     delete data.mcpAuth[connectorId];
     saveUserData(data);
+  }
+  // 权限纪元:OAuth 授权撤销同样 +1 并广播(订阅方断开 MCP 连接、清理 in-flight 凭证)
+  bumpAuthorityEpoch(userId, connectorId, { connectorId });
+}
+
+// ---- 持久状态治理:权限纪元 / 删除台账 / 审计日志 ----
+// 设计依据 docs/design/persistent-state-governance.md §3.2 / §3.3
+
+/** 读取某授权键(connectorId 或 envVar)的当前权限纪元;从未撤销过 = 0 */
+export function getAuthorityEpoch(userId: string, key: string): number {
+  return getUserData(userId).authorityEpochs?.[key] || 0;
+}
+
+/**
+ * 权限纪元 +1(单调递增,永不回退 —— 治理不变量 I1)。
+ * 落盘后经 governance-bus 广播 authority-revoked,agent-backend 据此:
+ * 1) 从 in-flight 任务的 session.env 移除对应 Key;
+ * 2) 断开该用户对应 MCP 连接;
+ * 3) 下一步 prepareStep 前注入治理提示,让模型显式感知「授权已撤销」。
+ */
+export function bumpAuthorityEpoch(
+  userId: string,
+  key: string,
+  meta?: { connectorId?: string; envVars?: string[] }
+): number {
+  const data = getUserData(userId);
+  data.authorityEpochs = data.authorityEpochs || {};
+  const epoch = (data.authorityEpochs[key] || 0) + 1;
+  data.authorityEpochs[key] = epoch;
+  saveUserData(data);
+  appendMemoryAudit(userId, {
+    at: Date.now(),
+    actor: 'user',
+    op: 'authority-revoked',
+    connectorId: meta?.connectorId || key,
+    epoch,
+    detail: meta?.envVars ? `envVars: ${meta.envVars.join(',')}` : undefined,
+  });
+  getGovernanceBus().emitAuthorityRevoked({
+    userId,
+    connectorId: meta?.connectorId,
+    envVars: meta?.envVars,
+    epoch,
+  });
+  return epoch;
+}
+
+/** 读取删除台账(最近在前) */
+export function getDeletionLedger(userId: string): DeletionLedgerEntry[] {
+  return getUserData(userId).deletionLedger || [];
+}
+
+/** 追加删除台账条目(只增不改;单用户最多保留 200 条,防单文件膨胀) */
+export function appendDeletionLedger(userId: string, entry: DeletionLedgerEntry) {
+  const data = getUserData(userId);
+  data.deletionLedger = [entry, ...(data.deletionLedger || [])].slice(0, 200);
+  saveUserData(data);
+}
+
+function getAuditFilePath(userId: string): string {
+  const safeFilename = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(getDataDir(), `${safeFilename}.audit.jsonl`);
+}
+
+/**
+ * 追加记忆审计日志(append-only jsonl,与用户数据文件分离):
+ * 所有 add/update/supersede/soft-delete/restore/purge/write-rejected/
+ * authority-revoked 操作都留痕 —— 回答「谁在何时对哪条状态做了什么」。
+ */
+export function appendMemoryAudit(userId: string, entry: MemoryAuditEntry) {
+  try {
+    fs.appendFileSync(getAuditFilePath(userId), `${JSON.stringify(entry)}\n`, 'utf-8');
+  } catch (e) {
+    console.error(`Failed to append audit log for ${userId}:`, e);
+  }
+}
+
+/** 读取审计日志(尾部 limit 条,最近在前);文件缺失返回空 */
+export function readMemoryAudit(userId: string, limit = 100): MemoryAuditEntry[] {
+  try {
+    const file = getAuditFilePath(userId);
+    if (!fs.existsSync(file)) return [];
+    const lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean);
+    return lines
+      .slice(-limit)
+      .reverse()
+      .map((l) => {
+        try {
+          return JSON.parse(l) as MemoryAuditEntry;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is MemoryAuditEntry => e !== null);
+  } catch {
+    return [];
   }
 }
 

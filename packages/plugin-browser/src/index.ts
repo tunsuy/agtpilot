@@ -258,6 +258,12 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     description:
       '使用 Stagehand AI 语义理解执行复杂的自然语言动作 (如: "点击搜索框输入 DeepSeek 并回车")。' +
       '会启动一个独立浏览器实例并先导航到当前会话所在页面 URL，再执行动作（不共享登录态与页面状态）。',
+    // 回滚把手(治理 I5):页面内动作(输入/翻页)可逆,但提交类动作(下单/发帖)
+    // 一旦触达远端服务即不可撤回 —— 声明为部分可逆,前端/审计据此提示
+    compensation: {
+      kind: 'partially-reversible',
+      undoHint: '页面内操作可通过反向动作撤销(清空输入/返回上一页);若动作已提交到远端服务(下单/发帖/删除),需在对应平台内撤回',
+    },
     parameters: {
       type: 'object',
       properties: {

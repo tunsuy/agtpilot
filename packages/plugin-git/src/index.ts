@@ -87,6 +87,11 @@ export function apply(ctx: Context) {
     name: 'git_apply_patch',
     description: '集成全球标准 diff 库与 Aider 补丁引擎：对目标文件应用标准 Unified Diff 补丁或指定查找块替换，支持 hunk 行号容差对齐，避免全文件重写丢失代码。文件写入类操作（同 sandbox_write_file 级别）。',
     dangerLevel: 'medium',
+    // 回滚把手(治理 I5):补丁可逆 —— 反向补丁或 git checkout 即可恢复原文件
+    compensation: {
+      kind: 'reversible',
+      undoHint: '对同一文件应用反向补丁(searchBlock/replaceBlock 互换),或 git checkout -- <filePath> 恢复到最近提交',
+    },
     parameters: {
       type: 'object',
       properties: {

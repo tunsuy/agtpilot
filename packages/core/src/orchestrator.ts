@@ -13,6 +13,7 @@ import {
 } from './routing';
 import { messageText, truncateToolOutput, TOOL_OUTPUT_LIMIT } from './text';
 import { compactConversationMessages } from './compaction';
+import { appendStepNotice } from './notice';
 import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
 /** 默认步数上限（一步 = 一轮模型调用）。可用环境变量 AGTPILOT_MAX_STEPS 或单任务 maxSteps 覆盖。
@@ -251,10 +252,13 @@ export class OrchestratorService extends Service {
           }
         }
 
-        // 广播工具执行结果
+        // 广播工具执行结果（compensation 透传：持久化层随步骤快照落盘回滚把手，
+        // 治理不变量 I5 —— 每个行动都要留下可回滚/可追责的元数据）
         broadcast({
           type: 'tool_result',
-          payload: { tool: toolDef.name, output },
+          payload: toolDef.compensation
+            ? { tool: toolDef.name, output, compensation: toolDef.compensation }
+            : { tool: toolDef.name, output },
           timestamp: Date.now(),
         });
 
@@ -323,6 +327,9 @@ export class OrchestratorService extends Service {
         //    下一步复查时已低于阈值，天然自限不会每步重复蒸馏。
         // 3) 运行中检查点：把当前（压缩后）消息快照发 agtpilot/checkpoint 事件，
         //    进程崩溃/重启后任务可从最近检查点续跑（消息历史已落盘）。
+        // 4) 治理提示注入（回退弧感知通道，getStepNotice 有值时）：把上层排队的
+        //    治理事件（记忆被删/授权撤销等）作为一条【系统治理提示】user 消息
+        //    追加到本步消息末尾 —— 刻意放在压缩之后，保证提示不被蒸馏掉。
         prepareStep: async ({ stepNumber, messages }: { stepNumber: number; messages: Array<any> }) => {
           const adjust: { activeTools?: string[]; messages?: Array<any> } = {};
           if (routedTools) {
@@ -339,7 +346,16 @@ export class OrchestratorService extends Service {
           } catch {
             // 压缩失败继续用原消息
           }
-          // 检查点采用本步实际使用的消息（含压缩重写）
+          if (options.getStepNotice) {
+            try {
+              const notice = await options.getStepNotice();
+              const withNotice = appendStepNotice(adjust.messages ?? messages, notice);
+              if (withNotice) adjust.messages = withNotice;
+            } catch {
+              // 治理提示获取失败不影响主流程
+            }
+          }
+          // 检查点采用本步实际使用的消息（含压缩重写与治理提示注入）
           const finalMessages = adjust.messages ?? messages;
           try {
             this.ctx.emit('agtpilot/checkpoint', { taskId, stepNumber, messages: finalMessages });

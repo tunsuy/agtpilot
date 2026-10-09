@@ -64,6 +64,11 @@ export interface MissionStep {
   answer?: string;
   output?: any;
   error?: string;
+  /**
+   * 副作用补偿声明(内核 tool_result 透传,持久状态治理不变量 I5:
+   * 每个行动都留下可回滚/可追责的「把手」,随任务快照落盘供撤销与审计)
+   */
+  compensation?: { kind: 'reversible' | 'partially-reversible' | 'irreversible'; undoHint?: string };
 }
 
 export interface Mission {

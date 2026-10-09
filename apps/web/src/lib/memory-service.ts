@@ -1,7 +1,17 @@
-import { getUserMemories, getUserData, saveUserData, saveUserMemory, deleteUserMemory } from './user-store';
+import {
+  getUserMemories,
+  getUserData,
+  saveUserData,
+  saveUserMemory,
+  getAuthorityEpoch,
+  appendDeletionLedger,
+  appendMemoryAudit,
+  type DeletionLedgerEntry,
+} from './user-store';
+import { getGovernanceBus } from './governance-bus';
 
 /**
- * 用户长期记忆统一服务 (User Memory Service) —— 双通道架构
+ * 用户长期记忆统一服务 (User Memory Service) —— 双通道架构 + 持久状态治理
  *
  * 之前记忆体系有两套互不相通的实现:
  * - plugin-memory 全局单文件 .cache/long_term_memory.json(多用户部署时 A 用户的
@@ -28,10 +38,83 @@ import { getUserMemories, getUserData, saveUserData, saveUserMemory, deleteUserM
  * 5. 会话结束自动维护(Mem0 式 CRUD 决策环,双通道各自跑):对照现有记忆做
  *   ADD/UPDATE/DELETE 决策,代码侧校验执行。用户手动固化的执行红线(rule)
  *   受保护,自动流程不可改删。
+ *
+ * 持久状态治理(docs/design/persistent-state-governance.md,对齐综述
+ * 《Always-On Agents》的六维状态元数据与回退弧):
+ * 6. 六维治理元数据 GovernanceMeta:权威/范围/可变性/来源/可恢复性/可行动性,
+ *    存量记忆读取时惰性回填(§6 迁移规则),写回时落盘;
+ * 7. 回退弧:软删除(用户删 30 天、自动删 7 天内可恢复)+ 删除台账 + 传导
+ *    (衍生记忆打 flag-review、被取代链一并软删)+ governance-bus 广播
+ *    memory-revoked(in-flight 任务下一步注入治理提示)+ append-only 审计日志;
+ * 8. 提炼防抹平(AOEP 教训):UPDATE 不再原地覆盖 —— 新版本独立成条,
+ *    supersededBy/originMemoryIds 保留来源链(I4);自动提炼禁改 protected
+ *    条目;不允许借 update 扩大 scope(I2)或把 fact 升级成 commitment;
+ * 9. 权限纪元联动:绑定连接器的 commitment 记忆,其授权纪元落后于当前纪元时
+ *    自动降级「待重新确认」,不再注入 prompt(I1)。
  */
 
 export type MemoryCategory = 'preference' | 'project' | 'fact' | 'rule';
 export type MemorySubject = 'user' | 'agent';
+
+/** 记忆条目的授予权威来源 */
+export type MemoryAuthority = 'user-manual' | 'user-confirmed' | 'agent-auto' | 'system';
+
+/**
+ * 六维治理元数据(综述的「每条持久状态六张身份证」):
+ * 权威 / 范围 / 可变性 / 来源 / 可恢复性 / 可行动性。
+ * 提炼与整合过程必须原样保留本结构 —— 治理不是阅读问题,
+ * 字段没存,模型再强也读不出来(AOEP 的核心教训)。
+ */
+export interface GovernanceMeta {
+  /** 权威:谁允许这条状态影响行动 */
+  authority: {
+    grantedBy: MemoryAuthority;
+    /** 权限纪元:授予时的 epoch;对应连接器授权撤销后 epoch 递增,旧纪元的 commitment 待重新确认 */
+    epoch: number;
+    /** 受保护:自动流程不可改删(收敛原「手动 user-rule 红线」逻辑的唯一判断入口) */
+    protected: boolean;
+  };
+  /** 范围:哪些上下文可以用它(缺省 = 该用户全域;I2:范围不能悄悄扩大) */
+  scope: {
+    /** 绑定的连接器 id(commitment 与该连接器的权限纪元联动) */
+    connectorId?: string;
+    /** 限定只对某任务生效 */
+    missionId?: string;
+    /** 限定只对某类工具生效(如 ['browser_']) */
+    toolPrefixes?: string[];
+    /** 时间边界 */
+    expiresAt?: number;
+  };
+  /** 可变性:能否被修订、取代、衰减、锁定 */
+  mutability: {
+    policy: 'immutable' | 'user-only' | 'auto-decay' | 'mutable';
+    /** 修订号:每次 UPDATE(取代)+1 */
+    revision: number;
+    /** 被哪条新记忆取代(旧版本退出注入,但保留可追溯) */
+    supersededBy?: string;
+  };
+  /** 来源:从哪个源头、经哪些变换得来(I4:整合必须保留来源) */
+  provenance: {
+    originMissionId?: string;
+    /** UPDATE/合并时的来源条目 id(取代链的上一环) */
+    originMemoryIds?: string[];
+    transforms: Array<'distill' | 'user-edit' | 'auto-crud'>;
+  };
+  /** 可恢复性:软删标记与台账指针(I3/I5) */
+  recoverability: {
+    deleted?: {
+      at: number;
+      by: 'user' | 'auto' | 'propagated';
+      ledgerId: string;
+      /** 超过该时刻物理清除(惰性 purge) */
+      recoverableUntil: number;
+    };
+  };
+  /** 可行动性:被动事实还是可执行承诺(commitment 注入时显式标注) */
+  actionability: 'fact' | 'commitment';
+  /** 待人工复核标记(传导产生:来源记忆被删除等) */
+  reviewFlag?: { at: number; reason: string };
+}
 
 export interface UserMemory {
   id: string;
@@ -50,6 +133,8 @@ export interface UserMemory {
   hitCount?: number;
   /** 最近一次被召回的时间 */
   lastHitAt?: number;
+  /** 六维治理元数据;存量数据缺失时读取层惰性回填(ensureGovernance) */
+  governance?: GovernanceMeta;
 }
 
 /** 自动提炼的维护决策结果 */
@@ -87,6 +172,339 @@ const AGENT_DISTILL_MIN_TOOL_CALLS = 3;
 /** 自动提炼开关:AGTPILOT_AUTO_MEMORY=0 关闭(两个通道一起关) */
 export function isAutoMemoryEnabled(): boolean {
   return process.env.AGTPILOT_AUTO_MEMORY !== '0';
+}
+
+// ---- 治理参数 ----
+/** 用户手动删除的软删保留期(可恢复窗口) */
+const SOFT_DELETE_USER_RETENTION_MS = 30 * 24 * 3600 * 1000;
+/** 自动流程删除的软删保留期 */
+const SOFT_DELETE_AUTO_RETENTION_MS = 7 * 24 * 3600 * 1000;
+
+// ---- 六维治理元数据:惰性回填 / 活跃过滤 / 软删与恢复 ----
+
+/** 旧版保护判定(手动固化的 user 通道 rule 红线),仅用于 governance 缺失时回填 */
+function legacyProtected(m: UserMemory): boolean {
+  return m.source === 'manual' && m.category === 'rule' && (m.subject || 'user') === 'user';
+}
+
+/**
+ * 惰性回填六维治理元数据(§6 迁移规则,纯函数不落盘):
+ * - source=manual → grantedBy=user-manual;source=auto → agent-auto;
+ * - protected 收敛原「手动 user-rule」判定;
+ * - missionId → provenance.originMissionId;
+ * - actionability 按 category 映射(rule → commitment,其余 → fact);
+ * - epoch 回填 0(历史数据无法考证授权纪元,按最低信任处理 ——
+ *   绑定连接器的 commitment 会因纪元落后被降级待确认,符合 I1 只收窄)。
+ */
+export function ensureGovernance(m: UserMemory): UserMemory {
+  if (m.governance) return m;
+  const manual = m.source !== 'auto';
+  return {
+    ...m,
+    governance: {
+      authority: {
+        grantedBy: manual ? 'user-manual' : 'agent-auto',
+        epoch: 0,
+        protected: legacyProtected(m),
+      },
+      scope: { missionId: m.missionId },
+      mutability: {
+        policy: manual ? 'user-only' : 'auto-decay',
+        revision: 0,
+      },
+      provenance: {
+        originMissionId: m.missionId,
+        transforms: [manual ? 'user-edit' : 'distill'],
+      },
+      recoverability: {},
+      actionability: m.category === 'rule' ? 'commitment' : 'fact',
+    },
+  };
+}
+
+/** 受保护条目(自动流程不可改删):governance 存在时以其为准,否则走旧判定 */
+export function isProtectedMemory(m: UserMemory): boolean {
+  return m.governance ? m.governance.authority.protected : legacyProtected(m);
+}
+
+/**
+ * 活跃判定(哪些记忆有资格进入召回/注入/提炼视野):
+ * 软删的、被取代的、超过 scope 时间边界的、绑定连接器的 commitment
+ * 且授权纪元已落后的(待重新确认)—— 全部排除(I1/I2)。
+ */
+export function isActiveMemory(
+  m: UserMemory,
+  opts: { now?: number; epochLookup?: (connectorId: string) => number } = {}
+): boolean {
+  const now = opts.now ?? Date.now();
+  const g = m.governance;
+  if (!g) return true; // 未回填的存量数据由调用方先 ensureGovernance
+  if (g.recoverability.deleted) return false;
+  if (g.mutability.supersededBy) return false;
+  if (g.scope.expiresAt && now > g.scope.expiresAt) return false;
+  if (
+    g.actionability === 'commitment' &&
+    g.scope.connectorId &&
+    opts.epochLookup &&
+    g.authority.epoch < opts.epochLookup(g.scope.connectorId)
+  ) {
+    return false; // 授权纪元落后 → 降级待重新确认
+  }
+  return true;
+}
+
+/**
+ * 读取该用户全部记忆(治理视角):惰性回填 governance + 惰性物理清除
+ * 超过保留期的软删条目(purge 留审计)。返回的是内存副本,
+ * 需要活跃子集时再按 isActiveMemory 过滤。
+ */
+export function listGovernedMemories(userId: string): UserMemory[] {
+  const raw = (getUserMemories(userId) as UserMemory[]) || [];
+  const now = Date.now();
+  let purged = 0;
+  const governed = raw
+    .map((m) => ensureGovernance(m))
+    .filter((m) => {
+      const deleted = m.governance?.recoverability.deleted;
+      if (deleted && now > deleted.recoverableUntil) {
+        purged++;
+        return false;
+      }
+      return true;
+    });
+  if (purged > 0) {
+    // 惰性 purge:保留期已过的软删条目物理移除(台账与审计仍保留完整链路)
+    try {
+      const data = getUserData(userId);
+      const aliveIds = new Set(governed.map((m) => m.id));
+      data.memories = (data.memories || []).filter((m: any) => aliveIds.has(m.id));
+      saveUserData(data);
+      appendMemoryAudit(userId, {
+        at: now,
+        actor: 'system',
+        op: 'purge',
+        detail: `物理清除 ${purged} 条超过软删保留期的记忆`,
+      });
+    } catch {
+      // purge 失败不影响读取
+    }
+  }
+  return governed;
+}
+
+/** 活跃记忆(召回/注入/提炼的统一入口):governed + 活跃过滤(含纪元联动) */
+export function listActiveMemories(userId: string, now = Date.now()): UserMemory[] {
+  const epochLookup = (connectorId: string) => getAuthorityEpoch(userId, connectorId);
+  return listGovernedMemories(userId).filter((m) => isActiveMemory(m, { now, epochLookup }));
+}
+
+/** 软删保留期内的条目(前端「最近删除/可恢复」视图用) */
+export function listSoftDeletedMemories(userId: string, now = Date.now()): UserMemory[] {
+  return listGovernedMemories(userId).filter(
+    (m) => m.governance?.recoverability.deleted && now <= m.governance.recoverability.deleted.recoverableUntil
+  );
+}
+
+function makeLedgerId(): string {
+  return `led_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * 软删除 + 删除台账 + 传导(治理回退弧核心,§3.2):
+ * 1. protected 条目仅用户本人可删,自动流程发起时拒绝并留审计(G4);
+ * 2. 目标条目打软删标记(保留期内可 restore);
+ * 3. 传导(I3):
+ *    - 衍生记忆(provenance.originMemoryIds 含目标 id)→ 打 reviewFlag 待人工复核;
+ *    - 被目标取代的历史版本(target.supersededBy 指向的旧条目)→ 一并软删;
+ * 4. 台账登记全部传导动作;审计留痕;governance-bus 广播 memory-revoked
+ *    (in-flight 任务下一步注入「该记忆已删除」治理提示)。
+ */
+export function softDeleteUserMemory(
+  userId: string,
+  memoryId: string,
+  opts: { requestedBy: 'user' | 'auto' | 'propagated'; reason?: string; actor?: 'user' | 'agent' | 'auto-distill' | 'system' }
+): { ok: boolean; rejected?: 'protected' | 'not-found'; ledgerId?: string; propagatedCount?: number } {
+  const all = listGovernedMemories(userId);
+  const target = all.find((m) => m.id === memoryId);
+  if (!target || target.governance?.recoverability.deleted) {
+    return { ok: false, rejected: 'not-found' };
+  }
+  if (isProtectedMemory(target) && opts.requestedBy !== 'user') {
+    appendMemoryAudit(userId, {
+      at: Date.now(),
+      actor: opts.actor || 'auto-distill',
+      op: 'write-rejected',
+      memoryId,
+      detail: `自动流程试图删除受保护条目 [${target.title}],已拦截`,
+    });
+    return { ok: false, rejected: 'protected' };
+  }
+
+  const now = Date.now();
+  const ledgerId = makeLedgerId();
+  const retention = opts.requestedBy === 'user' ? SOFT_DELETE_USER_RETENTION_MS : SOFT_DELETE_AUTO_RETENTION_MS;
+  const propagated: DeletionLedgerEntry['propagated'] = [];
+
+  const data = getUserData(userId);
+  const memories = ((data.memories || []) as UserMemory[]).map((m) => ensureGovernance(m));
+  const byId = new Map(memories.map((m) => [m.id, m]));
+
+  // 待软删集合:目标 + 被其取代的历史版本链(向旧追溯)
+  const toDelete = new Set<string>([memoryId]);
+  let cursor = byId.get(memoryId);
+  while (cursor?.governance?.provenance.originMemoryIds?.length) {
+    const prevId = cursor.governance.provenance.originMemoryIds[0];
+    const prev = byId.get(prevId);
+    if (!prev || toDelete.has(prevId)) break;
+    toDelete.add(prevId);
+    cursor = prev;
+  }
+
+  for (const m of memories) {
+    if (toDelete.has(m.id) && !m.governance!.recoverability.deleted) {
+      m.governance!.recoverability.deleted = {
+        at: now,
+        by: m.id === memoryId ? opts.requestedBy : 'propagated',
+        ledgerId,
+        recoverableUntil: now + retention,
+      };
+      if (m.id !== memoryId) {
+        propagated.push({ kind: 'memory', id: m.id, action: 'soft-delete' });
+      }
+    } else {
+      // 衍生记忆:来源被删 → 打待复核标记(不自动删,I3 的保守传导)
+      const origins = m.governance!.provenance.originMemoryIds || [];
+      if (origins.includes(memoryId) && !m.governance!.reviewFlag) {
+        m.governance!.reviewFlag = { at: now, reason: 'origin-deleted' };
+        propagated.push({ kind: 'memory', id: m.id, action: 'flag-review' });
+      }
+    }
+  }
+  data.memories = memories;
+  saveUserData(data);
+
+  const ledgerEntry: DeletionLedgerEntry = {
+    id: ledgerId,
+    target: { kind: 'memory', id: memoryId, userId },
+    requestedBy: opts.requestedBy,
+    reason: opts.reason,
+    at: now,
+    propagated,
+    status: 'done',
+  };
+  appendDeletionLedger(userId, ledgerEntry);
+  appendMemoryAudit(userId, {
+    at: now,
+    actor: opts.actor || (opts.requestedBy === 'user' ? 'user' : 'auto-distill'),
+    op: 'soft-delete',
+    memoryId,
+    detail: `by=${opts.requestedBy}${opts.reason ? ` reason=${opts.reason}` : ''} 传导 ${propagated.length} 项`,
+  });
+
+  getGovernanceBus().emitMemoryRevoked({
+    userId,
+    memoryId,
+    title: target.title,
+    requestedBy: opts.requestedBy,
+    reason: opts.reason,
+  });
+
+  return { ok: true, ledgerId, propagatedCount: propagated.length };
+}
+
+/** 恢复软删条目(G5:保留期内可 restore;restore 本身也留审计) */
+export function restoreUserMemory(
+  userId: string,
+  memoryId: string,
+  actor: 'user' | 'system' = 'user'
+): { ok: boolean; error?: 'not-found' | 'expired' } {
+  // 刻意读原始存储而非 listGovernedMemories:后者会先触发惰性 purge,
+  // 把刚过期的条目物理清掉,导致「已超保留期」退化成「不存在」——
+  // 两种语义对用户不同(前者可解释为何不能恢复),必须区分
+  const raw = ((getUserMemories(userId) as UserMemory[]) || []).map((m) => ensureGovernance(m));
+  const target = raw.find((m) => m.id === memoryId);
+  const deleted = target?.governance?.recoverability.deleted;
+  if (!target || !deleted) return { ok: false, error: 'not-found' };
+  if (Date.now() > deleted.recoverableUntil) return { ok: false, error: 'expired' };
+
+  const data = getUserData(userId);
+  data.memories = ((data.memories || []) as UserMemory[]).map((m) => {
+    const g = ensureGovernance(m);
+    if (g.id === memoryId) {
+      delete g.governance!.recoverability.deleted;
+      return g;
+    }
+    return m;
+  });
+  saveUserData(data);
+  appendMemoryAudit(userId, {
+    at: Date.now(),
+    actor,
+    op: 'restore',
+    memoryId,
+    detail: `从软删恢复(原删除台账 ${deleted.ledgerId})`,
+  });
+  return { ok: true };
+}
+
+/**
+ * 用户手动新增/更新记忆的统一入口(API 路由用):
+ * 手动条目 grantedBy=user-manual,rule 类自动 protected(I1:权威只收窄 ——
+ * 手动更新不会降级既有保护位),全程审计留痕。
+ */
+export function upsertManualMemory(
+  userId: string,
+  payload: { id?: string; title: string; content: string; category?: MemoryCategory; subject?: MemorySubject; confidence?: number }
+): UserMemory {
+  const now = Date.now();
+  const existing = payload.id
+    ? ((getUserMemories(userId) as UserMemory[]) || []).find((m) => m.id === payload.id)
+    : undefined;
+  const category = payload.category || existing?.category || 'preference';
+  const subject = payload.subject || existing?.subject || 'user';
+  const base = existing ? ensureGovernance(existing) : undefined;
+  const record: UserMemory = {
+    id: existing?.id || payload.id || makeMemoryId(),
+    title: payload.title.trim(),
+    content: payload.content.trim(),
+    category,
+    confidence: payload.confidence ?? existing?.confidence ?? 1.0,
+    updatedAt: now,
+    source: 'manual',
+    subject,
+    missionId: existing?.missionId,
+    hitCount: existing?.hitCount,
+    lastHitAt: existing?.lastHitAt,
+    governance: {
+      authority: {
+        grantedBy: 'user-manual',
+        epoch: base?.governance?.authority.epoch ?? 0,
+        protected: category === 'rule' && subject === 'user' ? true : (base?.governance?.authority.protected ?? false),
+      },
+      scope: { ...(base?.governance?.scope || {}), missionId: existing?.missionId },
+      mutability: {
+        policy: 'user-only',
+        revision: (base?.governance?.mutability.revision ?? 0) + (existing ? 1 : 0),
+        supersededBy: base?.governance?.mutability.supersededBy,
+      },
+      provenance: {
+        originMissionId: base?.governance?.provenance.originMissionId ?? existing?.missionId,
+        originMemoryIds: base?.governance?.provenance.originMemoryIds,
+        transforms: [...(base?.governance?.provenance.transforms || []), 'user-edit'],
+      },
+      recoverability: {},
+      actionability: category === 'rule' ? 'commitment' : (base?.governance?.actionability ?? 'fact'),
+    },
+  };
+  saveUserMemory(userId, record);
+  appendMemoryAudit(userId, {
+    at: now,
+    actor: 'user',
+    op: existing ? 'update' : 'add',
+    memoryId: record.id,
+    detail: `[${record.category}] ${record.title}`,
+  });
+  return record;
 }
 
 // ---- 分词 ----
@@ -203,7 +621,8 @@ export function recallUserMemories(
 ): UserMemory[] {
   const q = query.toLowerCase().trim();
   if (!q) return [];
-  const all = (getUserMemories(userId) as UserMemory[]).filter(
+  // 治理过滤:软删/被取代/过期/纪元降级的记忆不进召回(I1/I2/I3)
+  const all = listActiveMemories(userId).filter(
     (m) => (!category || m.category === category) && (!subject || (m.subject || 'user') === subject)
   );
   if (all.length === 0) return [];
@@ -256,7 +675,8 @@ export function noteMemoryHits(userId: string, ids: string[]): void {
  * 副作用:被注入的记忆视为一次命中,累计 hitCount(每次任务一次写盘)。
  */
 export function buildMemoryPromptBlock(userId: string, goal: string): string {
-  const all = (getUserMemories(userId) as UserMemory[])
+  // 治理过滤:软删/被取代/过期/授权纪元降级的记忆一律不注入(I1/I2/I3)
+  const all = listActiveMemories(userId)
     .slice()
     .sort((a, b) => b.updatedAt - a.updatedAt);
   if (all.length === 0) return '';
@@ -307,7 +727,7 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
     sections.push(
       [
         '【当前用户的专属个性画像与长期记忆】:',
-        ...selectedUser.map((m) => `- [${m.category.toUpperCase()}] ${m.title}: ${m.content}`),
+        ...selectedUser.map(formatMemoryLine),
         omittedUser > 0 ? `(另有 ${omittedUser} 条低相关记忆未注入,可用 memory_recall 按需检索)` : '',
       ]
         .filter(Boolean)
@@ -319,7 +739,7 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
     sections.push(
       [
         '【Agent 执行经验与教训(过往任务轨迹沉淀的环境/工具/流程经验,请主动规避已知坑、复用有效路径)】:',
-        ...selectedAgent.map((m) => `- [${m.category.toUpperCase()}] ${m.title}: ${m.content}`),
+        ...selectedAgent.map(formatMemoryLine),
         omittedAgent > 0 ? `(另有 ${omittedAgent} 条低相关经验未注入,可用 memory_recall 检索)` : '',
       ]
         .filter(Boolean)
@@ -328,6 +748,15 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
   }
   sections.push('请严格遵守上述用户的个性偏好与安全规则,并善用 Agent 已沉淀的执行经验进行思考与输出。');
   return sections.join('\n\n');
+}
+
+/**
+ * 注入行格式化:commitment(可执行承诺)显式标注 —— 被动事实与待执行承诺
+ * 分开呈现(六维之一 actionability),避免模型把承诺当背景知识读过就算。
+ */
+function formatMemoryLine(m: UserMemory): string {
+  const tag = m.governance?.actionability === 'commitment' ? '[承诺·须持续遵守/执行]' : '';
+  return `- [${m.category.toUpperCase()}]${tag} ${m.title}: ${m.content}`;
 }
 
 // ---- 用户级记忆工具(taskTools 同名覆盖 plugin-memory 全局版) ----
@@ -345,20 +774,51 @@ export function buildUserMemoryTools(userId: string): any[] {
     subject: MemorySubject = 'user'
   ): { record: UserMemory; isUpdate: boolean } => {
     const normTitle = normalizeForDedupe(title);
-    const existing = (getUserMemories(userId) as UserMemory[]).find(
+    // 同名去重只看活跃记忆:软删/被取代条目的标题可复用,不会「复活」旧 id
+    const existing = listActiveMemories(userId).find(
       (m) => normalizeForDedupe(m.title) === normTitle && (m.subject || 'user') === subject
     );
+    const now = Date.now();
+    const protectedFlag = category === 'rule' && subject === 'user';
     const record: UserMemory = {
       id: existing?.id || makeMemoryId(),
       title: title.trim(),
       content: content.trim(),
       category,
       confidence: 1.0,
-      updatedAt: Date.now(),
+      updatedAt: now,
       source: existing?.source || 'manual',
       subject,
+      governance: {
+        // 任务中经用户指示保存 → user-confirmed(权威低于记忆库页手动固化的 user-manual,
+        // 但高于会话末自动提炼的 agent-auto)
+        authority: {
+          grantedBy: existing?.governance?.authority.grantedBy === 'user-manual' ? 'user-manual' : 'user-confirmed',
+          epoch: existing?.governance?.authority.epoch ?? 0,
+          protected: existing?.governance?.authority.protected || protectedFlag,
+        },
+        scope: { ...(existing?.governance?.scope || {}) },
+        mutability: {
+          policy: existing?.governance?.mutability.policy ?? 'user-only',
+          revision: (existing?.governance?.mutability.revision ?? 0) + (existing ? 1 : 0),
+        },
+        provenance: {
+          originMissionId: existing?.governance?.provenance.originMissionId,
+          originMemoryIds: existing?.governance?.provenance.originMemoryIds,
+          transforms: [...(existing?.governance?.provenance.transforms || []), 'user-edit'],
+        },
+        recoverability: {},
+        actionability: protectedFlag || category === 'rule' ? 'commitment' : (existing?.governance?.actionability ?? 'fact'),
+      },
     };
     saveUserMemory(userId, record);
+    appendMemoryAudit(userId, {
+      at: now,
+      actor: 'agent',
+      op: existing ? 'update' : 'add',
+      memoryId: record.id,
+      detail: `memory_store 工具 [${record.category}] ${record.title}`,
+    });
     return { record, isUpdate: Boolean(existing) };
   };
 
@@ -450,10 +910,10 @@ export function buildUserMemoryTools(userId: string): any[] {
     },
     {
       name: 'memory_list',
-      description: '列出当前用户长期记忆库中所有已记录的用户偏好与 Agent 执行经验清单。',
+      description: '列出当前用户长期记忆库中所有已记录的用户偏好与 Agent 执行经验清单(不含已删除/已取代条目)。',
       parameters: { type: 'object', properties: {} },
       execute: async () => {
-        const list = (getUserMemories(userId) as UserMemory[]).sort((a, b) => b.updatedAt - a.updatedAt);
+        const list = listActiveMemories(userId).sort((a, b) => b.updatedAt - a.updatedAt);
         return {
           success: true,
           total: list.length,
@@ -462,6 +922,8 @@ export function buildUserMemoryTools(userId: string): any[] {
             title: m.title,
             category: m.category,
             subject: m.subject || 'user',
+            actionability: m.governance?.actionability || 'fact',
+            needsReview: Boolean(m.governance?.reviewFlag),
             updatedAt: new Date(m.updatedAt).toISOString(),
           })),
         };
@@ -495,11 +957,6 @@ function messageText(content: any): string {
   } catch {
     return '';
   }
-}
-
-/** 用户手动固化的执行红线受保护:自动流程不可改删(只能由用户自己在记忆库操作) */
-function isProtectedMemory(m: UserMemory): boolean {
-  return m.source === 'manual' && m.category === 'rule' && (m.subject || 'user') === 'user';
 }
 
 /** 列出某通道的现有记忆(带 id 与保护标记),供决策 prompt 引用 */
@@ -550,8 +1007,9 @@ async function runMemoryDecision(
   const raw = parseJsonArray(text);
   if (!raw) return empty;
 
-  // prompt 只列最近 50 条;计数/去重仍用全量,避免超出展示窗口的旧记忆被重复新增
-  const allExisting = ((getUserMemories(input.userId) as UserMemory[]) || [])
+  // prompt 只列最近 50 条;计数/去重仍用全量活跃记忆(软删/被取代的不算),
+  // 避免超出展示窗口的旧记忆被重复新增
+  const allExisting = listActiveMemories(input.userId)
     .slice()
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const subjectExisting = allExisting.filter((m) => (m.subject || 'user') === input.subject).slice(0, DISTILL_EXISTING_LIMIT);
@@ -576,6 +1034,10 @@ async function runMemoryDecision(
       const content = String(item.content || '').trim().slice(0, 300);
       const category = validCategories.includes(item.category) ? item.category : 'fact';
       if (!title || !content) continue;
+      // 可行动性由模型判定、代码侧校验(§3.5:提炼时结构化字段不许丢):
+      // 缺省按保守值 fact 处理 —— 只有用户明确委托的持续义务才是 commitment
+      const actionability: 'fact' | 'commitment' =
+        item.actionability === 'commitment' || category === 'rule' ? 'commitment' : 'fact';
 
       const normTitle = normalizeForDedupe(title);
       const normContent = normalizeForDedupe(content);
@@ -587,42 +1049,128 @@ async function runMemoryDecision(
       );
       if (duplicate) continue;
 
+      const now = Date.now();
       const record: UserMemory = {
         id: makeMemoryId(),
         title,
         content,
         category,
-        confidence: 0.8, // 自动提炼置信度低于手动固化
-        updatedAt: Date.now(),
+        confidence: 0.8, // 自动提炼置信度低于手动固化(权威分层)
+        updatedAt: now,
         source: 'auto',
         subject: input.subject,
         missionId: input.missionId,
+        governance: {
+          authority: { grantedBy: 'agent-auto', epoch: 0, protected: false },
+          scope: { missionId: undefined },
+          mutability: { policy: 'auto-decay', revision: 0 },
+          provenance: {
+            originMissionId: input.missionId,
+            transforms: ['distill'],
+          },
+          recoverability: {},
+          actionability,
+        },
       };
       saveUserMemory(input.userId, record);
+      appendMemoryAudit(input.userId, {
+        at: now,
+        actor: 'auto-distill',
+        op: 'add',
+        memoryId: record.id,
+        detail: `[${record.category}/${actionability}] ${record.title}(来源任务 ${input.missionId || '未知'})`,
+      });
       batchNorms.push({ title: normTitle, content: normContent });
       outcome.added.push(record);
     } else if (op === 'update') {
       const target = existingById.get(String(item.id || ''));
       if (!target || !remainingIds.has(target.id)) continue;
-      if (isProtectedMemory(target)) continue; // 手动 user 红线受保护
+      if (isProtectedMemory(target)) {
+        appendMemoryAudit(input.userId, {
+          at: Date.now(),
+          actor: 'auto-distill',
+          op: 'write-rejected',
+          memoryId: target.id,
+          detail: `自动流程试图修改受保护条目 [${target.title}],已拦截`,
+        });
+        continue; // 受保护条目自动流程不可改(I1)
+      }
       const content = String(item.content || '').trim().slice(0, 300);
       if (!content) continue;
       const title = String(item.title || target.title).trim().slice(0, 40) || target.title;
       const category = validCategories.includes(item.category) ? item.category : target.category;
+      const tg = ensureGovernance(target).governance!;
+
+      // 权威/范围/可行动性只收窄不放宽(I1/I2):update 不许把 fact 升级成
+      // commitment、不许改 protected、不许扩 scope —— 需要时走用户手动确认新建
+      const wantsCommitment = item.actionability === 'commitment' || category === 'rule';
+      const escalationBlocked =
+        (wantsCommitment && tg.actionability !== 'commitment') ||
+        (category === 'rule' && target.category !== 'rule');
+      if (escalationBlocked) {
+        appendMemoryAudit(input.userId, {
+          at: Date.now(),
+          actor: 'auto-distill',
+          op: 'write-rejected',
+          memoryId: target.id,
+          detail: `自动流程试图把事实记忆升级为承诺/红线 [${target.title}],已拦截(需用户手动确认)`,
+        });
+        continue;
+      }
+
+      // UPDATE 不原地覆盖(§3.5 防抹平 + I4 整合保来源):新版本独立成条,
+      // 旧条目标记 supersededBy 退出注入但保留可追溯
+      const now = Date.now();
+      const newId = makeMemoryId();
       const record: UserMemory = {
-        ...target,
+        id: newId,
         title,
         content,
         category,
-        updatedAt: Date.now(),
+        confidence: Math.min(target.confidence ?? 0.8, 0.8), // 自动修订不提升权威
+        updatedAt: now,
+        source: target.source,
+        subject: target.subject,
+        missionId: target.missionId,
+        hitCount: 0, // 新条目重新接受命中检验(旧条目的 hitCount 不转移)
+        governance: {
+          authority: { ...tg.authority }, // 权威原样继承(只能收窄,继承即不放宽)
+          scope: { ...tg.scope }, // 范围原样继承,禁止借 update 扩大
+          mutability: { policy: tg.mutability.policy, revision: tg.mutability.revision + 1 },
+          provenance: {
+            originMissionId: tg.provenance.originMissionId ?? target.missionId,
+            originMemoryIds: [target.id, ...(tg.provenance.originMemoryIds || [])].slice(0, 5),
+            transforms: [...tg.provenance.transforms, 'auto-crud'],
+          },
+          recoverability: {},
+          actionability: tg.actionability,
+        },
       };
+      const superseded: UserMemory = {
+        ...target,
+        governance: { ...tg, mutability: { ...tg.mutability, supersededBy: newId } },
+      };
+      saveUserMemory(input.userId, superseded);
       saveUserMemory(input.userId, record);
+      appendMemoryAudit(input.userId, {
+        at: now,
+        actor: 'auto-distill',
+        op: 'supersede',
+        memoryId: newId,
+        detail: `取代 ${target.id}(revision ${tg.mutability.revision} → ${record.governance!.mutability.revision})`,
+      });
+      remainingIds.delete(target.id); // 旧 id 不再可操作
       outcome.updated.push(record);
     } else if (op === 'delete') {
       const target = existingById.get(String(item.id || ''));
       if (!target || !remainingIds.has(target.id)) continue;
-      if (isProtectedMemory(target)) continue; // 手动 user 红线受保护
-      deleteUserMemory(input.userId, target.id);
+      // 软删除(带台账/传导/审计;protected 拦截在 softDeleteUserMemory 内统一执行)
+      const res = softDeleteUserMemory(input.userId, target.id, {
+        requestedBy: 'auto',
+        reason: '会话末自动维护判定已被推翻',
+        actor: 'auto-distill',
+      });
+      if (!res.ok) continue;
       remainingIds.delete(target.id);
       outcome.deletedIds.push(target.id);
     }
@@ -632,9 +1180,10 @@ async function runMemoryDecision(
 
 const CRUD_OP_SPEC =
   '输出严格的 JSON 操作数组(最多 5 条,无需任何变更就输出 []),每条:\n' +
-  '{"op":"add","title":"简短标题(20字内)","content":"具体内容(150字内)","category":"preference|project|fact|rule"} —— 新的持久事实\n' +
-  '{"op":"update","id":"现有记忆id","content":"修正后的完整内容"} —— 新信息与现有记忆矛盾或演进,更新过时表述\n' +
-  '{"op":"delete","id":"现有记忆id"} —— 现有记忆被明确推翻,不再成立\n' +
+  '{"op":"add","title":"简短标题(20字内)","content":"具体内容(150字内)","category":"preference|project|fact|rule","actionability":"fact|commitment"} —— 新的持久事实。\n' +
+  '  actionability 判定:只是背景信息/偏好 → "fact";用户明确委托 Agent 持续执行的义务(如「以后每周五自动汇总周报」)→ "commitment"。拿不准就填 "fact"。\n' +
+  '{"op":"update","id":"现有记忆id","content":"修正后的完整内容"} —— 新信息与现有记忆矛盾或演进,更新过时表述(系统会以新版本取代旧版本并保留来源链;不允许借 update 把事实升级为承诺/红线或扩大适用范围)\n' +
+  '{"op":"delete","id":"现有记忆id"} —— 现有记忆被明确推翻,不再成立(系统执行软删除,保留期内可恢复,并自动处理衍生记忆)\n' +
   '判定原则:\n' +
   '- update/delete 必须有明确依据,不确定时宁可不操作 —— 错误删除比漏记更糟;\n' +
   '- 不要提炼一次性任务细节、临时性内容;\n' +
@@ -683,7 +1232,7 @@ export async function distillMissionMemories(
     transcript = transcript.slice(0, DISTILL_TRANSCRIPT_LIMIT);
   }
 
-  const subjectExisting = ((getUserMemories(opts.userId) as UserMemory[]) || [])
+  const subjectExisting = listActiveMemories(opts.userId)
     .filter((m) => (m.subject || 'user') === 'user')
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, DISTILL_EXISTING_LIMIT);
@@ -769,7 +1318,7 @@ export async function distillAgentExperience(
     transcript = transcript.slice(0, DISTILL_TRANSCRIPT_LIMIT);
   }
 
-  const subjectExisting = ((getUserMemories(opts.userId) as UserMemory[]) || [])
+  const subjectExisting = listActiveMemories(opts.userId)
     .filter((m) => m.subject === 'agent')
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, DISTILL_EXISTING_LIMIT);

@@ -134,6 +134,16 @@ export interface ToolDefinition {
   description: string;
   parameters: Record<string, any>;
   dangerLevel?: 'low' | 'medium' | 'high';
+  /**
+   * 副作用补偿声明(持久状态治理不变量 I5:每个行动都要留下可回滚的「把手」)。
+   * 编排器在 tool_result 事件里透传给上层,由持久化层随任务步骤快照落盘 ——
+   * reversible 支持事后撤销,irreversible 在事前就明确告知(配合审批门)。
+   */
+  compensation?: {
+    kind: 'reversible' | 'partially-reversible' | 'irreversible';
+    /** 可(部分)回滚时:补偿方式的说明(供前端「撤销」入口与审计展示) */
+    undoHint?: string;
+  };
   execute: (args: any, session: ToolSession) => Promise<any>;
   /** 基线工具：任何任务都挂载（体积小且通用的规划/交付/记忆类），由插件自声明 */
   baseline?: boolean;

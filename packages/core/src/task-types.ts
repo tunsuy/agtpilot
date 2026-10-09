@@ -27,6 +27,14 @@ export interface TaskOptions {
   configOverride?: any;
   historyMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
   onEvent?: (event: AgentEvent) => void;
+  /**
+   * 动态治理提示(回退弧感知通道):每步 prepareStep 前调用,返回非空字符串时
+   * 内核把它作为一条【系统治理提示】用户消息追加到本步消息末尾 —— 用于向
+   * in-flight 任务即时通报「记忆已被删除」「连接器授权已撤销(纪元 a→b)」等
+   * 状态变化,让模型显式调整计划而不是拿着失效授权继续跑(治理不变量 I1/I3)。
+   * 每次返回一条(上层自行排队),抛错时内核静默跳过。
+   */
+  getStepNotice?: () => string | null | undefined | Promise<string | null | undefined>;
 }
 
 /** 单任务执行效率统计（识别"本该 2 步却跑了很多步"的空转任务） */

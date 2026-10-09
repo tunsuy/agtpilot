@@ -32,6 +32,13 @@ class AgentBackend {
   private cronSchedulerInitialized = false;
   /** 各任务检查点最近一次落盘时间（节流：≥5s 一次） */
   private checkpointSavedAt: Map<string, number> = new Map();
+  /**
+   * in-flight 任务运行时把手(治理「回退弧→前向弧」传导入口):
+   * missionId → { userId, env(taskEnv 活引用,删键即时生效), notices(治理提示队列) }。
+   * governance-bus 收到记忆删除/授权撤销事件后写这里,内核 prepareStep
+   * 经 getStepNotice 逐条取出注入模型上下文(见 initGovernanceSubscriptions)。
+   */
+  private taskRuntimes: Map<string, { userId?: string; env?: Record<string, string>; notices: string[] }> = new Map();
 
   private constructor() {
     this.state = {
@@ -55,6 +62,8 @@ class AgentBackend {
       connectorSuggestions: [],
       latestArtifact: undefined,
     };
+    // 治理总线订阅(回退弧传导到 in-flight 任务);失败只降级不拖垮后端
+    this.initGovernanceSubscriptions();
   }
 
   public static getInstance(): AgentBackend {
@@ -265,6 +274,11 @@ class AgentBackend {
             if (targetStep && targetStep.status === 'RUNNING') {
               targetStep.status = 'DONE';
               targetStep.output = event.payload.output;
+              // 回滚把手随步骤快照落盘(治理不变量 I5:每个行动都留下
+              // 可撤销性声明,irreversible 的在前端/审计里显式可见)
+              if (event.payload.compensation) {
+                targetStep.compensation = event.payload.compensation;
+              }
               // 真实耗时（工具广播与核心广播双写时取首次完成时间）
               const elapsed = Date.now() - (targetStep.startedAt || Date.now());
               targetStep.duration = `${elapsed < 0 ? 0 : elapsed}ms`;
@@ -573,6 +587,61 @@ class AgentBackend {
     this.broadcast({ type: 'approval_resolved', data: { approvalId, approved } });
     this.addTerminalLog('system', `[Approval] User ${approved ? 'AUTHORIZED' : 'REJECTED'} action ${approvalId}.`);
     return success;
+  }
+
+  /**
+   * 订阅治理总线(持久状态治理「回退弧」→ in-flight 任务传导,设计文档 §3.2/§3.3):
+   * - 记忆被(软)删除:通知该用户所有运行中任务,模型下一步显式感知,不再引用已删记忆(I3);
+   * - 授权撤销(权限纪元 +1):从 taskEnv 活引用中移除对应 Key(工具 session.env 与其
+   *   共享同一对象,立即生效)、断开对应 MCP 服务器连接,并注入治理提示(I1:权威只收窄)。
+   */
+  private initGovernanceSubscriptions() {
+    try {
+      const { getGovernanceBus } = require('@/lib/governance-bus');
+      const bus = getGovernanceBus();
+
+      bus.onMemoryRevoked((ev: any) => {
+        const who =
+          ev.requestedBy === 'user' ? '用户' : ev.requestedBy === 'propagated' ? '上游删除传导' : '系统';
+        const notice = `记忆「${ev.title || ev.memoryId}」已被${who}删除${ev.reason ? `(原因:${ev.reason})` : ''}。后续步骤不得再引用或依赖该记忆内容;若当前计划基于它制定,请立即调整方案。`;
+        for (const rt of this.taskRuntimes.values()) {
+          if (rt.userId === ev.userId) rt.notices.push(notice);
+        }
+      });
+
+      bus.onAuthorityRevoked((ev: any) => {
+        // 解析受影响的 envVar 集合:事件显式携带,或由 connectorId → tokenEnvVar 推导
+        const envVars: string[] = Array.isArray(ev.envVars) ? [...ev.envVars] : [];
+        let label = envVars.join(', ');
+        if (ev.connectorId) {
+          try {
+            const { getMcpConnectorDef } = require('@/lib/mcp-connectors');
+            const def = getMcpConnectorDef(ev.connectorId);
+            if (def?.tokenEnvVar && !envVars.includes(def.tokenEnvVar)) envVars.push(def.tokenEnvVar);
+            label = label || def?.name || ev.connectorId;
+            // 断开该用户对应 MCP 服务器连接(旧 token 的连接不再可复用)
+            const mcpSvc = this.mcp;
+            if (mcpSvc?.disconnectUser && Array.isArray(def?.servers)) {
+              for (const s of def.servers) {
+                Promise.resolve(mcpSvc.disconnectUser(ev.userId, s.name)).catch(() => {});
+              }
+            }
+          } catch {
+            label = label || ev.connectorId;
+          }
+        }
+        const notice = `连接器授权已撤销(${label},权限纪元推进至 ${ev.epoch})。对应凭证已从当前任务运行环境移除,严禁继续调用依赖该授权的工具(mcp_ 前缀调用或需要该 Key 的工具);请调整计划,或引导用户重新授权后再继续。`;
+        for (const rt of this.taskRuntimes.values()) {
+          if (rt.userId !== ev.userId) continue;
+          if (rt.env) {
+            for (const k of envVars) delete rt.env[k];
+          }
+          rt.notices.push(notice);
+        }
+      });
+    } catch (e: any) {
+      console.error('[Governance] 治理总线订阅失败(降级:回退弧事件不再传导到运行中任务):', e?.message || e);
+    }
   }
 
   public stopMission(missionId: string) {
@@ -896,6 +965,14 @@ class AgentBackend {
           }
         }
 
+        // 登记本任务运行时把手:治理事件(记忆删除/授权撤销)发生后仍能
+        // 传导到 in-flight 任务(凭证即时清除 + 下一步注入治理提示)
+        this.taskRuntimes.set(targetMission.id, {
+          userId: options.userId,
+          env: taskEnv,
+          notices: [],
+        });
+
         if (hasLlm) {
           // 调用真正的大模型 + 工具链编排 (Vercel AI SDK + Cordis 工具集)
           const result = await this.ctx.orchestrator.runTask({
@@ -907,6 +984,8 @@ class AgentBackend {
             prompt: goal,
             taskTools,
             taskEnv,
+            // 回退弧感知通道:每步 prepareStep 前取一条排队的治理提示注入
+            getStepNotice: () => this.taskRuntimes.get(targetMission.id)?.notices.shift() ?? null,
             system: `你是基于 Cordis 微内核架构驱动的个人全自主智能体驾驶舱 (AgtPilot)。
 你拥有强大的推理能力与丰富的原子工具生态（包括浏览器实时自动化 browser_navigate、沙箱隔离命令执行 sandbox_run_command 等）。
 ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
@@ -1027,6 +1106,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
         this.broadcast({ type: 'mission_updated', data: targetMission });
       } finally {
         this.activeAbortControllers.delete(targetMission.id);
+        this.taskRuntimes.delete(targetMission.id);
       }
     })();
 

@@ -347,6 +347,12 @@ export function buildEmailTools(userId: string): ToolDefinition[] {
       description:
         '通过用户配置的 SMTP 邮箱发送邮件:任务报告、内容投递、通知提醒均可。正文支持 Markdown(自动排版 HTML 邮件)或纯文本;收件人/抄送支持逗号分隔多个。QQ/163/Gmail/Outlook 自动识别服务器,自建邮箱可配主机端口。需要用户先在连接器页「电子邮件 (SMTP)」配置 账号:授权码。',
       dangerLevel: 'medium',
+      // 回滚把手(治理 I5):邮件一经 SMTP 投递即不可撤回 —— 显式声明不可逆,
+      // 配合审批门在事前告知,而不是事后假装能撤销
+      compensation: {
+        kind: 'irreversible',
+        undoHint: '邮件发出后无法撤回;如需补救只能再发一封更正/致歉邮件',
+      },
       parameters: {
         type: 'object',
         properties: {

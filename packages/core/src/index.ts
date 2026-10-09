@@ -40,6 +40,8 @@ export {
   COMPACT_DIGEST_ENTRY_LIMIT,
 } from './compaction';
 export type { CompactOptions, DigestSummarizer } from './compaction';
+export { appendStepNotice, STEP_NOTICE_PREFIX } from './notice';
+export type { StepNoticeMessage } from './notice';
 export { AgentService } from './agent-service';
 export { OrchestratorService } from './orchestrator';
 export type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';

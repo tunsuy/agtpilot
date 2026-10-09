@@ -1,21 +1,8 @@
 import { Context } from '@deepseek-ai/cordis';
-import { AgentService, OrchestratorService } from '@agtpilot/core';
+import { OrchestratorService, AgentService } from '@agtpilot/core';
+import { createAgentRuntime } from '@agtpilot/app-kit';
 import { ApprovalRequest, ConnectorSuggestion, PlanData, PlanTask } from '@agtpilot/protocol';
-import * as BrowserPlugin from '@agtpilot/plugin-browser';
-import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
-import * as SearchPlugin from '@agtpilot/plugin-search';
-import * as MCPPlugin from '@agtpilot/plugin-mcp';
-import * as ArtifactPlugin from '@agtpilot/plugin-artifact';
-import * as PlannerPlugin from '@agtpilot/plugin-planner';
-import * as MemoryPlugin from '@agtpilot/plugin-memory';
-import * as CronPlugin from '@agtpilot/plugin-cron';
-import * as ObservabilityPlugin from '@agtpilot/plugin-observability';
-import * as GitPlugin from '@agtpilot/plugin-git';
-import * as NotifyPlugin from '@agtpilot/plugin-notify';
-import * as RagPlugin from '@agtpilot/plugin-rag';
-import * as DesktopPlugin from '@agtpilot/plugin-desktop';
-import * as RouterPlugin from '@agtpilot/plugin-router';
-import * as ModelPlugin from '@agtpilot/plugin-model';
+import type { MCPService } from '@agtpilot/plugin-mcp';
 import { Cron } from 'croner';
 
 import { Mission, MissionStep, ViewportState, TerminalLog } from '../types/agent';
@@ -33,21 +20,20 @@ export interface AgentBackendState {
 
 class AgentBackend {
   private static instance: AgentBackend;
-  public ctx: Context;
-  public orchestrator: OrchestratorService;
-  public agentService: AgentService;
+  public ctx!: Context;
+  public orchestrator!: OrchestratorService;
+  public agentService!: AgentService;
   public state: AgentBackendState;
   private subscribers: Set<(event: any) => void> = new Set();
-  private initialized = false;
+  /** 装配 Promise（resolve 即全部插件就绪；单插件失败只跳过不拖垮内核） */
+  private runtimePromise: Promise<void> | null = null;
   private activeAbortControllers: Map<string, AbortController> = new Map();
   private activeCronJobs: Map<string, { job: Cron; userId: string; info: any }> = new Map();
   private cronSchedulerInitialized = false;
+  /** 各任务检查点最近一次落盘时间（节流：≥5s 一次） */
+  private checkpointSavedAt: Map<string, number> = new Map();
 
   private constructor() {
-    this.ctx = new Context();
-    this.agentService = new AgentService(this.ctx);
-    this.orchestrator = new OrchestratorService(this.ctx);
-
     this.state = {
       missions: [],
       activeMissionId: null,
@@ -67,44 +53,113 @@ class AgentBackend {
       ],
       approvalRequests: [],
       connectorSuggestions: [],
+      latestArtifact: undefined,
     };
-
-    this.bindEvents();
   }
 
   public static getInstance(): AgentBackend {
     const g = globalThis as any;
     if (!g.__agtPilotBackend) {
       g.__agtPilotBackend = new AgentBackend();
-      g.__agtPilotBackend.initPlugins().catch((err: any) => {
-        console.error('Failed to init plugins in AgentBackend:', err);
+      // 微内核 + 插件统一装配（app-kit），后台启动；调用方经 whenReady() 等待就绪
+      g.__agtPilotBackend.ensureRuntime().catch((err: any) => {
+        console.error('Failed to init agent runtime in AgentBackend:', err);
       });
       g.__agtPilotBackend.initCronScheduler();
     }
     return g.__agtPilotBackend;
   }
 
-  public async initPlugins() {
-    if (this.initialized) return;
-    this.initialized = true;
+  /** 等待微内核与全部插件就绪（幂等；API 路由入口处 await） */
+  public whenReady(): Promise<void> {
+    return this.runtimePromise ?? this.ensureRuntime();
+  }
 
-    await this.ctx.plugin(BrowserPlugin, { headless: true });
-    await this.ctx.plugin(SandboxPlugin);
-    await this.ctx.plugin(SearchPlugin);
-    await this.ctx.plugin(MCPPlugin);
-    await this.ctx.plugin(ArtifactPlugin);
-    await this.ctx.plugin(PlannerPlugin);
-    await this.ctx.plugin(MemoryPlugin);
-    await this.ctx.plugin(CronPlugin);
-    await this.ctx.plugin(ObservabilityPlugin);
-    await this.ctx.plugin(GitPlugin);
-    await this.ctx.plugin(NotifyPlugin);
-    await this.ctx.plugin(RagPlugin);
-    await this.ctx.plugin(DesktopPlugin);
-    await this.ctx.plugin(RouterPlugin);
-    await this.ctx.plugin(ModelPlugin);
+  /** MCP 连接器服务（类型化访问；未就绪时 undefined，需要确保就绪请先 await whenReady()） */
+  public get mcp(): MCPService | undefined {
+    return (this.ctx as Context | undefined)?.mcp;
+  }
 
-    this.addTerminalLog('system', '[Cordis] All 15 SOTA plugins attached to microkernel.');
+  private ensureRuntime(): Promise<void> {
+    if (this.runtimePromise) return this.runtimePromise;
+    this.runtimePromise = (async () => {
+      // composition root 统一装配：core 走插件形态，单插件失败只跳过并记录
+      const runtime = await createAgentRuntime();
+      this.ctx = runtime.ctx;
+      this.agentService = runtime.agent;
+      this.orchestrator = runtime.orchestrator;
+
+      this.bindEvents();
+      this.bindCheckpoint();
+      this.sweepInterruptedMissions();
+
+      const failed = runtime.loaded.filter((l) => !l.ok);
+      this.addTerminalLog(
+        'system',
+        `[Cordis] 微内核与插件装配完成（${runtime.loaded.length - failed.length}/${runtime.loaded.length} 就绪${failed.length ? `，跳过: ${failed.map((f) => f.plugin).join(', ')}` : ''}）。`
+      );
+    })();
+    return this.runtimePromise;
+  }
+
+  /**
+   * 重启清扫：持久化任务里停留在执行中/等审批状态的（进程重启即中断，
+   * 无自动恢复）标记为 INTERRUPTED，避免历史列表出现永远"进行中"的僵尸任务。
+   * 会话历史已随运行中检查点落盘，用户点开继续即可续跑。
+   */
+  private sweepInterruptedMissions() {
+    try {
+      const { getAllUsersData, saveUserMission } = require('@/lib/user-store');
+      let swept = 0;
+      for (const user of getAllUsersData()) {
+        for (const m of user.missions || []) {
+          if (m.status === 'ACTIVE' || m.status === 'WAITING_APPROVAL' || m.status === 'QUEUED') {
+            m.status = 'INTERRUPTED';
+            if (Array.isArray(m.steps)) {
+              m.steps.push({
+                id: `step_intr_${Date.now()}`,
+                title: '服务重启：任务执行中断（会话已保留，可继续对话续跑）',
+                status: 'FAILED',
+              });
+            }
+            saveUserMission(user.userId, m);
+            swept++;
+          }
+        }
+      }
+      if (swept > 0) {
+        this.addTerminalLog('system', `[Recovery] 重启清扫：${swept} 个中断任务已标记为 INTERRUPTED。`);
+      }
+    } catch {
+      // 清扫失败不影响启动
+    }
+  }
+
+  /**
+   * 运行中消息检查点：内核每步 prepareStep 时广播 agtpilot/checkpoint，
+   * 这里把会话历史写回 mission（节流落盘）——崩溃/重启后任务可从最近
+   * 检查点续跑，而不是只有收尾时才落一版。
+   */
+  private bindCheckpoint() {
+    this.ctx.on('agtpilot/checkpoint', ({ taskId, messages }: { taskId: string; messages: any[] }) => {
+      const mission = this.state.missions.find((m) => m.id === taskId);
+      if (!mission || !Array.isArray(messages) || messages.length === 0) return;
+      mission.conversationMessages = messages;
+
+      const now = Date.now();
+      const last = this.checkpointSavedAt.get(mission.id) || 0;
+      if (now - last < 5000) return; // 节流：每 5s 至多落盘一次
+      this.checkpointSavedAt.set(mission.id, now);
+
+      if (mission.userId) {
+        try {
+          const { saveUserMission } = require('@/lib/user-store');
+          saveUserMission(mission.userId, mission);
+        } catch {
+          // 落盘失败不影响主流程
+        }
+      }
+    });
   }
 
   private bindEvents() {
@@ -498,6 +553,8 @@ class AgentBackend {
   }
 
   public submitApproval(approvalId: string, approved: boolean): boolean {
+    // 内核未就绪（极早期请求）时必然没有挂起中的审批，直接返回未命中
+    if (!this.orchestrator) return false;
     const success = this.orchestrator.submitApproval(approvalId, approved);
     this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== approvalId);
 
@@ -525,7 +582,7 @@ class AgentBackend {
     if (this.state.approvalRequests.length > 0) {
       for (const req of this.state.approvalRequests) {
         try {
-          (this.ctx.orchestrator as any)?.submitApproval?.(req.id, false);
+          this.orchestrator?.submitApproval(req.id, false);
         } catch {
           // ignore
         }
@@ -581,13 +638,29 @@ class AgentBackend {
   }
 
   public async runMission(goal: string, options: { title?: string; userId?: string; missionId?: string } = {}): Promise<Mission> {
-    await this.initPlugins();
+    await this.ensureRuntime();
 
-    let targetMission: Mission;
-    const isContinuing = Boolean(options.missionId && this.state.missions.some((m) => m.id === options.missionId));
+    // 续聊目标定位：内存 → 持久化库回水（重启后内存为空，但磁盘上的
+    // 历史任务含会话消息，直接载入内存续聊，而不是静默开新任务丢上下文）
+    let targetMission: Mission | undefined = this.state.missions.find((m) => m.id === options.missionId);
+    if (!targetMission && options.missionId && options.userId) {
+      try {
+        const { getUserMissions } = await import('@/lib/user-store');
+        const persisted = getUserMissions(options.userId).find((m: any) => m.id === options.missionId);
+        if (persisted) {
+          targetMission = persisted as Mission;
+          this.state.missions.unshift(targetMission);
+          this.addTerminalLog(
+            'system',
+            `[Session Restored] ID: ${targetMission.id} 已从持久化库回水（含 ${targetMission.conversationMessages?.length || 0} 条历史会话）`
+          );
+        }
+      } catch {
+        // 回水失败按新任务处理
+      }
+    }
 
-    if (isContinuing) {
-      targetMission = this.state.missions.find((m) => m.id === options.missionId)!;
+    if (targetMission) {
       targetMission.status = 'ACTIVE';
       targetMission.progress = 10;
       targetMission.steps.push({
@@ -727,7 +800,7 @@ class AgentBackend {
           try {
             const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
             const { buildConnectorBridgeTools } = await import('@/lib/connector-bridge');
-            const mcpSvc = (this.ctx as any).mcp;
+            const mcpSvc = this.mcp;
             const injectedTools: any[] = [];
 
             if (mcpSvc?.syncUserServers) {
@@ -752,7 +825,7 @@ class AgentBackend {
               ...buildConnectorBridgeTools({
                 userId: uid,
                 emit: (e) => this.ctx.agent.emitEvent(e as any),
-                getMcpSvc: () => (this.ctx as any).mcp,
+                getMcpSvc: () => this.mcp,
               })
             );
 

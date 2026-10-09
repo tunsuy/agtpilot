@@ -26,6 +26,7 @@ const STATUS_META: Record<
   QUEUED: { label: '排队中', icon: Hourglass, className: 'text-amber-600 bg-amber-50' },
   WAITING_APPROVAL: { label: '待审批', icon: ShieldQuestion, className: 'text-orange-600 bg-orange-50' },
   DONE: { label: '已完成', icon: CheckCircle2, className: 'text-emerald-600 bg-emerald-50' },
+  INTERRUPTED: { label: '已中断', icon: AlertCircle, className: 'text-amber-600 bg-amber-50' },
 };
 
 function timeAgo(ts: number): string {

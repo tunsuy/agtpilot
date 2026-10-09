@@ -12,7 +12,7 @@ let runtimeHandler: ((req: Request) => Promise<Response>) | null = null;
 async function getHandler() {
   if (!runtimeHandler) {
     const backend = getAgentBackend();
-    await backend.initPlugins();
+    await backend.whenReady();
 
     const registered = backend.ctx.agent.getTools();
     const tools = registered.map((tool) =>

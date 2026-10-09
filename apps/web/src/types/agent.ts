@@ -70,7 +70,7 @@ export interface Mission {
   id: string;
   userId?: string;
   title: string;
-  status: 'ACTIVE' | 'DONE' | 'QUEUED' | 'WAITING_APPROVAL';
+  status: 'ACTIVE' | 'DONE' | 'QUEUED' | 'WAITING_APPROVAL' | 'INTERRUPTED';
   progress: number;
   startedAt: number;
   steps: MissionStep[];

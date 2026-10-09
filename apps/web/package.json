@@ -55,7 +55,8 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "@agtpilot/app-kit": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.20",

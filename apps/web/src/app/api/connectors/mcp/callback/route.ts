@@ -68,8 +68,8 @@ export async function GET(req: NextRequest) {
     // 预热连接：立即连上该用户的 MCP 服务器并挂载工具（失败不阻断，任务执行时会重试）
     try {
       const backend = getAgentBackend();
-      await backend.initPlugins();
-      const mcpSvc = (backend.ctx as any).mcp;
+      await backend.whenReady();
+      const mcpSvc = backend.mcp;
       if (mcpSvc?.syncUserServers) {
         const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
         await mcpSvc.syncUserServers(userId, buildUserMcpServers(userId));

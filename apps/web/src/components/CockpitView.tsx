@@ -229,10 +229,18 @@ export function CockpitView({
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
                             : m.status === 'ACTIVE'
                             ? 'bg-blue-50 text-blue-700 border border-blue-200/60 animate-pulse'
+                            : m.status === 'INTERRUPTED'
+                            ? 'bg-amber-50 text-amber-700 border border-amber-200/60'
                             : 'bg-zinc-100 text-zinc-500'
                         }`}
                       >
-                        {m.status === 'DONE' ? '已完成' : m.status === 'ACTIVE' ? `${m.progress}%` : '等待中'}
+                        {m.status === 'DONE'
+                          ? '已完成'
+                          : m.status === 'ACTIVE'
+                          ? `${m.progress}%`
+                          : m.status === 'INTERRUPTED'
+                          ? '已中断'
+                          : '等待中'}
                       </span>
                     </div>
 

@@ -26,8 +26,7 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
   // 运行中后端的用户级 MCP 连接状态（工具数/错误），后端未就绪时为空
   let liveServers: Array<{ name: string; toolsCount: number; error?: string }> = [];
   try {
-    const backend = getAgentBackend();
-    const mcpSvc = (backend.ctx as any).mcp;
+    const mcpSvc = getAgentBackend().mcp;
     if (mcpSvc?.listUserServers) {
       liveServers = mcpSvc.listUserServers(userId);
     }
@@ -90,8 +89,8 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
 async function resyncUserServers(userId: string) {
   try {
     const backend = getAgentBackend();
-    await backend.initPlugins();
-    const mcpSvc = (backend.ctx as any).mcp;
+    await backend.whenReady();
+    const mcpSvc = backend.mcp;
     if (mcpSvc?.syncUserServers) {
       const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
       const servers = buildUserMcpServers(userId);
@@ -169,7 +168,8 @@ export async function POST(req: NextRequest) {
       if (def.tokenEnvVar) saveUserConnector(userId, def.tokenEnvVar, '');
       deleteMcpAuth(userId, def.id);
       try {
-        const mcpSvc = (getAgentBackend().ctx as any).mcp;
+        await getAgentBackend().whenReady();
+        const mcpSvc = getAgentBackend().mcp;
         for (const s of def.servers) {
           await mcpSvc?.disconnectUser?.(userId, s.name);
         }

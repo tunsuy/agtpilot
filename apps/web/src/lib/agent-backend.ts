@@ -754,6 +754,10 @@ class AgentBackend {
             // 始终注入(未配置时返回引导文案),凭证在 execute 时才从 user-store 按用户读取
             const { buildWechatMpTools } = await import('@/lib/wechat-mp');
             injectedTools.push(...buildWechatMpTools(uid));
+
+            // 电子邮件 SMTP 直发:email_send(同样始终注入,凭证 execute 时按用户读取)
+            const { buildEmailTools } = await import('@/lib/email-smtp');
+            injectedTools.push(...buildEmailTools(uid));
             taskTools = injectedTools;
           } catch (e: any) {
             this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`);
@@ -773,6 +777,8 @@ class AgentBackend {
               // 通知类 Webhook（plugin-notify notify_send_webhook 按 session.env 解析）
               'FEISHU_WEBHOOK_URL',
               'SLACK_WEBHOOK_URL',
+              'DINGTALK_WEBHOOK_URL',
+              'WECOM_WEBHOOK_URL',
             ]) {
               const v = (cfgs[k] || '').trim();
               if (v) env[k] = v;

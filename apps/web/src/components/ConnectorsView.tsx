@@ -38,6 +38,7 @@ import {
   NotebookPen,
   Palette,
   MessagesSquare,
+  Mail,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
@@ -96,6 +97,12 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <MessageSquare className={`${className} text-fuchsia-600`} />;
     case 'feishu':
       return <Bell className={`${className} text-sky-500`} />;
+    case 'dingtalk':
+      return <Zap className={`${className} text-blue-600`} />;
+    case 'wecom':
+      return <Bell className={`${className} text-blue-500`} />;
+    case 'email_smtp':
+      return <Mail className={`${className} text-violet-600`} />;
     case 'exa':
       return <Search className={`${className} text-indigo-600`} />;
     case 'tavily':
@@ -122,7 +129,7 @@ const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
   { key: 'office', label: '办公协作', ids: ['notion_mcp', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
-  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'wechat_mp', 'xiaohongshu', 'twitter'] },
+  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'wechat_mp', 'xiaohongshu', 'twitter'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'e2b'] },
 ];
 const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));

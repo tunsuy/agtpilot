@@ -99,6 +99,36 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以卡片推送到飞书群。',
   },
   {
+    id: 'dingtalk',
+    name: '钉钉群机器人',
+    icon: 'Bell',
+    category: 'Communication',
+    envVar: 'DINGTALK_WEBHOOK_URL',
+    platformType: 'both',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以 Markdown 推送到钉钉群（群设置 → 智能群助手 → 添加自定义机器人获取地址）。',
+  },
+  {
+    id: 'wecom',
+    name: '企业微信群机器人',
+    icon: 'Bell',
+    category: 'Communication',
+    envVar: 'WECOM_WEBHOOK_URL',
+    platformType: 'both',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以 Markdown 推送到企业微信群（群聊 → 右键群机器人 → 添加获取地址）。',
+  },
+  {
+    id: 'email_smtp',
+    name: '电子邮件 (SMTP)',
+    icon: 'Mail',
+    category: 'Communication',
+    envVar: 'EMAIL_SMTP_CREDENTIAL',
+    platformType: 'both',
+    configHint:
+      '按 账号:授权码 格式填写(QQ/163/Gmail/Outlook 等自动识别服务器)。QQ:邮箱设置→账户→开启 SMTP 并生成授权码;163:设置→POP3/SMTP→开启并获取授权码;Gmail:开启两步验证后生成应用专用密码——均不是登录密码。自建/企业邮箱可写 账号:授权码:主机:端口。',
+    description:
+      'Agent 用你的邮箱直接发信:任务报告、内容投递、通知提醒,email_send 工具支持 Markdown 自动排版 HTML 邮件与多收件人抄送。',
+  },
+  {
     id: 'exa',
     name: 'Exa Neural Search',
     icon: 'Search',

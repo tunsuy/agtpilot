@@ -353,6 +353,84 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     ],
   },
 
+  // ---- 投研行情数据（投资理财场景：官方托管优先，本地 stdio 兜底）----
+  {
+    id: 'tushare',
+    name: 'Tushare 投研数据',
+    icon: 'TrendingUp',
+    category: 'Finance',
+    description:
+      'Tushare Pro 官方 MCP：A股/基金/期货行情、财务报表、宏观与指数数据（官方托管远程直连，粘贴个人 Token；积分制，注册即有免费额度）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_TUSHARE_TOKEN',
+    quickAuthUrl: 'https://tushare.pro/user/token',
+    authHint:
+      '注册/登录 Tushare Pro → 个人主页 →「接口 TOKEN」复制粘贴到下方。新用户注册即有免费积分，部分高级接口需要更高积分（捐赠/贡献可提升）。',
+    docUrl: 'https://tushare.pro/document/1?doc_id=463',
+    servers: [
+      {
+        name: 'tushare',
+        // 官方端点把 token 拼在 URL 路径里（非 header）
+        url: (cred) => `https://api.tushare.pro/mcp/token=${encodeURIComponent(cred)}`,
+        label: '投研数据',
+      },
+    ],
+  },
+  {
+    id: 'alphavantage_mcp',
+    name: 'Alpha Vantage（美股/外汇/加密）',
+    icon: 'LineChart',
+    category: 'Finance',
+    description:
+      'Alpha Vantage 官方托管 MCP：全球股票、外汇、大宗商品、加密货币的实时报价与 20 年历史数据、技术指标、基本面（免费 API Key 直连，已收录 Anthropic 官方 MCP 目录）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_ALPHAVANTAGE_KEY',
+    quickAuthUrl: 'https://www.alphavantage.co/support/#api-key',
+    authHint:
+      '打开 Alpha Vantage 官网 API Key 页，填邮箱立即免费获取 API Key，复制粘贴到下方（免费档 25 次请求/天，付费档更高）。',
+    docUrl: 'https://mcp.alphavantage.co/',
+    servers: [
+      {
+        name: 'alphavantage',
+        // 官方端点用 query 参数传 API Key
+        url: (cred) => `https://mcp.alphavantage.co/mcp?apikey=${encodeURIComponent(cred)}`,
+      },
+    ],
+  },
+  {
+    id: 'coingecko_mcp',
+    name: 'CoinGecko 加密行情',
+    icon: 'Coins',
+    category: 'Finance',
+    description:
+      'CoinGecko 官方 MCP（免凭证远程直连）：100 万+ 加密资产实时/历史价格、市值与成交量、DeFi 池与链上数据。免费档为共享限流；工具数量多，默认关闭，点「启用」后才为你的任务挂载。',
+    authType: 'none',
+    optIn: true,
+    tokenEnvVar: 'MCP_COINGECKO_OPTIN',
+    docUrl: 'https://docs.coingecko.com/ai-integration/mcp-server',
+    servers: [{ name: 'coingecko', url: 'https://mcp.api.coingecko.com/mcp' }],
+  },
+  {
+    id: 'a_stock',
+    name: 'A股实时行情 (AkShare)',
+    icon: 'CandlestickChart',
+    category: 'Finance',
+    description:
+      '基于 AkShare 的开源 A股数据 MCP（本地 stdio，免凭证免注册）：实时价格、历史 K线、公司信息、大盘概览、财务数据。需服务器预装 Python 包 a-stock-mcp-server（pip install a-stock-mcp-server）；本地子进程默认关闭，点「启用」后才挂载。',
+    authType: 'none',
+    optIn: true,
+    tokenEnvVar: 'MCP_ASTOCK_OPTIN',
+    docUrl: 'https://github.com/Llldmiao/a-stock-mcp-server',
+    servers: [
+      {
+        name: 'a_stock',
+        transport: 'stdio',
+        command: 'python3',
+        args: ['-m', 'a_stock_mcp_server'],
+      },
+    ],
+  },
+
   // ---- 官方 stdio MCP（本地子进程，凭证按用户注入 env/args，绝不进 process.env）----
   {
     id: 'lark_suite',

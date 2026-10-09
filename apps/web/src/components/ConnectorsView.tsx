@@ -46,6 +46,11 @@ import {
   Github,
   BookMarked,
   KanbanSquare,
+  TrendingUp,
+  LineChart,
+  Coins,
+  CandlestickChart,
+  Activity,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
@@ -68,6 +73,16 @@ import {
   type WeeklyReportAudience,
   type WeeklyReportDelivery,
 } from '../lib/office-workshops';
+import {
+  buildInvestPrompt,
+  INVEST_MODES,
+  REVIEW_MARKETS,
+  RISK_PROFILES,
+  INVEST_DELIVERIES,
+  type InvestMode,
+  type RiskProfile,
+  type InvestDelivery,
+} from '../lib/invest-workshops';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -111,6 +126,14 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <Github className={`${className} text-zinc-900`} />;
     case 'yuque':
       return <BookMarked className={`${className} text-emerald-600`} />;
+    case 'tushare':
+      return <TrendingUp className={`${className} text-blue-600`} />;
+    case 'alphavantage_mcp':
+      return <LineChart className={`${className} text-amber-600`} />;
+    case 'coingecko_mcp':
+      return <Coins className={`${className} text-emerald-600`} />;
+    case 'a_stock':
+      return <CandlestickChart className={`${className} text-red-600`} />;
     case 'browser_auto':
       return <Globe className={`${className} text-emerald-600`} />;
     default:
@@ -144,6 +167,8 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <Inbox className={`${className} text-indigo-600`} />;
     case 'weekly_report':
       return <ClipboardList className={`${className} text-sky-600`} />;
+    case 'invest_workshop':
+      return <Activity className={`${className} text-emerald-600`} />;
     case 'exa':
       return <Search className={`${className} text-indigo-600`} />;
     case 'tavily':
@@ -175,6 +200,7 @@ const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'models', label: '模型推理', ids: ['deepseek', 'openai', 'custom_llm'] },
   { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
   { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'weekly_report', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
+  { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock', 'invest_workshop'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
   { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },
@@ -250,7 +276,19 @@ export function ConnectorsView({
   const [wrDelivery, setWrDelivery] = useState<WeeklyReportDelivery>('chat');
   const [wrExtras, setWrExtras] = useState('');
 
-  const wsKind: 'xhs' | 'weibo' | 'video' | 'email_triage' | 'weekly' | null = workshopApp
+  // ---- 投研工坊：个股/基金体检 / 组合体检 / 盘后复盘（invest-workshops.ts）----
+  const [ivMode, setIvMode] = useState<InvestMode>('stock_check');
+  const [ivSymbols, setIvSymbols] = useState('');
+  const [ivFocus, setIvFocus] = useState('');
+  const [ivHoldings, setIvHoldings] = useState('');
+  const [ivRisk, setIvRisk] = useState<RiskProfile>('balanced');
+  const [ivMarkets, setIvMarkets] = useState<string[]>(['a_share']);
+  const [ivDelivery, setIvDelivery] = useState<InvestDelivery>('chat');
+
+  const toggleIvMarket = (id: string) =>
+    setIvMarkets((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
+
+  const wsKind: 'xhs' | 'weibo' | 'video' | 'email_triage' | 'weekly' | 'invest' | null = workshopApp
     ? workshopApp.id === 'weibo'
       ? 'weibo'
       : workshopApp.id === 'douyin' || workshopApp.id === 'bilibili'
@@ -259,6 +297,8 @@ export function ConnectorsView({
       ? 'email_triage'
       : workshopApp.id === 'weekly_report'
       ? 'weekly'
+      : workshopApp.id === 'invest_workshop'
+      ? 'invest'
       : 'xhs'
     : null;
 
@@ -276,6 +316,14 @@ export function ConnectorsView({
     setWrAudience('leader');
     setWrDelivery('chat');
     setWrExtras('');
+    // 投研工坊默认值
+    setIvMode('stock_check');
+    setIvSymbols('');
+    setIvFocus('');
+    setIvHoldings('');
+    setIvRisk('balanced');
+    setIvMarkets(['a_share']);
+    setIvDelivery('chat');
   };
 
   const handleWorkshopRun = () => {
@@ -293,6 +341,18 @@ export function ConnectorsView({
       });
       const periodName = WEEKLY_REPORT_PERIODS.find((p) => p.id === wrPeriod)?.name || '周报';
       onRunPrompt(prompt, `周报生成 · ${periodName}`);
+    } else if (wsKind === 'invest') {
+      const prompt = buildInvestPrompt({
+        mode: ivMode,
+        symbols: ivSymbols,
+        focus: ivFocus,
+        holdings: ivHoldings,
+        riskProfile: ivRisk,
+        markets: ivMarkets,
+        delivery: ivDelivery,
+      });
+      const modeName = INVEST_MODES.find((m) => m.id === ivMode)?.name || '投研';
+      onRunPrompt(prompt, `投研 · ${modeName}`);
     } else if (wsKind === 'video') {
       const isBili = workshopApp.id === 'bilibili';
       const prompt = buildVideoScriptPrompt({
@@ -607,6 +667,18 @@ export function ConnectorsView({
                   >
                     <Sparkles className="h-3 w-3" />
                     <span>{app.id === 'email_imap' ? '邮件分诊' : '生成周报'}</span>
+                  </button>
+                )}
+
+                {/* 投研工坊：个股/基金体检、组合体检、盘后复盘（只读投研，不构成投资建议） */}
+                {app.id === 'invest_workshop' && onRunPrompt && (
+                  <button
+                    onClick={() => openWorkshop(app)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition shadow-2xs"
+                    title="个股/基金体检、持仓组合体检、每日盘后复盘——只读投研，数据标注来源与时间戳"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span>投研工坊</span>
                   </button>
                 )}
 
@@ -1044,7 +1116,9 @@ export function ConnectorsView({
           <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl animate-fadeIn space-y-4">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-violet-100 text-violet-600 flex items-center justify-center shadow-2xs">
+                <div className={`h-9 w-9 rounded-xl flex items-center justify-center shadow-2xs ${
+                  wsKind === 'invest' ? 'bg-emerald-100 text-emerald-600' : 'bg-violet-100 text-violet-600'
+                }`}>
                   <Sparkles className="h-4 w-4" />
                 </div>
                 <div>
@@ -1057,6 +1131,8 @@ export function ConnectorsView({
                       ? '邮件分诊工坊'
                       : wsKind === 'weekly'
                       ? '周报生成工坊'
+                      : wsKind === 'invest'
+                      ? '投研工坊'
                       : '小红书内容工坊'}
                   </h3>
                   <p className="text-xs text-zinc-500 mt-0.5">
@@ -1064,6 +1140,8 @@ export function ConnectorsView({
                       ? 'Agent 拉取收件箱自动分级分诊，回复草稿经你逐封确认才发送'
                       : wsKind === 'weekly'
                       ? 'Agent 从已连接平台自动取材汇总周报，投递前经你确认'
+                      : wsKind === 'invest'
+                      ? '行情数据来自已连接的行情连接器，输出仅供参考、不构成投资建议'
                       : 'Agent 选题+创作，你在 App 人工确认发布（合规半自动）'}
                   </p>
                 </div>
@@ -1285,12 +1363,140 @@ export function ConnectorsView({
                 </>
               )}
 
+              {/* 投研工坊：模式 / 标的 / 持仓 / 市场 / 投递 */}
+              {wsKind === 'invest' && (
+                <>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">投研模式</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {INVEST_MODES.map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setIvMode(m.id)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                            ivMode === m.id
+                              ? 'bg-emerald-600 text-white border-emerald-600'
+                              : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                          }`}
+                        >
+                          {m.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {ivMode === 'stock_check' && (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">体检标的</label>
+                        <input
+                          type="text"
+                          value={ivSymbols}
+                          onChange={(e) => setIvSymbols(e.target.value)}
+                          placeholder="逗号分隔，如：600519, 00700, AAPL, 110022, BTC（留空则任务里先问你）"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">额外关注点（可选）</label>
+                        <input
+                          type="text"
+                          value={ivFocus}
+                          onChange={(e) => setIvFocus(e.target.value)}
+                          placeholder="如：重点看分红稳定性、对比同行业估值、关注解禁压力"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {ivMode === 'portfolio_check' && (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">我的持仓</label>
+                        <textarea
+                          value={ivHoldings}
+                          onChange={(e) => setIvHoldings(e.target.value)}
+                          rows={3}
+                          placeholder={'自由格式，如：\n600519 100股 成本1680\nAAPL 50股\n110022 占比20%\nBTC 0.5个（留空则任务里先问你）'}
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500 resize-none"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">风险偏好</label>
+                        <div className="flex gap-1.5">
+                          {RISK_PROFILES.map((r) => (
+                            <button
+                              key={r.id}
+                              type="button"
+                              onClick={() => setIvRisk(r.id)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                                ivRisk === r.id
+                                  ? 'bg-emerald-600 text-white border-emerald-600'
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                              }`}
+                            >
+                              {r.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {ivMode === 'daily_review' && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-zinc-700 block">覆盖市场（可多选）</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {REVIEW_MARKETS.map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => toggleIvMarket(m.id)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                              ivMarkets.includes(m.id)
+                                ? 'bg-emerald-600 text-white border-emerald-600'
+                                : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                            }`}
+                          >
+                            {m.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">报告投递</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {INVEST_DELIVERIES.map((d) => (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => setIvDelivery(d.id)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                            ivDelivery === d.id
+                              ? 'bg-emerald-600 text-white border-emerald-600'
+                              : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                          }`}
+                        >
+                          {d.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
               <p className="text-[11px] text-zinc-400 leading-relaxed flex items-start gap-1.5">
                 <ShieldCheck className="h-3.5 w-3.5 mt-px flex-shrink-0" />
                 {wsKind === 'email_triage'
                   ? '生成后跳转任务页，Agent 用 email_list/email_read 读取收件箱，输出总览 + 四级分诊清单（🔴立即/🟠今日/🟡稍后/⚪可忽略）与回复草稿。发送任何回复、改动邮件状态都需你逐封确认。需先在「电子邮件收件 (IMAP)」配置凭证（或已配 SMTP 会自动复用）。'
                   : wsKind === 'weekly'
                   ? '生成后跳转任务页，Agent 从你已连接的 Jira/GitHub/飞书/钉钉/腾讯会议/邮箱自动取材，输出结构化周报（概览/重点工作/数据看板/风险/下周计划）。先展示全文，投递（邮件/群机器人）需你确认；数据源都不可用时按补充要点整理。'
+                  : wsKind === 'invest'
+                  ? '生成后跳转任务页，Agent 通过你已连接的 Tushare / Alpha Vantage / CoinGecko / A股行情连接器拉取实时行情、估值与新闻，输出带来源与时间戳的结构化投研报告。全程只读：不执行任何交易、不动资金；报告经邮件/群机器人发送前需你确认。输出仅供参考，不构成投资建议。'
                   : wsKind === 'video'
                   ? `生成后跳转任务页，Agent 产出标题/分镜脚本/口播稿/标签分区/封面文案。你拍摄剪辑后 → 「真机唤起」${workshopApp.id === 'bilibili' ? 'B站' : '抖音'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`
                   : `生成后跳转任务页，Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 「真机唤起」${workshopApp.id === 'weibo' ? '微博' : '小红书'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`}
@@ -1308,7 +1514,9 @@ export function ConnectorsView({
                   type="button"
                   onClick={handleWorkshopRun}
                   className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-white text-xs font-medium transition shadow-xs ${
-                    wsKind === 'email_triage' || wsKind === 'weekly'
+                    wsKind === 'invest'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : wsKind === 'email_triage' || wsKind === 'weekly'
                       ? 'bg-sky-600 hover:bg-sky-700'
                       : 'bg-violet-600 hover:bg-violet-700'
                   }`}
@@ -1319,6 +1527,8 @@ export function ConnectorsView({
                       ? '开始分诊'
                       : wsKind === 'weekly'
                       ? '生成周报'
+                      : wsKind === 'invest'
+                      ? '开始分析'
                       : '开始创作'}
                   </span>
                 </button>

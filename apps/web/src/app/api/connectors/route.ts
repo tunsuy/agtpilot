@@ -251,6 +251,16 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
       '办公工坊：Agent 自动从你已连接的平台（Jira/GitHub/飞书/钉钉/腾讯会议/邮箱）拉取本周动态，汇总成结构化周报（概览/重点工作/数据看板/风险/下周计划），经你确认后可投递到邮箱或群机器人；未接数据源时降级为口述整理。',
   },
   {
+    id: 'invest_workshop',
+    name: '投研工坊',
+    icon: 'TrendingUp',
+    category: 'Productivity',
+    noCredential: true,
+    platformType: 'web',
+    description:
+      '投研工坊（只读，不构成投资建议）：个股/基金体检（行情+估值+财务+近期动态，🟢🟡🔴 综合信号）、持仓组合体检（配置结构/集中度/压力情景/健康评分）、每日盘后复盘（可配合定时任务自动推送到微信/飞书群）。数据来自已连接的 Tushare / Alpha Vantage / CoinGecko / A股行情连接器，缺失时降级为网络搜索并明示。',
+  },
+  {
     id: 'twitter',
     name: 'X / Twitter 客户端',
     icon: 'Share2',

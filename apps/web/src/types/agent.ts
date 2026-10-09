@@ -161,6 +161,16 @@ export interface MemoryItem {
   content: string;
   confidence: number;
   updatedAt: number;
+  /** manual = 记忆库页面手动添加；auto = 会话结束自动提炼沉淀 */
+  source?: 'manual' | 'auto';
+  /** 记忆主体：user = 用户事实记忆（画像/偏好）；agent = Agent 经验记忆（环境/工具/流程） */
+  subject?: 'user' | 'agent';
+  /** 来源任务引用（自动提炼时记录，构成情景记忆的时间锚点） */
+  missionId?: string;
+  /** 被召回（检索或注入）的累计次数，用于衰减与「疑似过时」判定 */
+  hitCount?: number;
+  /** 最近一次被召回的时间 */
+  lastHitAt?: number;
 }
 
 export interface CronJobItem {

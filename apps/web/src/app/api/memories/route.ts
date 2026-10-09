@@ -78,8 +78,11 @@ export async function POST(req: NextRequest) {
       title: String(memoryPayload.title).trim(),
       content: String(memoryPayload.content).trim(),
       category: memoryPayload.category || 'preference',
-      confidence: 1.0,
+      confidence: memoryPayload.confidence ?? 1.0,
       updatedAt: Date.now(),
+      // 会话自动提炼走 memory-service 直接落库；本路由收到的均为用户手动添加
+      source: memoryPayload.source === 'auto' ? 'auto' : 'manual',
+      subject: memoryPayload.subject === 'agent' ? 'agent' : 'user',
     };
 
     const updated = saveUserMemory(userId, newMemory);

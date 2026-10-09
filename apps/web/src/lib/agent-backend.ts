@@ -643,19 +643,13 @@ class AgentBackend {
     // 异步执行任务生命周期
     (async () => {
       try {
-        // 1. 获取当前登录用户专属沉淀的长效记忆与画像
+        // 1. 注入当前登录用户专属沉淀的长效记忆与画像：
+        // 执行红线(rule)全量注入,其余按与本次任务目标的相关性排序 + 条数/字符预算截断
         let userMemoryPrompt = '';
         if (options.userId) {
           try {
-            const { getUserMemories } = await import('@/lib/user-store');
-            const mems = getUserMemories(options.userId);
-            if (mems.length > 0) {
-              userMemoryPrompt = [
-                '【当前用户的专属个性画像与长期记忆】:',
-                ...mems.map((m: any) => `- [${m.category}] ${m.title}: ${m.content}`),
-                '请严格遵守上述用户的个性偏好与安全规则进行思考与输出。',
-              ].join('\n');
-            }
+            const { buildMemoryPromptBlock } = await import('@/lib/memory-service');
+            userMemoryPrompt = buildMemoryPromptBlock(options.userId, goal);
           } catch (e) {
             // fallback
           }
@@ -718,6 +712,18 @@ class AgentBackend {
         let taskEnv: Record<string, string> | undefined;
         if (options.userId) {
           const uid = options.userId;
+
+          // 2.4 用户级长期记忆工具（独立于 MCP 挂载，不随连接器失败而失效）：
+          // 同名覆盖 plugin-memory 的全局单文件版本 —— memory_store/recall/list
+          // 全部读写该用户专属记忆库（user-store），多用户部署时 A 用户 Agent
+          // 沉淀的记忆不会进入 B 用户的召回结果
+          try {
+            const { buildUserMemoryTools } = await import('@/lib/memory-service');
+            taskTools = [...(taskTools || []), ...buildUserMemoryTools(uid)];
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[Memory] 用户记忆工具挂载异常: ${e?.message || e}`);
+          }
+
           try {
             const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
             const { buildConnectorBridgeTools } = await import('@/lib/connector-bridge');
@@ -758,7 +764,8 @@ class AgentBackend {
             // 电子邮件 SMTP 直发:email_send(同样始终注入,凭证 execute 时按用户读取)
             const { buildEmailTools } = await import('@/lib/email-smtp');
             injectedTools.push(...buildEmailTools(uid));
-            taskTools = injectedTools;
+            taskTools = [...(taskTools || []), ...injectedTools];
+
           } catch (e: any) {
             this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`);
           }
@@ -817,6 +824,73 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
           if (result.success && result.messages) {
             targetMission.conversationMessages = result.messages;
             this.broadcast({ type: 'mission_updated', data: targetMission });
+          }
+
+          // 3. 会话结束自动记忆维护(双通道,Mem0 式 CRUD 决策环):
+          // - 用户通道:从用户原话提炼/维护用户画像记忆(偏好/背景/约束);
+          // - Agent 经验通道:从执行轨迹(工具调用/失败/熔断/效率)提炼环境事实、
+          //   工具教训与流程策略 —— Agent 不再每个会话重踩同一个坑;
+          // 用户手动固化的执行红线受保护不可改删。异步旁路执行,失败静默,
+          // 不阻塞任务交付
+          if (result.success && options.userId) {
+            const uid = options.userId;
+            void (async () => {
+              try {
+                const {
+                  distillMissionMemories,
+                  distillAgentExperience,
+                  isAutoMemoryEnabled,
+                } = await import('@/lib/memory-service');
+                if (!isAutoMemoryEnabled()) return;
+
+                const userOutcome = await distillMissionMemories(this.ctx, {
+                  userId: uid,
+                  goal,
+                  messages: targetMission.conversationMessages || [],
+                  missionId: targetMission.id,
+                  configOverride: userConfigOverride,
+                });
+                // Agent 通道自带信息量门槛(纯闲聊任务不跑,省一次模型调用)
+                const agentOutcome = await distillAgentExperience(this.ctx, {
+                  userId: uid,
+                  goal,
+                  mission: targetMission,
+                  efficiency: result.efficiency,
+                  missionId: targetMission.id,
+                  configOverride: userConfigOverride,
+                });
+
+                const fmt = (o: { added: any[]; updated: any[]; deletedIds: string[] }) =>
+                  [
+                    o.added.length > 0 ? `新增 ${o.added.length} 条(${o.added.map((m) => m.title).join('、')})` : '',
+                    o.updated.length > 0 ? `更新 ${o.updated.length} 条(${o.updated.map((m) => m.title).join('、')})` : '',
+                    o.deletedIds.length > 0 ? `删除 ${o.deletedIds.length} 条` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' / ');
+                const lines = [
+                  fmt(userOutcome) ? `用户画像: ${fmt(userOutcome)}` : '',
+                  fmt(agentOutcome) ? `Agent 经验: ${fmt(agentOutcome)}` : '',
+                ].filter(Boolean);
+                if (lines.length > 0) {
+                  this.addTerminalLog('system', `[Memory] 会话结束记忆维护: ${lines.join('；')}`);
+                  this.broadcast({
+                    type: 'memories_updated',
+                    data: {
+                      userId: uid,
+                      userAdded: userOutcome.added.length,
+                      userUpdated: userOutcome.updated.length,
+                      userDeleted: userOutcome.deletedIds.length,
+                      agentAdded: agentOutcome.added.length,
+                      agentUpdated: agentOutcome.updated.length,
+                      agentDeleted: agentOutcome.deletedIds.length,
+                    },
+                  });
+                }
+              } catch {
+                // 提炼失败不影响任务结果
+              }
+            })();
           }
 
           if (!result.success && result.error) {

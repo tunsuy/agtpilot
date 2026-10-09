@@ -576,6 +576,18 @@ export default function Workspace() {
       }
     });
 
+    // 记忆库更新（会话结束自动沉淀新记忆）：静默刷新记忆列表
+    eventSource.addEventListener('memories_updated', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (session?.user?.id && data?.userId === session.user.id) {
+          loadMemories();
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
     return () => {
       eventSource.close();
     };

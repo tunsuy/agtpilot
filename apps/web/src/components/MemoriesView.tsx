@@ -30,6 +30,7 @@ export function MemoriesView({
 }: MemoriesViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('all');
+  const [subjectFilter, setSubjectFilter] = useState<'all' | 'user' | 'agent'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [titleInput, setTitleInput] = useState('');
   const [contentInput, setContentInput] = useState('');
@@ -44,12 +45,20 @@ export function MemoriesView({
     { id: 'fact', label: '关键事实', count: memories.filter((m) => m.category === 'fact').length },
   ];
 
+  // 记忆主体分组:用户事实记忆(画像/偏好) vs Agent 经验记忆(环境/工具/流程)
+  const subjects = [
+    { id: 'all' as const, label: '全部记忆', count: memories.length },
+    { id: 'user' as const, label: '关于我', count: memories.filter((m) => (m.subject || 'user') === 'user').length },
+    { id: 'agent' as const, label: 'Agent 经验', count: memories.filter((m) => m.subject === 'agent').length },
+  ];
+
   const filtered = memories.filter((m) => {
+    const matchesSubject = subjectFilter === 'all' || (m.subject || 'user') === subjectFilter;
     const matchesCategory = activeCategory === 'all' || m.category === activeCategory;
     const matchesSearch =
       m.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.content.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
+    return matchesSubject && matchesCategory && matchesSearch;
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -102,6 +111,12 @@ export function MemoriesView({
     }
   };
 
+  // 疑似过时：自动沉淀 + 从未被召回 + 存在超过 30 天（与 memory-service 的衰减判定一致）
+  const isStale = (item: MemoryItem) =>
+    item.source === 'auto' &&
+    !item.hitCount &&
+    Date.now() - (item.updatedAt || 0) > 30 * 24 * 3600 * 1000;
+
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
       {/* 头部标题 */}
@@ -121,7 +136,7 @@ export function MemoriesView({
             )}
           </div>
           <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">
-            AgtPilot 会跨会话持久沉淀你的工作习惯、开发规范与业务禁忌。执行任务时，大模型将自动加载并严格遵循这些个性化记忆。
+            AgtPilot 会跨会话沉淀两类记忆：关于你的画像与偏好（工作习惯、规范、禁忌），以及 Agent 自己从任务执行中学到的环境与工具经验（踩坑教训、有效路径）。执行任务时大模型会自动加载相关记忆；任务结束后也会自动提炼维护（可随时删除）。
           </p>
         </div>
 
@@ -132,6 +147,30 @@ export function MemoriesView({
           <Plus className="h-3.5 w-3.5" />
           <span>添加新记忆</span>
         </button>
+      </div>
+
+      {/* 记忆主体分组(用户事实记忆 / Agent 经验记忆) */}
+      <div className="flex items-center gap-1.5">
+        {subjects.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setSubjectFilter(s.id)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-medium transition flex items-center gap-1.5 ${
+              subjectFilter === s.id
+                ? 'bg-zinc-900 text-white shadow-xs'
+                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
+            }`}
+          >
+            <span>{s.label}</span>
+            <span
+              className={`text-[10px] px-1 rounded-full ${
+                subjectFilter === s.id ? 'bg-zinc-700 text-zinc-200' : 'bg-zinc-200 text-zinc-500'
+              }`}
+            >
+              {s.count}
+            </span>
+          </button>
+        ))}
       </div>
 
       {/* 搜索与分类 Chips */}
@@ -196,7 +235,27 @@ export function MemoriesView({
                   <h3 className="text-xs font-semibold text-zinc-900 leading-snug">
                     {item.title}
                   </h3>
-                  {getCategoryBadge(item.category)}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {isStale(item) && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                        疑似过时
+                      </span>
+                    )}
+                    {item.subject === 'agent' ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-cyan-50 text-cyan-700 border border-cyan-200 flex items-center gap-0.5">
+                        <Sparkles className="h-2.5 w-2.5" />
+                        Agent 经验
+                      </span>
+                    ) : (
+                      item.source === 'auto' && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-0.5">
+                          <Sparkles className="h-2.5 w-2.5" />
+                          自动沉淀
+                        </span>
+                      )
+                    )}
+                    {getCategoryBadge(item.category)}
+                  </div>
                 </div>
 
                 <p className="text-xs text-zinc-600 leading-relaxed font-sans mt-2 whitespace-pre-wrap">
@@ -207,6 +266,7 @@ export function MemoriesView({
               <div className="pt-3 mt-4 border-t border-zinc-100 flex items-center justify-between text-[10px] text-zinc-400">
                 <span className="font-mono">
                   {new Date(item.updatedAt).toLocaleDateString()}
+                  {item.hitCount !== undefined && ` · 命中 ${item.hitCount} 次`}
                 </span>
 
                 <button

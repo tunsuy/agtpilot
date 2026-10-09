@@ -57,6 +57,12 @@ export async function GET() {
               return; // 不推送其他用户的任务
             }
           }
+          // 记忆库更新（会话结束自动沉淀）按用户过滤
+          if (event.type === 'memories_updated') {
+            if (!userId || event.data?.userId !== userId) {
+              return;
+            }
+          }
           // 连接器授权建议卡片按用户过滤（id 形如 `${userId}::${connectorId}`）
           if (event.type === 'connector_suggested' || event.type === 'connector_suggestion_resolved') {
             const sid = String(event.data?.id || '');

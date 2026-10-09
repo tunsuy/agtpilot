@@ -50,6 +50,8 @@ flowchart TD
 
 **依赖倒置**：微内核不 import 任何插件 —— 它只依赖 `ModelGateway` / `PlannerNotifier` 接口（`packages/core/src/contracts.ts`），由插件提供实现并以同名 cordis 服务注册。工具路由规则也由各插件自注册（`ctx.agent.registerToolRoute()`），新增插件无需修改内核。`packages/app-kit` 是唯一装配根（composition root）：CLI 与 Web 共用 `createAgentRuntime()` 统一加载内核与全套插件，返回的 Promise resolve 即全部就绪。
 
+> 分层铁律、反模式清单与新增插件检查单详见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+
 ---
 
 ## 📂 Repository Structure (Monorepo)

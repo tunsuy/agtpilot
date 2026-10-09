@@ -770,6 +770,11 @@ export function ConnectorsView({
                   autoFocus
                   className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
                 />
+                {configuringApp.configHint && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 leading-relaxed">
+                    {configuringApp.configHint}
+                  </p>
+                )}
               </div>
 
               {/* 仅在模型类连接器上展示 Base URL 与模型名称 */}

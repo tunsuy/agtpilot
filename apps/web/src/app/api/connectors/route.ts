@@ -26,6 +26,8 @@ export interface ConnectorInfo {
   comingSoon?: boolean;
   /** 免凭证连接器：仅有移动端真机唤起等免密能力，不提供任何凭证输入 */
   noCredential?: boolean;
+  /** 配置弹窗内的补充说明（凭证格式/前置条件等） */
+  configHint?: string;
 }
 
 const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefaultModel'>> = [
@@ -139,17 +141,20 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
   },
   {
     id: 'wechat_mp',
-    name: '微信分享 / 移动端微信',
+    name: '微信公众号(草稿箱直连)',
     icon: 'Share2',
     category: 'Communication',
-    noCredential: true,
-    platformType: 'mobile',
+    envVar: 'WECHAT_MP_CREDENTIAL',
+    platformType: 'both',
     mobileAction: {
       scheme: 'weixin://',
       actionName: '唤起微信直接分享',
       canDirectShare: true,
     },
-    description: '移动端免凭证：一键唤起微信会话与朋友圈分享（公众号草稿箱 API 暂未接入）。',
+    configHint:
+      '按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置);并把本服务器出口 IP 加入该页「IP 白名单」,否则会报 40164。草稿箱接口仅对已认证公众号开放。',
+    description:
+      '官方草稿箱 API:Agent 自动撰文、排版并写入公众号草稿箱,人工审核后发布(需已认证公众号 + IP 白名单);移动端仍可唤起微信分享。',
   },
   {
     id: 'twitter',

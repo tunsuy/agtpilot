@@ -25,6 +25,8 @@ export interface ConnectorApp {
   comingSoon?: boolean;
   /** 免凭证连接器：仅移动端真机唤起等免密能力，不提供凭证输入 */
   noCredential?: boolean;
+  /** 配置弹窗内的补充说明（凭证格式/前置条件等） */
+  configHint?: string;
 }
 
 /** MCP 连接器（一键授权/粘贴凭证/免凭证直连）状态信息 */

@@ -721,6 +721,11 @@ class AgentBackend {
                 getMcpSvc: () => (this.ctx as any).mcp,
               })
             );
+
+            // 微信公众号草稿箱直连:wechat_mp_check_setup / wechat_mp_create_draft
+            // 始终注入(未配置时返回引导文案),凭证在 execute 时才从 user-store 按用户读取
+            const { buildWechatMpTools } = await import('@/lib/wechat-mp');
+            injectedTools.push(...buildWechatMpTools(uid));
             taskTools = injectedTools;
           } catch (e: any) {
             this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`);

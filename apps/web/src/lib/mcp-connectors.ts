@@ -431,6 +431,53 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     ],
   },
 
+  // ---- 学习教研（教育场景：论文全文 / AI 学习资源 / 翻译润色，均为官方托管远程端点）----
+  {
+    id: 'alphaxiv',
+    name: 'alphaXiv 论文库',
+    icon: 'FileText',
+    category: 'Education',
+    description:
+      'alphaXiv 官方 MCP：300 万+ arXiv 论文语义检索、PDF 全文问答、热门论文速览、研究者追踪与个人文献库管理（免费注册拿 API Key，检索分析计入免费额度）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_ALPHAXIV_TOKEN',
+    quickAuthUrl: 'https://www.alphaxiv.org/',
+    authHint:
+      '注册/登录 alphaXiv → Settings → API Keys → 创建后复制粘贴到下方（走 Authorization: Bearer 头）。',
+    docUrl: 'https://www.alphaxiv.org/docs/mcp',
+    servers: [
+      {
+        name: 'alphaxiv',
+        url: 'https://api.alphaxiv.org/mcp/v1',
+        headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
+      },
+    ],
+  },
+  {
+    id: 'huggingface_mcp',
+    name: 'Hugging Face（官方 MCP）',
+    icon: 'Bot',
+    category: 'Education',
+    description:
+      'Hugging Face 官方 MCP（免凭证远程直连）：搜索模型/数据集/Spaces/论文、官方文档语义检索、调用社区 Gradio 工具，AI 学习与科研提效利器。工具数量多，默认关闭，点「启用」后才为你的任务挂载。',
+    authType: 'none',
+    optIn: true,
+    tokenEnvVar: 'MCP_HUGGINGFACE_OPTIN',
+    docUrl: 'https://huggingface.co/docs/hub/en/agents-mcp',
+    servers: [{ name: 'huggingface', url: 'https://huggingface.co/mcp' }],
+  },
+  {
+    id: 'deepl_mcp',
+    name: 'DeepL 翻译润色',
+    icon: 'Languages',
+    category: 'Education',
+    description:
+      'DeepL 官方远程 MCP（OAuth 一键授权，免费计划可用）：高质量文本/文档翻译、学术润色改写、语法纠错、术语表与写作风格规则管理，读外文文献与论文润色首选。',
+    authType: 'oauth',
+    docUrl: 'https://developers.deepl.com/docs/mcp',
+    servers: [{ name: 'deepl', url: 'https://mcp.deepl.com/v1/mcp' }],
+  },
+
   // ---- 官方 stdio MCP（本地子进程，凭证按用户注入 env/args，绝不进 process.env）----
   {
     id: 'lark_suite',

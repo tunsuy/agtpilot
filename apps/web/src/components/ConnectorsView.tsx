@@ -51,6 +51,9 @@ import {
   Coins,
   CandlestickChart,
   Activity,
+  GraduationCap,
+  BookOpenText,
+  Languages,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
@@ -83,6 +86,17 @@ import {
   type RiskProfile,
   type InvestDelivery,
 } from '../lib/invest-workshops';
+import {
+  buildEduPrompt,
+  EDU_MODES,
+  FLASHCARD_TYPES,
+  FLASHCARD_FORMATS,
+  EDU_DELIVERIES,
+  type EduMode,
+  type FlashcardType,
+  type FlashcardFormat,
+  type EduDelivery,
+} from '../lib/edu-workshops';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -134,6 +148,12 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <Coins className={`${className} text-emerald-600`} />;
     case 'a_stock':
       return <CandlestickChart className={`${className} text-red-600`} />;
+    case 'alphaxiv':
+      return <BookOpenText className={`${className} text-indigo-600`} />;
+    case 'huggingface_mcp':
+      return <Bot className={`${className} text-amber-500`} />;
+    case 'deepl_mcp':
+      return <Languages className={`${className} text-sky-700`} />;
     case 'browser_auto':
       return <Globe className={`${className} text-emerald-600`} />;
     default:
@@ -169,6 +189,8 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <ClipboardList className={`${className} text-sky-600`} />;
     case 'invest_workshop':
       return <Activity className={`${className} text-emerald-600`} />;
+    case 'edu_workshop':
+      return <GraduationCap className={`${className} text-indigo-600`} />;
     case 'exa':
       return <Search className={`${className} text-indigo-600`} />;
     case 'tavily':
@@ -201,6 +223,7 @@ const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
   { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'weekly_report', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock', 'invest_workshop'] },
+  { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki', 'edu_workshop'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
   { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },
@@ -288,7 +311,21 @@ export function ConnectorsView({
   const toggleIvMarket = (id: string) =>
     setIvMarkets((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
 
-  const wsKind: 'xhs' | 'weibo' | 'video' | 'email_triage' | 'weekly' | 'invest' | null = workshopApp
+  // ---- 教研工坊：文献综述 / 论文精读 / 智能备课 / 学习卡片（edu-workshops.ts）----
+  const [ewMode, setEwMode] = useState<EduMode>('literature_review');
+  const [ewTopic, setEwTopic] = useState('');
+  const [ewFocus, setEwFocus] = useState('');
+  const [ewPaper, setEwPaper] = useState('');
+  const [ewSubject, setEwSubject] = useState('');
+  const [ewGrade, setEwGrade] = useState('');
+  const [ewDuration, setEwDuration] = useState('');
+  const [ewExtras, setEwExtras] = useState('');
+  const [ewMaterial, setEwMaterial] = useState('');
+  const [ewCardType, setEwCardType] = useState<FlashcardType>('mixed');
+  const [ewCardFormat, setEwCardFormat] = useState<FlashcardFormat>('anki_csv');
+  const [ewDelivery, setEwDelivery] = useState<EduDelivery>('chat');
+
+  const wsKind: 'xhs' | 'weibo' | 'video' | 'email_triage' | 'weekly' | 'invest' | 'edu' | null = workshopApp
     ? workshopApp.id === 'weibo'
       ? 'weibo'
       : workshopApp.id === 'douyin' || workshopApp.id === 'bilibili'
@@ -299,6 +336,8 @@ export function ConnectorsView({
       ? 'weekly'
       : workshopApp.id === 'invest_workshop'
       ? 'invest'
+      : workshopApp.id === 'edu_workshop'
+      ? 'edu'
       : 'xhs'
     : null;
 
@@ -324,6 +363,19 @@ export function ConnectorsView({
     setIvRisk('balanced');
     setIvMarkets(['a_share']);
     setIvDelivery('chat');
+    // 教研工坊默认值
+    setEwMode('literature_review');
+    setEwTopic('');
+    setEwFocus('');
+    setEwPaper('');
+    setEwSubject('');
+    setEwGrade('');
+    setEwDuration('');
+    setEwExtras('');
+    setEwMaterial('');
+    setEwCardType('mixed');
+    setEwCardFormat('anki_csv');
+    setEwDelivery('chat');
   };
 
   const handleWorkshopRun = () => {
@@ -353,6 +405,23 @@ export function ConnectorsView({
       });
       const modeName = INVEST_MODES.find((m) => m.id === ivMode)?.name || '投研';
       onRunPrompt(prompt, `投研 · ${modeName}`);
+    } else if (wsKind === 'edu') {
+      const prompt = buildEduPrompt({
+        mode: ewMode,
+        topic: ewTopic,
+        focus: ewFocus,
+        paper: ewPaper,
+        subject: ewSubject,
+        grade: ewGrade,
+        duration: ewDuration,
+        extras: ewExtras,
+        material: ewMaterial,
+        cardType: ewCardType,
+        cardFormat: ewCardFormat,
+        delivery: ewDelivery,
+      });
+      const modeName = EDU_MODES.find((m) => m.id === ewMode)?.name || '教研';
+      onRunPrompt(prompt, `教研 · ${modeName}`);
     } else if (wsKind === 'video') {
       const isBili = workshopApp.id === 'bilibili';
       const prompt = buildVideoScriptPrompt({
@@ -679,6 +748,18 @@ export function ConnectorsView({
                   >
                     <Sparkles className="h-3 w-3" />
                     <span>投研工坊</span>
+                  </button>
+                )}
+
+                {/* 教研工坊：文献综述、论文精读、智能备课、学习卡片（只读检索，学术诚信） */}
+                {app.id === 'edu_workshop' && onRunPrompt && (
+                  <button
+                    onClick={() => openWorkshop(app)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition shadow-2xs"
+                    title="文献综述、论文精读、智能备课、学习卡片——只读检索，参考文献附 DOI/arXiv ID，严禁编造引用"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span>教研工坊</span>
                   </button>
                 )}
 
@@ -1117,7 +1198,11 @@ export function ConnectorsView({
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <div className={`h-9 w-9 rounded-xl flex items-center justify-center shadow-2xs ${
-                  wsKind === 'invest' ? 'bg-emerald-100 text-emerald-600' : 'bg-violet-100 text-violet-600'
+                  wsKind === 'invest'
+                    ? 'bg-emerald-100 text-emerald-600'
+                    : wsKind === 'edu'
+                    ? 'bg-indigo-100 text-indigo-600'
+                    : 'bg-violet-100 text-violet-600'
                 }`}>
                   <Sparkles className="h-4 w-4" />
                 </div>
@@ -1133,6 +1218,8 @@ export function ConnectorsView({
                       ? '周报生成工坊'
                       : wsKind === 'invest'
                       ? '投研工坊'
+                      : wsKind === 'edu'
+                      ? '教研工坊'
                       : '小红书内容工坊'}
                   </h3>
                   <p className="text-xs text-zinc-500 mt-0.5">
@@ -1142,6 +1229,8 @@ export function ConnectorsView({
                       ? 'Agent 从已连接平台自动取材汇总周报，投递前经你确认'
                       : wsKind === 'invest'
                       ? '行情数据来自已连接的行情连接器，输出仅供参考、不构成投资建议'
+                      : wsKind === 'edu'
+                      ? '文献来自 OpenAlex/alphaXiv 真实检索，引用附 DOI/arXiv ID、严禁编造'
                       : 'Agent 选题+创作，你在 App 人工确认发布（合规半自动）'}
                   </p>
                 </div>
@@ -1489,6 +1578,224 @@ export function ConnectorsView({
                 </>
               )}
 
+              {wsKind === 'edu' && (
+                <>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">教研模式</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {EDU_MODES.map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setEwMode(m.id)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                            ewMode === m.id
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                          }`}
+                        >
+                          {m.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {ewMode === 'literature_review' && (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">综述课题 / 关键词</label>
+                        <input
+                          type="text"
+                          value={ewTopic}
+                          onChange={(e) => setEwTopic(e.target.value)}
+                          placeholder="如：扩散模型在医学图像分割中的应用（留空则任务里先问你）"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">额外要求（可选）</label>
+                        <input
+                          type="text"
+                          value={ewFocus}
+                          onChange={(e) => setEwFocus(e.target.value)}
+                          placeholder="如：只要近 3 年、侧重方法论、以中文文献为主、需要 15 篇以上"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {ewMode === 'paper_read' && (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">论文标识</label>
+                        <input
+                          type="text"
+                          value={ewPaper}
+                          onChange={(e) => setEwPaper(e.target.value)}
+                          placeholder="标题 / arXiv ID（如 2506.13538）/ DOI / 链接（留空则任务里先问你）"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">额外关注点（可选）</label>
+                        <input
+                          type="text"
+                          value={ewFocus}
+                          onChange={(e) => setEwFocus(e.target.value)}
+                          placeholder="如：重点讲清方法、和我的课题的关系、实验复现难度"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {ewMode === 'lesson_plan' && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-zinc-700 block">学科</label>
+                          <input
+                            type="text"
+                            value={ewSubject}
+                            onChange={(e) => setEwSubject(e.target.value)}
+                            placeholder="如：初中数学"
+                            className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-zinc-700 block">学段年级</label>
+                          <input
+                            type="text"
+                            value={ewGrade}
+                            onChange={(e) => setEwGrade(e.target.value)}
+                            placeholder="如：八年级 / 大一下学期"
+                            className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-2 space-y-1.5">
+                          <label className="text-xs font-medium text-zinc-700 block">课题</label>
+                          <input
+                            type="text"
+                            value={ewTopic}
+                            onChange={(e) => setEwTopic(e.target.value)}
+                            placeholder="如：勾股定理 / 光合作用"
+                            className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-zinc-700 block">课时</label>
+                          <input
+                            type="text"
+                            value={ewDuration}
+                            onChange={(e) => setEwDuration(e.target.value)}
+                            placeholder="1 课时"
+                            className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">补充要求（可选）</label>
+                        <input
+                          type="text"
+                          value={ewExtras}
+                          onChange={(e) => setEwExtras(e.target.value)}
+                          placeholder="教材版本 / 学情 / 特殊安排，如：人教版、班级基础偏弱、需含分组实验"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {ewMode === 'flashcards' && (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">卡片主题（可选）</label>
+                        <input
+                          type="text"
+                          value={ewTopic}
+                          onChange={(e) => setEwTopic(e.target.value)}
+                          placeholder="如：高一化学必修一 · 离子反应（用于聚焦与命名）"
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">学习材料</label>
+                        <textarea
+                          value={ewMaterial}
+                          onChange={(e) => setEwMaterial(e.target.value)}
+                          rows={5}
+                          placeholder={'把要做成卡片的学习材料/笔记/教材段落粘贴到这里（留空则任务里先问你）。\n材料越具体，卡片越贴合考点。'}
+                          className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500 resize-none"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">卡片类型</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {FLASHCARD_TYPES.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => setEwCardType(t.id)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                                ewCardType === t.id
+                                  ? 'bg-indigo-600 text-white border-indigo-600'
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                              }`}
+                            >
+                              {t.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-zinc-700 block">输出格式</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {FLASHCARD_FORMATS.map((f) => (
+                            <button
+                              key={f.id}
+                              type="button"
+                              onClick={() => setEwCardFormat(f.id)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                                ewCardFormat === f.id
+                                  ? 'bg-indigo-600 text-white border-indigo-600'
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                              }`}
+                            >
+                              {f.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {ewMode !== 'flashcards' && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-zinc-700 block">成果投递</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {EDU_DELIVERIES.map((d) => (
+                          <button
+                            key={d.id}
+                            type="button"
+                            onClick={() => setEwDelivery(d.id)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                              ewDelivery === d.id
+                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                            }`}
+                          >
+                            {d.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
               <p className="text-[11px] text-zinc-400 leading-relaxed flex items-start gap-1.5">
                 <ShieldCheck className="h-3.5 w-3.5 mt-px flex-shrink-0" />
                 {wsKind === 'email_triage'
@@ -1497,6 +1804,8 @@ export function ConnectorsView({
                   ? '生成后跳转任务页，Agent 从你已连接的 Jira/GitHub/飞书/钉钉/腾讯会议/邮箱自动取材，输出结构化周报（概览/重点工作/数据看板/风险/下周计划）。先展示全文，投递（邮件/群机器人）需你确认；数据源都不可用时按补充要点整理。'
                   : wsKind === 'invest'
                   ? '生成后跳转任务页，Agent 通过你已连接的 Tushare / Alpha Vantage / CoinGecko / A股行情连接器拉取实时行情、估值与新闻，输出带来源与时间戳的结构化投研报告。全程只读：不执行任何交易、不动资金；报告经邮件/群机器人发送前需你确认。输出仅供参考，不构成投资建议。'
+                  : wsKind === 'edu'
+                  ? '生成后跳转任务页，Agent 通过你已连接的 OpenAlex / alphaXiv / Hugging Face / DeepL 连接器检索真实文献（缺失时降级为网络搜索并明示），按模式产出文献综述 / 论文精读卡 / 教案 / 学习卡片。每条引用附 DOI 或 arXiv ID、严禁编造参考文献；全程只读、不改你的文献库；成果经邮件/群机器人投递前需你确认。'
                   : wsKind === 'video'
                   ? `生成后跳转任务页，Agent 产出标题/分镜脚本/口播稿/标签分区/封面文案。你拍摄剪辑后 → 「真机唤起」${workshopApp.id === 'bilibili' ? 'B站' : '抖音'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`
                   : `生成后跳转任务页，Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 「真机唤起」${workshopApp.id === 'weibo' ? '微博' : '小红书'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`}
@@ -1516,6 +1825,8 @@ export function ConnectorsView({
                   className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-white text-xs font-medium transition shadow-xs ${
                     wsKind === 'invest'
                       ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : wsKind === 'edu'
+                      ? 'bg-indigo-600 hover:bg-indigo-700'
                       : wsKind === 'email_triage' || wsKind === 'weekly'
                       ? 'bg-sky-600 hover:bg-sky-700'
                       : 'bg-violet-600 hover:bg-violet-700'
@@ -1529,6 +1840,8 @@ export function ConnectorsView({
                       ? '生成周报'
                       : wsKind === 'invest'
                       ? '开始分析'
+                      : wsKind === 'edu'
+                      ? '开始生成'
                       : '开始创作'}
                   </span>
                 </button>

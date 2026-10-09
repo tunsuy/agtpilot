@@ -39,8 +39,13 @@ import {
   Palette,
   MessagesSquare,
   Mail,
+  Inbox,
+  ClipboardList,
   Feather,
   Tv,
+  Github,
+  BookMarked,
+  KanbanSquare,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
@@ -51,6 +56,18 @@ import {
   WEIBO_WORKSHOP_STYLES,
   VIDEO_SCRIPT_DURATIONS,
 } from '../lib/content-workshops';
+import {
+  buildEmailTriagePrompt,
+  buildWeeklyReportPrompt,
+  EMAIL_TRIAGE_SCOPES,
+  WEEKLY_REPORT_PERIODS,
+  WEEKLY_REPORT_AUDIENCES,
+  WEEKLY_REPORT_DELIVERIES,
+  type EmailTriageScope,
+  type WeeklyReportPeriod,
+  type WeeklyReportAudience,
+  type WeeklyReportDelivery,
+} from '../lib/office-workshops';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -88,6 +105,12 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <Feather className={`${className} text-sky-500`} />;
     case 'dingtalk_mcp':
       return <Zap className={`${className} text-blue-600`} />;
+    case 'atlassian_mcp':
+      return <KanbanSquare className={`${className} text-blue-700`} />;
+    case 'github_mcp':
+      return <Github className={`${className} text-zinc-900`} />;
+    case 'yuque':
+      return <BookMarked className={`${className} text-emerald-600`} />;
     case 'browser_auto':
       return <Globe className={`${className} text-emerald-600`} />;
     default:
@@ -117,6 +140,10 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <Bell className={`${className} text-blue-500`} />;
     case 'email_smtp':
       return <Mail className={`${className} text-violet-600`} />;
+    case 'email_imap':
+      return <Inbox className={`${className} text-indigo-600`} />;
+    case 'weekly_report':
+      return <ClipboardList className={`${className} text-sky-600`} />;
     case 'exa':
       return <Search className={`${className} text-indigo-600`} />;
     case 'tavily':
@@ -147,10 +174,10 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
 const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'models', label: '模型推理', ids: ['deepseek', 'openai', 'custom_llm'] },
   { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
-  { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
+  { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'weekly_report', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
-  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'wechat_mp', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
-  { key: 'dev', label: '开发与云', ids: ['github', 'e2b', 'browser_auto'] },
+  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
+  { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },
 ];
 const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));
 
@@ -214,11 +241,24 @@ export function ConnectorsView({
   const [wsCount, setWsCount] = useState(1);
   const [wsDuration, setWsDuration] = useState<string>(VIDEO_SCRIPT_DURATIONS[1]);
 
-  const wsKind: 'xhs' | 'weibo' | 'video' | null = workshopApp
+  // ---- 办公工坊：邮件分诊 / 周报生成（office-workshops.ts）----
+  const [etScope, setEtScope] = useState<EmailTriageScope>('unread');
+  const [etFocus, setEtFocus] = useState('');
+  const [etDraft, setEtDraft] = useState(true);
+  const [wrPeriod, setWrPeriod] = useState<WeeklyReportPeriod>('this_week');
+  const [wrAudience, setWrAudience] = useState<WeeklyReportAudience>('leader');
+  const [wrDelivery, setWrDelivery] = useState<WeeklyReportDelivery>('chat');
+  const [wrExtras, setWrExtras] = useState('');
+
+  const wsKind: 'xhs' | 'weibo' | 'video' | 'email_triage' | 'weekly' | null = workshopApp
     ? workshopApp.id === 'weibo'
       ? 'weibo'
       : workshopApp.id === 'douyin' || workshopApp.id === 'bilibili'
       ? 'video'
+      : workshopApp.id === 'email_imap'
+      ? 'email_triage'
+      : workshopApp.id === 'weekly_report'
+      ? 'weekly'
       : 'xhs'
     : null;
 
@@ -228,11 +268,32 @@ export function ConnectorsView({
     setWsCount(1);
     setWsStyle(app.id === 'weibo' ? WEIBO_WORKSHOP_STYLES[0] : XHS_WORKSHOP_STYLES[0]);
     setWsDuration(VIDEO_SCRIPT_DURATIONS[1]);
+    // 办公工坊默认值
+    setEtScope('unread');
+    setEtFocus('');
+    setEtDraft(true);
+    setWrPeriod('this_week');
+    setWrAudience('leader');
+    setWrDelivery('chat');
+    setWrExtras('');
   };
 
   const handleWorkshopRun = () => {
     if (!workshopApp || !onRunPrompt || !wsKind) return;
-    if (wsKind === 'video') {
+    if (wsKind === 'email_triage') {
+      const prompt = buildEmailTriagePrompt({ scope: etScope, focus: etFocus, draftReplies: etDraft });
+      const scopeName = EMAIL_TRIAGE_SCOPES.find((s) => s.id === etScope)?.name || '邮件';
+      onRunPrompt(prompt, `邮件分诊 · ${scopeName}`);
+    } else if (wsKind === 'weekly') {
+      const prompt = buildWeeklyReportPrompt({
+        period: wrPeriod,
+        audience: wrAudience,
+        delivery: wrDelivery,
+        extras: wrExtras,
+      });
+      const periodName = WEEKLY_REPORT_PERIODS.find((p) => p.id === wrPeriod)?.name || '周报';
+      onRunPrompt(prompt, `周报生成 · ${periodName}`);
+    } else if (wsKind === 'video') {
       const isBili = workshopApp.id === 'bilibili';
       const prompt = buildVideoScriptPrompt({
         topic: wsTopic,
@@ -530,6 +591,22 @@ export function ConnectorsView({
                   >
                     <Sparkles className="h-3 w-3" />
                     <span>{app.id === 'douyin' || app.id === 'bilibili' ? '脚本工坊' : '内容工坊'}</span>
+                  </button>
+                )}
+
+                {/* 办公工坊：邮件分诊 / 周报生成 */}
+                {(app.id === 'email_imap' || app.id === 'weekly_report') && onRunPrompt && (
+                  <button
+                    onClick={() => openWorkshop(app)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 transition shadow-2xs"
+                    title={
+                      app.id === 'email_imap'
+                        ? 'Agent 拉取收件箱，自动分诊为四级优先级并起草回复（发送前逐封经你确认）'
+                        : 'Agent 从你已连接的平台自动取材，汇总成结构化周报（投递前经你确认）'
+                    }
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span>{app.id === 'email_imap' ? '邮件分诊' : '生成周报'}</span>
                   </button>
                 )}
 
@@ -976,10 +1053,18 @@ export function ConnectorsView({
                       ? `${workshopApp.id === 'bilibili' ? 'B站' : '抖音'}短视频脚本工坊`
                       : wsKind === 'weibo'
                       ? '微博内容工坊'
+                      : wsKind === 'email_triage'
+                      ? '邮件分诊工坊'
+                      : wsKind === 'weekly'
+                      ? '周报生成工坊'
                       : '小红书内容工坊'}
                   </h3>
                   <p className="text-xs text-zinc-500 mt-0.5">
-                    Agent 选题+创作，你在 App 人工确认发布（合规半自动）
+                    {wsKind === 'email_triage'
+                      ? 'Agent 拉取收件箱自动分级分诊，回复草稿经你逐封确认才发送'
+                      : wsKind === 'weekly'
+                      ? 'Agent 从已连接平台自动取材汇总周报，投递前经你确认'
+                      : 'Agent 选题+创作，你在 App 人工确认发布（合规半自动）'}
                   </p>
                 </div>
               </div>
@@ -992,24 +1077,26 @@ export function ConnectorsView({
             </div>
 
             <div className="space-y-4">
-              {/* 主题 */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-700 block">主题（可选）</label>
-                <input
-                  type="text"
-                  value={wsTopic}
-                  onChange={(e) => setWsTopic(e.target.value)}
-                  placeholder={
-                    wsKind === 'video'
-                      ? '留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：AI 工具月度盘点'
-                      : '留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：秋冬通勤穿搭'
-                  }
-                  className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
-                />
-              </div>
+              {/* 主题（内容/脚本工坊才有） */}
+              {(wsKind === 'xhs' || wsKind === 'weibo' || wsKind === 'video') && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-700 block">主题（可选）</label>
+                  <input
+                    type="text"
+                    value={wsTopic}
+                    onChange={(e) => setWsTopic(e.target.value)}
+                    placeholder={
+                      wsKind === 'video'
+                        ? '留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：AI 工具月度盘点'
+                        : '留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：秋冬通勤穿搭'
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                  />
+                </div>
+              )}
 
               {/* 内容类型（图文工坊才有；脚本工坊选时长） */}
-              {wsKind !== 'video' && (
+              {(wsKind === 'xhs' || wsKind === 'weibo') && (
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-zinc-700 block">
                     {wsKind === 'weibo' ? '微博类型' : '笔记类型'}
@@ -1056,32 +1143,155 @@ export function ConnectorsView({
                 </div>
               )}
 
-              {/* 篇数 */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-700 block">
-                  {wsKind === 'video' ? '产出脚本数' : '产出篇数'}
-                </label>
-                <div className="flex gap-1.5">
-                  {[1, 2, 3].map((n) => (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => setWsCount(n)}
-                      className={`w-10 py-1 rounded-lg text-xs font-medium border transition ${
-                        wsCount === n
-                          ? 'bg-violet-600 text-white border-violet-600'
-                          : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  ))}
+              {/* 篇数（内容/脚本工坊才有） */}
+              {(wsKind === 'xhs' || wsKind === 'weibo' || wsKind === 'video') && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-700 block">
+                    {wsKind === 'video' ? '产出脚本数' : '产出篇数'}
+                  </label>
+                  <div className="flex gap-1.5">
+                    {[1, 2, 3].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setWsCount(n)}
+                        className={`w-10 py-1 rounded-lg text-xs font-medium border transition ${
+                          wsCount === n
+                            ? 'bg-violet-600 text-white border-violet-600'
+                            : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* 邮件分诊：范围 / 关注点 / 是否起草回复 */}
+              {wsKind === 'email_triage' && (
+                <>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">分诊范围</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {EMAIL_TRIAGE_SCOPES.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setEtScope(s.id)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                            etScope === s.id
+                              ? 'bg-sky-600 text-white border-sky-600'
+                              : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">特别关注（可选）</label>
+                    <input
+                      type="text"
+                      value={etFocus}
+                      onChange={(e) => setEtFocus(e.target.value)}
+                      placeholder="如：老板的邮件、合同相关、面试候选人——命中的自动上调优先级"
+                      className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={etDraft}
+                      onChange={(e) => setEtDraft(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-zinc-300 accent-sky-600"
+                    />
+                    <span className="text-xs text-zinc-600">为高优邮件起草回复（发送前逐封经我确认）</span>
+                  </label>
+                </>
+              )}
+
+              {/* 周报生成：周期 / 读者 / 投递 / 补充要点 */}
+              {wsKind === 'weekly' && (
+                <>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">周报周期</label>
+                    <div className="flex gap-1.5">
+                      {WEEKLY_REPORT_PERIODS.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setWrPeriod(p.id)}
+                          className={`px-3 py-1 rounded-lg text-xs font-medium border transition ${
+                            wrPeriod === p.id
+                              ? 'bg-sky-600 text-white border-sky-600'
+                              : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                          }`}
+                        >
+                          {p.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">写给谁看</label>
+                    <div className="flex gap-1.5">
+                      {WEEKLY_REPORT_AUDIENCES.map((a) => (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onClick={() => setWrAudience(a.id)}
+                          className={`px-3 py-1 rounded-lg text-xs font-medium border transition ${
+                            wrAudience === a.id
+                              ? 'bg-sky-600 text-white border-sky-600'
+                              : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                          }`}
+                        >
+                          {a.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">投递方式</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {WEEKLY_REPORT_DELIVERIES.map((d) => (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => setWrDelivery(d.id)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                            wrDelivery === d.id
+                              ? 'bg-sky-600 text-white border-sky-600'
+                              : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                          }`}
+                        >
+                          {d.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700 block">补充要点（可选）</label>
+                    <textarea
+                      value={wrExtras}
+                      onChange={(e) => setWrExtras(e.target.value)}
+                      rows={2}
+                      placeholder="口述数据源里没有的工作，直接纳入周报，如：本周主导了 X 项目上线、协调了 Y 部门…"
+                      className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500 resize-none"
+                    />
+                  </div>
+                </>
+              )}
 
               <p className="text-[11px] text-zinc-400 leading-relaxed flex items-start gap-1.5">
                 <ShieldCheck className="h-3.5 w-3.5 mt-px flex-shrink-0" />
-                {wsKind === 'video'
+                {wsKind === 'email_triage'
+                  ? '生成后跳转任务页，Agent 用 email_list/email_read 读取收件箱，输出总览 + 四级分诊清单（🔴立即/🟠今日/🟡稍后/⚪可忽略）与回复草稿。发送任何回复、改动邮件状态都需你逐封确认。需先在「电子邮件收件 (IMAP)」配置凭证（或已配 SMTP 会自动复用）。'
+                  : wsKind === 'weekly'
+                  ? '生成后跳转任务页，Agent 从你已连接的 Jira/GitHub/飞书/钉钉/腾讯会议/邮箱自动取材，输出结构化周报（概览/重点工作/数据看板/风险/下周计划）。先展示全文，投递（邮件/群机器人）需你确认；数据源都不可用时按补充要点整理。'
+                  : wsKind === 'video'
                   ? `生成后跳转任务页，Agent 产出标题/分镜脚本/口播稿/标签分区/封面文案。你拍摄剪辑后 → 「真机唤起」${workshopApp.id === 'bilibili' ? 'B站' : '抖音'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`
                   : `生成后跳转任务页，Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 「真机唤起」${workshopApp.id === 'weibo' ? '微博' : '小红书'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`}
               </p>
@@ -1097,10 +1307,20 @@ export function ConnectorsView({
                 <button
                   type="button"
                   onClick={handleWorkshopRun}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium transition shadow-xs"
+                  className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-white text-xs font-medium transition shadow-xs ${
+                    wsKind === 'email_triage' || wsKind === 'weekly'
+                      ? 'bg-sky-600 hover:bg-sky-700'
+                      : 'bg-violet-600 hover:bg-violet-700'
+                  }`}
                 >
                   <Sparkles className="h-3.5 w-3.5" />
-                  <span>开始创作</span>
+                  <span>
+                    {wsKind === 'email_triage'
+                      ? '开始分诊'
+                      : wsKind === 'weekly'
+                      ? '生成周报'
+                      : '开始创作'}
+                  </span>
                 </button>
               </div>
             </div>

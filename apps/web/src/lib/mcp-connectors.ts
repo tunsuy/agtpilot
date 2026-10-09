@@ -105,6 +105,25 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     docUrl: 'https://docs.ardot.tencent.com/ardot-mcp/introduction.html',
     servers: [{ name: 'ardot', url: 'https://ardot.tencent.com/mcp' }],
   },
+  {
+    id: 'atlassian_mcp',
+    name: 'Atlassian（Jira + Confluence）',
+    icon: 'KanbanSquare',
+    category: 'Productivity',
+    description:
+      'Atlassian 官方托管 MCP（Rovo）：Jira 工单查询/创建/流转、Confluence 页面读写与搜索、Bitbucket 仓库，一键授权直连（仅支持 Atlassian Cloud）。',
+    authType: 'oauth',
+    quickAuthUrl: 'https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/',
+    docUrl: 'https://www.atlassian.com/platform/rovo-mcp',
+    servers: [
+      {
+        name: 'atlassian',
+        // v2 端点(2026-02 GA;v1/SSE 2026-06-30 停用)。tools=all 返回全量工具(默认是精选子集)
+        url: 'https://mcp.atlassian.com/v2/mcp?tools=all',
+        label: 'Jira + Confluence',
+      },
+    ],
+  },
 
   // ---- 打开授权页粘贴凭证 ----
   {
@@ -245,6 +264,28 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
   },
 
   {
+    id: 'github_mcp',
+    name: 'GitHub（官方 MCP）',
+    icon: 'Github',
+    category: 'Engineering',
+    description:
+      'GitHub 官方托管 MCP：仓库/Issue/PR 查询与操作、代码搜索、Actions 状态（粘贴 Fine-grained Personal Access Token 即用）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_GITHUB_PAT',
+    quickAuthUrl: 'https://github.com/settings/personal-access-tokens/new',
+    authHint:
+      'GitHub → Settings → Developer settings → Fine-grained personal access tokens → Generate new token：按需勾选仓库与权限（读取选 Contents: Read / Issues: Read / Pull requests: Read，需写操作再勾选 Write），生成后粘贴到下方。',
+    docUrl: 'https://github.com/github/github-mcp-server',
+    servers: [
+      {
+        name: 'github_mcp',
+        url: 'https://api.githubcopilot.com/mcp/',
+        headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
+      },
+    ],
+  },
+
+  {
     id: 'zhihu',
     name: '知乎',
     icon: 'MessagesSquare',
@@ -367,6 +408,30 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
               'dingtalk-tasks,dingtalk-calendar,dingtalk-robot-send-message,dingtalk-contacts',
           };
         },
+      },
+    ],
+  },
+  {
+    id: 'yuque',
+    name: '语雀（官方 MCP）',
+    icon: 'BookMarked',
+    category: 'Productivity',
+    description:
+      '语雀官方 yuque-mcp：知识库/文档读写、搜索、目录与小记管理（本地 stdio 运行，粘贴语雀 API Token）。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_YUQUE_TOKEN',
+    quickAuthUrl: 'https://www.yuque.com/settings/tokens',
+    authHint:
+      '语雀 → 个人设置 → Token → 新建 Token（按需勾选读写范围），复制后粘贴到下方。',
+    docUrl: 'https://github.com/yuque/yuque-mcp-server',
+    servers: [
+      {
+        name: 'yuque',
+        transport: 'stdio',
+        command: 'npx',
+        // 凭证经 env 注入（不出现在命令行，避免进程列表泄露）
+        args: ['-y', 'yuque-mcp'],
+        env: (cred) => ({ YUQUE_TOKEN: cred }),
       },
     ],
   },

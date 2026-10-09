@@ -17,6 +17,8 @@ const nextConfig = {
     'playwright',
     'playwright-core',
     '@browserbasehq/stagehand',
+    'imapflow',
+    'mailparser',
   ],
   transpilePackages: [
     '@copilotkit/react-core',

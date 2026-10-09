@@ -78,7 +78,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     icon: 'GitPullRequest',
     category: 'Engineering',
     comingSoon: true,
-    description: '仓库、Issue 与 PR 自动化（后端工具接入开发中；公开仓库问答可先用下方 DeepWiki MCP 连接器）。',
+    description: '仓库、Issue 与 PR 自动化（原生工具接入开发中；现在可用下方「GitHub（官方 MCP）」连接器粘贴 PAT 直连，公开仓库问答可用 DeepWiki）。',
   },
   {
     id: 'slack',
@@ -127,6 +127,18 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
       '按 账号:授权码 格式填写(QQ/163/Gmail/Outlook 等自动识别服务器)。QQ:邮箱设置→账户→开启 SMTP 并生成授权码;163:设置→POP3/SMTP→开启并获取授权码;Gmail:开启两步验证后生成应用专用密码——均不是登录密码。自建/企业邮箱可写 账号:授权码:主机:端口。',
     description:
       'Agent 用你的邮箱直接发信:任务报告、内容投递、通知提醒,email_send 工具支持 Markdown 自动排版 HTML 邮件与多收件人抄送。',
+  },
+  {
+    id: 'email_imap',
+    name: '电子邮件收件 (IMAP)',
+    icon: 'Mail',
+    category: 'Communication',
+    envVar: 'EMAIL_IMAP_CREDENTIAL',
+    platformType: 'both',
+    configHint:
+      '按 账号:授权码 格式填写(QQ/163/Gmail/Outlook 等自动识别 IMAP 服务器)。授权码与 SMTP 通常相同:QQ 需开启 IMAP/SMTP 服务、163 开启 POP3/IMAP/SMTP、Gmail 用应用专用密码。留空则自动复用已配置的「电子邮件 (SMTP)」凭证。自建/企业邮箱可写 账号:授权码:主机:端口(993=SSL,143=STARTTLS)。',
+    description:
+      'Agent 读你的收件箱:email_list 列最新/未读/按关键词搜邮件,email_read 按 uid 读全文与附件清单(默认不改已读状态)。未单独配置时自动复用 SMTP 凭证。',
   },
   {
     id: 'exa',
@@ -227,6 +239,16 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
       '按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置);并把本服务器出口 IP 加入该页「IP 白名单」,否则会报 40164。草稿箱接口仅对已认证公众号开放。',
     description:
       '官方草稿箱 API:Agent 自动撰文、排版并写入公众号草稿箱,人工审核后发布(需已认证公众号 + IP 白名单);移动端仍可唤起微信分享。',
+  },
+  {
+    id: 'weekly_report',
+    name: '周报生成工坊',
+    icon: 'ClipboardList',
+    category: 'Productivity',
+    noCredential: true,
+    platformType: 'web',
+    description:
+      '办公工坊：Agent 自动从你已连接的平台（Jira/GitHub/飞书/钉钉/腾讯会议/邮箱）拉取本周动态，汇总成结构化周报（概览/重点工作/数据看板/风险/下周计划），经你确认后可投递到邮箱或群机器人；未接数据源时降级为口述整理。',
   },
   {
     id: 'twitter',

@@ -837,6 +837,10 @@ class AgentBackend {
             // 电子邮件 SMTP 直发:email_send(同样始终注入,凭证 execute 时按用户读取)
             const { buildEmailTools } = await import('@/lib/email-smtp');
             injectedTools.push(...buildEmailTools(uid));
+
+            // 电子邮件 IMAP 收件:email_list / email_read(始终注入,凭证 execute 时按用户读取,未配置回退复用 SMTP 凭证)
+            const { buildEmailImapTools } = await import('@/lib/email-imap');
+            injectedTools.push(...buildEmailImapTools(uid));
             taskTools = [...(taskTools || []), ...injectedTools];
 
           } catch (e: any) {

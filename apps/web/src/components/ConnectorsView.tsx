@@ -40,7 +40,7 @@ import {
   MessagesSquare,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
-import { openAppScheme } from '../utils/nativeBridge';
+import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
 import { buildXhsWorkshopPrompt, XHS_WORKSHOP_STYLES } from '../lib/xhs-workshop';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
@@ -157,6 +157,20 @@ export function ConnectorsView({
   const [baseUrlInput, setBaseUrlInput] = useState('');
   const [modelNameInput, setModelNameInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+
+  // ---- 真机唤起可用性:Capacitor 原生壳或手机浏览器 UA;桌面端隐藏按钮(scheme 打不开是死按钮) ----
+  const [mobileCtx, setMobileCtx] = useState(false);
+  useEffect(() => {
+    let native = false;
+    try {
+      native = isNativePlatform();
+    } catch {
+      // Capacitor 桥未就绪时按 UA 兜底
+    }
+    const uaMobile =
+      typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    setMobileCtx(native || uaMobile);
+  }, []);
 
   // ---- MCP 连接器（官方托管直连，自取数据，独立于外部 props）----
   const [mcpConnectors, setMcpConnectors] = useState<McpConnectorInfo[]>([]);
@@ -460,8 +474,8 @@ export function ConnectorsView({
                   </button>
                 )}
 
-                {/* 移动端专属一键唤起真机 App 按钮 */}
-                {app.mobileAction && (
+                {/* 移动端专属一键唤起真机 App 按钮（桌面端 scheme 无法打开，隐藏避免死按钮） */}
+                {app.mobileAction && mobileCtx && (
                   <button
                     onClick={async () => {
                       if (app.mobileAction?.scheme) {
@@ -477,6 +491,17 @@ export function ConnectorsView({
                     <Smartphone className="h-3 w-3" />
                     <span>真机唤起</span>
                   </button>
+                )}
+
+                {/* 桌面端提示:唤起能力仅在手机端存在 */}
+                {app.mobileAction && !mobileCtx && (
+                  <span
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] text-zinc-400 bg-zinc-50 border border-zinc-200"
+                    title="真机唤起仅在手机浏览器或 Capacitor App 内可用"
+                  >
+                    <Smartphone className="h-3 w-3" />
+                    <span>手机端可用</span>
+                  </span>
                 )}
 
                 {/* 凭证配置入口：comingSoon（未接入）与 noCredential（免凭证）不提供任何输入 */}

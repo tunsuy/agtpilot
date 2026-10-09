@@ -4,7 +4,8 @@ export interface ConnectorApp {
   category: string;
   icon: string;
   status: 'connected' | 'unconfigured';
-  envVar: string;
+  /** 凭证存储键；免凭证（noCredential）/ 未接入（comingSoon）的连接器无此字段 */
+  envVar?: string;
   description: string;
   keyMasked?: string;
   isModel?: boolean;
@@ -13,9 +14,6 @@ export interface ConnectorApp {
   baseUrlEnvVar?: string;
   customModelName?: string;
   modelNameEnvVar?: string;
-  authType?: 'api_key' | 'oauth';
-  oauthProvider?: string;
-  oauthScope?: string;
   platformType?: 'web' | 'mobile' | 'both';
   websiteUrl?: string;
   mobileAction?: {
@@ -23,6 +21,10 @@ export interface ConnectorApp {
     actionName?: string;
     canDirectShare?: boolean;
   };
+  /** 能力尚未接入后端：隐藏配置/授权入口，展示「即将支持」 */
+  comingSoon?: boolean;
+  /** 免凭证连接器：仅移动端真机唤起等免密能力，不提供凭证输入 */
+  noCredential?: boolean;
 }
 
 /** MCP 连接器（一键授权/粘贴凭证/免凭证直连）状态信息 */

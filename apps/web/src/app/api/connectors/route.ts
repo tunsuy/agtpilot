@@ -6,7 +6,8 @@ export interface ConnectorInfo {
   icon: string;
   category: 'Cloud' | 'Productivity' | 'Engineering' | 'Communication' | 'AI & MicroVM';
   status: 'connected' | 'unconfigured';
-  envVar: string;
+  /** 凭证存储键；免凭证（noCredential）/ 未接入（comingSoon）的连接器无此字段 */
+  envVar?: string;
   description: string;
   keyMasked?: string;
   isModel?: boolean;
@@ -15,17 +16,16 @@ export interface ConnectorInfo {
   baseUrlEnvVar?: string;
   customModelName?: string;
   modelNameEnvVar?: string;
-  authType?: 'api_key' | 'oauth';
-  oauthProvider?: string;
-  oauthScope?: string;
-  /** OAuth 授权后 token 实际保存的键（与 envVar 不同时用于状态判断，如 Slack） */
-  oauthTokenEnvVar?: string;
   platformType?: 'web' | 'mobile' | 'both';
   mobileAction?: {
     scheme?: string;
     actionName?: string;
     canDirectShare?: boolean;
   };
+  /** 能力尚未接入后端：隐藏配置/授权入口，展示「即将支持」 */
+  comingSoon?: boolean;
+  /** 免凭证连接器：仅有移动端真机唤起等免密能力，不提供任何凭证输入 */
+  noCredential?: boolean;
 }
 
 const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefaultModel'>> = [
@@ -75,20 +75,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     name: 'GitHub Workspace',
     icon: 'GitPullRequest',
     category: 'Engineering',
-    envVar: 'GITHUB_TOKEN',
-    authType: 'oauth',
-    oauthProvider: 'github',
-    description: 'Repository access, git diff, patch commit, and pull request automation.',
-  },
-  {
-    id: 'notion',
-    name: 'Notion Workspace',
-    icon: 'FileText',
-    category: 'Productivity',
-    envVar: 'NOTION_TOKEN',
-    authType: 'oauth',
-    oauthProvider: 'notion',
-    description: 'Autonomous documentation sync, database query, and page creation.',
+    comingSoon: true,
+    description: '仓库、Issue 与 PR 自动化（后端工具接入开发中；公开仓库问答可先用下方 DeepWiki MCP 连接器）。',
   },
   {
     id: 'slack',
@@ -96,11 +84,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     icon: 'MessageSquare',
     category: 'Communication',
     envVar: 'SLACK_WEBHOOK_URL',
-    authType: 'oauth',
-    oauthProvider: 'slack',
-    oauthTokenEnvVar: 'SLACK_TOKEN',
     platformType: 'both',
-    description: 'Direct channel broadcasts, escalation alerts, and approval notifications.',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 推送到 Slack 频道。',
   },
   {
     id: 'feishu',
@@ -109,7 +94,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Communication',
     envVar: 'FEISHU_WEBHOOK_URL',
     platformType: 'both',
-    description: 'Enterprise IM webhook notifications and card messaging.',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以卡片推送到飞书群。',
   },
   {
     id: 'exa',
@@ -143,42 +128,42 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     name: '小红书创作者服务',
     icon: 'Share2',
     category: 'Communication',
-    envVar: 'XHS_SESSION_TOKEN',
-    platformType: 'both',
+    noCredential: true,
+    platformType: 'mobile',
     mobileAction: {
       scheme: 'xhsdiscover://',
       actionName: '唤起手机小红书 App',
       canDirectShare: true,
     },
-    description: '网页端支持 Session/Cookie 凭证与草稿箱；移动端支持直接唤起手机 App 发布与相册图集导入。',
+    description: '移动端免凭证：一键唤起手机小红书 App 发布笔记与导入相册图集（网页端自动发布暂未接入）。',
   },
   {
     id: 'wechat_mp',
-    name: '微信公众平台 / 移动端微信',
+    name: '微信分享 / 移动端微信',
     icon: 'Share2',
     category: 'Communication',
-    envVar: 'WECHAT_MP_APP_SECRET',
-    platformType: 'both',
+    noCredential: true,
+    platformType: 'mobile',
     mobileAction: {
       scheme: 'weixin://',
       actionName: '唤起微信直接分享',
       canDirectShare: true,
     },
-    description: '网页端支持公众号 AppSecret 草稿箱；移动端支持一键唤起微信会话与朋友圈分享。',
+    description: '移动端免凭证：一键唤起微信会话与朋友圈分享（公众号草稿箱 API 暂未接入）。',
   },
   {
     id: 'twitter',
-    name: 'X / Twitter API 与客户端',
+    name: 'X / Twitter 客户端',
     icon: 'Share2',
     category: 'Communication',
-    envVar: 'TWITTER_API_KEY',
-    platformType: 'both',
+    noCredential: true,
+    platformType: 'mobile',
     mobileAction: {
       scheme: 'twitter://',
       actionName: '唤起 X App 发推',
       canDirectShare: true,
     },
-    description: '网页端支持 Developer API 自动发推；移动端支持唤起 X 客户端直接带参编辑。',
+    description: '移动端免凭证：一键唤起 X 客户端带参编辑发推（Developer API 自动发推暂未接入）。',
   },
 ];
 
@@ -197,7 +182,7 @@ import { getUserConnectors, saveUserConnector, setUserActiveModel } from '@/lib/
 /** 允许用户写入的凭证键白名单（防止 POST 任意 envVar 键名注入配置） */
 const ALLOWED_ENV_VARS = new Set<string>(
   CONNECTOR_DEFS.flatMap((d) =>
-    [d.envVar, d.baseUrlEnvVar, d.modelNameEnvVar, d.oauthTokenEnvVar].filter(
+    [d.envVar, d.baseUrlEnvVar, d.modelNameEnvVar].filter(
       (v): v is string => Boolean(v)
     )
   )
@@ -221,7 +206,7 @@ function getConnectorStatusList(userId?: string): ConnectorInfo[] {
     // 优先读取用户独立配置，若未设置则回退全局默认配置
     const lookup = (key?: string) =>
       key ? (userId && userConfigs.configs[key]) || process.env[key] || '' : '';
-    const val = lookup(def.envVar) || lookup(def.oauthTokenEnvVar);
+    const val = lookup(def.envVar);
     const isSet = Boolean(val && val.trim().length > 0 && !val.includes('dummy'));
     const keyMasked = isSet ? maskSecret(val) : undefined;
 

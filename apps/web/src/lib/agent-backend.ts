@@ -732,7 +732,15 @@ class AgentBackend {
             const { getUserConnectors } = await import('@/lib/user-store');
             const cfgs = getUserConnectors(uid).configs;
             const env: Record<string, string> = {};
-            for (const k of ['EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'E2B_API_KEY']) {
+            for (const k of [
+              'EXA_API_KEY',
+              'TAVILY_API_KEY',
+              'FIRECRAWL_API_KEY',
+              'E2B_API_KEY',
+              // 通知类 Webhook（plugin-notify notify_send_webhook 按 session.env 解析）
+              'FEISHU_WEBHOOK_URL',
+              'SLACK_WEBHOOK_URL',
+            ]) {
               const v = (cfgs[k] || '').trim();
               if (v) env[k] = v;
             }

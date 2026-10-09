@@ -245,7 +245,7 @@ export function ConnectorsView({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!configuringApp || !keyInput.trim()) return;
+    if (!configuringApp || !configuringApp.envVar || !keyInput.trim()) return;
     setIsSaving(true);
     try {
       await onSaveKey(configuringApp.envVar, keyInput.trim(), {
@@ -366,7 +366,12 @@ export function ConnectorsView({
                       <span className="text-[10px] text-zinc-400 uppercase font-mono">
                         {app.category}
                       </span>
-                      {app.platformType === 'mobile' || app.mobileAction ? (
+                      {app.comingSoon ? (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-amber-50 text-amber-600 border border-amber-200 flex items-center gap-0.5">
+                          <Laptop className="h-2.5 w-2.5" />
+                          <span>接入开发中</span>
+                        </span>
+                      ) : app.platformType === 'mobile' || app.mobileAction ? (
                         <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-rose-50 text-rose-600 border border-rose-200 flex items-center gap-0.5">
                           <Smartphone className="h-2.5 w-2.5" />
                           <span>支持真机免密</span>
@@ -387,15 +392,25 @@ export function ConnectorsView({
                       当前激活
                     </span>
                   )}
-                  <span
-                    className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
-                      app.status === 'connected'
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : 'bg-zinc-100 text-zinc-500'
-                    }`}
-                  >
-                    {app.status === 'connected' ? '已连接' : '未配置'}
-                  </span>
+                  {app.comingSoon ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-50 text-amber-700 border border-amber-200">
+                      即将支持
+                    </span>
+                  ) : app.noCredential ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      免凭证
+                    </span>
+                  ) : (
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
+                        app.status === 'connected'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-zinc-100 text-zinc-500'
+                      }`}
+                    >
+                      {app.status === 'connected' ? '已连接' : '未配置'}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -406,7 +421,7 @@ export function ConnectorsView({
 
             <div className="pt-3 border-t border-zinc-100 flex items-center justify-between">
               <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
-                {app.envVar}
+                {app.envVar || ''}
               </span>
 
               <div className="flex items-center gap-1.5">
@@ -438,33 +453,21 @@ export function ConnectorsView({
                   </button>
                 )}
 
-                {/* 如果支持 OAuth 授权跳转 */}
-                {app.authType === 'oauth' && (
-                  <a
-                    href={`/api/connectors/oauth/start?provider=${app.oauthProvider || app.id}`}
-                    className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition shadow-2xs ${
-                      app.status === 'connected'
-                        ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
-                        : 'bg-zinc-900 hover:bg-zinc-800 text-white'
-                    }`}
+                {/* 凭证配置入口：comingSoon（未接入）与 noCredential（免凭证）不提供任何输入 */}
+                {!app.comingSoon && !app.noCredential && (
+                  <button
+                    onClick={() => {
+                      setConfiguringApp(app);
+                      setKeyInput('');
+                      setBaseUrlInput(app.baseUrl || '');
+                      setModelNameInput(app.customModelName || '');
+                    }}
+                    className="px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
+                    title="手动输入或修改 API Key / Token"
                   >
-                    <ExternalLink className="h-3 w-3" />
-                    <span>{app.status === 'connected' ? '重新授权' : '一键授权'}</span>
-                  </a>
+                    {app.status === 'connected' ? '重新配置' : '配置密钥'}
+                  </button>
                 )}
-
-                <button
-                  onClick={() => {
-                    setConfiguringApp(app);
-                    setKeyInput('');
-                    setBaseUrlInput(app.baseUrl || '');
-                    setModelNameInput(app.customModelName || '');
-                  }}
-                  className="px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
-                  title="手动输入或修改 API Key / Token"
-                >
-                  {app.authType === 'oauth' ? '填 Key' : app.status === 'connected' ? '重新配置' : '配置密钥'}
-                </button>
               </div>
             </div>
           </div>
@@ -707,9 +710,11 @@ export function ConnectorsView({
                   <h3 className="text-sm font-semibold text-zinc-900">
                     配置 {configuringApp.name}
                   </h3>
-                  <p className="text-xs text-zinc-500 font-mono mt-0.5">
-                    环境变量: {configuringApp.envVar}
-                  </p>
+                  {configuringApp.envVar && (
+                    <p className="text-xs text-zinc-500 font-mono mt-0.5">
+                      环境变量: {configuringApp.envVar}
+                    </p>
+                  )}
                 </div>
               </div>
               <button

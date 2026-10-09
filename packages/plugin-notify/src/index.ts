@@ -67,6 +67,30 @@ export class NotifyService extends Service {
   }
 }
 
+/**
+ * Webhook 地址解析（多用户服务器安全）：
+ * 1. 调用参数显式传入的 webhookUrl；
+ * 2. 任务级 session.env 注入的当前用户凭证（连接器页保存的 {CHANNEL}_WEBHOOK_URL，
+ *    经 agent-backend taskEnv 白名单透传，用户间互相隔离）；
+ * 3. 全局 process.env 回退（单机自用场景），新旧键名（{CHANNEL}_WEBHOOK_URL / {CHANNEL}_WEBHOOK）都认。
+ * 三者皆无时返回 missingEnvKey，由调用方显式报错 —— 绝不静默发往假地址
+ * （旧实现会 POST 到 example.com/mock-webhook 并谎报成功）。
+ */
+export function resolveWebhookUrl(
+  channel: string,
+  webhookUrl?: string,
+  sessionEnv?: Record<string, string | undefined>
+): { url?: string; missingEnvKey?: string } {
+  const ch = String(channel || '').toUpperCase();
+  const url =
+    (webhookUrl || '').trim() ||
+    sessionEnv?.[`${ch}_WEBHOOK_URL`] ||
+    process.env[`${ch}_WEBHOOK_URL`] ||
+    process.env[`${ch}_WEBHOOK`];
+  if (url) return { url };
+  return { missingEnvKey: `${ch}_WEBHOOK_URL` };
+}
+
 export function apply(ctx: Context) {
   const notifyService = new NotifyService(ctx);
 
@@ -105,20 +129,25 @@ export function apply(ctx: Context) {
         },
         webhookUrl: {
           type: 'string',
-          description: '机器人的 Webhook 入口 URL (若未传则默认读取环境变量 FEISHU_WEBHOOK / DINGTALK_WEBHOOK)',
+          description: '机器人的 Webhook 入口 URL（若未传则读取当前用户在连接器页配置的 {渠道}_WEBHOOK_URL，如 FEISHU_WEBHOOK_URL / SLACK_WEBHOOK_URL）',
         },
         title: { type: 'string', description: '消息卡片标题' },
         content: { type: 'string', description: 'Markdown 格式的消息正文或报告' },
       },
       required: ['channel', 'title', 'content'],
     },
-    execute: async ({ channel, webhookUrl, title, content }) => {
-      const url =
-        webhookUrl ||
-        process.env[`${channel.toUpperCase()}_WEBHOOK`] ||
-        'https://example.com/mock-webhook';
+    execute: async ({ channel, webhookUrl, title, content }, session?: any) => {
+      const resolved = resolveWebhookUrl(channel, webhookUrl, session?.env);
+      if (!resolved.url) {
+        return {
+          success: false,
+          channel,
+          title,
+          error: `未找到 [${channel}] 的 Webhook 地址：请先在「连接器」页面配置 ${resolved.missingEnvKey}，或在调用参数中直接传入 webhookUrl。`,
+        };
+      }
 
-      const result = await notifyService.sendWebhook(channel, url, title, content);
+      const result = await notifyService.sendWebhook(channel, resolved.url, title, content);
       return {
         success: result.ok,
         channel,

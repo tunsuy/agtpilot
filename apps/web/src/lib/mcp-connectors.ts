@@ -560,6 +560,55 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
       },
     ],
   },
+
+  // ---- 信息源热榜 / 海外社媒数据（本地 stdio：聚合热榜免凭证，X 数据按量计费）----
+  {
+    id: 'newsnow',
+    name: '全网热榜 (NewsNow)',
+    icon: 'Newspaper',
+    category: 'Productivity',
+    description:
+      'NewsNow 官方 MCP（本地 stdio，免凭证免注册）：一个连接器聚合 40+ 全网热榜——微博实时热搜、今日头条、知乎、百度热搜、抖音、哔哩哔哩、快手、腾讯新闻、澎湃、36氪、华尔街见闻、财联社、雪球热门股票、金十数据、Hacker News、GitHub Trending 等。默认走 NewsNow 公共实例；本地子进程默认关闭，点「启用」后才为你的任务挂载。',
+    authType: 'none',
+    optIn: true,
+    tokenEnvVar: 'MCP_NEWSNOW_OPTIN',
+    docUrl: 'https://github.com/newsnext/newsnow',
+    servers: [
+      {
+        name: 'newsnow',
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', 'newsnow-mcp-server'],
+        // 数据源默认走 NewsNow 作者维护的公共实例；若公共实例限流/下线，
+        // 自部署一个 NewsNow 后端并设置 NEWSNOW_BASE_URL 即可无缝切换（只进子进程，不碰全局 env）
+        env: () => ({ BASE_URL: process.env.NEWSNOW_BASE_URL || 'https://newsnow.busiyi.world' }),
+      },
+    ],
+  },
+  {
+    id: 'twitterapi_io',
+    name: 'X / Twitter 数据',
+    icon: 'Twitter',
+    category: 'Productivity',
+    description:
+      'twitterapi.io 官方 MCP（本地 stdio）：12 个只读工具——推文搜索（支持 from:/since:/lang: 等高级语法）、用户资料与最新推文、粉丝/关注/提及列表、推文回复/引用/转推者、趋势话题。无需注册 X 开发者账号，twitterapi.io 注册即拿 API Key，按量计费（约 $0.15/千条推文），注册送免费试用额度。与「X / Twitter 客户端」连接器（仅唤起 App 发推）互补。',
+    authType: 'token',
+    tokenEnvVar: 'MCP_TWITTERAPI_IO_KEY',
+    quickAuthUrl: 'https://twitterapi.io/dashboard',
+    authHint:
+      '注册/登录 twitterapi.io → Dashboard 复制 API Key 粘贴到下方（Key 经 env 注入子进程，不出现在命令行；按量计费，新用户有免费试用额度）。',
+    docUrl: 'https://docs.twitterapi.io/introduction',
+    servers: [
+      {
+        name: 'twitterapi_io',
+        transport: 'stdio',
+        command: 'npx',
+        // 凭证经 env 注入（不出现在命令行，避免进程列表泄露）；用官方新包名（@kaitoinfra 旧包已废弃）
+        args: ['-y', '@twitterapi_io/mcp-server'],
+        env: (cred) => ({ TWITTERAPI_IO_API_KEY: cred }),
+      },
+    ],
+  },
 ];
 
 export function getMcpConnectorDef(id: string): McpConnectorDef | undefined {

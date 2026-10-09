@@ -54,6 +54,8 @@ import {
   GraduationCap,
   BookOpenText,
   Languages,
+  Newspaper,
+  Twitter,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
@@ -154,6 +156,10 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <Bot className={`${className} text-amber-500`} />;
     case 'deepl_mcp':
       return <Languages className={`${className} text-sky-700`} />;
+    case 'newsnow':
+      return <Newspaper className={`${className} text-orange-600`} />;
+    case 'twitterapi_io':
+      return <Twitter className={`${className} text-zinc-900`} />;
     case 'browser_auto':
       return <Globe className={`${className} text-emerald-600`} />;
     default:
@@ -220,7 +226,7 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
  */
 const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'models', label: '模型推理', ids: ['deepseek', 'openai', 'custom_llm'] },
-  { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
+  { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'newsnow', 'twitterapi_io', 'deepwiki', 'openalex', 'qcc'] },
   { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'weekly_report', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock', 'invest_workshop'] },
   { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki', 'edu_workshop'] },

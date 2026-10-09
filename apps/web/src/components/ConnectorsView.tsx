@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme } from '../utils/nativeBridge';
+import { buildXhsWorkshopPrompt, XHS_WORKSHOP_STYLES } from '../lib/xhs-workshop';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -120,6 +121,8 @@ interface ConnectorsViewProps {
     extra?: { baseUrl?: string; baseUrlEnvVar?: string; modelName?: string; modelNameEnvVar?: string }
   ) => Promise<void>;
   onSetDefaultModel: (modelId: string) => Promise<void>;
+  /** 内容工坊:把结构化 Prompt 作为新任务交给 Agent 执行并跳转任务页 */
+  onRunPrompt?: (prompt: string, title?: string) => void | Promise<void>;
   /** 任务中途授权跳转过来时自动打开对应连接器的配置弹窗 */
   autoConfigureId?: string | null;
   onAutoConfigureHandled?: () => void;
@@ -129,6 +132,7 @@ export function ConnectorsView({
   connectors,
   onSaveKey,
   onSetDefaultModel,
+  onRunPrompt,
   autoConfigureId,
   onAutoConfigureHandled,
 }: ConnectorsViewProps) {
@@ -146,6 +150,22 @@ export function ConnectorsView({
   const [mcpTokenInput, setMcpTokenInput] = useState('');
   const [mcpSaving, setMcpSaving] = useState(false);
   const [mcpNotice, setMcpNotice] = useState('');
+
+  // ---- 小红书内容工坊（半自动运营：Agent 选题+创作，发布仍由用户在 App 人工确认）----
+  const [workshopApp, setWorkshopApp] = useState<ConnectorApp | null>(null);
+  const [wsTopic, setWsTopic] = useState('');
+  const [wsStyle, setWsStyle] = useState<string>(XHS_WORKSHOP_STYLES[0]);
+  const [wsCount, setWsCount] = useState(1);
+
+  const handleWorkshopRun = () => {
+    if (!workshopApp || !onRunPrompt) return;
+    const prompt = buildXhsWorkshopPrompt({ topic: wsTopic, style: wsStyle, count: wsCount });
+    onRunPrompt(prompt, `小红书内容工坊 · ${wsStyle}`);
+    setWorkshopApp(null);
+    setWsTopic('');
+    setWsStyle(XHS_WORKSHOP_STYLES[0]);
+    setWsCount(1);
+  };
 
   const loadMcpConnectors = async () => {
     try {
@@ -431,6 +451,18 @@ export function ConnectorsView({
                     className="px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition"
                   >
                     设为默认
+                  </button>
+                )}
+
+                {/* 小红书内容工坊：Agent 选题+创作，发布仍由用户在 App 人工确认（合规半自动） */}
+                {app.id === 'xiaohongshu' && onRunPrompt && (
+                  <button
+                    onClick={() => setWorkshopApp(app)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 transition shadow-2xs"
+                    title="让 Agent 帮你选题、写文案、配标签，你只需在 App 人工确认发布"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span>内容工坊</span>
                   </button>
                 )}
 
@@ -807,6 +839,112 @@ export function ConnectorsView({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 小红书内容工坊 Modal（半自动运营：Agent 选题+创作，发布由用户在 App 人工确认） */}
+      {workshopApp && (
+        <div className="fixed inset-0 bg-black/30 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl animate-fadeIn space-y-4">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-violet-100 text-violet-600 flex items-center justify-center shadow-2xs">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-900">小红书内容工坊</h3>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Agent 选题+创作，你在 App 人工确认发布（合规半自动）
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setWorkshopApp(null)}
+                className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* 主题 */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-700 block">主题（可选）</label>
+                <input
+                  type="text"
+                  value={wsTopic}
+                  onChange={(e) => setWsTopic(e.target.value)}
+                  placeholder="留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：秋冬通勤穿搭"
+                  className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                />
+              </div>
+
+              {/* 笔记类型 */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-700 block">笔记类型</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {XHS_WORKSHOP_STYLES.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setWsStyle(s)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                        wsStyle === s
+                          ? 'bg-violet-600 text-white border-violet-600'
+                          : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 篇数 */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-700 block">产出篇数</label>
+                <div className="flex gap-1.5">
+                  {[1, 2, 3].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setWsCount(n)}
+                      className={`w-10 py-1 rounded-lg text-xs font-medium border transition ${
+                        wsCount === n
+                          ? 'bg-violet-600 text-white border-violet-600'
+                          : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-[11px] text-zinc-400 leading-relaxed flex items-start gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 mt-px flex-shrink-0" />
+                生成后跳转任务页，Agent 产出标题/正文/标签/封面建议。复制满意的一篇 → 「真机唤起」小红书 App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setWorkshopApp(null)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleWorkshopRun}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium transition shadow-xs"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span>开始创作</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

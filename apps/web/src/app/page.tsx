@@ -386,7 +386,7 @@ export default function Workspace() {
 
   const { data: session, status: sessionStatus } = useSession();
 
-  const handleRun = async (text: string, title?: string, targetMissionId?: string) => {
+  const handleRun = async (text: string, title?: string, targetMissionId?: string | null) => {
     if (!text.trim() || isSubmitting) return;
 
     // 检查登录状态：未登录用户直接拦截并弹出登录弹窗
@@ -649,6 +649,7 @@ export default function Workspace() {
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
+                onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
               />
@@ -879,6 +880,7 @@ export default function Workspace() {
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
+                onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
               />

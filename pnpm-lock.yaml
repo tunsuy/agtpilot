@@ -45,51 +45,9 @@ importers:
       '@agtpilot/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@agtpilot/plugin-artifact':
-        specifier: workspace:*
-        version: link:../../packages/plugin-artifact
-      '@agtpilot/plugin-browser':
-        specifier: workspace:*
-        version: link:../../packages/plugin-browser
-      '@agtpilot/plugin-cron':
-        specifier: workspace:*
-        version: link:../../packages/plugin-cron
-      '@agtpilot/plugin-desktop':
-        specifier: workspace:*
-        version: link:../../packages/plugin-desktop
-      '@agtpilot/plugin-git':
-        specifier: workspace:*
-        version: link:../../packages/plugin-git
       '@agtpilot/plugin-mcp':
         specifier: workspace:*
         version: link:../../packages/plugin-mcp
-      '@agtpilot/plugin-memory':
-        specifier: workspace:*
-        version: link:../../packages/plugin-memory
-      '@agtpilot/plugin-model':
-        specifier: workspace:*
-        version: link:../../packages/plugin-model
-      '@agtpilot/plugin-notify':
-        specifier: workspace:*
-        version: link:../../packages/plugin-notify
-      '@agtpilot/plugin-observability':
-        specifier: workspace:*
-        version: link:../../packages/plugin-observability
-      '@agtpilot/plugin-planner':
-        specifier: workspace:*
-        version: link:../../packages/plugin-planner
-      '@agtpilot/plugin-rag':
-        specifier: workspace:*
-        version: link:../../packages/plugin-rag
-      '@agtpilot/plugin-router':
-        specifier: workspace:*
-        version: link:../../packages/plugin-router
-      '@agtpilot/plugin-sandbox':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sandbox
-      '@agtpilot/plugin-search':
-        specifier: workspace:*
-        version: link:../../packages/plugin-search
       '@agtpilot/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

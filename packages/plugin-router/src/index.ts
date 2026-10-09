@@ -107,6 +107,7 @@ export function apply(ctx: Context) {
   // 1. router_select_tier: 动态切换大模型能级梯度（真实生效：写入 ModelGateway 偏好）
   ctx.agent.registerTool({
     name: 'router_select_tier',
+    baseline: true,
     description:
       '根据当前任务复杂性动态切换模型能级：reasoning (复杂架构与长推理)、fast (日常极速响应)、local (完全离线与敏感隐私，走本地 Ollama)。切换立即对后续模型调用生效。',
     parameters: {
@@ -137,6 +138,7 @@ export function apply(ctx: Context) {
   // 2. router_get_budget_status: 获取当前 Token 消耗与预算状态（真实累计值）
   ctx.agent.registerTool({
     name: 'router_get_budget_status',
+    baseline: true,
     description: '查看当前会话累计的 Token 消耗、模型能级与剩余预算百分比（数据为真实用量统计）。',
     parameters: {
       type: 'object',
@@ -151,6 +153,7 @@ export function apply(ctx: Context) {
   // 3. router_set_budget_limit: 设定 Token 预算上限（模型侧 agent loop 硬熔断）
   ctx.agent.registerTool({
     name: 'router_set_budget_limit',
+    baseline: true,
     description:
       '设置本次会话累计 Token 消耗上限。达到上限后正在执行的任务循环会被强制停止并进入总结收尾，防止失控计费。',
     parameters: {

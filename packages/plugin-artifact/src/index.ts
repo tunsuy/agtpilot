@@ -9,9 +9,6 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     artifact: ArtifactService;
   }
-  interface Events {
-    'agtpilot/artifact'(artifact: ArtifactData): void;
-  }
 }
 
 export class ArtifactService extends Service {
@@ -33,8 +30,7 @@ export class ArtifactService extends Service {
     this.artifacts.set(id, artifact);
     this.latestArtifactId = id;
 
-    // 广播产物创建/更新事件（Events 增强已在本文件声明）
-    this.ctx.emit('agtpilot/artifact', artifact);
+    // 产物经 AgentEvent 流（type: 'artifact'）广播给前端 —— 这是唯一送达路径
     this.ctx.agent.emitEvent({
       type: 'artifact',
       payload: artifact,

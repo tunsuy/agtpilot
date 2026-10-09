@@ -54,15 +54,18 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   // 1. 真实导航与网页内容蒸馏 (browser_navigate)
   ctx.agent.registerTool({
     name: 'browser_navigate',
-    description: '使用持久化浏览器导航至指定网址，并返回蒸馏后的主要 Markdown 文本内容',
+    description:
+      '使用持久化浏览器导航至指定网址，并返回蒸馏后的主要 Markdown 文本内容（每次最多 4000 字符）。' +
+      '内容被截断时携带 offset 参数（返回值中的 nextOffset）可续读后续内容，无需换 URL 重抓。',
     parameters: {
       type: 'object',
       properties: {
         url: { type: 'string', description: '需要访问的目标网址 (URL)' },
+        offset: { type: 'number', description: '续读偏移量：上次返回 nextOffset 时传入可读取后续内容 (可选，默认 0)' },
       },
       required: ['url'],
     },
-    execute: async ({ url }) => {
+    execute: async ({ url, offset = 0 }) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
         payload: { tool: 'browser_navigate', url },
@@ -75,10 +78,20 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
 
         const title = await page.title();
         const html = await page.content();
-        
-        // 使用 Turndown 将网页转为干净的 Markdown，并截取前 4000 字符防止大模型上下文溢出
+
+        // 使用 Turndown 将网页转为干净的 Markdown；每次返回 4000 字符窗口，
+        // 截断时给出 nextOffset + 显式标记，模型可带 offset 续读，
+        // 避免"换 URL 重抓"式的步数空转
+        const PAGE_WINDOW = 4000;
         const rawMarkdown = turndown.turndown(html);
-        const markdown = rawMarkdown.length > 4000 ? rawMarkdown.slice(0, 4000) + '\n\n...(内容过长，已截断)' : rawMarkdown;
+        const safeOffset = Math.max(0, Number(offset) || 0);
+        const markdown = rawMarkdown.slice(safeOffset, safeOffset + PAGE_WINDOW);
+        const nextOffset =
+          safeOffset + markdown.length < rawMarkdown.length ? safeOffset + PAGE_WINDOW : undefined;
+        const truncatedNote =
+          nextOffset !== undefined
+            ? `\n\n…[内容过长，本次返回第 ${safeOffset}~${safeOffset + PAGE_WINDOW} 字符（共 ${rawMarkdown.length} 字符），续读请携带 offset=${nextOffset}]…`
+            : '';
 
         let screenshotBase64 = '';
         try {
@@ -108,7 +121,9 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           success: true,
           url,
           title,
-          content: markdown,
+          content: markdown + truncatedNote,
+          nextOffset,
+          totalLength: rawMarkdown.length,
           screenshotBase64: screenshotBase64 ? `data:image/jpeg;base64,${screenshotBase64}` : undefined,
         };
       } catch (err: any) {
@@ -287,16 +302,19 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   // 6. 顶级 Firecrawl 反爬穿透与纯净 Markdown 抓取 (browser_firecrawl_scrape)
   ctx.agent.registerTool({
     name: 'browser_firecrawl_scrape',
-    description: '使用业界顶级的 Firecrawl 网页爬取引擎抓取目标网址，自动执行客户端渲染与反爬穿透，返回纯净的高可读性 Markdown 正文',
+    description:
+      '使用 Firecrawl 网页爬取引擎抓取目标网址，返回纯净的高可读性 Markdown 正文（每次最多 4000 字符）。' +
+      '内容被截断时携带 offset 参数（返回值中的 nextOffset）可续读后续内容，无需换 URL 重抓。',
     dangerLevel: 'low',
     parameters: {
       type: 'object',
       properties: {
         url: { type: 'string', description: '需要抓取的目标网页 URL' },
+        offset: { type: 'number', description: '续读偏移量：上次返回 nextOffset 时传入可读取后续内容 (可选，默认 0)' },
       },
       required: ['url'],
     },
-    execute: async ({ url }, session?: any) => {
+    execute: async ({ url, offset = 0 }, session?: any) => {
       // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离）
       const apiKey = session?.env?.FIRECRAWL_API_KEY || process.env.FIRECRAWL_API_KEY;
       if (!apiKey) {
@@ -320,11 +338,25 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           throw new Error(res.error || 'Firecrawl 抓取失败');
         }
 
+        // 与 browser_navigate 相同的窗口式返回：截断时给 nextOffset + 显式标记，支持续读
+        const PAGE_WINDOW = 4000;
+        const fullMarkdown: string = res.markdown || '';
+        const safeOffset = Math.max(0, Number(offset) || 0);
+        const markdown = fullMarkdown.slice(safeOffset, safeOffset + PAGE_WINDOW);
+        const nextOffset =
+          safeOffset + markdown.length < fullMarkdown.length ? safeOffset + PAGE_WINDOW : undefined;
+        const truncatedNote =
+          nextOffset !== undefined
+            ? `\n\n…[内容过长，本次返回第 ${safeOffset}~${safeOffset + PAGE_WINDOW} 字符（共 ${fullMarkdown.length} 字符），续读请携带 offset=${nextOffset}]…`
+            : '';
+
         return {
           success: true,
           url,
           title: res.metadata?.title || '',
-          markdown: res.markdown || '',
+          markdown: markdown + truncatedNote,
+          nextOffset,
+          totalLength: fullMarkdown.length,
         };
       } catch (err: any) {
         return {

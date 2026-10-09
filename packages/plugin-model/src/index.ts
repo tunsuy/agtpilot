@@ -87,6 +87,15 @@ export interface AgentLoopOptions {
   activeTools?: string[];
   abortSignal?: AbortSignal;
   configOverride?: ModelInvokeOptions['configOverride'];
+  /**
+   * 每步准备回调（对应 AI SDK v5 prepareStep）：进入每一步前由上层做两件事 ——
+   * 依据近期消息重算本步可见工具子集（任务中途的动态工具路由），
+   * 以及超阈值时重写本步消息（任务内的会话压缩）。
+   */
+  prepareStep?: (info: { stepNumber: number; messages: ModelMessage[] }) =>
+    | { activeTools?: string[]; messages?: ModelMessage[] }
+    | undefined
+    | Promise<{ activeTools?: string[]; messages?: ModelMessage[] } | undefined>;
   /** 每步完成回调（模型文本 + 工具调用/结果），供上层做事件广播 */
   onStepFinish?: (info: AgentLoopStepInfo) => void;
 }
@@ -146,7 +155,9 @@ export class ModelService extends Service {
       system: options.system,
       messages: options.messages,
       tools: Object.keys(toolsMap).length > 0 ? toolsMap : undefined,
-      temperature: options.temperature ?? 0.7,
+      // 工具循环默认低温：高温会降低工具选择与 JSON 参数生成的稳定性，
+      // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
+      temperature: options.temperature ?? 0,
       stopWhen: stepCountIs(1), // 严格单步，绝不越权包含循环
     });
 
@@ -195,9 +206,26 @@ export class ModelService extends Service {
       messages: options.messages,
       tools: Object.keys(toolsMap).length > 0 ? toolsMap : undefined,
       activeTools: activeTools && activeTools.length > 0 ? activeTools : undefined,
-      temperature: options.temperature ?? 0.7,
+      // 工具循环默认低温：高温会降低工具选择与 JSON 参数生成的稳定性，
+      // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
+      temperature: options.temperature ?? 0,
       stopWhen: stepCountIs(maxSteps),
       abortSignal: options.abortSignal,
+      // 每步动态路由 + 任务内压缩：上层可重算本步可见工具（初始 activeTools 仍作默认），
+      // 也可重写本步消息（超阈值时压缩历史）；两者都缺省时返回 undefined 不干预
+      prepareStep: options.prepareStep
+        ? async ({ stepNumber, messages }: any) => {
+            const result = await options.prepareStep!({ stepNumber, messages: messages as ModelMessage[] });
+            if (!result) return undefined;
+            const out: { activeTools?: string[]; messages?: ModelMessage[] } = {};
+            if (result.activeTools?.length) {
+              const filtered = result.activeTools.filter((n) => n in toolsMap);
+              if (filtered.length > 0) out.activeTools = filtered;
+            }
+            if (result.messages?.length) out.messages = result.messages;
+            return Object.keys(out).length > 0 ? out : undefined;
+          }
+        : undefined,
       onStepFinish: (step) => {
         stepCounter++;
         if (!options.onStepFinish) return;

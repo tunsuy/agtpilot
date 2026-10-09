@@ -180,6 +180,7 @@ class AgentBackend {
                 role: 'tool',
                 status: 'RUNNING',
                 args: event.payload.args || event.payload,
+                startedAt: Date.now(),
               });
             }
             this.broadcast({ type: 'mission_updated', data: mission });
@@ -209,7 +210,9 @@ class AgentBackend {
             if (targetStep && targetStep.status === 'RUNNING') {
               targetStep.status = 'DONE';
               targetStep.output = event.payload.output;
-              targetStep.duration = '320ms';
+              // 真实耗时（工具广播与核心广播双写时取首次完成时间）
+              const elapsed = Date.now() - (targetStep.startedAt || Date.now());
+              targetStep.duration = `${elapsed < 0 ? 0 : elapsed}ms`;
               this.broadcast({ type: 'mission_updated', data: mission });
             }
           }
@@ -223,12 +226,26 @@ class AgentBackend {
           const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
           if (mission) {
             mission.title = plan.goal;
-            mission.steps = plan.tasks.map((t: PlanTask) => ({
-              id: t.id,
-              title: t.title,
-              status: t.status === 'completed' ? 'DONE' : t.status === 'in_progress' ? 'RUNNING' : 'PENDING',
-              duration: t.status === 'completed' ? '280ms' : undefined,
-            }));
+            // 合并式同步：看板任务按 id 增量更新/追加，【不】整体覆盖 steps ——
+            // 旧实现每次 planner_update_task 都会把用户提问、已执行的工具步骤
+            // 全部抹掉，时间线反复闪烁且回溯不可见
+            for (const t of plan.tasks) {
+              const status =
+                t.status === 'completed' ? 'DONE' : t.status === 'in_progress' ? 'RUNNING' : t.status === 'failed' ? 'FAILED' : 'PENDING';
+              const existing = mission.steps.find((s) => s.id === t.id);
+              if (existing) {
+                existing.title = t.title;
+                existing.status = status;
+                if (t.result) existing.output = t.result;
+              } else {
+                mission.steps.push({
+                  id: t.id,
+                  title: t.title,
+                  status,
+                  output: t.result,
+                });
+              }
+            }
             const completedCount = mission.steps.filter((s) => s.status === 'DONE').length;
             mission.progress = Math.round((completedCount / (mission.steps.length || 1)) * 100);
             this.broadcast({ type: 'mission_updated', data: mission });
@@ -286,20 +303,26 @@ class AgentBackend {
         break;
       }
 
-      case 'thought': {
+      case 'approval_resolved': {
+        // 核心层审批超时自动拒绝（或中止释放）：撤下审批卡片，任务状态恢复
+        const { id, reason } = event.payload || {};
+        if (id) {
+          this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== id);
+        }
         if (this.state.activeMissionId) {
           const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
-            const thoughtText = event.payload.text || '';
-            // 更新当前第一步或者添加思考步骤
-            if (mission.steps.length > 0 && mission.steps[0].id === 'step_init') {
-              mission.steps[0].title = `意图理解与分析: ${thoughtText.slice(0, 60)}${thoughtText.length > 60 ? '...' : ''}`;
-              mission.steps[0].status = 'DONE';
-              mission.steps[0].duration = '450ms';
-            }
+          if (mission && mission.status === 'WAITING_APPROVAL') {
+            mission.status = 'ACTIVE';
             this.broadcast({ type: 'mission_updated', data: mission });
           }
         }
+        if (reason === 'timeout') {
+          this.addTerminalLog('stderr', '[Approval] 审批等待超时，已自动拒绝并继续执行（工具走 rejected 兜底路径）。');
+        }
+        break;
+      }
+
+      case 'thought': {
         if (event.payload.text) {
           this.addTerminalLog('system', `[AI 思考与回复] ${event.payload.text}`);
         }
@@ -311,11 +334,14 @@ class AgentBackend {
         if (this.state.activeMissionId) {
           const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
           if (mission) {
-            // 确保未完成的工具步骤状态标记为 DONE
+            // 只有真正执行过的 RUNNING 步骤标记完成；PENDING（未执行的看板步骤）
+            // 保持原状态 —— 旧实现把所有 PENDING 强标 DONE、进度强设 100，
+            // 未完成的计划步骤在 UI 上显示为"已完成"，效率面板系统性偏乐观
             mission.steps.forEach((st) => {
-              if (st.status === 'RUNNING' || st.status === 'PENDING') {
+              if (st.status === 'RUNNING') {
                 st.status = 'DONE';
-                st.duration = st.duration || '320ms';
+                const elapsed = Date.now() - (st.startedAt || Date.now());
+                st.duration = st.duration || `${elapsed < 0 ? 0 : elapsed}ms`;
               }
             });
 
@@ -339,7 +365,9 @@ class AgentBackend {
             }
 
             mission.status = 'DONE';
-            mission.progress = 100;
+            // 进度按真实完成比例呈现（未执行的看板步骤不计入完成）
+            const doneCount = mission.steps.filter((st) => st.status === 'DONE').length;
+            mission.progress = Math.round((doneCount / (mission.steps.length || 1)) * 100);
             if (mission.viewport) {
               mission.viewport.status = 'idle';
             }
@@ -459,7 +487,7 @@ class AgentBackend {
         }
         sendPushToUser(event.data.userId, {
           title: '任务完成',
-          body: `${event.data.title || '任务'}：${(event.data.steps?.slice(-1)?.[0]?.answer || '').toString().slice(0, 80) || '点击查看交付成果'}`,
+          body: `${event.data.title || '任务'}：${(event.data.steps?.filter((s: any) => s.role === 'assistant' && s.answer)?.slice(-1)?.[0]?.answer || '').toString().slice(0, 80) || '点击查看交付成果'}`,
           tag: `mission-done-${missionId}`,
           url: '/',
         }).catch(() => {});
@@ -776,7 +804,8 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 2. 【按需调用工具】：只有当用户的任务确实需要实时信息检索、网页交互抓取、执行代码或特定环境诊断时，才调用对应的原子工具。
 3. 【连接器工具优先】：mcp_ 前缀的工具来自用户已授权的外部服务连接器（如地图、文档、日程），涉及对应平台的能力时优先使用它们。
 4. 【中途授权】：当任务确实需要某平台专用能力（如读写 Notion、管理滴答清单日程）但对应连接器未授权时，调用 connector_authorize（action=request，附 connectorId 与一句话理由）向用户发起授权请求 —— 用户会看到授权卡片，工具会等待结果：授权成功则返回新工具清单，用 mcp_call 按名字调用；用户跳过或超时则立即改用 browser_ 系列工具在网页上直接完成操作作为兜底，不要空等或放弃任务。不确定有哪些连接器时先用 connector_authorize（action=list）查看。
-5. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。`,
+5. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。
+6. 【步数经济】：多个互相独立的工具调用，请在同一轮一次性并行发出，不要逐个串行等待结果后再发下一个；任务看板（planner）由系统随工具执行成功自动推进，【不要】调用 planner_update_task 汇报进度（仅在需要标记某步骤失败时才使用）；预计两步以内的简单任务直接执行，不要创建规划看板。`,
           });
 
           if (result.success && result.messages) {

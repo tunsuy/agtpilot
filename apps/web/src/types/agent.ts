@@ -55,6 +55,8 @@ export interface MissionStep {
   role?: 'user' | 'assistant' | 'tool';
   userPrompt?: string;
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  /** 工具步骤开始时间（用于计算真实耗时，替代旧的硬编码假值） */
+  startedAt?: number;
   duration?: string;
   args?: any;
   answer?: string;

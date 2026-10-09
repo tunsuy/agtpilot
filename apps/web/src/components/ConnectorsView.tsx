@@ -40,10 +40,17 @@ import {
   MessagesSquare,
   Mail,
   Feather,
+  Tv,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
 import { buildXhsWorkshopPrompt, XHS_WORKSHOP_STYLES } from '../lib/xhs-workshop';
+import {
+  buildWeiboWorkshopPrompt,
+  buildVideoScriptPrompt,
+  WEIBO_WORKSHOP_STYLES,
+  VIDEO_SCRIPT_DURATIONS,
+} from '../lib/content-workshops';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -118,6 +125,12 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <Flame className={`${className} text-orange-600`} />;
     case 'xiaohongshu':
       return <Share2 className={`${className} text-rose-600`} />;
+    case 'weibo':
+      return <MessagesSquare className={`${className} text-orange-500`} />;
+    case 'douyin':
+      return <Video className={`${className} text-zinc-900`} />;
+    case 'bilibili':
+      return <Tv className={`${className} text-sky-500`} />;
     case 'wechat_mp':
       return <Share2 className={`${className} text-emerald-600`} />;
     case 'twitter':
@@ -136,7 +149,7 @@ const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
   { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
-  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'wechat_mp', 'xiaohongshu', 'twitter'] },
+  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'wechat_mp', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'e2b', 'browser_auto'] },
 ];
 const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));
@@ -193,16 +206,48 @@ export function ConnectorsView({
   const [mcpSaving, setMcpSaving] = useState(false);
   const [mcpNotice, setMcpNotice] = useState('');
 
-  // ---- 小红书内容工坊（半自动运营：Agent 选题+创作，发布仍由用户在 App 人工确认）----
+  // ---- 内容/脚本工坊（半自动运营：Agent 选题+创作，发布仍由用户在 App 人工确认）----
+  // 小红书/微博 = 图文内容工坊；抖音/B站 = 短视频脚本工坊；同一弹窗按 wsKind 复用
   const [workshopApp, setWorkshopApp] = useState<ConnectorApp | null>(null);
   const [wsTopic, setWsTopic] = useState('');
   const [wsStyle, setWsStyle] = useState<string>(XHS_WORKSHOP_STYLES[0]);
   const [wsCount, setWsCount] = useState(1);
+  const [wsDuration, setWsDuration] = useState<string>(VIDEO_SCRIPT_DURATIONS[1]);
+
+  const wsKind: 'xhs' | 'weibo' | 'video' | null = workshopApp
+    ? workshopApp.id === 'weibo'
+      ? 'weibo'
+      : workshopApp.id === 'douyin' || workshopApp.id === 'bilibili'
+      ? 'video'
+      : 'xhs'
+    : null;
+
+  const openWorkshop = (app: ConnectorApp) => {
+    setWorkshopApp(app);
+    setWsTopic('');
+    setWsCount(1);
+    setWsStyle(app.id === 'weibo' ? WEIBO_WORKSHOP_STYLES[0] : XHS_WORKSHOP_STYLES[0]);
+    setWsDuration(VIDEO_SCRIPT_DURATIONS[1]);
+  };
 
   const handleWorkshopRun = () => {
-    if (!workshopApp || !onRunPrompt) return;
-    const prompt = buildXhsWorkshopPrompt({ topic: wsTopic, style: wsStyle, count: wsCount });
-    onRunPrompt(prompt, `小红书内容工坊 · ${wsStyle}`);
+    if (!workshopApp || !onRunPrompt || !wsKind) return;
+    if (wsKind === 'video') {
+      const isBili = workshopApp.id === 'bilibili';
+      const prompt = buildVideoScriptPrompt({
+        topic: wsTopic,
+        platform: isBili ? 'bilibili' : 'douyin',
+        duration: wsDuration,
+        count: wsCount,
+      });
+      onRunPrompt(prompt, `${isBili ? 'B站' : '抖音'}短视频脚本工坊 · ${wsDuration}`);
+    } else if (wsKind === 'weibo') {
+      const prompt = buildWeiboWorkshopPrompt({ topic: wsTopic, style: wsStyle, count: wsCount });
+      onRunPrompt(prompt, `微博内容工坊 · ${wsStyle}`);
+    } else {
+      const prompt = buildXhsWorkshopPrompt({ topic: wsTopic, style: wsStyle, count: wsCount });
+      onRunPrompt(prompt, `小红书内容工坊 · ${wsStyle}`);
+    }
     setWorkshopApp(null);
     setWsTopic('');
     setWsStyle(XHS_WORKSHOP_STYLES[0]);
@@ -476,15 +521,15 @@ export function ConnectorsView({
                   </button>
                 )}
 
-                {/* 小红书内容工坊：Agent 选题+创作，发布仍由用户在 App 人工确认（合规半自动） */}
-                {app.id === 'xiaohongshu' && onRunPrompt && (
+                {/* 内容/脚本工坊：Agent 选题+创作，发布仍由用户在 App 人工确认（合规半自动） */}
+                {(app.id === 'xiaohongshu' || app.id === 'weibo' || app.id === 'douyin' || app.id === 'bilibili') && onRunPrompt && (
                   <button
-                    onClick={() => setWorkshopApp(app)}
+                    onClick={() => openWorkshop(app)}
                     className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 transition shadow-2xs"
-                    title="让 Agent 帮你选题、写文案、配标签，你只需在 App 人工确认发布"
+                    title="让 Agent 帮你选题、写文案/脚本、配标签，你只需在 App 人工确认发布"
                   >
                     <Sparkles className="h-3 w-3" />
-                    <span>内容工坊</span>
+                    <span>{app.id === 'douyin' || app.id === 'bilibili' ? '脚本工坊' : '内容工坊'}</span>
                   </button>
                 )}
 
@@ -916,7 +961,7 @@ export function ConnectorsView({
         </div>
       )}
 
-      {/* 小红书内容工坊 Modal（半自动运营：Agent 选题+创作，发布由用户在 App 人工确认） */}
+      {/* 内容/脚本工坊 Modal（半自动运营：Agent 选题+创作，发布由用户在 App 人工确认） */}
       {workshopApp && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl animate-fadeIn space-y-4">
@@ -926,7 +971,13 @@ export function ConnectorsView({
                   <Sparkles className="h-4 w-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-zinc-900">小红书内容工坊</h3>
+                  <h3 className="text-sm font-semibold text-zinc-900">
+                    {wsKind === 'video'
+                      ? `${workshopApp.id === 'bilibili' ? 'B站' : '抖音'}短视频脚本工坊`
+                      : wsKind === 'weibo'
+                      ? '微博内容工坊'
+                      : '小红书内容工坊'}
+                  </h3>
                   <p className="text-xs text-zinc-500 mt-0.5">
                     Agent 选题+创作，你在 App 人工确认发布（合规半自动）
                   </p>
@@ -948,35 +999,68 @@ export function ConnectorsView({
                   type="text"
                   value={wsTopic}
                   onChange={(e) => setWsTopic(e.target.value)}
-                  placeholder="留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：秋冬通勤穿搭"
+                  placeholder={
+                    wsKind === 'video'
+                      ? '留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：AI 工具月度盘点'
+                      : '留空则由 Agent 抓知乎热榜/搜索热点自动选题，如：秋冬通勤穿搭'
+                  }
                   className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
                 />
               </div>
 
-              {/* 笔记类型 */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-700 block">笔记类型</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {XHS_WORKSHOP_STYLES.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setWsStyle(s)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
-                        wsStyle === s
-                          ? 'bg-violet-600 text-white border-violet-600'
-                          : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
-                      }`}
-                    >
-                      {s}
-                    </button>
-                  ))}
+              {/* 内容类型（图文工坊才有；脚本工坊选时长） */}
+              {wsKind !== 'video' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-700 block">
+                    {wsKind === 'weibo' ? '微博类型' : '笔记类型'}
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(wsKind === 'weibo' ? WEIBO_WORKSHOP_STYLES : XHS_WORKSHOP_STYLES).map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setWsStyle(s)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                          wsStyle === s
+                            ? 'bg-violet-600 text-white border-violet-600'
+                            : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* 视频时长（脚本工坊才有） */}
+              {wsKind === 'video' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-700 block">视频时长</label>
+                  <div className="flex gap-1.5">
+                    {VIDEO_SCRIPT_DURATIONS.map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setWsDuration(d)}
+                        className={`px-3 py-1 rounded-lg text-xs font-medium border transition ${
+                          wsDuration === d
+                            ? 'bg-violet-600 text-white border-violet-600'
+                            : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+                        }`}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* 篇数 */}
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-700 block">产出篇数</label>
+                <label className="text-xs font-medium text-zinc-700 block">
+                  {wsKind === 'video' ? '产出脚本数' : '产出篇数'}
+                </label>
                 <div className="flex gap-1.5">
                   {[1, 2, 3].map((n) => (
                     <button
@@ -997,7 +1081,9 @@ export function ConnectorsView({
 
               <p className="text-[11px] text-zinc-400 leading-relaxed flex items-start gap-1.5">
                 <ShieldCheck className="h-3.5 w-3.5 mt-px flex-shrink-0" />
-                生成后跳转任务页，Agent 产出标题/正文/标签/封面建议。复制满意的一篇 → 「真机唤起」小红书 App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。
+                {wsKind === 'video'
+                  ? `生成后跳转任务页，Agent 产出标题/分镜脚本/口播稿/标签分区/封面文案。你拍摄剪辑后 → 「真机唤起」${workshopApp.id === 'bilibili' ? 'B站' : '抖音'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`
+                  : `生成后跳转任务页，Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 「真机唤起」${workshopApp.id === 'weibo' ? '微博' : '小红书'} App → 人工核对后发布。已连接知乎 MCP 时选题走实时热榜。`}
               </p>
 
               <div className="flex items-center justify-end gap-2 pt-1">

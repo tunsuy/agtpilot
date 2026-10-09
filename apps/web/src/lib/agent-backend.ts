@@ -277,9 +277,13 @@ class AgentBackend {
 
       case 'plan': {
         const plan: PlanData = event.payload;
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
+        // 按任务键归属：plan.taskKey = 发起该任务的 mission id。
+        // 多用户并发时事件流是全局的，不按 taskKey 过滤会把 A 用户的看板
+        // 挂到 B 用户的 activeMissionId 上（看板串台）。
+        const mission = plan.taskKey
+          ? this.state.missions.find((m) => m.id === plan.taskKey)
+          : this.state.missions.find((m) => m.id === this.state.activeMissionId);
+        if (mission) {
             mission.title = plan.goal;
             // 合并式同步：看板任务按 id 增量更新/追加，【不】整体覆盖 steps ——
             // 旧实现每次 planner_update_task 都会把用户提问、已执行的工具步骤
@@ -304,7 +308,6 @@ class AgentBackend {
             const completedCount = mission.steps.filter((s) => s.status === 'DONE').length;
             mission.progress = Math.round((completedCount / (mission.steps.length || 1)) * 100);
             this.broadcast({ type: 'mission_updated', data: mission });
-          }
         }
         break;
       }
@@ -346,13 +349,14 @@ class AgentBackend {
       }
 
       case 'artifact': {
+        // 按任务键归属（同 plan 的串台问题）；无 taskId 的产物走 activeMission 兜底
+        const mission = event.payload.taskId
+          ? this.state.missions.find((m) => m.id === event.payload.taskId)
+          : this.state.missions.find((m) => m.id === this.state.activeMissionId);
         this.state.latestArtifact = event.payload;
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
-            mission.artifact = event.payload;
-            this.broadcast({ type: 'mission_updated', data: mission });
-          }
+        if (mission) {
+          mission.artifact = event.payload;
+          this.broadcast({ type: 'mission_updated', data: mission });
         }
         this.broadcast({ type: 'artifact_updated', data: event.payload });
         break;
@@ -896,6 +900,7 @@ class AgentBackend {
           // 调用真正的大模型 + 工具链编排 (Vercel AI SDK + Cordis 工具集)
           const result = await this.ctx.orchestrator.runTask({
             taskId: targetMission.id,
+            userId: options.userId,
             abortSignal: abortController.signal,
             configOverride: userConfigOverride,
             historyMessages: targetMission.conversationMessages,

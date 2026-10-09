@@ -1,6 +1,6 @@
 import { Context } from '@deepseek-ai/cordis';
 import '@agtpilot/core';
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { Sandbox as E2BSandbox } from '@e2b/code-interpreter';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export const name = 'agtpilot-plugin-sandbox';
 export const inject = ['agent'];
@@ -34,18 +35,43 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
     fsSync.mkdirSync(tempSandboxDir, { recursive: true });
   }
 
-  // 辅助函数：校验路径安全性，防止路径穿越攻击（Path Traversal）
-  function resolveSafePath(userPath: string): string {
+  // 辅助函数：路径围栏（Path Traversal 防护）。
+  // 解析后必须落在 workspaceRoot 内 —— 绝对路径逃逸与 ../ 穿越一律拒绝（返回 null）。
+  function resolveSafePath(userPath: string): string | null {
     const resolved = path.isAbsolute(userPath)
       ? path.normalize(userPath)
       : path.resolve(workspaceRoot, userPath);
+    if (resolved === workspaceRoot || !resolved.startsWith(workspaceRoot + path.sep)) {
+      return null;
+    }
     return resolved;
+  }
+
+  /**
+   * 子进程环境白名单：只传命令执行必需的基础变量 + 任务级 session.env
+   * （当前用户个人空间保存的 Key，经 orchestrator 透传，用户间隔离）。
+   * 绝不整包继承 process.env —— 那会把宿主机上的全部密钥（含其他用户
+   * 配置的服务 Key）泄露给任意一次模型触发的命令执行。
+   */
+  function buildChildEnv(sessionEnv?: Record<string, string>) {
+    const base: Record<string, string> = { CI: 'true' };
+    for (const [k, v] of Object.entries({
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      TZ: process.env.TZ,
+      TMPDIR: process.env.TMPDIR,
+    })) {
+      if (typeof v === 'string') base[k] = v;
+    }
+    return { ...base, ...(sessionEnv || {}) };
   }
 
   // 1. 命令执行原子能力 (sandbox_run_command)
   ctx.agent.registerTool({
     name: 'sandbox_run_command',
-    description: '在受控沙箱或指定工作目录中执行 Shell 命令，返回标准输出、标准错误和退出码 (高危工具，触发安全审批拦截)',
+    description: '在宿主机的工作目录中执行 Shell 命令，返回标准输出、标准错误和退出码。注意：直接在宿主环境执行（无系统级隔离）；配置了 E2B_API_KEY 的 Python 代码可改用 sandbox_run_code 走云端微虚拟机隔离。高危工具，触发安全审批拦截。',
     dangerLevel: 'high',
     parameters: {
       type: 'object',
@@ -56,8 +82,15 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       },
       required: ['command'],
     },
-    execute: async ({ command, cwd, timeoutMs }) => {
-      const execCwd = cwd ? resolveSafePath(cwd) : workspaceRoot;
+    execute: async ({ command, cwd, timeoutMs }, session?: any) => {
+      let execCwd = workspaceRoot;
+      if (cwd) {
+        const resolved = resolveSafePath(String(cwd));
+        if (!resolved) {
+          return { success: false, command, error: `工作目录越界: ${cwd}（只允许 workspace 内路径）` };
+        }
+        execCwd = resolved;
+      }
       const timeout = timeoutMs || defaultTimeoutMs;
       const startTime = Date.now();
 
@@ -66,7 +99,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           cwd: execCwd,
           timeout,
           maxBuffer: 10 * 1024 * 1024, // 10MB 缓冲区保护
-          env: { ...process.env, CI: 'true' },
+          env: buildChildEnv(session?.env) as NodeJS.ProcessEnv,
         });
 
         const durationMs = Date.now() - startTime;
@@ -122,7 +155,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
   // 2. 本地/云端多语言代码解释执行 (sandbox_run_code)
   ctx.agent.registerTool({
     name: 'sandbox_run_code',
-    description: '在隔离沙箱环境中直接执行一段 Node.js (JavaScript/TypeScript) 或 Python 代码片段',
+    description: '执行一段 Node.js (JavaScript/TypeScript) 或 Python 代码片段：配置了 E2B_API_KEY 且为 Python 时自动走云端 Firecracker 微虚拟机隔离执行（结果 mode=e2b-isolated）；否则在本地临时目录执行（与宿主共享文件系统，无系统级隔离，结果 mode=local，降级时会显式标注）。',
     dangerLevel: 'high',
     parameters: {
       type: 'object',
@@ -145,58 +178,69 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
         let sandbox: any = null;
         try {
           sandbox = await E2BSandbox.create({ apiKey: e2bKey });
-          const execution = await sandbox.runCode(code);
+          const execution = await sandbox.runCode(code, { timeoutMs });
           return {
-            success: true,
+            success: !execution.error,
             language: 'python (E2B Cloud MicroVM)',
+            mode: 'e2b-isolated',
             stdout: execution.logs.stdout.join('\n').trim(),
             stderr: execution.logs.stderr.join('\n').trim(),
+            error: execution.error ? execution.error.value : undefined,
             artifacts: (execution.results || []).map((r: any) => ({
               text: r.text,
               hasImage: !!(r.png || r.jpeg),
             })),
           };
         } catch (err: any) {
-          // 优雅降级到本地执行
+          // 云端沙箱失败 → 降级本地执行，但必须让模型与用户看见降级事实
+          ctx.agent.emitEvent({
+            type: 'thought',
+            payload: {
+              text: `E2B 云端沙箱不可用（${err.message}），已降级为本地临时目录执行（无系统级隔离）。`,
+            },
+            timestamp: Date.now(),
+          });
         } finally {
           if (sandbox) await sandbox.kill().catch(() => {});
         }
       }
 
-      // 本地隔离目录执行
+      // 本地临时目录执行（注意：非系统级隔离，与宿主共享文件系统）
       const fileExt = language === 'python' ? '.py' : language === 'typescript' ? '.ts' : '.mjs';
       const tempFileName = `snippet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${fileExt}`;
       const tempFilePath = path.join(tempSandboxDir, tempFileName);
+      const degraded = Boolean(language === 'python' && e2bKey);
 
       try {
         await fs.writeFile(tempFilePath, code, 'utf-8');
 
-        let cmd = '';
-        if (language === 'python') {
-          cmd = `python3 "${tempFilePath}"`;
-        } else if (language === 'typescript') {
-          cmd = `npx tsx "${tempFilePath}"`;
-        } else {
-          cmd = `node "${tempFilePath}"`;
-        }
+        // execFile 数组参数：临时文件路径不经 shell 解释（路径由本插件生成，但保持零 shell 原则）
+        const runner =
+          language === 'python' ? 'python3' : language === 'typescript' ? 'npx' : 'node';
+        const runnerArgs =
+          language === 'typescript' ? ['tsx', tempFilePath] : [tempFilePath];
 
         const startTime = Date.now();
-        const { stdout, stderr } = await execAsync(cmd, {
+        const { stdout, stderr } = await execFileAsync(runner, runnerArgs, {
           cwd: workspaceRoot,
           timeout: timeoutMs,
+          env: buildChildEnv(session?.env) as NodeJS.ProcessEnv,
         });
 
         return {
           success: true,
           language,
+          mode: degraded ? 'local-fallback (E2B 不可用)' : 'local',
           stdout: stdout.trim(),
           stderr: stderr.trim(),
           durationMs: Date.now() - startTime,
+          ...(degraded ? { warning: '云端隔离沙箱不可用，本次在本地宿主环境执行。' } : {}),
         };
       } catch (err: any) {
         return {
           success: false,
           language,
+          mode: degraded ? 'local-fallback (E2B 不可用)' : 'local',
           stdout: (err.stdout || '').trim(),
           stderr: (err.stderr || err.message || '').trim(),
           error: err.message,
@@ -238,7 +282,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       let sandbox: any = null;
       try {
         sandbox = await E2BSandbox.create({ apiKey });
-        const execution = await sandbox.runCode(code);
+        const execution = await sandbox.runCode(code, { timeoutMs: defaultTimeoutMs * 4 });
 
         const logs = {
           stdout: execution.logs.stdout.join('\n'),
@@ -252,11 +296,12 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           pngBase64: r.png,
         }));
 
+        // 沙箱内代码报错是真实失败（success:false），不能拿着 error 还报 success
         return {
-          success: true,
+          success: !execution.error,
           logs,
           artifacts,
-          error: execution.error ? execution.error.value : undefined,
+          ...(execution.error ? { error: execution.error.value } : {}),
         };
       } catch (err: any) {
         return {
@@ -286,7 +331,10 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       required: ['filePath'],
     },
     execute: async ({ filePath, startLine = 1, maxLines = 500 }) => {
-      const fullPath = resolveSafePath(filePath);
+      const fullPath = resolveSafePath(String(filePath));
+      if (!fullPath) {
+        return { success: false, filePath, error: `路径越界: ${filePath}（只允许 workspace 内路径）` };
+      }
 
       try {
         const stats = await fs.stat(fullPath);
@@ -334,7 +382,14 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       required: ['filePath', 'content'],
     },
     execute: async ({ filePath, content, overwrite = true }) => {
-      const fullPath = resolveSafePath(filePath);
+      const fullPath = resolveSafePath(String(filePath));
+      if (!fullPath) {
+        return {
+          success: false,
+          filePath,
+          error: `路径越界: ${filePath}（只允许 workspace 内路径）`,
+        };
+      }
 
       try {
         if (!overwrite && fsSync.existsSync(fullPath)) {
@@ -376,7 +431,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       },
     },
     execute: async ({ dirPath = '.' }) => {
-      const fullPath = resolveSafePath(dirPath);
+      const fullPath = resolveSafePath(String(dirPath)) || workspaceRoot;
 
       try {
         const entries = await fs.readdir(fullPath, { withFileTypes: true });

@@ -59,10 +59,11 @@ export class ModelRouterService extends Service {
   }
 
   setBudget(maxTokens?: number, maxCost?: number) {
-    if (maxTokens && maxTokens > 0) this.maxTokensBudget = Math.floor(maxTokens);
-    if (maxCost && maxCost > 0) this.maxCostUsd = maxCost;
+    // 0 = 显式清零撤销限制；undefined/负数不改动现有值
+    if (maxTokens !== undefined && maxTokens >= 0) this.maxTokensBudget = Math.floor(maxTokens);
+    if (maxCost !== undefined && maxCost >= 0) this.maxCostUsd = maxCost;
     // 预算下发到模型网关，由其在 agent loop 的 stopWhen 里硬熔断
-    this.ctx.model.setBudget({ maxTokens: this.maxTokensBudget || undefined, maxCostUsd: this.maxCostUsd || undefined });
+    this.ctx.model.setBudget({ maxTokens: this.maxTokensBudget, maxCostUsd: this.maxCostUsd });
   }
 
   getStatus() {

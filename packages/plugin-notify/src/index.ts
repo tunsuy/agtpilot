@@ -1,9 +1,9 @@
 import { Context, Service } from '@deepseek-ai/cordis';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import '@agtpilot/core';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export const name = 'agtpilot-plugin-notify';
 export const inject = ['agent'];
@@ -14,13 +14,17 @@ export class NotifyService extends Service {
   }
 
   async sendDesktopNotification(title: string, message: string): Promise<boolean> {
+    // 数组参数 execFile：不经 shell，title/message 中任何字符都不可能被解释为命令
+    if (process.platform !== 'darwin') {
+      return false;
+    }
     try {
-      if (process.platform === 'darwin') {
-        const safeTitle = title.replace(/"/g, '\\"');
-        const safeMsg = message.replace(/"/g, '\\"');
-        await execAsync(`osascript -e 'display notification "${safeMsg}" with title "${safeTitle}"'`);
-        return true;
-      }
+      // AppleScript 字符串字面量转义（\\ 与 "）—— 只影响脚本语法合法性，无注入面
+      const esc = (s: string) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      await execFileAsync('osascript', [
+        '-e',
+        `display notification "${esc(message)}" with title "${esc(title)}"`,
+      ]);
       return true;
     } catch {
       return false;
@@ -69,9 +73,11 @@ export class NotifyService extends Service {
 
 /**
  * Webhook 地址解析（多用户服务器安全）：
- * 1. 调用参数显式传入的 webhookUrl；
- * 2. 任务级 session.env 注入的当前用户凭证（连接器页保存的 {CHANNEL}_WEBHOOK_URL，
- *    经 agent-backend taskEnv 白名单透传，用户间互相隔离）；
+ * 1. 任务级 session.env 注入的当前用户凭证（连接器页保存的 {CHANNEL}_WEBHOOK_URL，
+ *    经 agent-backend taskEnv 白名单透传，用户间互相隔离）—— 优先级最高：
+ *    模型参数是可被提示注入操纵的外部输入，绝不允许覆盖用户自己配置的地址
+ *    （否则会出现「把用户私密报告转发到攻击者 webhook」的数据外传路径）；
+ * 2. 调用参数显式传入的 webhookUrl（用户在对话里明确给出的地址兜底）；
  * 3. 全局 process.env 回退（单机自用场景），新旧键名（{CHANNEL}_WEBHOOK_URL / {CHANNEL}_WEBHOOK）都认。
  * 三者皆无时返回 missingEnvKey，由调用方显式报错 —— 绝不静默发往假地址
  * （旧实现会 POST 到 example.com/mock-webhook 并谎报成功）。
@@ -83,8 +89,8 @@ export function resolveWebhookUrl(
 ): { url?: string; missingEnvKey?: string } {
   const ch = String(channel || '').toUpperCase();
   const url =
-    (webhookUrl || '').trim() ||
     sessionEnv?.[`${ch}_WEBHOOK_URL`] ||
+    (webhookUrl || '').trim() ||
     process.env[`${ch}_WEBHOOK_URL`] ||
     process.env[`${ch}_WEBHOOK`];
   if (url) return { url };
@@ -117,7 +123,9 @@ export function apply(ctx: Context) {
       const ok = await notifyService.sendDesktopNotification(title, message);
       return {
         success: ok,
-        message: ok ? `桌面原生通知已成功弹出: [${title}]` : '桌面通知弹出失败',
+        message: ok
+          ? `桌面原生通知已成功弹出: [${title}]`
+          : `桌面通知弹出失败（当前平台: ${process.platform}，仅 macOS 支持；或系统通知服务不可用）`,
       };
     },
   });

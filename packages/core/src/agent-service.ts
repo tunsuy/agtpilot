@@ -20,6 +20,11 @@ export class AgentService extends Service {
     this.ctx.emit('agtpilot/tool-registered', tool);
   }
 
+  /** 反注册全局工具（连接器断开等场景，避免已断连工具残留注册表） */
+  unregisterTool(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
   getTools(): ToolDefinition[] {
     return Array.from(this.tools.values());
   }

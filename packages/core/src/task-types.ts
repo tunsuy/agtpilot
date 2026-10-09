@@ -3,6 +3,8 @@ import { ToolDefinition } from './contracts';
 
 export interface TaskOptions {
   taskId?: string;
+  /** 任务归属用户（多用户 Web 传入；CLI 单用户缺省）。经 ToolSession 传给每个工具，插件按其分域隔离状态 */
+  userId?: string;
   prompt: string;
   system?: string;
   model?: string;

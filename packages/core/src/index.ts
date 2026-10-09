@@ -6,6 +6,7 @@ import { OrchestratorService } from './orchestrator';
 // ---- 公共 API（保持既有导出面不变，新增契约与路由接口）----
 export type {
   ToolDefinition,
+  ToolSession,
   ToolRoute,
   ModelGateway,
   PlannerNotifier,

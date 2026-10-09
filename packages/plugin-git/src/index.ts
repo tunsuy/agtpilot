@@ -1,5 +1,5 @@
 import { Context } from '@deepseek-ai/cordis';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -7,10 +7,17 @@ import '@agtpilot/core';
 
 import * as Diff from 'diff';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export const name = 'agtpilot-plugin-git';
 export const inject = ['agent'];
+
+/** 文件路径围栏：解析后必须落在工作区内（拒绝绝对路径逃逸与 .. 穿越） */
+function resolveInsideCwd(cwd: string, filePath: string): string | null {
+  const full = path.resolve(cwd, filePath);
+  if (full === cwd || !full.startsWith(cwd + path.sep)) return null;
+  return full;
+}
 
 export function apply(ctx: Context) {
   // 工具路由自注册：prompt 命中版本控制类关键词时挂载本插件工具组
@@ -32,8 +39,8 @@ export function apply(ctx: Context) {
     },
     execute: async () => {
       try {
-        const { stdout: status } = await execAsync('git status -s', { cwd });
-        const { stdout: branch } = await execAsync('git branch --show-current', { cwd });
+        const { stdout: status } = await execFileAsync('git', ['status', '-s'], { cwd });
+        const { stdout: branch } = await execFileAsync('git', ['branch', '--show-current'], { cwd });
         return {
           success: true,
           branch: branch.trim(),
@@ -59,8 +66,12 @@ export function apply(ctx: Context) {
     },
     execute: async ({ file, staged }) => {
       try {
-        const cmd = `git diff ${staged ? '--staged' : ''} ${file ? `-- "${file}"` : ''}`;
-        const { stdout } = await execAsync(cmd, { cwd, maxBuffer: 10 * 1024 * 1024 });
+        // execFile 数组参数：不经 shell，file 中的任何字符都只是 git 的路径参数
+        const { stdout } = await execFileAsync(
+          'git',
+          ['diff', ...(staged ? ['--staged'] : []), ...(file ? ['--', String(file)] : [])],
+          { cwd, maxBuffer: 10 * 1024 * 1024 }
+        );
         return {
           success: true,
           diff: stdout.trim() || '（当前无改动）',
@@ -74,11 +85,12 @@ export function apply(ctx: Context) {
   // 3. git_apply_patch: 精准应用 Unified Diff / 局部补丁 (基于官方 jsdiff 引擎)
   ctx.agent.registerTool({
     name: 'git_apply_patch',
-    description: '集成全球标准 diff 库与 Aider 补丁引擎：对目标文件应用标准 Unified Diff 补丁或指定查找块替换，支持 hunk 行号容差对齐，避免全文件重写丢失代码。',
+    description: '集成全球标准 diff 库与 Aider 补丁引擎：对目标文件应用标准 Unified Diff 补丁或指定查找块替换，支持 hunk 行号容差对齐，避免全文件重写丢失代码。文件写入类操作（同 sandbox_write_file 级别）。',
+    dangerLevel: 'medium',
     parameters: {
       type: 'object',
       properties: {
-        filePath: { type: 'string', description: '要修改的文件相对路径' },
+        filePath: { type: 'string', description: '要修改的文件路径（须位于当前工作区内）' },
         patchString: { type: 'string', description: '可选，标准 Unified Diff 补丁文本（包含 @@ -l,s +l,s @@ hunk 头）' },
         searchBlock: { type: 'string', description: '可选，原文件中要被替换的代码段（必须匹配上下文）' },
         replaceBlock: { type: 'string', description: '可选，替换后的新代码段' },
@@ -86,7 +98,10 @@ export function apply(ctx: Context) {
       required: ['filePath'],
     },
     execute: async ({ filePath, patchString, searchBlock, replaceBlock }) => {
-      const fullPath = path.resolve(cwd, filePath);
+      const fullPath = resolveInsideCwd(cwd, String(filePath));
+      if (!fullPath) {
+        return { success: false, error: `路径越界: ${filePath}（只允许工作区内文件）` };
+      }
       if (!fs.existsSync(fullPath)) {
         return { success: false, error: `文件未找到: ${filePath}` };
       }
@@ -115,7 +130,8 @@ export function apply(ctx: Context) {
             error: `无法在 [${filePath}] 中匹配到原代码段 searchBlock，请先核验文件最新内容。`,
           };
         }
-        const updated = content.replace(searchBlock, replaceBlock);
+        // 函数式替换：replaceBlock 中的 $&/$1 等特殊序列按字面量写入，不做 pattern 解释
+        const updated = content.replace(searchBlock, () => String(replaceBlock));
         fs.writeFileSync(fullPath, updated, 'utf-8');
         return {
           success: true,
@@ -162,7 +178,7 @@ export function apply(ctx: Context) {
   // 5. git_create_checkpoint: 建立安全快照分支
   ctx.agent.registerTool({
     name: 'git_create_checkpoint',
-    description: '在进行大型重构或危险修改前，创建临时快照备份分支，支持随时一键回滚。',
+    description: '在进行大型重构或危险修改前，创建临时快照备份分支（含当前已修改的 tracked 文件；未跟踪的新文件不在快照内），支持随时一键回滚。',
     parameters: {
       type: 'object',
       properties: {
@@ -172,12 +188,23 @@ export function apply(ctx: Context) {
     },
     execute: async ({ name }) => {
       try {
-        const branchName = `checkpoint/${name}_${Date.now()}`;
-        await execAsync(`git branch "${branchName}"`, { cwd });
+        // 纯 git branch 只备份 HEAD 已提交内容，不含工作区未提交修改 ——
+        // 这里用 `git stash create`（不动工作区、不进 stash 栈）拿到包含
+        // 未提交修改的快照 commit，再在其上建分支；工作区干净时回退 HEAD。
+        const branchName = `checkpoint/${String(name).replace(/[^\w.-]/g, '_')}_${Date.now()}`;
+        let snapshotRef = '';
+        try {
+          const { stdout } = await execFileAsync('git', ['stash', 'create'], { cwd });
+          snapshotRef = stdout.trim();
+        } catch {
+          snapshotRef = ''; // 无未提交修改或 stash 不可用时回退 HEAD
+        }
+        await execFileAsync('git', ['branch', branchName, snapshotRef || 'HEAD'], { cwd });
         return {
           success: true,
           checkpointBranch: branchName,
-          message: `已建立安全备份分支 [${branchName}]。若后续操作异常可快速还原。`,
+          includesUncommitted: Boolean(snapshotRef),
+          message: `已建立安全备份分支 [${branchName}]${snapshotRef ? '（含当前未提交修改）' : '（基于最近一次提交）'}。若后续操作异常可快速还原。`,
         };
       } catch (err: any) {
         return { success: false, error: err.message };
@@ -188,6 +215,7 @@ export function apply(ctx: Context) {
   // 5. codebase_search_symbols: 全局代码符号与关键词检索
   ctx.agent.registerTool({
     name: 'codebase_search_symbols',
+    baseline: true,
     description: '在整个代码工程中高速全文检索符号、函数、类定义或关键字符串，自动忽略 node_modules、.git 等噪音目录。',
     parameters: {
       type: 'object',
@@ -198,14 +226,27 @@ export function apply(ctx: Context) {
       required: ['query'],
     },
     execute: async ({ query, extension }) => {
+      // execFile 数组参数 + execve 直传（不经 shell）：
+      // query 作为 grep 的 pattern 参数原样传递，无需也无法被 shell 解释
       try {
-        const extFilter = extension ? `--include="*.${extension}"` : '';
-        const cmd = `grep -rn -I --exclude-dir={node_modules,.git,.next,dist,build} ${extFilter} "${query}" . | head -n 30`;
-        const { stdout } = await execAsync(cmd, { cwd });
+        const args = [
+          '-rn',
+          '-I',
+          '--exclude-dir=node_modules',
+          '--exclude-dir=.git',
+          '--exclude-dir=.next',
+          '--exclude-dir=dist',
+          '--exclude-dir=build',
+          ...(extension ? [`--include=*.${String(extension).replace(/[^\w]/g, '')}`] : []),
+          String(query),
+          '.',
+        ];
+        const { stdout } = await execFileAsync('grep', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
         const matches = stdout
           .trim()
           .split('\n')
           .filter(Boolean)
+          .slice(0, 30)
           .map((line) => {
             const parts = line.split(':');
             return {
@@ -220,15 +261,14 @@ export function apply(ctx: Context) {
           query,
           count: matches.length,
           matches,
+          truncated: stdout.trim().split('\n').filter(Boolean).length > 30,
         };
-      } catch {
-        return {
-          success: true,
-          query,
-          count: 0,
-          matches: [],
-          message: '未搜索到匹配项',
-        };
+      } catch (err: any) {
+        // grep 退出码语义：1 = 无匹配（真实空结果），2+ = 真实错误（路径不存在/参数非法）
+        if (err.code === 1) {
+          return { success: true, query, count: 0, matches: [], message: '未搜索到匹配项' };
+        }
+        return { success: false, query, error: err.message };
       }
     },
   });

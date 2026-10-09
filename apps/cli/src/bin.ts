@@ -96,6 +96,115 @@ function mountCliCronTools(ctx: any) {
   sync(loadCliCronJobs());
 }
 
+/**
+ * CLI 侧全局 MCP 连接工具包装（应用层补齐 plugin-mcp 刻意不做的工具暴露）。
+ * 多用户的 Web 侧对应实现 = 连接器中心 UI + agent-backend 的 getUserTools
+ * 任务级 taskTools 注入（用户间互不可见）。CLI 单用户经全局注册表挂载。
+ */
+function mountCliMcpTools(ctx: any) {
+  ctx.agent.registerTool({
+    name: 'mcp_connect_stdio',
+    description: '连接一个基于标准输入输出 (Stdio) 的 MCP Server，并自动将其暴露的所有工具动态挂载进来（高危：会在宿主机启动子进程）',
+    dangerLevel: 'high',
+    parameters: {
+      type: 'object',
+      properties: {
+        serverName: { type: 'string', description: '为该 MCP Server 指定的唯一别名 (如: "sqlite", "github", "filesystem")' },
+        command: { type: 'string', description: '启动命令可执行文件 (如: "npx", "node", "uvx", "docker")' },
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '启动命令参数列表 (如: ["-y", "@modelcontextprotocol/server-sqlite", "--db-path", "app.db"])',
+        },
+      },
+      required: ['serverName', 'command'],
+    },
+    execute: async ({ serverName, command, args = [] }: any) => {
+      try {
+        return await ctx.mcp.connectServer({ name: serverName, transport: 'stdio', command, args });
+      } catch (err: any) {
+        return { success: false, serverName, error: err.message };
+      }
+    },
+  });
+
+  ctx.agent.registerTool({
+    name: 'mcp_connect_sse',
+    description: '通过 Server-Sent Events (SSE) 连接远程托管的 MCP 服务端并动态挂载其工具',
+    dangerLevel: 'medium',
+    parameters: {
+      type: 'object',
+      properties: {
+        serverName: { type: 'string', description: 'MCP 服务端别名标识' },
+        url: { type: 'string', description: '远程 MCP SSE 端点 URL (如: "http://localhost:8000/sse")' },
+      },
+      required: ['serverName', 'url'],
+    },
+    execute: async ({ serverName, url }: any) => {
+      try {
+        return await ctx.mcp.connectServer({ name: serverName, transport: 'sse', url });
+      } catch (err: any) {
+        return { success: false, serverName, error: err.message };
+      }
+    },
+  });
+
+  ctx.agent.registerTool({
+    name: 'mcp_connect_http',
+    description: '通过 Streamable HTTP 连接远程 MCP 服务端（MCP 标准首选传输，支持 Authorization 等静态凭证头）并动态挂载其工具',
+    dangerLevel: 'medium',
+    parameters: {
+      type: 'object',
+      properties: {
+        serverName: { type: 'string', description: 'MCP 服务端别名标识' },
+        url: { type: 'string', description: '远程 MCP Streamable HTTP 端点 URL' },
+        headers: {
+          type: 'object',
+          description: '可选：附加请求头（如 {"Authorization": "Bearer xx"}）',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      required: ['serverName', 'url'],
+    },
+    execute: async ({ serverName, url, headers }: any) => {
+      try {
+        return await ctx.mcp.connectServer({ name: serverName, transport: 'http', url, headers });
+      } catch (err: any) {
+        return { success: false, serverName, error: err.message };
+      }
+    },
+  });
+
+  ctx.agent.registerTool({
+    name: 'mcp_list_servers',
+    description: '列出当前所有已成功连接的 MCP Server 及其已动态挂载的工具清单',
+    dangerLevel: 'low',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const servers = ctx.mcp.listServers();
+      return { success: true, serversCount: servers.length, servers };
+    },
+  });
+
+  ctx.agent.registerTool({
+    name: 'mcp_disconnect_server',
+    description: '断开指定的 MCP Server 连接，并撤销其挂载的全部工具',
+    dangerLevel: 'medium',
+    parameters: {
+      type: 'object',
+      properties: { serverName: { type: 'string', description: '要断开的 MCP Server 别名' } },
+      required: ['serverName'],
+    },
+    execute: async ({ serverName }: any) => {
+      try {
+        return await ctx.mcp.disconnectServer(serverName);
+      } catch (err: any) {
+        return { success: false, serverName, error: err.message };
+      }
+    },
+  });
+}
+
 async function main() {
   console.log('🚀 启动 agtpilot (基于 Cordis 插件微内核 + app-kit 统一装配)...');
 
@@ -114,9 +223,11 @@ async function main() {
   console.log(' - 🧠 模型网关服务: ctx.model (ModelGateway, Vercel AI SDK v5 agent loop)');
   console.log(' - 🔄 编排调度服务: ctx.orchestrator (熔断/审批/压缩/检查点)');
 
-  // 2. CLI 单用户 cron 工具包装（调度本体在 plugin-cron 的无头 CronService，
-  //    应用层补齐持久化/执行/工具三件事 —— Web 侧对应 apps/web/src/lib/cron-service.ts）
+  // 2. CLI 单用户 cron / MCP 连接工具包装（调度与连接本体分别在 plugin-cron /
+  //    plugin-mcp 的无头引擎里，应用层补齐持久化/执行/工具暴露 —— Web 侧对应
+  //    apps/web/src/lib/cron-service.ts 与连接器中心 + getUserTools 任务级注入）
   mountCliCronTools(ctx);
+  mountCliMcpTools(ctx);
 
   const tools = ctx.agent.getTools();
   tools.forEach((t: any) => {

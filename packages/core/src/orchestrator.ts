@@ -78,10 +78,16 @@ export class OrchestratorService extends Service {
     const events: AgentEvent[] = [];
 
     const broadcast = (event: AgentEvent) => {
-      events.push(event);
-      this.ctx.agent.emitEvent(event);
+      // 事件统一盖章 taskId（payload 顶层）：observability 追踪与前端按任务
+      // 过滤的归属锚点 —— 多用户并发时不过滤会把 A 的事件挂到 B 的任务上
+      const stamped: AgentEvent = {
+        ...event,
+        payload: { ...(event.payload || {}), taskId },
+      };
+      events.push(stamped);
+      this.ctx.agent.emitEvent(stamped);
       if (options.onEvent) {
-        options.onEvent(event);
+        options.onEvent(stamped);
       }
     };
 
@@ -201,7 +207,12 @@ export class OrchestratorService extends Service {
         // 真实调用工具
         let output: any;
         try {
-          output = await toolDef.execute(args, { taskId, step: currentStep, env: options.taskEnv });
+          output = await toolDef.execute(args, {
+            taskId,
+            step: currentStep,
+            env: options.taskEnv,
+            userId: options.userId,
+          });
         } catch (err: any) {
           output = { error: err.message };
         }

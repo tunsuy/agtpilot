@@ -1,5 +1,6 @@
 import { Context, Service } from '@deepseek-ai/cordis';
 import { ToolDefinition } from '@agtpilot/core';
+import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
@@ -20,15 +21,14 @@ export type {
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 
 /**
- * MCP 连接器插件（自研连接器体系 · 一期）
+ * MCP 连接器插件（自研连接器体系 · 无头能力引擎形态）
  *
- * 两层连接管理：
- * 1. 进程级（activeClients）：CLI/单机场景，config.servers 预连接 +
- *    mcp_connect_stdio / mcp_connect_sse 管理工具，工具注册进全局注册表（历史行为，保持不变）。
- * 2. 用户级（userClients，key = `${userId}::${serverName}`）：多用户 Web 场景，
- *    连接与工具定义按用户隔离，【不进全局注册表】，由调用方（agent-backend）
- *    通过 getUserTools() 取出后以 runTask({ taskTools }) 任务级注入，
- *    杜绝 A 用户的连接器工具泄漏给 B 用户的任务。
+ * 插件只提供「连接管理」能力（进程级 connectServer/listServers + 用户级
+ * syncUserServers/getUserTools/disconnectUser）；工具暴露归应用层：
+ * - CLI 单用户：apps/cli/src/bin.ts 包装 mcp_connect_* 全局工具；
+ * - Web 多用户：连接器中心（UI）+ getUserTools 任务级 taskTools 注入。
+ * （旧版在插件里自注册 mcp_connect_* 全局工具，是反模式清单 #10 的复发：
+ * 多用户部署下模型经全局工具建立的连接会泄漏到所有用户。）
  *
  * 凭证注入三种方式（按用户友好度排序）：
  * - authProvider：MCP 标准 OAuth（RFC 9728/8414/7591 + PKCE），SDK 自动发现、
@@ -72,11 +72,79 @@ function isConnectionError(err: any): boolean {
     msg.includes('econnrefused') ||
     msg.includes('epipe') ||
     msg.includes('socket hang up') ||
-    msg.includes('transport') ||
+    msg.includes('transport closed') ||
     msg.includes('terminated') ||
     err?.code === 'ECONNRESET' ||
     err?.code === 'EPIPE'
   );
+}
+
+/**
+ * 远程端点安全校验：只允许 http(s)，并封禁云厂商元数据端点
+ * （169.254.169.254 / fd00:ec2::254 —— 命中即可窃取宿主机云凭证）。
+ * 本地地址（localhost/内网 IP）不封禁：本地 MCP Server 是合法常见用法。
+ */
+function assertSafeUrl(rawUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error(`无效的 URL: ${rawUrl}`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`只允许 http/https 协议的 MCP 端点，收到: ${url.protocol}`);
+  }
+  const host = url.hostname.toLowerCase();
+  if (host === '169.254.169.254' || host === 'fd00:ec2::254' || host === '[fd00:ec2::254]') {
+    throw new Error('禁止访问云元数据端点（169.254.169.254）—— 该地址可泄露宿主机凭证。');
+  }
+  return url;
+}
+
+/**
+ * stdio 子进程环境白名单：只传运行必需的基础变量 + 配置显式给出的 env。
+ * 绝不整包继承 process.env —— MCP Server 是第三方代码，拿到宿主全部密钥
+ * （含其他用户配置的 Key）等于把整个进程的凭证面交出去。
+ */
+function buildStdioEnv(extra?: Record<string, string>): Record<string, string> {
+  const base: Record<string, string> = {};
+  for (const [k, v] of Object.entries({
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    TZ: process.env.TZ,
+    TMPDIR: process.env.TMPDIR,
+  })) {
+    if (typeof v === 'string') base[k] = v;
+  }
+  return { ...base, ...(extra || {}) };
+}
+
+/** 按 config 构建 transport（stdio/sse/http 三种，UserConnection 与进程级连接共用） */
+function buildMCPTransport(
+  c: MCPServerConfig
+): StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport {
+  if (c.transport === 'stdio') {
+    if (!c.command) throw new Error('stdio 类型的 MCP Server 必须提供 command 启动参数。');
+    return new StdioClientTransport({
+      command: c.command,
+      args: c.args || [],
+      env: buildStdioEnv(c.env),
+    });
+  }
+  if (!c.url) throw new Error(`${c.transport} 类型的 MCP Server 必须提供 url 参数。`);
+  const url = assertSafeUrl(c.url);
+  if (c.transport === 'http') {
+    return new StreamableHTTPClientTransport(url, {
+      authProvider: c.authProvider,
+      requestInit: c.headers ? { headers: { ...c.headers } } : undefined,
+    });
+  }
+  return new SSEClientTransport(url, {
+    authProvider: c.authProvider,
+    requestInit: c.headers ? { headers: { ...c.headers } } : undefined,
+  });
 }
 
 /** 单条用户级连接：持有 client，支持断线自动重连一次 */
@@ -92,43 +160,21 @@ class UserConnection {
     private readonly onEvent: (event: any) => void
   ) {}
 
-  /** 连接指纹：url/headers/command 等不变则复用现有连接（token 由 authProvider 请求时动态读取，不参与指纹） */
+  /**
+   * 连接指纹：url/headers/command 等不变则复用现有连接。
+   * 敏感字段（headers/env）只进 SHA-256 哈希 —— 指纹用于日志/比较，
+   * 不能把用户凭证明文带出去。
+   */
   fingerprint(): string {
     const c = this.config;
+    const sensitive = JSON.stringify({ h: c.headers, e: c.env }) || '';
     return JSON.stringify({
       t: c.transport,
       u: c.url,
-      h: c.headers,
       cmd: c.command,
       a: c.args,
-      e: c.env,
       oauth: Boolean(c.authProvider),
-    });
-  }
-
-  private buildTransport(): StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport {
-    const c = this.config;
-    if (c.transport === 'stdio') {
-      if (!c.command) throw new Error('stdio 类型的 MCP Server 必须提供 command 启动参数。');
-      return new StdioClientTransport({
-        command: c.command,
-        args: c.args || [],
-        env: Object.fromEntries(
-          Object.entries({ ...process.env, ...(c.env || {}) }).filter(([, v]) => typeof v === 'string')
-        ) as Record<string, string>,
-      });
-    }
-    if (!c.url) throw new Error(`${c.transport} 类型的 MCP Server 必须提供 url 参数。`);
-    const url = new URL(c.url);
-    if (c.transport === 'http') {
-      return new StreamableHTTPClientTransport(url, {
-        authProvider: c.authProvider,
-        requestInit: c.headers ? { headers: { ...c.headers } } : undefined,
-      });
-    }
-    return new SSEClientTransport(url, {
-      authProvider: c.authProvider,
-      requestInit: c.headers ? { headers: { ...c.headers } } : undefined,
+      sensitiveHash: createHash('sha256').update(sensitive).digest('hex').slice(0, 16),
     });
   }
 
@@ -140,11 +186,20 @@ class UserConnection {
         { name: `agtpilot-${this.config.name}-client`, version: '0.1.0' },
         { capabilities: {} }
       );
-      await client.connect(this.buildTransport());
+      // 半死连接修复：listTools 成功之前不落地 this.client ——
+      // 否则连接成功但工具拉取失败时，连接呈「已连接零工具」的假成功态
+      // 且后续 connect() 直接返回，永远不自愈。
+      await client.connect(buildMCPTransport(this.config));
+      let tools: any[];
+      try {
+        ({ tools } = await client.listTools());
+      } catch (err) {
+        await client.close().catch(() => {});
+        throw err;
+      }
+      this.tools = this.buildToolDefs(tools);
       this.client = client;
       this.lastError = '';
-      const { tools } = await client.listTools();
-      this.tools = this.buildToolDefs(tools);
       return client;
     })().finally(() => {
       this.connecting = null;
@@ -242,10 +297,14 @@ export interface SyncUserServersResult {
 }
 
 export class MCPService extends Service {
-  /** 进程级连接（CLI 场景，工具注册进全局注册表） */
-  private activeClients = new Map<string, { client: Client; tools: string[] }>();
+  /** 进程级连接（CLI/操作员预配置场景，工具注册进全局注册表） */
+  private activeClients = new Map<string, { conn: UserConnection; tools: string[] }>();
+  /** 进程级连接的并发锁：同名 server 并发 connect 只跑一次 */
+  private connectLocks = new Map<string, Promise<any>>();
   /** 用户级连接隔离池：`${userId}::${serverName}` → UserConnection */
   private userClients = new Map<string, UserConnection>();
+  /** 每用户 sync 锁：并发 sync 同一用户时不交叉重建连接 */
+  private syncLocks = new Map<string, Promise<SyncUserServersResult>>();
 
   constructor(ctx: Context) {
     super(ctx, 'mcp');
@@ -256,8 +315,20 @@ export class MCPService extends Service {
   /**
    * 全量对齐某用户的 MCP 服务器清单：新增的连接、指纹未变的复用、
    * 清单里已移除的断开。单个失败不阻断其余（failed 里返回）。
+   * 同一用户并发调用串行执行，避免交叉重建连接池。
    */
   async syncUserServers(userId: string, servers: MCPServerConfig[]): Promise<SyncUserServersResult> {
+    const prev = this.syncLocks.get(userId);
+    const run = prev ? prev.catch(() => undefined).then(() => this.doSyncUserServers(userId, servers)) : this.doSyncUserServers(userId, servers);
+    this.syncLocks.set(userId, run);
+    try {
+      return await run;
+    } finally {
+      if (this.syncLocks.get(userId) === run) this.syncLocks.delete(userId);
+    }
+  }
+
+  private async doSyncUserServers(userId: string, servers: MCPServerConfig[]): Promise<SyncUserServersResult> {
     const result: SyncUserServersResult = { connected: [], reused: [], failed: [], removed: [] };
     const prefix = `${userId}::`;
     const wanted = new Map<string, MCPServerConfig>();
@@ -339,55 +410,43 @@ export class MCPService extends Service {
     return out;
   }
 
-  // ---- 进程级 API（CLI 场景，历史行为）----
+  // ---- 进程级 API（CLI/操作员预配置场景）----
 
-  /** 连接单个 MCP Server 并将其工具注册至全局注册表 */
+  /** 连接单个 MCP Server 并将其工具注册至全局注册表（同名并发只连一次） */
   async connectServer(serverConfig: MCPServerConfig) {
-    if (this.activeClients.has(serverConfig.name)) {
+    const existing = this.activeClients.get(serverConfig.name);
+    if (existing) {
+      return { success: false, error: `MCP Server [${serverConfig.name}] 已处于连接状态。` };
+    }
+    const prevLock = this.connectLocks.get(serverConfig.name);
+    const run = prevLock
+      ? prevLock.catch(() => undefined).then(() => this.doConnectServer(serverConfig))
+      : this.doConnectServer(serverConfig);
+    this.connectLocks.set(serverConfig.name, run);
+    try {
+      return await run;
+    } finally {
+      if (this.connectLocks.get(serverConfig.name) === run) this.connectLocks.delete(serverConfig.name);
+    }
+  }
+
+  private async doConnectServer(serverConfig: MCPServerConfig) {
+    const recheck = this.activeClients.get(serverConfig.name);
+    if (recheck) {
       return { success: false, error: `MCP Server [${serverConfig.name}] 已处于连接状态。` };
     }
 
-    const client = new Client(
-      { name: `agtpilot-${serverConfig.name}-client`, version: '0.1.0' },
-      { capabilities: {} }
-    );
-
     const conn = new UserConnection('__global__', serverConfig, (event) => this.ctx.agent.emitEvent(event));
-    // 复用 UserConnection 的 transport 构建逻辑
-    const transport = (conn as any).buildTransport();
-    await client.connect(transport);
+    await conn.connect();
 
-    const { tools } = await client.listTools();
+    // 注册进全局注册表（CLI 单用户/操作员预配置场景 —— Web 多用户走 getUserTools 任务级注入）
     const registeredToolNames: string[] = [];
-    const used = new Set<string>();
-
-    for (const tool of tools) {
-      let toolName = sanitizeToolName(`mcp_${serverConfig.name}_${tool.name}`);
-      let n = 2;
-      const base = toolName;
-      while (used.has(toolName)) toolName = `${base.slice(0, 60)}_${n++}`;
-      used.add(toolName);
-
-      const originalName = tool.name;
-      const serverName = serverConfig.name;
-      this.ctx.agent.registerTool({
-        name: toolName,
-        description: `[MCP: ${serverName}] ${tool.description || ''}`,
-        parameters: (tool.inputSchema as any) || { type: 'object', properties: {} },
-        dangerLevel: 'medium',
-        execute: async (args: any) => {
-          this.ctx.agent.emitEvent({
-            type: 'tool_call',
-            payload: { tool: toolName, mcpServer: serverName, args },
-            timestamp: Date.now(),
-          });
-          return client.callTool({ name: originalName, arguments: args });
-        },
-      });
-      registeredToolNames.push(toolName);
+    for (const def of conn.tools) {
+      this.ctx.agent.registerTool(def);
+      registeredToolNames.push(def.name);
     }
 
-    this.activeClients.set(serverConfig.name, { client, tools: registeredToolNames });
+    this.activeClients.set(serverConfig.name, { conn, tools: registeredToolNames });
 
     return {
       success: true,
@@ -397,17 +456,16 @@ export class MCPService extends Service {
     };
   }
 
-  /** 断开进程级连接 */
+  /** 断开进程级连接并从全局注册表反注册其工具（不留可调用但必失败的僵尸工具） */
   async disconnectServer(serverName: string) {
     const info = this.activeClients.get(serverName);
     if (!info) return { success: false, error: `MCP Server [${serverName}] 未连接。` };
-    try {
-      await info.client.close();
-    } catch {
-      // ignore
-    }
     this.activeClients.delete(serverName);
-    return { success: true, serverName };
+    for (const toolName of info.tools) {
+      this.ctx.agent.unregisterTool(toolName);
+    }
+    await info.conn.close();
+    return { success: true, serverName, unregisteredTools: info.tools.length };
   }
 
   listServers() {
@@ -420,11 +478,7 @@ export class MCPService extends Service {
 
   async closeAll() {
     for (const [, info] of this.activeClients) {
-      try {
-        await info.client.close();
-      } catch {
-        // ignore
-      }
+      await info.conn.close().catch(() => {});
     }
     this.activeClients.clear();
     for (const [, conn] of this.userClients) {
@@ -441,107 +495,17 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export function apply(ctx: Context, config: MCPPluginConfig = {}) {
-  // 工具路由自注册：prompt 命中外部工具服务类关键词时挂载本插件工具组
+  // 工具路由自注册：prompt 命中外部工具服务类关键词时挂载本插件工具组。
+  // 工具本体按前缀约定由应用层提供（CLI: bin.ts 的 mcp_connect_* 包装）。
   ctx.agent.registerToolRoute({
     id: 'mcp',
     prefixes: ['mcp_'],
-    test: /(mcp|外部工具服务)/i,
+    test: /(mcp|外部工具服务|连接器)/i,
   });
 
   const svc = new MCPService(ctx);
 
-  // 1. 暴露 mcp_connect_stdio 工具供 Agent 自主挂载本地 MCP Server
-  ctx.agent.registerTool({
-    name: 'mcp_connect_stdio',
-    description: '连接一个基于标准输入输出 (Stdio) 的 Anthropic 官方 MCP Server，并自动将其暴露的所有工具动态挂载到微内核中',
-    dangerLevel: 'high',
-    parameters: {
-      type: 'object',
-      properties: {
-        serverName: { type: 'string', description: '为该 MCP Server 指定的唯一别名 (如: "sqlite", "github", "filesystem")' },
-        command: { type: 'string', description: '启动命令可执行文件 (如: "npx", "node", "uvx", "docker")' },
-        args: {
-          type: 'array',
-          items: { type: 'string' },
-          description: '启动命令参数列表 (如: ["-y", "@modelcontextprotocol/server-sqlite", "--db-path", "app.db"])',
-        },
-      },
-      required: ['serverName', 'command'],
-    },
-    execute: async ({ serverName, command, args = [] }) => {
-      try {
-        return await svc.connectServer({ name: serverName, transport: 'stdio', command, args });
-      } catch (err: any) {
-        return { success: false, serverName, error: err.message };
-      }
-    },
-  });
-
-  // 2. 暴露 mcp_connect_sse 工具供 Agent 挂载远程 HTTP/SSE MCP Server
-  ctx.agent.registerTool({
-    name: 'mcp_connect_sse',
-    description: '通过 Server-Sent Events (SSE) 连接远程托管的 MCP 服务端并动态挂载其工具',
-    dangerLevel: 'medium',
-    parameters: {
-      type: 'object',
-      properties: {
-        serverName: { type: 'string', description: 'MCP 服务端别名标识' },
-        url: { type: 'string', description: '远程 MCP SSE 端点 URL (如: "http://localhost:8000/sse")' },
-      },
-      required: ['serverName', 'url'],
-    },
-    execute: async ({ serverName, url }) => {
-      try {
-        return await svc.connectServer({ name: serverName, transport: 'sse', url });
-      } catch (err: any) {
-        return { success: false, serverName, error: err.message };
-      }
-    },
-  });
-
-  // 3. 暴露 mcp_connect_http 工具供 Agent 挂载 Streamable HTTP MCP Server（支持静态凭证头）
-  ctx.agent.registerTool({
-    name: 'mcp_connect_http',
-    description: '通过 Streamable HTTP 连接远程 MCP 服务端（MCP 标准首选传输，支持 Authorization 等静态凭证头）并动态挂载其工具',
-    dangerLevel: 'medium',
-    parameters: {
-      type: 'object',
-      properties: {
-        serverName: { type: 'string', description: 'MCP 服务端别名标识' },
-        url: { type: 'string', description: '远程 MCP Streamable HTTP 端点 URL' },
-        headers: {
-          type: 'object',
-          description: '可选：附加请求头（如 {"Authorization": "Bearer xx"}）',
-          additionalProperties: { type: 'string' },
-        },
-      },
-      required: ['serverName', 'url'],
-    },
-    execute: async ({ serverName, url, headers }) => {
-      try {
-        return await svc.connectServer({ name: serverName, transport: 'http', url, headers });
-      } catch (err: any) {
-        return { success: false, serverName, error: err.message };
-      }
-    },
-  });
-
-  // 4. 暴露 mcp_list_servers 工具查看当前已连接的 MCP 实例与挂载工具
-  ctx.agent.registerTool({
-    name: 'mcp_list_servers',
-    description: '列出当前所有已成功连接的 MCP Server 及其已动态挂载至微内核的工具清单',
-    dangerLevel: 'low',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    execute: async () => {
-      const servers = svc.listServers();
-      return { success: true, serversCount: servers.length, servers };
-    },
-  });
-
-  // 启动时自动连接配置文件中指定的预设 MCP Servers
+  // 启动时自动连接配置中指定的预设 MCP Servers（操作员预配置，进程级）
   if (config.servers && config.servers.length > 0) {
     for (const s of config.servers) {
       svc.connectServer(s).catch((err) => {

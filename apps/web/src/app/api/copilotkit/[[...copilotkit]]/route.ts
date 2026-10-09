@@ -21,7 +21,7 @@ async function getHandler() {
         description: tool.description,
         parameters: tool.parameters as any,
         execute: async (args: any) => {
-          return tool.execute(args, { source: 'copilotkit-web' });
+          return tool.execute(args, { taskId: 'copilotkit-web', step: 1 });
         },
       })
     );

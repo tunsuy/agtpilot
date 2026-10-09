@@ -6,6 +6,8 @@ export interface ArtifactData {
   language?: string;
   description?: string;
   timestamp: number;
+  /** 产生该产物的任务键（多用户部署时前端按其归属任务，避免串台） */
+  taskId?: string;
 }
 
 export interface PlanTask {
@@ -23,6 +25,8 @@ export interface PlanData {
   currentTaskId?: string;
   createdAt: number;
   updatedAt: number;
+  /** 所属任务键（= orchestrator taskId；多用户部署时前端按其过滤归属任务） */
+  taskKey?: string;
 }
 
 export interface AgentEvent {

@@ -22,8 +22,12 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     test: /(网页|网站|浏览|抓取|爬取|打开链接|https?:\/\/|www\.|\.(com|cn|org|net|io)\b|browser|webpage|scrape|crawl)/i,
   });
 
-  let browserContext: BrowserContext | null = null;
-  let activePage: Page | null = null;
+  // 持久化浏览器环境按用户分域（session.userId；CLI 单用户 = 'default'）：
+  // 每用户独立 profile 目录与 BrowserContext —— 登录态/Cookie 互不可见
+  const contexts = new Map<string, BrowserContext>();
+  const pages = new Map<string, Page>();
+  // 初始化串行锁：并发首调 getOrCreatePage 不重复 launch 浏览器
+  let initChain: Promise<void> = Promise.resolve();
 
   const turndown = new TurndownService({
     headingStyle: 'atx',
@@ -33,29 +37,47 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   // 过滤脚本、样式等干扰大模型阅读的噪音标签
   turndown.remove(['script', 'style', 'noscript', 'svg', 'canvas'] as any);
 
-  // 获取或初始化持久化浏览器环境
-  async function getOrCreatePage(): Promise<Page> {
-    if (activePage && !activePage.isClosed()) {
-      return activePage;
+  const userKey = (userId?: string) => (userId || 'default').replace(/[^\w-]/g, '_');
+
+  // 获取或初始化该用户的持久化浏览器环境
+  function getOrCreatePage(userId?: string): Promise<Page> {
+    const key = userKey(userId);
+    const existing = pages.get(key);
+    if (existing && !existing.isClosed()) {
+      return Promise.resolve(existing);
     }
 
-    const defaultProfileDir = path.resolve(process.cwd(), '.cache/browser-profile');
-    const profileDir = config.userDataDir || defaultProfileDir;
-    if (!fs.existsSync(profileDir)) {
-      fs.mkdirSync(profileDir, { recursive: true });
-    }
+    const run = async () => {
+      // 'default' 沿用旧目录名（保留 CLI 单用户既有登录态）
+      const defaultProfileDir = path.resolve(
+        process.cwd(),
+        '.cache',
+        key === 'default' ? 'browser-profile' : `browser-profile-${key}`
+      );
+      // userDataDir 覆盖只对 default（单用户/CLI）生效；多用户各自独立目录，避免共享 profile
+      const profileDir = (key === 'default' && config.userDataDir) || defaultProfileDir;
+      if (!fs.existsSync(profileDir)) {
+        fs.mkdirSync(profileDir, { recursive: true });
+      }
 
-    if (!browserContext) {
-      browserContext = await chromium.launchPersistentContext(profileDir, {
-        headless: config.headless ?? true,
-        viewport: { width: 1280, height: 800 },
-        userAgent:
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-      });
-    }
+      if (!contexts.has(key)) {
+        const context = await chromium.launchPersistentContext(profileDir, {
+          headless: config.headless ?? true,
+          viewport: { width: 1280, height: 800 },
+          userAgent:
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        });
+        contexts.set(key, context);
+      }
+      const context = contexts.get(key)!;
+      const page = context.pages()[0] || (await context.newPage());
+      pages.set(key, page);
+      return page;
+    };
 
-    activePage = browserContext.pages()[0] || (await browserContext.newPage());
-    return activePage;
+    const result = initChain.then(run, run);
+    initChain = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   // 1. 真实导航与网页内容蒸馏 (browser_navigate)
@@ -72,7 +94,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       },
       required: ['url'],
     },
-    execute: async ({ url, offset = 0 }) => {
+    execute: async ({ url, offset = 0 }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
         payload: { tool: 'browser_navigate', url },
@@ -80,7 +102,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       });
 
       try {
-        const page = await getOrCreatePage();
+        const page = await getOrCreatePage(session?.userId);
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
         const title = await page.title();
@@ -159,10 +181,16 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       },
       required: ['selector'],
     },
-    execute: async ({ selector }) => {
+    execute: async ({ selector }, session?: any) => {
       try {
-        const page = await getOrCreatePage();
-        await page.click(selector, { timeout: 10000 });
+        const page = await getOrCreatePage(session?.userId);
+        // 先按 Playwright 选择器（CSS / text= / role=）点击；
+        // 失败时按纯文本内容兜底（描述承诺"支持文本"）
+        try {
+          await page.click(selector, { timeout: 10000 });
+        } catch {
+          await page.getByText(selector).first().click({ timeout: 5000 });
+        }
         return {
           success: true,
           selector,
@@ -188,10 +216,16 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
         filename: { type: 'string', description: '截图保存的文件名 (可选，默认为 screenshot.png)' },
       },
     },
-    execute: async ({ filename = 'screenshot.png' }) => {
+    execute: async ({ filename = 'screenshot.png' }, session?: any) => {
       try {
-        const page = await getOrCreatePage();
-        const savePath = path.resolve(process.cwd(), filename);
+        const page = await getOrCreatePage(session?.userId);
+        // 文件名围栏：basename 清洗 + 固定落截图缓存目录，拒绝任意路径写入
+        const safeName = String(filename).replace(/[/\\]/g, '_').replace(/\.\./g, '_') || 'screenshot.png';
+        const saveDir = path.resolve(process.cwd(), '.cache', 'browser-screens');
+        if (!fs.existsSync(saveDir)) {
+          fs.mkdirSync(saveDir, { recursive: true });
+        }
+        const savePath = path.join(saveDir, path.basename(safeName));
         const buffer = await page.screenshot({ path: savePath, fullPage: false, type: 'jpeg', quality: 75 });
         const screenshotBase64 = buffer.toString('base64');
         ctx.agent.emitEvent({
@@ -221,7 +255,9 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   // 4. Stagehand AI 语义化动作操控 (browser_stagehand_act)
   ctx.agent.registerTool({
     name: 'browser_stagehand_act',
-    description: '使用 Stagehand AI 语义理解直接在页面上执行复杂的自然语言动作 (如: "点击搜索框输入 DeepSeek 并回车")',
+    description:
+      '使用 Stagehand AI 语义理解执行复杂的自然语言动作 (如: "点击搜索框输入 DeepSeek 并回车")。' +
+      '会启动一个独立浏览器实例并先导航到当前会话所在页面 URL，再执行动作（不共享登录态与页面状态）。',
     parameters: {
       type: 'object',
       properties: {
@@ -229,16 +265,20 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       },
       required: ['instruction'],
     },
-    execute: async ({ instruction }) => {
+    execute: async ({ instruction }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
         payload: { tool: 'browser_stagehand_act', instruction },
         timestamp: Date.now(),
       });
 
+      let stagehand: any = null;
       try {
+        // 附着：以当前会话页面的 URL 为起点（独立实例），保证动作发生在
+        // 模型认为的"当前页面"上，而不是空白页
+        const currentUrl = (await getOrCreatePage(session?.userId)).url();
         const { Stagehand } = await import('@browserbasehq/stagehand');
-        const stagehand = await Stagehand.create({
+        stagehand = await Stagehand.create({
           env: 'LOCAL',
           verbose: 1,
           debugDom: true,
@@ -246,13 +286,16 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
             headless: config.headless ?? true,
           },
         } as any);
+        if (currentUrl && currentUrl !== 'about:blank') {
+          await stagehand.page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        }
 
         const result = await stagehand.act(instruction);
-        await stagehand.close();
 
         return {
           success: true,
           instruction,
+          pageUrl: currentUrl,
           actionResult: result,
           message: `Stagehand 已成功按指令执行动作: "${instruction}"`,
         };
@@ -262,6 +305,9 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           instruction,
           error: err.message,
         };
+      } finally {
+        // 失败路径同样关闭：独立实例泄漏会让浏览器进程堆积
+        if (stagehand) await stagehand.close().catch(() => {});
       }
     },
   });
@@ -269,17 +315,21 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   // 5. Stagehand AI 页面语义观察 (browser_stagehand_observe)
   ctx.agent.registerTool({
     name: 'browser_stagehand_observe',
-    description: '使用 Stagehand 视觉与 DOM 语义观察当前网页，输出所有可供执行的操作与元素列表',
+    description:
+      '使用 Stagehand 视觉与 DOM 语义观察网页，输出所有可供执行的操作与元素列表。' +
+      '会启动一个独立浏览器实例并先导航到当前会话所在页面 URL（不共享登录态与页面状态）。',
     parameters: {
       type: 'object',
       properties: {
         goal: { type: 'string', description: '可选，本次观察希望寻找的目标操作 (如: "寻找登录或注册按钮")' },
       },
     },
-    execute: async ({ goal }) => {
+    execute: async ({ goal }, session?: any) => {
+      let stagehand: any = null;
       try {
+        const currentUrl = (await getOrCreatePage(session?.userId)).url();
         const { Stagehand } = await import('@browserbasehq/stagehand');
-        const stagehand = await Stagehand.create({
+        stagehand = await Stagehand.create({
           env: 'LOCAL',
           verbose: 1,
           debugDom: true,
@@ -287,13 +337,16 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
             headless: config.headless ?? true,
           },
         } as any);
+        if (currentUrl && currentUrl !== 'about:blank') {
+          await stagehand.page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        }
 
         const observations = await stagehand.observe(goal);
-        await stagehand.close();
 
         return {
           success: true,
           goal,
+          pageUrl: currentUrl,
           observations,
         };
       } catch (err: any) {
@@ -302,6 +355,8 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           goal,
           error: err.message,
         };
+      } finally {
+        if (stagehand) await stagehand.close().catch(() => {});
       }
     },
   });
@@ -377,10 +432,10 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
 
   // 进程退出时妥善关闭浏览器（'dispose' 事件由 core 的 Events 增强声明）
   ctx.on('dispose', async () => {
-    if (browserContext) {
-      await browserContext.close();
-      browserContext = null;
-      activePage = null;
+    for (const [, context] of contexts) {
+      await context.close().catch(() => {});
     }
+    contexts.clear();
+    pages.clear();
   });
 }

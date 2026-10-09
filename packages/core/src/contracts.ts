@@ -116,12 +116,25 @@ export interface PlannerNotifier {
 
 // ---- 工具契约 ----
 
+/**
+ * 工具执行会话（编排器注入）：插件侧做隔离/记账的唯一身份锚点。
+ * 多用户部署时 Web 传入 userId；CLI 单用户场景缺省。
+ * 插件持有进程级状态（缓存/索引/沙箱目录）时必须按 userId 分域，
+ * 缺省回退 'default' —— 不允许裸用 process.cwd() 级全局状态。
+ */
+export interface ToolSession {
+  taskId: string;
+  step: number;
+  env?: Record<string, string>;
+  userId?: string;
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: Record<string, any>;
   dangerLevel?: 'low' | 'medium' | 'high';
-  execute: (args: any, session: any) => Promise<any>;
+  execute: (args: any, session: ToolSession) => Promise<any>;
   /** 基线工具：任何任务都挂载（体积小且通用的规划/交付/记忆类），由插件自声明 */
   baseline?: boolean;
 }

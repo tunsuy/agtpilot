@@ -12,6 +12,8 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export class ArtifactService extends Service {
+  /** 产物上限：超限淘汰最旧 —— 防长驻进程无界增长 */
+  private static readonly MAX_ARTIFACTS = 50;
   private artifacts: Map<string, ArtifactData> = new Map();
   private latestArtifactId: string | null = null;
 
@@ -19,15 +21,28 @@ export class ArtifactService extends Service {
     super(ctx, 'artifact');
   }
 
-  createOrUpdateArtifact(data: Omit<ArtifactData, 'id' | 'timestamp'> & { id?: string }): ArtifactData {
+  createOrUpdateArtifact(
+    data: Omit<ArtifactData, 'id' | 'timestamp'> & { id?: string },
+    taskId?: string
+  ): ArtifactData {
     const id = data.id || `art_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const artifact: ArtifactData = {
       ...data,
       id,
       timestamp: Date.now(),
+      ...(taskId ? { taskId } : {}),
     };
 
+    // 同 id 更新不重复计数
+    if (!this.artifacts.has(id) && this.artifacts.size >= ArtifactService.MAX_ARTIFACTS) {
+      const oldest = Array.from(this.artifacts.values()).sort((a, b) => a.timestamp - b.timestamp)[0];
+      if (oldest) this.artifacts.delete(oldest.id);
+    }
+
     this.artifacts.set(id, artifact);
+    if (this.latestArtifactId && !this.artifacts.has(this.latestArtifactId)) {
+      this.latestArtifactId = null;
+    }
     this.latestArtifactId = id;
 
     // 产物经 AgentEvent 流（type: 'artifact'）广播给前端 —— 这是唯一送达路径
@@ -44,13 +59,22 @@ export class ArtifactService extends Service {
     return this.artifacts.get(id);
   }
 
-  getLatestArtifact(): ArtifactData | undefined {
+  getLatestArtifact(taskId?: string): ArtifactData | undefined {
+    if (taskId) {
+      const scoped = Array.from(this.artifacts.values())
+        .filter((a) => a.taskId === taskId)
+        .sort((a, b) => b.timestamp - a.timestamp);
+      return scoped[0];
+    }
     if (!this.latestArtifactId) return undefined;
     return this.artifacts.get(this.latestArtifactId);
   }
 
-  listArtifacts(): ArtifactData[] {
-    return Array.from(this.artifacts.values()).sort((a, b) => b.timestamp - a.timestamp);
+  listArtifacts(taskId?: string): ArtifactData[] {
+    const all = Array.from(this.artifacts.values());
+    return (taskId ? all.filter((a) => a.taskId === taskId) : all).sort(
+      (a, b) => b.timestamp - a.timestamp
+    );
   }
 }
 
@@ -89,14 +113,17 @@ export function apply(ctx: Context) {
       },
       required: ['title', 'type', 'content'],
     },
-    execute: async (args) => {
-      const artifact = artifactService.createOrUpdateArtifact({
-        title: args.title,
-        type: args.type,
-        content: args.content,
-        language: args.language,
-        description: args.description,
-      });
+    execute: async (args, session?: any) => {
+      const artifact = artifactService.createOrUpdateArtifact(
+        {
+          title: args.title,
+          type: args.type,
+          content: args.content,
+          language: args.language,
+          description: args.description,
+        },
+        session?.taskId
+      );
 
       return {
         success: true,

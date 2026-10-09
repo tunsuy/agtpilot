@@ -26,29 +26,21 @@ export type { ModelStepResult };
  * 本包不再做模块增强。
  */
 export class ModelService extends Service implements ModelGateway {
-  private deepseekProvider: ReturnType<typeof createDeepSeek>;
-  private openaiProvider: ReturnType<typeof createOpenAI>;
-
-  /** 运行时偏好模型（plugin-router 的能级切换写入；优先级高于环境变量默认） */
-  private preferred: { activeModelId?: string; modelName?: string; reason?: string } = {};
+  /**
+   * 运行时偏好模型（plugin-router 的能级切换写入；优先级高于环境变量默认）。
+   * modelName 按 provider 分域存储：切换到 openai 时不会带着 deepseek 的
+   * 模型名（旧实现整包 merge，deepseek-reasoner 会泄漏进 openai 分支导致 404）。
+   */
+  private preferred: { activeModelId?: string; modelNames: Record<string, string>; reason?: string } = {
+    modelNames: {},
+  };
   /** Token 预算（超出时 agent loop 主动收尾）；0 = 未设置 */
   private budgetMaxTokens = 0;
-  /** 进程内累计 token 用量（runAgentLoop 每次上报） */
+  /** 进程内累计 token 用量（每步实时上报，循环内即生效） */
   private usedTokens = 0;
 
   constructor(ctx: Context) {
     super(ctx, 'model');
-
-    const deepseekApiKey = process.env.DEEPSEEK_API_KEY || 'dummy_key';
-    const openaiApiKey = process.env.OPENAI_API_KEY || 'dummy_key';
-
-    this.deepseekProvider = createDeepSeek({
-      apiKey: deepseekApiKey,
-    });
-
-    this.openaiProvider = createOpenAI({
-      apiKey: openaiApiKey,
-    });
   }
 
   /**
@@ -59,21 +51,13 @@ export class ModelService extends Service implements ModelGateway {
   async invokeStep(options: ModelInvokeOptions): Promise<ModelStepResult> {
     const selectedModel = this.resolveActiveModel(options.model, options.configOverride);
 
-    const toolsMap: Record<string, any> = {};
-    if (!options.disableTools) {
-      for (const t of this.ctx.agent.getTools()) {
-        toolsMap[t.name] = tool({
-          description: t.description,
-          inputSchema: toInputSchema(t.parameters), // 透传真实参数定义
-        });
-      }
-    }
-
+    // 单步无状态调用【不执行】工具，因此也【不声明】工具：
+    // 声明无 execute 的工具会诱导模型产出 tool-call，随后 SDK 因无法执行而报错
+    // （步数耗尽总结等收尾场景本就该纯文本输出）。
     const response = await generateText({
       model: selectedModel,
       system: options.system,
       messages: options.messages,
-      tools: Object.keys(toolsMap).length > 0 ? toolsMap : undefined,
       // 工具循环默认低温：高温会降低工具选择与 JSON 参数生成的稳定性，
       // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
       temperature: options.temperature ?? 0,
@@ -151,6 +135,12 @@ export class ModelService extends Service implements ModelGateway {
         : undefined,
       onStepFinish: (step) => {
         stepCounter++;
+        // 预算实时记账：每步用量即时累计，stopWhen 下一轮即可感知 ——
+        // 旧实现只在整循环结束后记账，循环内预算闸门永远看不见当次消耗
+        const stepUsage = (step as any).usage;
+        if (stepUsage) {
+          this.recordUsage(stepUsage.inputTokens ?? 0, stepUsage.outputTokens ?? 0);
+        }
         if (!options.onStepFinish) return;
         options.onStepFinish({
           stepNumber: (step as any).stepNumber ?? stepCounter,
@@ -170,13 +160,18 @@ export class ModelService extends Service implements ModelGateway {
       },
     });
 
-    this.recordUsage(response.usage?.inputTokens ?? 0, response.usage?.outputTokens ?? 0);
+    // 用量已在 onStepFinish 按步实时记账（此处整包再记会双倍计数）
+
+    const budgetStopped =
+      response.finishReason === 'tool-calls' && this.budgetMaxTokens > 0 && this.isBudgetExceeded();
 
     return {
       text: response.text,
-      finishReason: response.finishReason,
+      // 预算触顶与步数耗尽分开标识：上层与用户能分辨「为什么停」
+      finishReason: budgetStopped ? 'budget-exceeded' : response.finishReason,
       stepsCount: response.steps?.length ?? stepCounter,
-      // finishReason 仍为 tool-calls 说明是 stopWhen 截停（模型还想继续调工具）
+      // finishReason 仍为 tool-calls 说明是 stopWhen 截停（模型还想继续调工具）；
+      // 预算触顶同样需要强制总结收尾
       stepsExhausted: response.finishReason === 'tool-calls',
       responseMessages: response.response?.messages ?? [],
       usage: {
@@ -189,14 +184,29 @@ export class ModelService extends Service implements ModelGateway {
   /**
    * 设置偏好模型（plugin-router 能级切换入口）。
    * 优先级：configOverride > 显式 model 参数 > 本偏好 > 环境变量默认。
+   * modelName 按 provider 分域：router 切到 openai 只影响 openai 分支的模型名。
    */
   setPreferredModel(pref: { activeModelId?: string; modelName?: string; reason?: string }): void {
-    this.preferred = { ...this.preferred, ...pref };
+    if (pref.activeModelId !== undefined) {
+      this.preferred.activeModelId = pref.activeModelId || undefined;
+    }
+    if (pref.modelName) {
+      const target = this.preferred.activeModelId || this.envDefaultModelId();
+      this.preferred.modelNames[target] = pref.modelName;
+    }
+    if (pref.reason !== undefined) {
+      this.preferred.reason = pref.reason;
+    }
   }
 
-  /** 设置 Token 预算：超出后 agent loop 主动收尾，防止失控计费 */
+  /** 设置 Token 预算：超出后 agent loop 主动收尾，防止失控计费。
+   *  maxTokens: 0 为显式清零（撤销预算限制）；未传/负数不改动现有值 */
   setBudget(budget: { maxTokens?: number; maxCostUsd?: number }): void {
-    if (budget.maxTokens && budget.maxTokens > 0) this.budgetMaxTokens = budget.maxTokens;
+    if (budget.maxTokens === 0) {
+      this.budgetMaxTokens = 0;
+    } else if (budget.maxTokens && budget.maxTokens > 0) {
+      this.budgetMaxTokens = budget.maxTokens;
+    }
     // maxCostUsd 保留接口位：成本换算依赖具体模型定价，当前按 token 预算约束
   }
 
@@ -212,6 +222,13 @@ export class ModelService extends Service implements ModelGateway {
     this.usedTokens += promptTokens + completionTokens;
   }
 
+  /** 环境变量推断的默认 provider（setPreferredModel 只带 modelName 时落到这里） */
+  private envDefaultModelId(): string {
+    if (process.env.CUSTOM_LLM_API_KEY) return 'custom_llm';
+    if (process.env.DEEPSEEK_API_KEY) return 'deepseek';
+    return 'openai';
+  }
+
   private resolveActiveModel(
     modelOverride?: string,
     configOverride?: { activeModelId?: string; apiKey?: string; baseURL?: string; modelName?: string }
@@ -221,14 +238,22 @@ export class ModelService extends Service implements ModelGateway {
       configOverride?.activeModelId ||
       modelOverride ||
       this.preferred.activeModelId ||
-      (process.env.CUSTOM_LLM_API_KEY
-        ? 'custom_llm'
-        : process.env.DEEPSEEK_API_KEY
-        ? 'deepseek'
-        : 'openai');
+      this.envDefaultModelId();
+
+    // 云端 provider 缺 API Key 时快速失败：配置错误应在入口报清楚，
+    // 而不是用 'dummy_key' 裸奔到第一次请求才收到难排查的 401
+    const requireApiKey = (envKey: string): string => {
+      const key = configOverride?.apiKey || process.env[envKey];
+      if (!key) {
+        throw new Error(
+          `[plugin-model] 缺少 ${envKey}：无法使用 ${activeModelId} 模型。请配置环境变量或在用户设置中填入 API Key。`
+        );
+      }
+      return key;
+    };
 
     if (activeModelId === 'custom_llm') {
-      const apiKey = configOverride?.apiKey || process.env.CUSTOM_LLM_API_KEY || 'dummy_key';
+      const apiKey = requireApiKey('CUSTOM_LLM_API_KEY');
       const baseURL = configOverride?.baseURL || process.env.CUSTOM_LLM_BASE_URL || undefined;
       const modelName =
         configOverride?.modelName || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o';
@@ -240,20 +265,26 @@ export class ModelService extends Service implements ModelGateway {
     }
 
     if (activeModelId === 'local_llm') {
-      // 本地推理（Ollama 等 OpenAI 兼容端点）：敏感数据不出机
+      // 本地推理（Ollama 等 OpenAI 兼容端点）：敏感数据不出机，无需真实 Key
       const apiKey = configOverride?.apiKey || process.env.LOCAL_LLM_API_KEY || 'ollama';
       const baseURL = configOverride?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1';
       const modelName =
-        configOverride?.modelName || this.preferred.modelName || process.env.LOCAL_LLM_MODEL_NAME || 'qwen2.5:14b';
+        configOverride?.modelName ||
+        this.preferred.modelNames['local_llm'] ||
+        process.env.LOCAL_LLM_MODEL_NAME ||
+        'qwen2.5:14b';
       const provider = createOpenAI({ apiKey, baseURL });
       return provider(modelName);
     }
 
     if (activeModelId === 'openai') {
-      const apiKey = configOverride?.apiKey || process.env.OPENAI_API_KEY || 'dummy_key';
+      const apiKey = requireApiKey('OPENAI_API_KEY');
       const baseURL = configOverride?.baseURL || process.env.OPENAI_BASE_URL || undefined;
       const modelName =
-        configOverride?.modelName || this.preferred.modelName || process.env.OPENAI_MODEL_NAME || 'gpt-4o';
+        configOverride?.modelName ||
+        this.preferred.modelNames['openai'] ||
+        process.env.OPENAI_MODEL_NAME ||
+        'gpt-4o';
       const provider = createOpenAI({
         apiKey,
         baseURL,
@@ -261,12 +292,18 @@ export class ModelService extends Service implements ModelGateway {
       return provider(modelName);
     }
 
+    if (activeModelId !== 'deepseek') {
+      throw new Error(
+        `[plugin-model] 未知的 activeModelId: ${activeModelId}（支持: deepseek / openai / custom_llm / local_llm）`
+      );
+    }
+
     // deepseek（默认）
-    const apiKey = configOverride?.apiKey || process.env.DEEPSEEK_API_KEY || 'dummy_key';
+    const apiKey = requireApiKey('DEEPSEEK_API_KEY');
     const baseURL = configOverride?.baseURL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1';
     const modelName =
       configOverride?.modelName ||
-      this.preferred.modelName ||
+      this.preferred.modelNames['deepseek'] ||
       process.env.DEEPSEEK_MODEL_NAME ||
       'deepseek-chat';
     const provider = createDeepSeek({

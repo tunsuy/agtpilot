@@ -46,9 +46,24 @@ export class PlannerService extends Service implements PlannerNotifier {
     }
 
     this.plans.push(plan);
-    if (this.plans.length > 20) this.plans.shift(); // 控制内存
+    this.evictStale();
     this.broadcastPlan(plan);
     return plan;
+  }
+
+  /**
+   * 容量控制（>20 时淘汰）：优先淘汰「已全部完结且最久未更新」的计划 ——
+   * 旧实现直接 shift 掉最旧的，活跃看板也会被逐出，任务中途看板凭空消失。
+   */
+  private evictStale() {
+    while (this.plans.length > 20) {
+      const candidates = this.plans
+        .map((p, i) => ({ p, i }))
+        .filter(({ p }) => !p.tasks.some((t) => t.status === 'in_progress' || t.status === 'pending'));
+      if (candidates.length === 0) break; // 全部活跃：宁可超限也不逐出活跃看板
+      const victim = candidates.reduce((a, b) => (a.p.updatedAt <= b.p.updatedAt ? a : b));
+      this.plans.splice(victim.i, 1);
+    }
   }
 
   updateTask(taskId: string, status: PlanTask['status'], result?: string, taskKey?: string): PlanData | null {
@@ -63,8 +78,9 @@ export class PlannerService extends Service implements PlannerNotifier {
       plan.tasks[taskIndex].result = result;
     }
 
-    // 如果当前任务完成，自动将下一个待处理任务标记为 in_progress
-    if (status === 'completed') {
+    // 当前任务完成或确认失败，都推进到下一个待处理任务 ——
+    // 只处理 completed 会让 failed 后 currentTaskId 悬停，看板冻结
+    if (status === 'completed' || status === 'failed') {
       const nextTask = plan.tasks.slice(taskIndex + 1).find((t) => t.status === 'pending');
       if (nextTask) {
         nextTask.status = 'in_progress';
@@ -87,10 +103,11 @@ export class PlannerService extends Service implements PlannerNotifier {
    * 看板自动推进（由 core Orchestrator 在工具执行成功后调用）：
    * 真实工具成功即视为当前 in_progress 步骤完成。模型不再需要为"汇报进度"
    * 单独花一轮调用 planner_update_task —— 每个阶段一次汇报调用曾是步数
-   * 膨胀的最大来源。元工具（看板/记忆）不触发推进。
+   * 膨胀的最大来源。元工具（看板/记忆/路由/观测）不触发推进：
+   * 它们不产出任务交付物，router_select_tier 这类调度类调用不该"完成"一个步骤。
    */
   noteToolResult(taskKey: string, toolName: string) {
-    if (/^(planner_|memory_)/.test(toolName)) return;
+    if (/^(planner_|memory_|router_|observability_)/.test(toolName)) return;
     const plan = this.planFor(taskKey);
     if (!plan) return;
     const current = plan.tasks.find((t) => t.id === plan.currentTaskId && t.status === 'in_progress');

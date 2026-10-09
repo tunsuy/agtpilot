@@ -39,7 +39,7 @@ flowchart TD
 
 | 模块 | 职责 |
 |---|---|
-| `contracts.ts` | 全部跨层接口：`ModelGateway`、`PlannerNotifier`、`ToolDefinition`、`ToolRoute`、loop 类型 |
+| `contracts.ts` | 全部跨层接口：`ModelGateway`、`PlannerNotifier`、`ToolDefinition`、`ToolSession`（工具执行会话：taskId/step/env/userId，插件隔离的唯一身份锚点）、`ToolRoute`、loop 类型 |
 | `orchestrator.ts` | 任务编排：审批门、熔断、任务内压缩、`agtpilot/checkpoint`/`agtpilot/usage` 事件 |
 | `agent-service.ts` | 工具注册表 + `registerToolRoute()` 路由规则注册表 |
 | `routing.ts` | 工具按需挂载（阈值门 + 关键词路由）、token 估算、死循环参数归一 |
@@ -86,12 +86,16 @@ flowchart TD
 | 7 | 任务状态只存内存单例 | 进程重启即全部丢失 | checkpoint 事件节流落盘 + 启动僵尸清扫 + rehydrate 续跑 |
 | 8 | `test: 'echo \"no tests\"'` 静默通过 | CI 绿灯但零覆盖 | vitest 真实跑，30 用例守护 routing/text/compaction |
 | 9 | 插件侧 `declare module` 增强 `Context.model` | 与 core 的声明接口合并冲突、类型漂移 | 声明全部收敛 core |
-| 10 | 插件自带执行策略（plugin-cron 旧形态：自持久化 + 硬编码 `runTask` + 自注册工具） | 多用户化后应用层被迫另建一套，双轨分裂：模型经工具建的任务与 UI 建的任务互不可见 | 插件只留无头能力引擎（`ctx.cron.register/cancel`），持久化/执行身份/工具暴露归应用层（Web: `cron-service.ts` + taskTools；CLI: `bin.ts` 包装） |
+| 10 | 插件自带执行策略（plugin-cron 旧形态：自持久化 + 硬编码 `runTask` + 自注册工具） | 多用户化后应用层被迫另建一套，双轨分裂：模型经工具建的任务与 UI 建的任务互不可见 | 插件只留无头能力引擎（`ctx.cron.register/cancel`），持久化/执行身份/工具暴露归应用层（Web: `cron-service.ts` + taskTools；CLI: `bin.ts` 包装）。plugin-mcp 曾复发同款：插件里自注册 `mcp_connect_*` 全局工具 → 已同样收敛（连接能力留插件，工具暴露归 CLI 包装 / Web 连接器中心） |
+| 11 | 子进程用 `exec` 拼字符串（osascript / git / screencapture / grep…只转义双引号） | 单引号/`$()`/反引号逃逸 → 模型可控的 shell 注入（notify 曾可弹任意 AppleScript） | 一律 `execFile` + 参数数组（不经 shell）；必须用 shell 时命令模板里不插任何模型可控值 |
+| 12 | 插件进程级状态无身份锚点（rag 全局索引、browser 全局 profile、observability 全局 span、artifact 全局 latest） | 多用户下 A 的私有文档/登录态/看板对 B 可见或串台 | 状态按 `session.userId` 分域（缺省 `default`）；`TaskOptions.userId` → orchestrator → `ToolSession{taskId, step, env, userId}`，事件 payload 统一盖章 `taskId` 供前端过滤 |
+| 13 | 向子进程整包透传 `process.env`（sandbox 命令执行、MCP stdio Server） | 宿主全部密钥（含其他用户配置的 Key）泄露给模型触发的一次执行 | 环境白名单（PATH/HOME/LANG/TZ/TMPDIR）+ 任务级 `session.env` 用户 Key；绝不 `{...process.env}` |
+| 14 | 失败被吞成「假成功」（notify 非 macOS 返回 true、git grep catch 返回 count:0、E2B 失败静默本地降级、search 全源失败报 0 条） | 模型把「工具坏了」当成「事实如此」，基于假数据收尾 | 失败就是 `success:false` + 具体原因；降级要在结果与事件里显式标注（`mode: local-fallback`） |
 
 ## 事件清单（cordis 事件 ≠ AgentEvent）
 
 - `agtpilot/tool-registered` / `agtpilot/plan` / `agtpilot/artifact` —— 注册与插件侧通知
-- `agtpilot/event`（AgentEvent）—— 面向前端 UI 的广播流（observability 转发）
+- `agtpilot/event`（AgentEvent）—— 面向前端 UI 的广播流（observability 转发）。payload 顶层由 orchestrator 统一盖章 `taskId`，前端/插件按其归属过滤，多用户不串台
 - `agtpilot/usage` —— 每轮 loop 真实 token 用量（router 统计）
 - `agtpilot/checkpoint` —— 每步消息快照（web 落盘用；**刻意不走 AgentEvent 广播**，避免事件数组 O(n²) 膨胀）
 
@@ -100,9 +104,12 @@ flowchart TD
 1. 新建 `packages/plugin-xxx/`，`inject` 声明所需服务（仅允许 core 契约里的服务名）
 2. `ctx.agent.registerToolRoute({ id, prefixes: ['xxx_'], test: /关键词|keyword/i })` —— 想被按需挂载就必须做
 3. 通用小工具加 `baseline: true`
-4. 描述写真实能力，禁止「假存在」描述
-5. app-kit 的 `createAgentRuntime()` 里 `mount('plugin-xxx', XxxPlugin)` 一行（失败自动隔离）
-6. 依赖加进 `packages/app-kit/package.json`，根目录 `pnpm install`
+4. 描述写真实能力，禁止「假存在」描述；失败必须真实返回 `success:false` + 原因，禁止假成功
+5. 插件持有进程级状态（缓存/索引/目录/浏览器 profile）时按 `session.userId` 分域，缺省回退 `default`
+6. 起子进程一律 `execFile` + 参数数组（禁 `exec` 拼字符串）；子进程 env 用白名单 + `session.env`，禁 `{...process.env}`
+7. 有副作用的敏感操作（写文件、剪贴板、宿主读取）如实标 `dangerLevel`
+8. app-kit 的 `createAgentRuntime()` 里 `mount('plugin-xxx', XxxPlugin)` 一行（失败自动隔离）
+9. 依赖加进 `packages/app-kit/package.json`，根目录 `pnpm install`
 
 ## 环境变量
 

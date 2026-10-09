@@ -1,5 +1,6 @@
 import { Context, Service } from '@deepseek-ai/cordis';
 import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import * as path from 'path';
 import '@agtpilot/core';
 
@@ -44,26 +45,27 @@ export class MemoryService extends Service {
           this.memories.set(item.id, item);
         }
       }
-    } catch {
-      // 容错处理
+    } catch (err: any) {
+      console.error(`[plugin-memory] 加载记忆文件失败: ${err.message}`);
     }
   }
 
-  private saveToDisk() {
+  /** 异步落盘（同步写会阻塞事件循环 —— 多用户并发任务下是全局卡顿源） */
+  private async saveToDisk() {
     try {
       const list = Array.from(this.memories.values());
-      fs.writeFileSync(this.memoryFilePath, JSON.stringify(list, null, 2), 'utf-8');
-    } catch {
-      // 容错处理
+      await fsp.writeFile(this.memoryFilePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (err: any) {
+      console.error(`[plugin-memory] 记忆落盘失败: ${err.message}`);
     }
   }
 
-  storeMemory(
+  async storeMemory(
     title: string,
     content: string,
     category: MemoryRecord['category'] = 'fact',
     id?: string
-  ): MemoryRecord {
+  ): Promise<MemoryRecord> {
     const memoryId = id || `mem_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const record: MemoryRecord = {
       id: memoryId,
@@ -75,21 +77,21 @@ export class MemoryService extends Service {
     };
 
     this.memories.set(memoryId, record);
-    this.saveToDisk();
+    await this.saveToDisk();
     return record;
   }
 
-  deleteMemory(id: string): boolean {
+  async deleteMemory(id: string): Promise<boolean> {
     const existed = this.memories.delete(id);
     if (existed) {
-      this.saveToDisk();
+      await this.saveToDisk();
     }
     return existed;
   }
 
-  clearMemories(): void {
+  async clearMemories(): Promise<void> {
     this.memories.clear();
-    this.saveToDisk();
+    await this.saveToDisk();
   }
 
   recall(query: string, category?: MemoryRecord['category']): MemoryRecord[] {
@@ -98,10 +100,13 @@ export class MemoryService extends Service {
 
     for (const item of this.memories.values()) {
       if (category && item.category !== category) continue;
+      // 反向包含（查询串包含标题）只在标题足够长时生效：
+      // 短标题（如 "ai"）会命中任何查询，是召回噪音的最大来源
+      const reverseOk = item.title.length >= 4 && q.includes(item.title.toLowerCase());
       if (
         item.title.toLowerCase().includes(q) ||
         item.content.toLowerCase().includes(q) ||
-        q.includes(item.title.toLowerCase())
+        reverseOk
       ) {
         results.push(item);
       }
@@ -113,15 +118,6 @@ export class MemoryService extends Service {
   listAll(): MemoryRecord[] {
     return Array.from(this.memories.values()).sort((a, b) => b.updatedAt - a.updatedAt);
   }
-
-  getPromptContext(): string {
-    const items = this.listAll().slice(0, 10);
-    if (items.length === 0) return '';
-    return (
-      '【已沉淀的长期个人与项目记忆】:\n' +
-      items.map((m) => `- [${m.category.toUpperCase()}] ${m.title}: ${m.content}`).join('\n')
-    );
-  }
 }
 
 export function apply(ctx: Context) {
@@ -131,7 +127,7 @@ export function apply(ctx: Context) {
   ctx.agent.registerTool({
     name: 'memory_store',
     baseline: true,
-    description: '长期记住用户的习惯偏好、技术栈规范、专属业务知识或踩坑经验。存储后的记忆会持久化到磁盘并在未来的跨会话任务中永久生效。',
+    description: '长期记住用户的习惯偏好、技术栈规范、专属业务知识或踩坑经验。存储后的记忆会持久化到磁盘并在未来的跨会话任务中永久生效。注意：本记忆库为进程级共享（CLI 单用户场景）；多用户 Web 的用户级记忆由用户空间记忆系统负责。',
     parameters: {
       type: 'object',
       properties: {
@@ -146,7 +142,7 @@ export function apply(ctx: Context) {
       required: ['title', 'content'],
     },
     execute: async ({ title, content, category }) => {
-      const record = memoryService.storeMemory(title, content, category);
+      const record = await memoryService.storeMemory(title, content, category);
       return {
         success: true,
         memoryId: record.id,

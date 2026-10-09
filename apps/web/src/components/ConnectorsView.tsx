@@ -113,6 +113,20 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
   }
 }
 
+/**
+ * 连接器页 Tab 分组(按用户意图人工策展,原生与 MCP 连接器混排)。
+ * 不在任何分组里的新连接器自动落入「其他」兜底 Tab,不会静默消失。
+ */
+const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
+  { key: 'models', label: '模型推理', ids: ['deepseek', 'openai', 'custom_llm'] },
+  { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'deepwiki', 'openalex', 'qcc'] },
+  { key: 'office', label: '办公协作', ids: ['notion_mcp', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
+  { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
+  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'wechat_mp', 'xiaohongshu', 'twitter'] },
+  { key: 'dev', label: '开发与云', ids: ['github', 'e2b'] },
+];
+const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));
+
 interface ConnectorsViewProps {
   connectors: ConnectorApp[];
   onSaveKey: (
@@ -137,7 +151,7 @@ export function ConnectorsView({
   onAutoConfigureHandled,
 }: ConnectorsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [platformFilter, setPlatformFilter] = useState<'all' | 'web' | 'mobile'>('all');
+  const [tab, setTab] = useState('all');
   const [configuringApp, setConfiguringApp] = useState<ConnectorApp | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [baseUrlInput, setBaseUrlInput] = useState('');
@@ -243,25 +257,28 @@ export function ConnectorsView({
     }
   };
 
-  const filteredMcp = mcpConnectors.filter(
-    (c) =>
-      !searchQuery ||
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // ---- Tab 归属:all=全部;other=未策展兜底;其余按 CONNECTOR_TABS 的 ids ----
+  const tabIds = tab === 'all' ? null : CONNECTOR_TABS.find((t) => t.key === tab)?.ids ?? null;
+  const inTab = (id: string) =>
+    tab === 'all' || (tab === 'other' ? !TABBED_IDS.has(id) : Boolean(tabIds?.includes(id)));
+  const matchSearch = (name: string, description: string, category: string) =>
+    !searchQuery ||
+    name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    category.toLowerCase().includes(searchQuery.toLowerCase());
 
-  const filtered = connectors.filter((c) => {
-    const matchSearch =
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.category.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    if (!matchSearch) return false;
-    if (platformFilter === 'mobile') return c.platformType === 'mobile' || c.platformType === 'both' || Boolean(c.mobileAction);
-    if (platformFilter === 'web') return c.platformType === 'web' || c.platformType === 'both' || !c.platformType;
-    return true;
-  });
+  const filteredMcp = mcpConnectors.filter((c) => inTab(c.id) && matchSearch(c.name, c.description, c.category));
+
+  const filtered = connectors.filter((c) => inTab(c.id) && matchSearch(c.name, c.description, c.category));
+
+  const tabCount = (key: string) => {
+    const ids = key === 'all' ? null : CONNECTOR_TABS.find((t) => t.key === key)?.ids ?? null;
+    const hit = (id: string) =>
+      key === 'all' || (key === 'other' ? !TABBED_IDS.has(id) : Boolean(ids?.includes(id)));
+    return connectors.filter((c) => hit(c.id)).length + mcpConnectors.filter((c) => hit(c.id)).length;
+  };
+  const hasOther =
+    connectors.some((c) => !TABBED_IDS.has(c.id)) || mcpConnectors.some((c) => !TABBED_IDS.has(c.id));
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -309,50 +326,27 @@ export function ConnectorsView({
         </div>
       </div>
 
-      {/* Filter Tabs & Search Bar */}
+      {/* Category Tabs & Search Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
-          <button
-            onClick={() => setPlatformFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
-              platformFilter === 'all'
-                ? 'bg-zinc-900 text-white shadow-xs'
-                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
-            }`}
-          >
-            <span>全部授权渠道</span>
-            <span className="opacity-75 font-mono text-[11px]">({connectors.length})</span>
-          </button>
-
-          <button
-            onClick={() => setPlatformFilter('web')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
-              platformFilter === 'web'
-                ? 'bg-zinc-900 text-white shadow-xs'
-                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
-            }`}
-          >
-            <Laptop className="h-3.5 w-3.5" />
-            <span>网页/API 授权</span>
-            <span className="opacity-75 font-mono text-[11px]">
-              ({connectors.filter((c) => c.platformType === 'web' || c.platformType === 'both' || !c.platformType).length})
-            </span>
-          </button>
-
-          <button
-            onClick={() => setPlatformFilter('mobile')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
-              platformFilter === 'mobile'
-                ? 'bg-zinc-900 text-white shadow-xs'
-                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
-            }`}
-          >
-            <Smartphone className="h-3.5 w-3.5 text-rose-500" />
-            <span>移动端/真机 App 免密直连</span>
-            <span className="opacity-75 font-mono text-[11px]">
-              ({connectors.filter((c) => c.platformType === 'mobile' || c.platformType === 'both' || Boolean(c.mobileAction)).length})
-            </span>
-          </button>
+          {[
+            { key: 'all', label: '全部' },
+            ...CONNECTOR_TABS.map((t) => ({ key: t.key, label: t.label })),
+            ...(hasOther ? [{ key: 'other', label: '其他' }] : []),
+          ].map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+                tab === t.key
+                  ? 'bg-zinc-900 text-white shadow-xs'
+                  : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
+              }`}
+            >
+              <span>{t.label}</span>
+              <span className="opacity-75 font-mono text-[11px]">({tabCount(t.key)})</span>
+            </button>
+          ))}
         </div>
 
         <div className="relative w-full sm:w-64 flex-shrink-0">
@@ -505,6 +499,13 @@ export function ConnectorsView({
           </div>
         ))}
       </div>
+
+      {/* 空分组/无搜索结果占位 */}
+      {filtered.length === 0 && filteredMcp.length === 0 && (
+        <div className="text-center py-10 text-xs text-zinc-400">
+          该分组下没有匹配的连接器{searchQuery ? `(搜索「${searchQuery}」无结果)` : ''}
+        </div>
+      )}
 
       {/* MCP 连接器区（官方托管直连：一键授权 / 粘贴凭证 / 免凭证） */}
       {filteredMcp.length > 0 && (

@@ -11,3 +11,4 @@ allowBuilds:
   protobufjs: true
 minimumReleaseAgeExclude:
   - '@modelcontextprotocol/sdk@1.32.1'
+  - 'imapflow@2.3.0'

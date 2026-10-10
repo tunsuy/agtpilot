@@ -10,7 +10,7 @@ Inspired by **OpenMuse**, **DeepSeek Harness**, and **CopilotKit**, `agtpilot` d
 
 - 🧩 **Pluggable Microkernel Architecture**: Everything is a plugin. Easily swap models, sandboxes, tools, and UI components.
 - 🌐 **Persistent Browser Automation**: Autonomous web browsing, form filling, login state persistence, and research driven by Playwright.
-- 📦 **Isolated Code Execution Sandbox**: Safe execution of Bash scripts, Python, and Node.js code within containerized environments (Docker / E2B).
+- 📦 **Sandboxed Code Execution**: Bash/Python/Node.js execution with layered controls — path fencing, child-process env allowlist (zero credential leakage by default), credential-endpoint binding, egress guard (private/metadata IP blocking), optional bwrap kernel fence, and optional E2B cloud MicroVM isolation. See docs/design/sandbox-control-hardening.md.
 - 🔄 **Durable Session & Checkpoints**: Missions and conversation history persist to disk; each agent step emits a message checkpoint, so after a server restart an interrupted mission is marked and can be resumed by continuing the conversation (the in-flight loop itself is not auto-restarted).
 - 🎨 **Generative UI / AG-UI Protocol**: Returns rich, interactive React components (charts, approval cards, tables) directly in chat rather than boring plain text.
 - 🤝 **Human-in-the-Loop (HITL)**: Built-in safety approval mechanism for sensitive operations (emailing, purchasing, deleting files).
@@ -35,7 +35,7 @@ flowchart TD
 
     subgraph Plugins ["Atomic Plugins"]
         BrowserPlugin["plugin-browser (Playwright)"]
-        SandboxPlugin["plugin-sandbox (Docker / E2B)"]
+        SandboxPlugin["plugin-sandbox (local fence / bwrap / E2B)"]
         ModelPlugin["plugin-model (implements ModelGateway)"]
         MCPPlugin["plugin-mcp (Tool Registry)"]
     end
@@ -62,7 +62,7 @@ agtpilot/
 │   ├── core/              # Microkernel: contracts (ModelGateway), orchestrator, event bus
 │   ├── app-kit/           # Composition root: createAgentRuntime() 统一装配
 │   ├── plugin-browser/    # Persistent Playwright browser control
-│   ├── plugin-sandbox/    # Safe Docker / E2B code execution
+│   ├── plugin-sandbox/    # Sandboxed code execution (local fence / bwrap / E2B)
 │   ├── protocol/          # AG-UI and Generative UI event schema
 │   └── plugin-*           # 15 个原子能力插件（model/planner/memory/mcp/...）
 ├── apps/
@@ -81,7 +81,7 @@ agtpilot/
 ### Prerequisites
 - Node.js >= 20
 - pnpm >= 9
-- Docker (optional, for local code sandbox execution)
+- bubblewrap (bwrap, optional: kernel-level fence for local code execution on Linux)
 
 ### 1. Clone & Install
 ```bash

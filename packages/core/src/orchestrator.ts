@@ -213,6 +213,7 @@ export class OrchestratorService extends Service {
             step: currentStep,
             env: options.taskEnv,
             userId: options.userId,
+            sandbox: options.taskSandbox,
           });
         } catch (err: any) {
           output = { error: err.message };

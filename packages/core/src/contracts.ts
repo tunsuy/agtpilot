@@ -127,6 +127,12 @@ export interface ToolSession {
   step: number;
   env?: Record<string, string>;
   userId?: string;
+  /**
+   * 任务级沙箱策略(docs/design/sandbox-control-hardening.md §4.2):
+   * 子进程环境暴露白名单 / 凭据-端点绑定 / bwrap 围栏模式 / 出站网络开关。
+   * web 层构建后持有活引用 —— 权限提案批准即原地热更新,in-flight 任务下一步生效。
+   */
+  sandbox?: import('./sandbox-fence').SandboxSessionPolicy;
 }
 
 export interface ToolDefinition {

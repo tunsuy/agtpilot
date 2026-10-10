@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { encryptSecret, decryptSecret, isEncrypted } from './secret-box';
 import { getGovernanceBus } from './governance-bus';
+import { isPrivateOrReservedIp, DEFAULT_CREDENTIAL_BINDINGS } from '@agtpilot/core';
 
 /**
  * 用户级别数据持久化隔离存储引擎 (User Scoped Data Store)
@@ -35,7 +36,60 @@ export interface UserScopedData {
   deletionLedger?: DeletionLedgerEntry[];
   /** 权限纪元：key(connectorId 或 envVar) -> 单调递增纪元。撤销凭证后 +1，旧纪元的授权/承诺失效 */
   authorityEpochs?: Record<string, number>;
+  /** 沙箱控制配置(docs/design/sandbox-control-hardening.md §5):暴露白名单/凭据绑定/围栏模式 */
+  sandbox?: SandboxConfigRecord;
+  /** 权限提案(deny-log → proposal → 人工审核 → 热更新;只增 + 状态迁移) */
+  policyProposals?: PolicyProposalRecord[];
   updatedAt: number;
+}
+
+/**
+ * 沙箱控制用户级配置(docs/design/sandbox-control-hardening.md §5):
+ * - exposeAllowlist: 允许进子进程环境的 session.env 键(用户显式 opt-in,默认空 = 零暴露);
+ * - credentialBindings: 自定义凭据-端点绑定(与 core DEFAULT_CREDENTIAL_BINDINGS 合并后下发);
+ * - fence: 内核围栏模式(off / best_effort / hard_requirement,需宿主机 bwrap)。
+ */
+export interface SandboxConfigRecord {
+  exposeAllowlist?: string[];
+  credentialBindings?: Record<string, string[]>;
+  fence?: 'off' | 'best_effort' | 'hard_requirement';
+}
+
+/**
+ * 权限提案记录:sandbox_deny 拒绝日志自动/手动生成,人工审核后生效。
+ * approve credential-binding → hosts 合并进 sandbox.credentialBindings;
+ * approve expose-env → envVar 并入 exposeAllowlist。热更新经 governance-bus
+ * PermissionResolvedEvent 传导到 in-flight 任务的 taskSandbox 活引用。
+ */
+export interface PolicyProposalRecord {
+  id: string;
+  at: number;
+  kind: 'credential-binding' | 'expose-env';
+  status: 'pending' | 'approved' | 'rejected';
+  detail: {
+    envVar?: string;
+    hosts?: string[];
+    reason?: string;
+  };
+  source?: {
+    taskId?: string;
+    tool?: string;
+    url?: string;
+  };
+  resolvedAt?: number;
+}
+
+/** 沙箱拒绝审计条目(只增不改,落盘为独立 jsonl,镜像 memory audit 模式) */
+export interface SandboxAuditEntry {
+  at?: number;
+  userId: string;
+  tool: string;
+  /** 拒绝原因码: private_host_blocked / credential_endpoint_mismatch / credential_not_found / scheme_not_allowed / dns_failed 等 */
+  reason: string;
+  url?: string;
+  credentialRef?: string;
+  taskId?: string;
+  detail?: string;
 }
 
 /**
@@ -217,6 +271,8 @@ export function getUserConnectors(userId: string) {
 export function saveUserConnector(userId: string, envVar: string, value: string, extra?: { activeModelId?: string }) {
   const data = getUserData(userId);
   data.connectors = data.connectors || {};
+  // 策略 lint(非阻断):保存前给出私网 host/通配符/端点不匹配警告,由调用方展示
+  const warnings = value ? lintConnectorValue(envVar, value) : [];
   if (value) {
     data.connectors[envVar] = value;
   } else {
@@ -231,7 +287,7 @@ export function saveUserConnector(userId: string, envVar: string, value: string,
   if (!value) {
     bumpAuthorityEpoch(userId, envVar, { envVars: [envVar] });
   }
-  return data;
+  return { data, warnings };
 }
 
 export function setUserActiveModel(userId: string, modelId: string) {
@@ -499,6 +555,159 @@ export function readMemoryAudit(userId: string, limit = 100): MemoryAuditEntry[]
   } catch {
     return [];
   }
+}
+
+// ---- 沙箱控制(docs/design/sandbox-control-hardening.md §4.4)----
+
+/** 读取用户沙箱配置(缺省 = 零暴露/零自定义绑定/fence 未设) */
+export function getSandboxConfig(userId: string): SandboxConfigRecord {
+  return getUserData(userId).sandbox || {};
+}
+
+/** 保存用户沙箱配置(整体覆盖三个字段;调用方负责合并语义) */
+export function saveSandboxConfig(userId: string, cfg: SandboxConfigRecord) {
+  const data = getUserData(userId);
+  data.sandbox = {
+    exposeAllowlist: cfg.exposeAllowlist || [],
+    credentialBindings: cfg.credentialBindings || {},
+    fence: cfg.fence,
+  };
+  saveUserData(data);
+  return data.sandbox;
+}
+
+/** 新增权限提案(pending);返回带生成 id 的完整记录 */
+export function addPolicyProposal(
+  userId: string,
+  proposal: { kind: PolicyProposalRecord['kind']; detail: PolicyProposalRecord['detail']; source?: PolicyProposalRecord['source'] },
+): PolicyProposalRecord {
+  const data = getUserData(userId);
+  const record: PolicyProposalRecord = {
+    id: `prop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    at: Date.now(),
+    kind: proposal.kind,
+    status: 'pending',
+    detail: proposal.detail,
+    source: proposal.source,
+  };
+  // 单用户最多保留 200 条,防单文件膨胀(同删除台账策略)
+  data.policyProposals = [record, ...(data.policyProposals || [])].slice(0, 200);
+  saveUserData(data);
+  return record;
+}
+
+/** 列出提案(status 缺省 = 全部,最近在前) */
+export function getPolicyProposals(userId: string, status?: PolicyProposalRecord['status']): PolicyProposalRecord[] {
+  const all = getUserData(userId).policyProposals || [];
+  return status ? all.filter((p) => p.status === status) : all;
+}
+
+/**
+ * 裁决提案:approve 时把配置合并进 sandbox 记录(热更新数据源);
+ * reject 只改状态。非 pending / 不存在 → null(幂等)。
+ */
+export function resolvePolicyProposal(
+  userId: string,
+  proposalId: string,
+  approved: boolean,
+): PolicyProposalRecord | null {
+  const data = getUserData(userId);
+  const proposal = (data.policyProposals || []).find((p) => p.id === proposalId);
+  if (!proposal || proposal.status !== 'pending') return null;
+  proposal.status = approved ? 'approved' : 'rejected';
+  proposal.resolvedAt = Date.now();
+  if (approved) {
+    data.sandbox = data.sandbox || {};
+    if (proposal.kind === 'credential-binding' && proposal.detail.envVar) {
+      const envVar = proposal.detail.envVar;
+      const hosts = proposal.detail.hosts || [];
+      data.sandbox.credentialBindings = {
+        ...(data.sandbox.credentialBindings || {}),
+        [envVar]: Array.from(new Set([...((data.sandbox.credentialBindings || {})[envVar] || []), ...hosts])),
+      };
+    } else if (proposal.kind === 'expose-env' && proposal.detail.envVar) {
+      const allow = data.sandbox.exposeAllowlist || [];
+      if (!allow.includes(proposal.detail.envVar)) {
+        data.sandbox.exposeAllowlist = [...allow, proposal.detail.envVar];
+      }
+    }
+  }
+  saveUserData(data);
+  return proposal;
+}
+
+function getSandboxAuditFilePath(userId: string): string {
+  const safeFilename = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(getDataDir(), `${safeFilename}.sandbox-audit.jsonl`);
+}
+
+/** 追加沙箱拒绝审计(append-only jsonl,与用户数据/记忆审计文件分离) */
+export function appendSandboxAudit(userId: string, entry: SandboxAuditEntry) {
+  try {
+    const full = { at: Date.now(), ...entry };
+    fs.appendFileSync(getSandboxAuditFilePath(userId), `${JSON.stringify(full)}\n`, 'utf-8');
+  } catch (e) {
+    console.error(`Failed to append sandbox audit for ${userId}:`, e);
+  }
+}
+
+/** 读取沙箱审计(尾部 limit 条,最近在前);文件缺失返回空 */
+export function readSandboxAudit(userId: string, limit = 100): SandboxAuditEntry[] {
+  try {
+    const file = getSandboxAuditFilePath(userId);
+    if (!fs.existsSync(file)) return [];
+    const lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean);
+    return lines
+      .slice(-limit)
+      .reverse()
+      .map((l) => {
+        try {
+          return JSON.parse(l) as SandboxAuditEntry;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is SandboxAuditEntry => e !== null);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 连接器值策略 lint(非阻断警告,借鉴 OpenShell 策略风险预检的简化版):
+ * - URL 形态值指向 localhost/字面量私网地址 → 警告;
+ * - 值含通配符 '*' → 警告(高危主机匹配);
+ * - envVar 有默认凭据绑定且 URL host 不在绑定内 → 端点不匹配警告。
+ * 域名解析到私网的情况不在 lint 覆盖内(运行时 guardUrlHost 兜底)。
+ */
+export function lintConnectorValue(envVar: string, value: string): string[] {
+  const warnings: string[] = [];
+  const v = (value || '').trim();
+  if (!v) return warnings;
+  if (v.includes('*')) {
+    warnings.push('值包含通配符「*」：可能匹配到意外的高危主机，请确认是否必要。');
+  }
+  // URL 形态才做 host 检查(纯 API Key 不触发)
+  if (/^https?:\/\//i.test(v)) {
+    let host = '';
+    try {
+      host = new URL(v).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    } catch {
+      warnings.push('URL 形态无法解析，请检查格式。');
+      return warnings;
+    }
+    // 仅对字面量 IP 判私网(isPrivateOrReservedIp 对非 IP 输入 fail closed,域名会误报);
+    // 域名解析到私网的情况由运行时 guardUrlHost 兜底
+    const isLiteralIp = host.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    if (host === 'localhost' || host.endsWith('.localhost') || (isLiteralIp && isPrivateOrReservedIp(host))) {
+      warnings.push(`URL 指向本机/私有网络地址(${host})：出站围栏会拒绝此类请求，且存在内网暴露风险。`);
+    }
+    const bound = DEFAULT_CREDENTIAL_BINDINGS[envVar];
+    if (bound && host && !bound.some((h) => h.toLowerCase() === host)) {
+      warnings.push(`端点不匹配：${envVar} 的默认凭据绑定为 [${bound.join(', ')}]，当前值指向 ${host}，凭据将拒绝发往该端点(credential_endpoint_mismatch)。`);
+    }
+  }
+  return warnings;
 }
 
 // 辅助方法：读取所有用户数据（用于服务端启动时加载所有后台定时任务等）

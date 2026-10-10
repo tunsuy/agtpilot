@@ -1,6 +1,15 @@
 import { Context } from '@deepseek-ai/cordis';
 import '@agtpilot/core';
-import { exec, execFile } from 'node:child_process';
+import {
+  buildChildEnv,
+  decideFence,
+  buildBwrapArgs,
+  resolveCredentialRequest,
+  guardUrlHost,
+  DEFAULT_CREDENTIAL_BINDINGS,
+} from '@agtpilot/core';
+import type { SandboxSessionPolicy } from '@agtpilot/core';
+import { exec, execFile, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -19,6 +28,17 @@ export interface SandboxConfig {
   e2bApiKey?: string;
 }
 
+/** 探测宿主机 bwrap(bubblewrap)可用性:apply() 时一次,结果缓存 */
+function detectBwrap(): boolean {
+  if (process.platform !== 'linux') return false;
+  try {
+    execFileSync('bwrap', ['--version'], { stdio: 'ignore', timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function apply(ctx: Context, config: SandboxConfig = {}) {
   // 工具路由自注册：prompt 命中代码/命令执行类关键词时挂载本插件工具组
   ctx.agent.registerToolRoute({
@@ -30,6 +50,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
   const workspaceRoot = config.workspaceRoot || process.cwd();
   const defaultTimeoutMs = config.defaultTimeoutMs || 30000;
   const tempSandboxDir = path.resolve(workspaceRoot, '.cache/sandbox');
+  const bwrapAvailable = detectBwrap();
 
   if (!fsSync.existsSync(tempSandboxDir)) {
     fsSync.mkdirSync(tempSandboxDir, { recursive: true });
@@ -48,30 +69,38 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
   }
 
   /**
-   * 子进程环境白名单：只传命令执行必需的基础变量 + 任务级 session.env
-   * （当前用户个人空间保存的 Key，经 orchestrator 透传，用户间隔离）。
-   * 绝不整包继承 process.env —— 那会把宿主机上的全部密钥（含其他用户
-   * 配置的服务 Key）泄露给任意一次模型触发的命令执行。
+   * 子进程环境:基础白名单 + 仅 session.sandbox.exposeEnv 显式白名单内的任务级 Key。
+   * 凭据托管(docs/design/sandbox-control-hardening.md §4.3):session.env 默认
+   * **零 Key 进子进程** —— 修复旧实现整包展开造成的凭据泄漏;合法消费方
+   * (plugin-search / plugin-notify 等)都在插件 JS 进程内读 session.env,不受影响。
    */
-  function buildChildEnv(sessionEnv?: Record<string, string>) {
-    const base: Record<string, string> = { CI: 'true' };
-    for (const [k, v] of Object.entries({
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      LANG: process.env.LANG,
-      LC_ALL: process.env.LC_ALL,
-      TZ: process.env.TZ,
-      TMPDIR: process.env.TMPDIR,
-    })) {
-      if (typeof v === 'string') base[k] = v;
-    }
-    return { ...base, ...(sessionEnv || {}) };
+  function childEnv(session?: any): NodeJS.ProcessEnv {
+    return buildChildEnv(session?.env, session?.sandbox as SandboxSessionPolicy | undefined) as NodeJS.ProcessEnv;
+  }
+
+  /** 围栏决策 + 降级/拒绝的诚实标注(延续 E2B 降级显式标注模式) */
+  function fenceDecision(session?: any) {
+    const policy = session?.sandbox as SandboxSessionPolicy | undefined;
+    return decideFence(policy?.fence, bwrapAvailable);
+  }
+
+  /** sandbox_deny 结构化事件(拒绝日志 → 权限提案的数据源,见设计文档 §4.4) */
+  function emitDeny(session: any, payload: Record<string, any>) {
+    ctx.agent.emitEvent({
+      type: 'sandbox_deny',
+      payload: {
+        ...payload,
+        taskId: session?.taskId,
+        userId: session?.userId,
+      },
+      timestamp: Date.now(),
+    });
   }
 
   // 1. 命令执行原子能力 (sandbox_run_command)
   ctx.agent.registerTool({
     name: 'sandbox_run_command',
-    description: '在宿主机的工作目录中执行 Shell 命令，返回标准输出、标准错误和退出码。注意：直接在宿主环境执行（无系统级隔离）；配置了 E2B_API_KEY 的 Python 代码可改用 sandbox_run_code 走云端微虚拟机隔离。高危工具，触发安全审批拦截。',
+    description: '在宿主机的工作目录中执行 Shell 命令，返回标准输出、标准错误和退出码。隔离层级：默认 local（路径围栏+环境白名单，无系统级隔离）；fence 配置开启且宿主机有 bwrap 时为 bwrap 内核围栏（只读根+可写工作区）；Python 代码可改用 sandbox_run_code 走 E2B 云端 MicroVM 隔离。高危工具，触发安全审批拦截。',
     dangerLevel: 'high',
     parameters: {
       type: 'object',
@@ -94,13 +123,39 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
       const timeout = timeoutMs || defaultTimeoutMs;
       const startTime = Date.now();
 
-      try {
-        const { stdout, stderr } = await execAsync(command, {
-          cwd: execCwd,
-          timeout,
-          maxBuffer: 10 * 1024 * 1024, // 10MB 缓冲区保护
-          env: buildChildEnv(session?.env) as NodeJS.ProcessEnv,
+      // 内核围栏决策(hard_requirement 下 bwrap 缺失 → 拒绝执行)
+      const fence = fenceDecision(session);
+      if (fence.blocked) {
+        ctx.agent.emitEvent({
+          type: 'thought',
+          payload: { text: `沙箱围栏拒绝执行: ${fence.reason}` },
+          timestamp: Date.now(),
         });
+        return { success: false, command, error: fence.reason, fence: 'blocked' };
+      }
+      if (fence.degraded) {
+        ctx.agent.emitEvent({
+          type: 'thought',
+          payload: { text: `沙箱围栏降级: ${fence.reason}` },
+          timestamp: Date.now(),
+        });
+      }
+      const fenceLabel = fence.wrap ? 'bwrap' : fence.degraded ? 'degraded (bwrap 不可用)' : 'off';
+
+      try {
+        const env = childEnv(session);
+        const { stdout, stderr } = fence.wrap
+          ? await execFileAsync(
+              'bwrap',
+              [...buildBwrapArgs({ workspaceRoot, net: session?.sandbox?.net }), '--', '/bin/sh', '-c', String(command)],
+              { cwd: execCwd, timeout, maxBuffer: 10 * 1024 * 1024, env },
+            )
+          : await execAsync(command, {
+              cwd: execCwd,
+              timeout,
+              maxBuffer: 10 * 1024 * 1024, // 10MB 缓冲区保护
+              env,
+            });
 
         const durationMs = Date.now() - startTime;
         ctx.agent.emitEvent({
@@ -112,6 +167,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
             stderr: stderr.trim(),
             exitCode: 0,
             durationMs,
+            fence: fenceLabel,
           },
           timestamp: Date.now(),
         });
@@ -122,6 +178,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           stdout: stdout.trim(),
           stderr: stderr.trim(),
           durationMs,
+          fence: fenceLabel,
         };
       } catch (err: any) {
         const durationMs = Date.now() - startTime;
@@ -136,6 +193,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
             stderr: errOut,
             exitCode: err.code ?? -1,
             durationMs,
+            fence: fenceLabel,
           },
           timestamp: Date.now(),
         });
@@ -147,6 +205,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           stderr: errOut,
           durationMs,
           timedOut: err.killed || false,
+          fence: fenceLabel,
         };
       }
     },
@@ -155,7 +214,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
   // 2. 本地/云端多语言代码解释执行 (sandbox_run_code)
   ctx.agent.registerTool({
     name: 'sandbox_run_code',
-    description: '执行一段 Node.js (JavaScript/TypeScript) 或 Python 代码片段：配置了 E2B_API_KEY 且为 Python 时自动走云端 Firecracker 微虚拟机隔离执行（结果 mode=e2b-isolated）；否则在本地临时目录执行（与宿主共享文件系统，无系统级隔离，结果 mode=local，降级时会显式标注）。',
+    description: '执行一段 Node.js (JavaScript/TypeScript) 或 Python 代码片段：配置了 E2B_API_KEY 且为 Python 时自动走云端 Firecracker 微虚拟机隔离执行（结果 mode=e2b-isolated）；否则在本地临时目录执行（默认无系统级隔离，结果 mode=local；fence 开启且宿主机有 bwrap 时以只读根内核围栏包裹，结果 fence=bwrap；降级时会显式标注）。',
     dangerLevel: 'high',
     parameters: {
       type: 'object',
@@ -205,11 +264,25 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
         }
       }
 
-      // 本地临时目录执行（注意：非系统级隔离，与宿主共享文件系统）
+      // 本地临时目录执行（注意：非系统级隔离，与宿主共享文件系统；fence 配置开启且
+      // 宿主机有 bwrap 时以只读根内核围栏包裹，可写区仅 workspace）
       const fileExt = language === 'python' ? '.py' : language === 'typescript' ? '.ts' : '.mjs';
       const tempFileName = `snippet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${fileExt}`;
       const tempFilePath = path.join(tempSandboxDir, tempFileName);
       const degraded = Boolean(language === 'python' && e2bKey);
+
+      const fence = fenceDecision(session);
+      if (fence.blocked) {
+        return { success: false, language, error: fence.reason, fence: 'blocked' };
+      }
+      if (fence.degraded) {
+        ctx.agent.emitEvent({
+          type: 'thought',
+          payload: { text: `沙箱围栏降级: ${fence.reason}` },
+          timestamp: Date.now(),
+        });
+      }
+      const fenceLabel = fence.wrap ? 'bwrap' : fence.degraded ? 'degraded (bwrap 不可用)' : 'off';
 
       try {
         await fs.writeFile(tempFilePath, code, 'utf-8');
@@ -221,16 +294,28 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           language === 'typescript' ? ['tsx', tempFilePath] : [tempFilePath];
 
         const startTime = Date.now();
-        const { stdout, stderr } = await execFileAsync(runner, runnerArgs, {
-          cwd: workspaceRoot,
-          timeout: timeoutMs,
-          env: buildChildEnv(session?.env) as NodeJS.ProcessEnv,
-        });
+        const { stdout, stderr } = fence.wrap
+          ? await execFileAsync(
+              'bwrap',
+              [
+                ...buildBwrapArgs({ workspaceRoot, net: session?.sandbox?.net }),
+                '--',
+                runner,
+                ...runnerArgs,
+              ],
+              { cwd: workspaceRoot, timeout: timeoutMs, env: childEnv(session) },
+            )
+          : await execFileAsync(runner, runnerArgs, {
+              cwd: workspaceRoot,
+              timeout: timeoutMs,
+              env: childEnv(session),
+            });
 
         return {
           success: true,
           language,
           mode: degraded ? 'local-fallback (E2B 不可用)' : 'local',
+          fence: fenceLabel,
           stdout: stdout.trim(),
           stderr: stderr.trim(),
           durationMs: Date.now() - startTime,
@@ -241,6 +326,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           success: false,
           language,
           mode: degraded ? 'local-fallback (E2B 不可用)' : 'local',
+          fence: fenceLabel,
           stdout: (err.stdout || '').trim(),
           stderr: (err.stderr || err.message || '').trim(),
           error: err.message,
@@ -454,6 +540,152 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
           error: err.message,
         };
       }
+    },
+  });
+
+  // 7. 受控 HTTP 出站 (sandbox_http_request) —— 凭据托管注入 + 端点绑定 + 私网围栏
+  //    (docs/design/sandbox-control-hardening.md §4.3:密钥永远不进子进程环境;
+  //    需要携带用户 Key 的出站请求走本工具,由宿主进程按 credentialRef 解析、
+  //    校验端点绑定后代发。任何拒绝都发 sandbox_deny 事件 → 审计 + 权限提案。)
+  ctx.agent.registerTool({
+    name: 'sandbox_http_request',
+    description:
+      '发起一次受控 HTTP(S) 请求（隔离层级：宿主进程代发 + 出站围栏）。私网/保留地址/云元数据端点一律拒绝；携带凭据时经 credentialRef 引用用户空间保存的 Key（真实值不出宿主进程、不进任何子进程），且只允许发往该 Key 绑定的官方端点（端点不匹配返回 credential_endpoint_mismatch）。高危工具，触发安全审批拦截。',
+    dangerLevel: 'high',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '目标 URL（仅 http/https）' },
+        method: { type: 'string', description: 'HTTP 方法，默认 GET' },
+        headers: { type: 'object', description: '附加请求头（键值对）' },
+        body: { type: 'string', description: '请求体文本（POST/PUT 等）' },
+        credentialRef: {
+          type: 'string',
+          description: '凭据引用名（用户空间保存的环境变量名，如 EXA_API_KEY）；缺省则不携带凭据',
+        },
+        authStyle: {
+          type: 'string',
+          enum: ['bearer', 'header', 'query'],
+          description: '凭据注入方式：bearer=Authorization Bearer 头；header=自定义头（authHeaderName，默认 x-api-key）；query=URL 参数（authQueryParam，默认 api_key）',
+        },
+        authHeaderName: { type: 'string', description: 'authStyle=header 时的头名，默认 x-api-key' },
+        authQueryParam: { type: 'string', description: 'authStyle=query 时的参数名，默认 api_key' },
+        timeoutMs: { type: 'number', description: '请求超时毫秒数，默认 30000ms' },
+      },
+      required: ['url'],
+    },
+    execute: async (
+      { url, method = 'GET', headers, body, credentialRef, authStyle = 'bearer', authHeaderName = 'x-api-key', authQueryParam = 'api_key', timeoutMs },
+      session?: any,
+    ) => {
+      const bindings = {
+        ...DEFAULT_CREDENTIAL_BINDINGS,
+        ...((session?.sandbox?.credentialBindings as Record<string, string[]>) || {}),
+      };
+      const timeout = timeoutMs || defaultTimeoutMs;
+      const MAX_REDIRECTS = 3;
+      let currentUrl = String(url);
+      let credentialValue: string | undefined;
+      const originalHost = (() => {
+        try {
+          return new URL(currentUrl).hostname.toLowerCase();
+        } catch {
+          return '';
+        }
+      })();
+
+      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+        // 出站围栏：scheme + 私网/保留地址（DNS 解析后逐地址校验）
+        const guard = await guardUrlHost(currentUrl);
+        if (!guard.ok) {
+          const reason = guard.reason === 'private_host' ? 'private_host_blocked' : (guard.reason || 'blocked');
+          emitDeny(session, { tool: 'sandbox_http_request', reason, url: currentUrl, detail: guard.message });
+          return { success: false, url: currentUrl, code: reason, error: guard.message };
+        }
+
+        // 凭据解析 + 端点绑定校验（只在首跳注入；重定向改 host 时凭据不放行）
+        if (credentialRef && hop === 0) {
+          const decision = resolveCredentialRequest(
+            { credentialRef: String(credentialRef), hostname: guard.hostname || originalHost },
+            session?.env,
+            bindings,
+          );
+          if (!decision.ok) {
+            emitDeny(session, {
+              tool: 'sandbox_http_request',
+              reason: decision.code,
+              url: currentUrl,
+              credentialRef: String(credentialRef),
+              detail: decision.message,
+            });
+            return { success: false, url: currentUrl, code: decision.code, error: decision.message };
+          }
+          credentialValue = decision.value;
+        } else if (credentialRef && guard.hostname && guard.hostname.toLowerCase() !== originalHost) {
+          const message = `重定向改变目标主机（${originalHost} → ${guard.hostname}），凭据 ${credentialRef} 不放行`;
+          emitDeny(session, {
+            tool: 'sandbox_http_request',
+            reason: 'credential_endpoint_mismatch',
+            url: currentUrl,
+            credentialRef: String(credentialRef),
+            detail: message,
+          });
+          return { success: false, url: currentUrl, code: 'credential_endpoint_mismatch', error: message };
+        }
+
+        // 组装请求（凭据只在宿主进程内注入这一跳的请求，绝不落入任何子进程/日志）
+        const reqHeaders: Record<string, string> = { ...(headers || {}) };
+        let finalUrl = currentUrl;
+        if (credentialValue) {
+          if (authStyle === 'bearer') {
+            reqHeaders['Authorization'] = `Bearer ${credentialValue}`;
+          } else if (authStyle === 'header') {
+            reqHeaders[String(authHeaderName)] = credentialValue;
+          } else {
+            const u = new URL(currentUrl);
+            u.searchParams.set(String(authQueryParam), credentialValue);
+            finalUrl = u.toString();
+          }
+        }
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        let res: Response;
+        try {
+          res = await fetch(finalUrl, {
+            method: String(method).toUpperCase(),
+            headers: reqHeaders,
+            body: body !== undefined ? String(body) : undefined,
+            redirect: 'manual', // 手动跟随：每一跳重新过围栏（缓解重定向到内网的 TOCTOU）
+            signal: controller.signal,
+          });
+        } catch (err: any) {
+          return { success: false, url: currentUrl, error: err?.message || String(err) };
+        } finally {
+          clearTimeout(timer);
+        }
+
+        // 重定向：逐跳重校验
+        if (res.status >= 300 && res.status < 400) {
+          const location = res.headers.get('location');
+          if (!location || hop === MAX_REDIRECTS) {
+            return { success: false, url: currentUrl, status: res.status, error: '重定向缺少 Location 或超过 3 跳上限' };
+          }
+          currentUrl = new URL(location, currentUrl).toString();
+          continue;
+        }
+
+        const text = await res.text().catch(() => '');
+        return {
+          success: res.ok,
+          url: currentUrl,
+          status: res.status,
+          contentType: res.headers.get('content-type') || undefined,
+          body: text.length > 200_000 ? `${text.slice(0, 200_000)}\n...[截断,共 ${text.length} 字符]` : text,
+          ...(credentialRef ? { credentialRef: String(credentialRef), credentialInjected: true } : {}),
+        };
+      }
+      return { success: false, url: String(url), error: '重定向跳数超限' };
     },
   });
 }

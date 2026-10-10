@@ -34,11 +34,12 @@ class AgentBackend {
   private checkpointSavedAt: Map<string, number> = new Map();
   /**
    * in-flight 任务运行时把手(治理「回退弧→前向弧」传导入口):
-   * missionId → { userId, env(taskEnv 活引用,删键即时生效), notices(治理提示队列) }。
-   * governance-bus 收到记忆删除/授权撤销事件后写这里,内核 prepareStep
+   * missionId → { userId, env(taskEnv 活引用,删键即时生效), sandbox(taskSandbox
+   * 活引用,权限提案批准即热更新), notices(治理提示队列) }。
+   * governance-bus 收到记忆删除/授权撤销/权限提案裁决事件后写这里,内核 prepareStep
    * 经 getStepNotice 逐条取出注入模型上下文(见 initGovernanceSubscriptions)。
    */
-  private taskRuntimes: Map<string, { userId?: string; env?: Record<string, string>; notices: string[] }> = new Map();
+  private taskRuntimes: Map<string, { userId?: string; env?: Record<string, string>; sandbox?: import('@agtpilot/core').SandboxSessionPolicy; notices: string[] }> = new Map();
 
   private constructor() {
     this.state = {
@@ -210,6 +211,69 @@ class AgentBackend {
         }
         if (event.payload.stderr) {
           this.addTerminalLog('stderr', event.payload.stderr);
+        }
+        break;
+      }
+
+      case 'sandbox_deny': {
+        // 沙箱拒绝日志 → 审计留痕 + (端点不匹配时)自动生成权限提案待人工审核
+        // (docs/design/sandbox-control-hardening.md §4.4:deny-log → proposal → review → hot update)
+        const p = event.payload || {};
+        this.broadcast({ type: 'sandbox_deny', data: p });
+        try {
+          const userId = p.userId;
+          if (userId) {
+            const us = require('@/lib/user-store');
+            us.appendSandboxAudit(userId, {
+              userId,
+              tool: p.tool,
+              reason: p.reason,
+              url: p.url,
+              credentialRef: p.credentialRef,
+              taskId: p.taskId,
+              detail: p.detail,
+            });
+            let proposed = false;
+            if (p.reason === 'credential_endpoint_mismatch' && p.credentialRef && p.url) {
+              let host = '';
+              try {
+                host = new URL(String(p.url)).hostname;
+              } catch {
+                // 非法 URL 不生成提案,仅审计
+              }
+              if (host) {
+                // 去重:同一 envVar+host 已有 pending 提案时不重复生成
+                const pending = (us.getPolicyProposals(userId, 'pending') as any[]).some(
+                  (x) => x.kind === 'credential-binding' && x.detail?.envVar === p.credentialRef && (x.detail?.hosts || []).includes(host)
+                );
+                if (!pending) {
+                  const proposal = us.addPolicyProposal(userId, {
+                    kind: 'credential-binding',
+                    detail: { envVar: String(p.credentialRef), hosts: [host], reason: String(p.reason) },
+                    source: { taskId: p.taskId, tool: p.tool, url: String(p.url) },
+                  });
+                  const { getGovernanceBus } = require('@/lib/governance-bus');
+                  getGovernanceBus().emitPermissionProposed({
+                    userId,
+                    proposalId: proposal.id,
+                    kind: 'credential-binding',
+                    detail: `${p.credentialRef} → ${host}`,
+                  });
+                  this.addTerminalLog(
+                    'system',
+                    `[Sandbox] 凭据端点不匹配已拦截(${p.credentialRef} → ${host}),已生成权限提案待审核。`
+                  );
+                  proposed = true;
+                }
+              }
+            }
+            if (!proposed) {
+              this.addTerminalLog('stderr', `[Sandbox] 出站/凭据请求被拒绝: ${p.reason}${p.url ? `(${p.url})` : ''}`);
+            }
+          }
+        } catch {
+          // 审计/提案失败不阻断主流程(降级:仅终端日志)
+          this.addTerminalLog('stderr', `[Sandbox] 拒绝事件已收到(审计落盘失败): ${p.reason || 'unknown'}`);
         }
         break;
       }
@@ -639,6 +703,30 @@ class AgentBackend {
           rt.notices.push(notice);
         }
       });
+
+      // 权限提案批准 → 热更新该用户 in-flight 任务的 taskSandbox 活引用
+      // (docs/design/sandbox-control-hardening.md §4.4:审核通过后规则即时生效,
+      // 不重启任务 —— 原地修改策略对象,工具下一次调用读取新值,铁律 7 不受影响)
+      bus.onPermissionResolved((ev: any) => {
+        if (!ev.approved) return;
+        for (const rt of this.taskRuntimes.values()) {
+          if (rt.userId !== ev.userId || !rt.sandbox) continue;
+          if (ev.kind === 'credential-binding' && ev.payload?.envVar) {
+            const cur = rt.sandbox.credentialBindings || {};
+            const hosts = Array.isArray(ev.payload.hosts) ? ev.payload.hosts : [];
+            rt.sandbox.credentialBindings = {
+              ...cur,
+              [ev.payload.envVar]: Array.from(new Set([...(cur[ev.payload.envVar] || []), ...hosts])),
+            };
+          } else if (ev.kind === 'expose-env' && ev.payload?.envVar) {
+            const allow = rt.sandbox.exposeEnv || [];
+            // 与任务启动时同一 ∩ 语义:只放行确实注入过 taskEnv 的键
+            if (!allow.includes(ev.payload.envVar) && rt.env && ev.payload.envVar in rt.env) {
+              rt.sandbox.exposeEnv = [...allow, ev.payload.envVar];
+            }
+          }
+        }
+      });
     } catch (e: any) {
       console.error('[Governance] 治理总线订阅失败(降级:回退弧事件不再传导到运行中任务):', e?.message || e);
     }
@@ -856,6 +944,7 @@ class AgentBackend {
         // 任务级注入（taskTools）：不进全局注册表，多用户互不可见
         let taskTools: any[] | undefined;
         let taskEnv: Record<string, string> | undefined;
+        let taskSandbox: import('@agtpilot/core').SandboxSessionPolicy | undefined;
         if (options.userId) {
           const uid = options.userId;
 
@@ -963,6 +1052,38 @@ class AgentBackend {
           } catch (e) {
             // ignore
           }
+
+          // 沙箱控制策略(taskSandbox,docs/design/sandbox-control-hardening.md §4.4):
+          // - exposeEnv: 仅用户显式 opt-in 白名单 ∩ 实际注入的 taskEnv 键(默认零 Key 进子进程);
+          // - credentialBindings: core 默认绑定 ∪ 用户自定义(提案批准后热更新的落点);
+          // - fence: 用户配置 → AGTPILOT_SANDBOX_FENCE → off(向后兼容)。
+          // 该对象为活引用:权限提案批准后经 onPermissionResolved 原地修改,in-flight 任务即时生效。
+          try {
+            const { getSandboxConfig } = await import('@/lib/user-store');
+            const { DEFAULT_CREDENTIAL_BINDINGS } = await import('@agtpilot/core');
+            const sbxCfg = getSandboxConfig(uid);
+            const envFence = process.env.AGTPILOT_SANDBOX_FENCE;
+            const fence: 'off' | 'best_effort' | 'hard_requirement' =
+              sbxCfg.fence ||
+              (envFence === 'best_effort' || envFence === 'hard_requirement' || envFence === 'off'
+                ? envFence
+                : 'off');
+            taskSandbox = {
+              exposeEnv: (sbxCfg.exposeAllowlist || []).filter((k) => Boolean(taskEnv && k in taskEnv)),
+              credentialBindings: { ...DEFAULT_CREDENTIAL_BINDINGS, ...(sbxCfg.credentialBindings || {}) },
+              fence,
+              net: 'allow',
+            };
+            if ((taskSandbox.exposeEnv || []).length > 0) {
+              this.addTerminalLog(
+                'system',
+                `[Sandbox] 子进程环境暴露白名单: ${taskSandbox.exposeEnv!.join(', ')}(用户显式授权,其余 Key 不进子进程)`
+              );
+            }
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[Sandbox] 沙箱策略构建异常(降级为默认零暴露): ${e?.message || e}`);
+            taskSandbox = { exposeEnv: [], fence: 'off', net: 'allow' };
+          }
         }
 
         // 登记本任务运行时把手:治理事件(记忆删除/授权撤销)发生后仍能
@@ -970,6 +1091,7 @@ class AgentBackend {
         this.taskRuntimes.set(targetMission.id, {
           userId: options.userId,
           env: taskEnv,
+          sandbox: taskSandbox,
           notices: [],
         });
 
@@ -984,6 +1106,7 @@ class AgentBackend {
             prompt: goal,
             taskTools,
             taskEnv,
+            taskSandbox,
             // 回退弧感知通道:每步 prepareStep 前取一条排队的治理提示注入
             getStepNotice: () => this.taskRuntimes.get(targetMission.id)?.notices.shift() ?? null,
             system: `你是基于 Cordis 微内核架构驱动的个人全自主智能体驾驶舱 (AgtPilot)。

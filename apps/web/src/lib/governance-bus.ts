@@ -32,16 +32,47 @@ export interface AuthorityRevokedEvent {
   epoch: number;
 }
 
+/**
+ * 权限提案事件(docs/design/sandbox-control-hardening.md §4.4):
+ * 沙箱拒绝(sandbox_deny)→ 生成 pending 提案时发出,供 UI 提醒/通知消费。
+ */
+export interface PermissionProposedEvent {
+  userId: string;
+  proposalId: string;
+  kind: 'credential-binding' | 'expose-env';
+  detail?: string;
+}
+
+/**
+ * 权限提案裁决事件:人工审核(批准/拒绝)后发出。
+ * 批准 credential-binding / expose-env 时,agent-backend 据此**热更新**
+ * 该用户 in-flight 任务的 taskSandbox 活引用(下一步工具调用即生效,不重启 loop)。
+ */
+export interface PermissionResolvedEvent {
+  userId: string;
+  proposalId: string;
+  approved: boolean;
+  kind: 'credential-binding' | 'expose-env';
+  /** 批准生效的配置内容(credential-binding: {envVar, hosts};expose-env: {envVar}) */
+  payload?: { envVar?: string; hosts?: string[] };
+}
+
 export interface GovernanceBus {
   onMemoryRevoked(handler: (e: MemoryRevokedEvent) => void): () => void;
   onAuthorityRevoked(handler: (e: AuthorityRevokedEvent) => void): () => void;
+  onPermissionProposed(handler: (e: PermissionProposedEvent) => void): () => void;
+  onPermissionResolved(handler: (e: PermissionResolvedEvent) => void): () => void;
   emitMemoryRevoked(e: MemoryRevokedEvent): void;
   emitAuthorityRevoked(e: AuthorityRevokedEvent): void;
+  emitPermissionProposed(e: PermissionProposedEvent): void;
+  emitPermissionResolved(e: PermissionResolvedEvent): void;
 }
 
 function createBus(): GovernanceBus {
   const memoryHandlers = new Set<(e: MemoryRevokedEvent) => void>();
   const authorityHandlers = new Set<(e: AuthorityRevokedEvent) => void>();
+  const proposedHandlers = new Set<(e: PermissionProposedEvent) => void>();
+  const resolvedHandlers = new Set<(e: PermissionResolvedEvent) => void>();
   return {
     onMemoryRevoked(handler) {
       memoryHandlers.add(handler);
@@ -50,6 +81,14 @@ function createBus(): GovernanceBus {
     onAuthorityRevoked(handler) {
       authorityHandlers.add(handler);
       return () => authorityHandlers.delete(handler);
+    },
+    onPermissionProposed(handler) {
+      proposedHandlers.add(handler);
+      return () => proposedHandlers.delete(handler);
+    },
+    onPermissionResolved(handler) {
+      resolvedHandlers.add(handler);
+      return () => resolvedHandlers.delete(handler);
     },
     emitMemoryRevoked(e) {
       for (const h of memoryHandlers) {
@@ -62,6 +101,24 @@ function createBus(): GovernanceBus {
     },
     emitAuthorityRevoked(e) {
       for (const h of authorityHandlers) {
+        try {
+          h(e);
+        } catch {
+          // 同上
+        }
+      }
+    },
+    emitPermissionProposed(e) {
+      for (const h of proposedHandlers) {
+        try {
+          h(e);
+        } catch {
+          // 同上
+        }
+      }
+    },
+    emitPermissionResolved(e) {
+      for (const h of resolvedHandlers) {
         try {
           h(e);
         } catch {

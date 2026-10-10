@@ -1,5 +1,6 @@
 import { AgentEvent } from '@agtpilot/protocol';
 import { ToolDefinition } from './contracts';
+import type { SandboxSessionPolicy } from './sandbox-fence';
 
 export interface TaskOptions {
   taskId?: string;
@@ -23,6 +24,14 @@ export interface TaskOptions {
    * 绝不写入 process.env，避免 A 用户的 Key 被 B 用户的请求使用。
    */
   taskEnv?: Record<string, string>;
+  /**
+   * 任务级沙箱策略(docs/design/sandbox-control-hardening.md §4.2)。
+   * 经 ToolSession.sandbox 透传给沙箱类工具:控制子进程环境暴露(exposeEnv)、
+   * 凭据-端点绑定(credentialBindings)、bwrap 内核围栏(fence)、出站网络(net)。
+   * 与 taskEnv 同一注入点、同样活引用语义(web 层热更新点)。缺省 = 全部默认
+   * (零 Key 暴露 / 默认绑定 / 逻辑围栏 / 网络放行)。
+   */
+  taskSandbox?: SandboxSessionPolicy;
   abortSignal?: AbortSignal;
   configOverride?: any;
   historyMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;

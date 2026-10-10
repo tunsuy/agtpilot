@@ -30,7 +30,7 @@ export interface PlanData {
 }
 
 export interface AgentEvent {
-  type: 'thought' | 'tool_call' | 'tool_result' | 'ui_card' | 'artifact' | 'plan' | 'approval_request' | 'approval_resolved' | 'connector_suggestion' | 'connector_suggestion_resolved' | 'viewport_update' | 'terminal_output' | 'done' | 'error';
+  type: 'thought' | 'tool_call' | 'tool_result' | 'ui_card' | 'artifact' | 'plan' | 'approval_request' | 'approval_resolved' | 'connector_suggestion' | 'connector_suggestion_resolved' | 'viewport_update' | 'terminal_output' | 'sandbox_deny' | 'done' | 'error';
   payload: Record<string, any>;
   timestamp: number;
 }

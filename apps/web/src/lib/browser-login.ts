@@ -22,6 +22,20 @@ export const XHS_LOGIN_COOKIE_NAMES = ['web_session'];
 /** URL 出现在登录流程中(如重定向回登录页)则视为未登录完成 */
 export const XHS_LOGIN_URL_HINT = /login/i;
 
+/**
+ * 登录页(creator.xiaohongshu.com/login)默认是「短信登录」表单,而扫码通道需要二维码视图。
+ * 以下选择器 2026-10-10 无头实测:全用结构/文案锚点,不依赖站方 emotion 哈希 class(css-xxxx 每次发版都变)。
+ */
+/** 短信登录态判定:手机号输入框可见 */
+export const XHS_SMS_INPUT_SELECTOR = 'input[placeholder="手机号"]';
+/** 扫码态判定文案(「扫码即同意 用户协议 和 隐私政策」只在二维码视图出现) */
+export const XHS_QR_MODE_TEXT = '扫码即同意';
+/** 切换角标:登录卡右上角图标。短信态下它是 `.sso-login-wrapper` 内唯一 img,点击即切「APP扫一扫登录」 */
+export const XHS_QR_SWITCH_SELECTOR = '.sso-login-wrapper img';
+/** 等登录卡挂载 / 等切换生效的上限(登录卡是客户端渲染,goto 后需要几秒才挂载) */
+export const QR_MOUNT_WAIT_MS = 8000;
+export const QR_SWITCH_WAIT_MS = 8000;
+
 /** 轮询间隔:截图推帧 + 登录判定 */
 export const LOGIN_POLL_INTERVAL_MS = 1500;
 /** 整体超时(可用 AGTPILOT_BROWSER_LOGIN_TIMEOUT_MS 覆盖) */
@@ -64,10 +78,14 @@ export interface LoginBrowserDeps {
   pageUrl(userId?: string): string | null;
 }
 
-/** Page 的最小面(状态机只用 goto/url) */
+/** Page 的最小面(状态机只用 goto/url;isVisible/click 供扫码态切换,真 Page 原生具备) */
 export interface PageLike {
   goto(url: string, opts?: any): Promise<any>;
   url(): string;
+  /** 可选:元素可见性判定(mock 可省略,省略时扫码态切换降级为不干预) */
+  isVisible?(selector: string): Promise<boolean>;
+  /** 可选:选择器点击(mock 可省略) */
+  click?(selector: string, opts?: any): Promise<any>;
 }
 
 export interface LoginDeps {
@@ -79,6 +97,9 @@ export interface LoginDeps {
   pollIntervalMs?: number;
   timeoutMs?: number;
   settleMs?: number;
+  /** 扫码态切换:等登录卡挂载 / 等切换生效的上限(测试置小值) */
+  qrMountWaitMs?: number;
+  qrSwitchWaitMs?: number;
   /** 终态后 session 清理延迟(测试置 0) */
   retentionMs?: number;
 }
@@ -140,6 +161,55 @@ export function checkLoginState(
   currentUrl: string
 ): boolean {
   return hasCookies && !isLoginUrl(currentUrl);
+}
+
+/**
+ * 登录页默认停在「短信登录」表单,而扫码通道要的是二维码视图:
+ * 登录卡挂载后若手机号输入框可见,点击卡右上角角标切到「APP扫一扫登录」。
+ * 尽力而为:站方改版导致选择器失配时返回 false、不抛错,帧流原样展示页面,人工仍可自救。
+ * 返回 true = 已确认处于扫码态(含站方本就默认扫码);false = 未确认(卡未挂载/改版/能力缺失)。
+ */
+export async function ensureQrLoginMode(
+  page: PageLike,
+  sleep: (ms: number) => Promise<void>,
+  opts?: { mountWaitMs?: number; switchWaitMs?: number; tickMs?: number }
+): Promise<boolean> {
+  if (!page.isVisible || !page.click) return false;
+  const tick = opts?.tickMs ?? 500;
+  const visible = async (sel: string) => {
+    try {
+      return await page.isVisible!(sel);
+    } catch {
+      // 页面跳转瞬间等偶发失败按不可见处理,下一轮重试
+      return false;
+    }
+  };
+  const qrMarker = `text=${XHS_QR_MODE_TEXT}`;
+
+  // 登录卡客户端渲染:等到两种形态之一出现才算挂载
+  const mountDeadline = Date.now() + (opts?.mountWaitMs ?? QR_MOUNT_WAIT_MS);
+  let smsVisible = false;
+  while (Date.now() < mountDeadline) {
+    if (await visible(qrMarker)) return true; // 站方本就默认扫码态
+    smsVisible = await visible(XHS_SMS_INPUT_SELECTOR);
+    if (smsVisible) break;
+    await sleep(tick);
+  }
+  if (!smsVisible) return false;
+
+  try {
+    await page.click(XHS_QR_SWITCH_SELECTOR, { timeout: 5000 });
+  } catch {
+    return false;
+  }
+
+  // 模式切换即时生效(二维码图片另走 qr-code 接口,实测 1-4s,由帧流自然带出)
+  const switchDeadline = Date.now() + (opts?.switchWaitMs ?? QR_SWITCH_WAIT_MS);
+  while (Date.now() < switchDeadline) {
+    if (await visible(qrMarker)) return true;
+    await sleep(tick);
+  }
+  return false;
 }
 
 /**
@@ -222,11 +292,17 @@ async function drive(session: LoginSession, deps: LoginDeps) {
       return finish('success', '浏览器已保存登录态,无需重复扫码');
     }
 
+    // 登录页默认是短信登录表单:切到扫码态,用户帧流里看到的才是二维码(尽力而为,失败不阻断)
+    await ensureQrLoginMode(page, sleep, {
+      mountWaitMs: deps.qrMountWaitMs ?? QR_MOUNT_WAIT_MS,
+      switchWaitMs: deps.qrSwitchWaitMs ?? QR_SWITCH_WAIT_MS,
+    });
+    if (session.cancelRequested) return finish('cancelled');
+
     emit(
       session,
       { type: 'status', phase: 'waiting', detail: '请用小红书 App 扫描页面中的二维码', ts: now() }
     );
-
     // 轮询:推帧 + 登录判定,直到命中 / 超时 / 取消
     const startedAt = now();
     while (!session.final) {

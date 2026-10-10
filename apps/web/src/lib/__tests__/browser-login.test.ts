@@ -5,9 +5,12 @@ import {
   getLoginSession,
   subscribeLoginEvents,
   checkLoginState,
+  ensureQrLoginMode,
   resetLoginSessionsForTest,
   XHS_CREATOR_HOME,
   XHS_LOGIN_COOKIE_NAMES,
+  XHS_SMS_INPUT_SELECTOR,
+  XHS_QR_SWITCH_SELECTOR,
   type LoginBrowserDeps,
   type LoginEvent,
   type LoginDeps,
@@ -26,24 +29,42 @@ async function waitUntil(fn: () => boolean, ms = 2000): Promise<void> {
 
 interface MockPage extends PageLike {
   gotoCalls: string[];
+  clickCalls: string[];
 }
 
-function makeMockPage(url: string): MockPage {
+/** loginMode:模拟登录卡形态 —— sms 短信表单 / qr 扫码视图 / none 卡未挂载或改版 */
+function makeMockPage(url: string, loginMode: 'sms' | 'qr' | 'none' = 'none'): MockPage {
   let current = url;
+  let mode = loginMode;
   const gotoCalls: string[] = [];
+  const clickCalls: string[] = [];
   const page: MockPage = {
     gotoCalls,
+    clickCalls,
     goto: vi.fn(async (u: string) => {
       gotoCalls.push(u);
       current = u;
     }),
     url: () => current,
+    isVisible: vi.fn(async (sel: string) => {
+      if (mode === 'none') return false;
+      if (sel === XHS_SMS_INPUT_SELECTOR) return mode === 'sms';
+      if (sel.startsWith('text=')) return mode === 'qr';
+      return false;
+    }),
+    click: vi.fn(async (sel: string) => {
+      clickCalls.push(sel);
+      // 点角标 = 切到扫码视图(与真实站点行为一致)
+      if (sel === XHS_QR_SWITCH_SELECTOR && mode === 'sms') mode = 'qr';
+    }),
   };
   return page;
 }
 
-function makeMockBrowser(opts: { cookiesAfter?: number; frameUrl?: string; throwFirstFrame?: boolean } = {}) {
-  const page = makeMockPage(XHS_CREATOR_HOME);
+function makeMockBrowser(
+  opts: { cookiesAfter?: number; frameUrl?: string; throwFirstFrame?: boolean; loginMode?: 'sms' | 'qr' | 'none' } = {}
+) {
+  const page = makeMockPage(XHS_CREATOR_HOME, opts.loginMode ?? 'none');
   let cookieCalls = 0;
   let frameCalls = 0;
   const acquirePage = vi.fn(async () => page);
@@ -75,6 +96,9 @@ function baseDeps(browser: LoginBrowserDeps, overrides: Partial<LoginDeps> = {})
     pollIntervalMs: 1,
     settleMs: 0,
     retentionMs: 100_000,
+    // 扫码态切换的等待上限置小:mock sleep 瞬时,避免 'none' 形态用例空转真实 8s
+    qrMountWaitMs: 20,
+    qrSwitchWaitMs: 20,
     ...overrides,
   };
 }
@@ -227,5 +251,60 @@ describe('startBrowserLogin 状态机', () => {
     const [, domain, names] = mocks.hasCookies.mock.calls[0];
     expect(domain).toBe(XHS_CREATOR_HOME);
     expect(names).toEqual(XHS_LOGIN_COOKIE_NAMES);
+  });
+
+  it('短信态登录页:状态机自动点角标切到扫码视图', async () => {
+    const { browser, page } = makeMockBrowser({ cookiesAfter: 3, loginMode: 'sms' });
+    const { sessionId } = startBrowserLogin('u10', baseDeps(browser));
+
+    await waitUntil(() => !!getLoginSession(sessionId)?.final);
+    expect(getLoginSession(sessionId)!.final?.outcome).toBe('success');
+    expect(page.clickCalls).toContain(XHS_QR_SWITCH_SELECTOR);
+  });
+
+  it('已是扫码态:不重复点角标', async () => {
+    const { browser, page } = makeMockBrowser({ cookiesAfter: 3, loginMode: 'qr' });
+    const { sessionId } = startBrowserLogin('u11', baseDeps(browser));
+
+    await waitUntil(() => !!getLoginSession(sessionId)?.final);
+    expect(getLoginSession(sessionId)!.final?.outcome).toBe('success');
+    expect(page.clickCalls).toEqual([]);
+  });
+});
+
+describe('ensureQrLoginMode', () => {
+  const noopSleep = async () => {};
+
+  it('短信态 → 点角标 → 确认扫码态 true', async () => {
+    const page = makeMockPage(XHS_CREATOR_HOME, 'sms');
+    await expect(ensureQrLoginMode(page, noopSleep)).resolves.toBe(true);
+    expect(page.clickCalls).toEqual([XHS_QR_SWITCH_SELECTOR]);
+  });
+
+  it('站方本就扫码态 → 不点击直接 true', async () => {
+    const page = makeMockPage(XHS_CREATOR_HOME, 'qr');
+    await expect(ensureQrLoginMode(page, noopSleep)).resolves.toBe(true);
+    expect(page.clickCalls).toEqual([]);
+  });
+
+  it('登录卡未挂载/改版 → 等挂载超时后 false,不抛错', async () => {
+    const page = makeMockPage(XHS_CREATOR_HOME, 'none');
+    await expect(ensureQrLoginMode(page, noopSleep, { mountWaitMs: 30 })).resolves.toBe(false);
+    expect(page.clickCalls).toEqual([]);
+  });
+
+  it('Page 缺 isVisible/click 能力 → 降级 false,不干预页面', async () => {
+    const bare: PageLike = makeMockPage(XHS_CREATOR_HOME, 'sms');
+    delete bare.isVisible;
+    delete bare.click;
+    await expect(ensureQrLoginMode(bare, noopSleep)).resolves.toBe(false);
+  });
+
+  it('角标点击抛错(站方改版)→ 收敛 false', async () => {
+    const page = makeMockPage(XHS_CREATOR_HOME, 'sms');
+    page.click = vi.fn(async () => {
+      throw new Error('selector 失配');
+    });
+    await expect(ensureQrLoginMode(page, noopSleep)).resolves.toBe(false);
   });
 });

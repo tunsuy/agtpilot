@@ -206,12 +206,7 @@ export function DeliverablesView({
       {/* 顶部标题栏：移动端居中简版（无图标/描述），桌面完整版；操作按钮两种布局共用 */}
       {variant === 'mobile' ? (
         <header className="text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-900">
-            交付物
-            <span className="ml-2 align-middle text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 border border-zinc-200/80 text-zinc-600">
-              {allArtifacts.length}
-            </span>
-          </h1>
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900">交付物</h1>
           {activeItem && (
             <div className="mt-3 flex items-center justify-center gap-2">
               <HeaderActions

@@ -103,6 +103,7 @@ export function MobileHomeView({
 
       {/* 下任务输入框 */}
       <div className="rounded-2xl border border-zinc-200 bg-white shadow-sm focus-within:border-zinc-300 focus-within:ring-2 focus-within:ring-zinc-100 transition">
+        {/* rows=2:placeholder 约 27 字在手机上必然折两行,单行高会把第二行裁掉 */}
         <textarea
           ref={textareaRef}
           value={draft}
@@ -117,7 +118,7 @@ export function MobileHomeView({
               submit();
             }
           }}
-          rows={1}
+          rows={2}
           placeholder="一句话派个任务，如：帮我调研下周末北京适合遛娃的地方"
           className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-6 text-zinc-900 placeholder:text-zinc-400 focus:outline-none"
         />

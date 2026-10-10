@@ -20,8 +20,8 @@ import { Mission, ApprovalRequest, User } from '../types/agent';
 import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
-  activeView: 'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables';
-  onViewChange: (view: 'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => void;
+  activeView: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables';
+  onViewChange: (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => void;
   currentMission: Mission | null;
   connectedCount: number;
   memoryCount?: number;
@@ -120,6 +120,18 @@ export function Navbar({
           {isMissionActive && (
             <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-ping" />
           )}
+        </button>
+
+        <button
+          onClick={() => onViewChange('workshops')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'workshops'
+              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>工坊</span>
         </button>
 
         <button

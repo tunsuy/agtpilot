@@ -7,6 +7,7 @@ import { Navbar } from '../components/Navbar';
 import { HomeView } from '../components/HomeView';
 import { CockpitView } from '../components/CockpitView';
 import { ConnectorsView } from '../components/ConnectorsView';
+import { WorkshopsView } from '../components/workshops/WorkshopsView';
 import { DeliverablesView } from '../components/DeliverablesView';
 import { MemoriesView } from '../components/MemoriesView';
 import { CronJobsView } from '../components/CronJobsView';
@@ -38,10 +39,10 @@ import {
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
   const { isMobile, mounted: mobileReady } = useIsMobile();
-  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables'>('home');
   // 移动端专属状态：底部 tab + 全屏覆盖层（复用桌面视图做"更多"入口）
   const [mobileTab, setMobileTab] = useState<MobileTab>('home');
-  const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'patrol' | null>(null);
+  const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'patrol' | 'workshops' | null>(null);
   const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact'>('browser');
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
@@ -61,6 +62,8 @@ export default function Workspace() {
   const [connectorSuggestions, setConnectorSuggestions] = useState<ConnectorSuggestion[]>([]);
   // 中途授权（粘贴凭证类）：跳到连接器中心并自动打开对应配置弹窗
   const [mcpAutoConfigure, setMcpAutoConfigure] = useState<string | null>(null);
+  // 连接器页「工坊直达」跳转：自动打开工坊页中对应的场景工坊表单
+  const [workshopAutoOpen, setWorkshopAutoOpen] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<ArtifactState | null>(null);
 
   // 连接器状态
@@ -443,6 +446,8 @@ export default function Workspace() {
       const tab = urlParams.get('tab');
       if (tab === 'connectors') {
         setActiveView('connectors');
+      } else if (tab === 'workshops') {
+        setActiveView('workshops');
       } else if (tab === 'home' || tab === 'deliverables' || tab === 'activity' || tab === 'profile') {
         setMobileTab(tab);
       }
@@ -651,14 +656,29 @@ export default function Workspace() {
     };
   }, [session?.user?.id]);
 
-  const handleViewChange = (view: 'home' | 'cockpit' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => {
-    // 首页允许所有人浏览概览，其余页面（工作台、连接器、记忆库、巡航、交付库、长期目标）必须登录
+  const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => {
+    // 首页允许所有人浏览概览，其余页面（工作台、工坊、连接器、记忆库、巡航、交付库、长期目标）必须登录
     if (view !== 'home' && sessionStatus !== 'loading' && !session?.user) {
       setAuthModalTab('login');
       setAuthModalOpen(true);
       return;
     }
     setActiveView(view);
+  };
+
+  // 连接器页「工坊直达」:带工坊 id 跳转,工坊页自动展开对应表单(桌面/移动统一入口)
+  const handleOpenWorkshops = (workshopId: string) => {
+    if (sessionStatus !== 'loading' && !session?.user) {
+      setAuthModalTab('login');
+      setAuthModalOpen(true);
+      return;
+    }
+    setWorkshopAutoOpen(workshopId);
+    if (isMobile) {
+      setMobileOverlay('workshops');
+    } else {
+      setActiveView('workshops');
+    }
   };
 
   const currentMission = missions.find((m) => m.id === activeMissionId) || missions[0] || null;
@@ -687,6 +707,7 @@ export default function Workspace() {
         connectors: '连接器',
         memories: '记忆库',
         patrol: '定时巡航',
+        workshops: '工坊',
       };
       return (
         <div className="fixed inset-0 z-40 bg-[#fbfbfd] flex flex-col">
@@ -721,9 +742,22 @@ export default function Workspace() {
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
-                onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
+                onOpenWorkshops={handleOpenWorkshops}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
+              />
+            )}
+            {mobileOverlay === 'workshops' && (
+              <WorkshopsView
+                connectors={connectors}
+                onRunPrompt={(prompt, title) => {
+                  handleRun(prompt, title, null);
+                  // 任务发起后回到活动页看执行流,关闭工坊覆盖层
+                  setMobileOverlay(null);
+                }}
+                onOpenConnectors={() => setMobileOverlay('connectors')}
+                autoOpenId={workshopAutoOpen}
+                onAutoOpenHandled={() => setWorkshopAutoOpen(null)}
               />
             )}
             {mobileOverlay === 'memories' && (
@@ -947,13 +981,25 @@ export default function Workspace() {
             </main>
           )}
 
+          {activeView === 'workshops' && (
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
+              <WorkshopsView
+                connectors={connectors}
+                onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
+                onOpenConnectors={() => handleViewChange('connectors')}
+                autoOpenId={workshopAutoOpen}
+                onAutoOpenHandled={() => setWorkshopAutoOpen(null)}
+              />
+            </main>
+          )}
+
           {activeView === 'connectors' && (
             <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
               <ConnectorsView
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
-                onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
+                onOpenWorkshops={handleOpenWorkshops}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
               />

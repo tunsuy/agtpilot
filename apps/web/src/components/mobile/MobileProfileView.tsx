@@ -15,6 +15,7 @@ import {
   Bell,
   BellOff,
   Smartphone,
+  Sparkles,
 } from 'lucide-react';
 import { ConnectorApp, CronJobItem, GoalItem } from '../../types/agent';
 import { detectPushSupport, enablePush, disablePush, getPushStatus, PushSupport, PushStatus } from '../../utils/pwaPush';
@@ -31,7 +32,7 @@ interface MobileProfileViewProps {
   onToggleCronJob: (id: string) => void;
   onTriggerCronJob: (id: string) => void;
   /** 打开桌面版功能页（移动端以全屏覆盖层呈现，带返回） */
-  onOpenFullView: (view: 'goals' | 'connectors' | 'memories' | 'patrol') => void;
+  onOpenFullView: (view: 'goals' | 'connectors' | 'memories' | 'patrol' | 'workshops') => void;
   onOpenAuth: (tab: 'login' | 'register') => void;
   onLogout: () => void;
 }
@@ -282,6 +283,14 @@ export function MobileProfileView({
       <section className="mt-5">
         <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 px-1">更多</h2>
         <ul className="rounded-xl border border-zinc-200 bg-white divide-y divide-zinc-100 overflow-hidden shadow-sm">
+          <li>
+            <button type="button" onClick={() => onOpenFullView('workshops')} className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-zinc-50 transition">
+              <Sparkles className="h-4 w-4 text-zinc-400" />
+              <span className="flex-1 text-sm text-zinc-800">工坊</span>
+              <span className="text-xs text-zinc-400">场景任务一键发起</span>
+              <ChevronRight className="h-4 w-4 text-zinc-300" />
+            </button>
+          </li>
           <li>
             <button type="button" onClick={() => onOpenFullView('connectors')} className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-zinc-50 transition">
               <Plug className="h-4 w-4 text-zinc-400" />

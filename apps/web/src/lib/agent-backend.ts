@@ -614,7 +614,8 @@ class AgentBackend {
             mission.steps.push({
               id: `step_assistant_${Date.now()}`,
               role: 'assistant',
-              title: '智能体回复',
+              messageKind: 'final',
+              title: '最终答复',
               status: 'DONE',
               answer: finalAnswer,
             });
@@ -1279,7 +1280,8 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 3. 【连接器工具优先】：mcp_ 前缀的工具来自用户已授权的外部服务连接器（如地图、文档、日程），涉及对应平台的能力时优先使用它们。
 4. 【中途授权】：当任务确实需要某平台专用能力（如读写 Notion、管理滴答清单日程）但对应连接器未授权时，调用 connector_authorize（action=request，附 connectorId 与一句话理由）向用户发起授权请求 —— 用户会看到授权卡片，工具会等待结果：授权成功则返回新工具清单，用 mcp_call 按名字调用；用户跳过或超时则立即改用 browser_ 系列工具在网页上直接完成操作作为兜底，不要空等或放弃任务。不确定有哪些连接器时先用 connector_authorize（action=list）查看。
 5. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。
-6. 【步数经济】：多个互相独立的工具调用，请在同一轮一次性并行发出，不要逐个串行等待结果后再发下一个；任务看板（planner）由系统随工具执行成功自动推进，【不要】调用 planner_update_task 汇报进度（仅在需要标记某步骤失败时才使用）；预计两步以内的简单任务直接执行，不要创建规划看板。`,
+6. 【步数经济】：多个互相独立的工具调用，请在同一轮一次性并行发出，不要逐个串行等待结果后再发下一个；任务看板（planner）由系统随工具执行成功自动推进，【不要】调用 planner_update_task 汇报进度（仅在需要标记某步骤失败时才使用）；预计两步以内的简单任务直接执行，不要创建规划看板。
+7. 【安静执行】：在工具调用前后不要反复输出“收到”“我先搜索”“我再继续”等过程播报；直接调用工具，由系统活动卡展示进度。只有需要用户补充信息、审批授权、报告不可恢复的阻塞，或给出最终交付时，才向用户输出完整消息。`, 
           });
 
           if (result.success && result.messages) {

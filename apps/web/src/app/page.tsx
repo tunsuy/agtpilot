@@ -550,7 +550,7 @@ export default function Workspace() {
                     next.reasoning = (next.reasoning || '') + String(seg.delta || '');
                   } else {
                     next.answer = (next.answer || '') + String(seg.delta || '');
-                    next.title = '智能体回复';
+                    next.title = '正在处理…';
                   }
                 }
                 steps[i] = next;
@@ -563,7 +563,8 @@ export default function Workspace() {
               const fallback = {
                 id: `step_live_${taskId}_fe_${Date.now()}`,
                 role: 'assistant' as const,
-                title: '智能体回复',
+                messageKind: 'progress' as const,
+                title: '正在处理…',
                 status: 'RUNNING' as const,
                 answer: '',
                 reasoning: '',

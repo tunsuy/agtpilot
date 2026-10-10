@@ -55,6 +55,8 @@ export interface MissionStep {
   title: string;
   tool?: string;
   role?: 'user' | 'assistant' | 'tool';
+  /** UI 语义：过程叙述归入任务活动流，只有 final/intervention 使用正式消息卡。 */
+  messageKind?: 'progress' | 'final' | 'intervention';
   userPrompt?: string;
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
   /** 工具步骤开始时间（用于计算真实耗时，替代旧的硬编码假值） */

@@ -33,6 +33,7 @@ describe('ensureLiveStep / findLiveStep', () => {
     const step = ensureLiveStep(m, 1);
     expect(step.status).toBe('RUNNING');
     expect(step.role).toBe('assistant');
+    expect(step.messageKind).toBe('progress');
     expect(step.title).toBe('正在思考…');
     expect(step.id.startsWith(LIVE_STEP_ID_PREFIX)).toBe(true);
     expect(m.steps).toHaveLength(1);
@@ -131,7 +132,8 @@ describe('finalizeWithAnswer（done 合并去重）', () => {
     expect(merged).toBe(true);
     expect(live.answer).toBe('最终权威回答全文');
     expect(live.status).toBe('DONE');
-    expect(live.title).toBe('智能体回复');
+    expect(live.title).toBe('最终答复');
+    expect(live.messageKind).toBe('final');
     expect(m.steps.filter((s) => s.role === 'assistant')).toHaveLength(1);
   });
 

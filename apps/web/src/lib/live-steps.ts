@@ -30,6 +30,7 @@ export function ensureLiveStep(mission: Mission, stepNumber?: number, reason?: s
   const step: MissionStep = {
     id: `${LIVE_STEP_ID_PREFIX}${mission.id}_${stepNumber ?? 'x'}_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
     role: 'assistant',
+    messageKind: 'progress',
     title: reason === 'wrap-up' ? '正在做最终总结…' : '正在思考…',
     status: 'RUNNING',
     answer: '',
@@ -82,7 +83,8 @@ export function finalizeWithAnswer(mission: Mission, finalAnswer: string): boole
   if (!live) return false;
   live.answer = finalAnswer;
   live.status = 'DONE';
-  live.title = '智能体回复';
+  live.messageKind = 'final';
+  live.title = '最终答复';
   live.duration = `${Math.max(0, Date.now() - (live.startedAt || Date.now()))}ms`;
   return true;
 }

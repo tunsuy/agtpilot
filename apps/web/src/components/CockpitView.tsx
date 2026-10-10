@@ -27,6 +27,8 @@ import {
   Plus,
   PanelLeftClose,
   PanelLeft,
+  PanelRightClose,
+  PanelRightOpen,
   ListTodo,
   Bot,
   User,
@@ -103,7 +105,9 @@ export function CockpitView({
   const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'source' | 'social'>('preview');
   const [selectedArtifactIndex, setSelectedArtifactIndex] = useState<number>(0);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+  const [showExecutionDetails, setShowExecutionDetails] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(true);
   const [isWorkbenchExpanded, setIsWorkbenchExpanded] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const stepsEndRef = useRef<HTMLDivElement>(null);
@@ -263,8 +267,8 @@ export function CockpitView({
       {/* 2. 中间：核心交互与执行轨迹流 (Main Chat, Steps & Stream)      */}
       {/* ========================================================= */}
       <section
-        className={`flex-1 flex flex-col min-w-[380px] bg-white border-r border-zinc-200 transition-all ${
-          isWorkbenchExpanded ? 'hidden' : 'flex'
+        className={`flex flex-col min-w-[380px] bg-white transition-all ${
+          isWorkbenchExpanded ? 'hidden' : isWorkbenchOpen ? 'flex-[0_1_44%] border-r border-zinc-200' : 'flex-1'
         }`}
       >
         {/* 顶部目标概览与进度条 */}
@@ -280,13 +284,35 @@ export function CockpitView({
                   <PanelLeft className="h-4 w-4" />
                 </button>
               )}
-              <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
-                <ListTodo className="h-3.5 w-3.5" />
-                <span>任务执行流</span>
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <ListTodo className="h-3.5 w-3.5" />
+                  <span>任务活动</span>
+                </span>
+                {currentMission && (
+                  <button
+                    type="button"
+                    onClick={() => setShowExecutionDetails((value) => !value)}
+                    className="text-[10px] text-zinc-400 hover:text-zinc-700 transition"
+                  >
+                    {showExecutionDetails ? '收起详情' : '查看执行详情'}
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
+              {!isWorkbenchOpen && (
+                <button
+                  type="button"
+                  onClick={() => setIsWorkbenchOpen(true)}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition"
+                  title="打开执行工作区"
+                >
+                  <PanelRightOpen className="h-3.5 w-3.5" />
+                  <span>工作区</span>
+                </button>
+              )}
               {currentMission && currentMission.status !== 'DONE' && onStopMission && (
                 <button
                   type="button"
@@ -416,11 +442,29 @@ export function CockpitView({
 
                 const blocks: RenderBlock[] = [];
                 let currentTools: (typeof currentMission.steps) = [];
+                // 兼容旧任务：每个用户轮次中最后一条已完成 assistant 文本视作最终答复。
+                const legacyFinalAssistantIds = new Set<string>();
+                let legacyCandidate: string | undefined;
+                for (const step of currentMission.steps) {
+                  const beginsNewTurn = step.role === 'user' || Boolean(step.userPrompt);
+                  if (beginsNewTurn) {
+                    if (legacyCandidate) legacyFinalAssistantIds.add(legacyCandidate);
+                    legacyCandidate = undefined;
+                  } else if (step.role === 'assistant' && step.status === 'DONE' && step.answer && !step.messageKind) {
+                    legacyCandidate = step.id;
+                  }
+                }
+                if (legacyCandidate) legacyFinalAssistantIds.add(legacyCandidate);
 
                 currentMission.steps.forEach((st, idx) => {
                   const isUser = st.role === 'user' || Boolean(st.userPrompt);
                   const isAssistant = (st.role === 'assistant' || Boolean(st.answer)) && !isUser;
-                  const isTool = !isUser && !isAssistant;
+                  const isFinalAssistant = isAssistant && (
+                    st.messageKind === 'final' ||
+                    (!st.messageKind && legacyFinalAssistantIds.has(st.id))
+                  );
+                  // 中间模型轮次是执行过程，不再作为平级大回复；与工具调用一起归入活动块。
+                  const isTool = !isUser && (!isAssistant || !isFinalAssistant);
 
                   if (isTool) {
                     currentTools.push(st);
@@ -481,16 +525,20 @@ export function CockpitView({
                     const groupKey = block.key;
                     const isAnyRunning = groupSteps.some((s) => s.status === 'RUNNING');
                     const hasFailed = groupSteps.some((s) => s.status === 'FAILED');
-                    const isGroupExpanded = expandedTools[groupKey] ?? isAnyRunning;
+                    const isGroupExpanded = expandedTools[groupKey] ?? (showExecutionDetails && isAnyRunning);
 
                     // 提取概览信息
-                    const toolTypes = Array.from(new Set(groupSteps.map((s) => s.tool || 'action')));
+                    const toolTypes = Array.from(new Set(groupSteps.map((s) => s.tool).filter(Boolean)));
                     const lastAction = groupSteps[groupSteps.length - 1];
+                    const completedCount = groupSteps.filter((s) => s.status === 'DONE').length;
+                    const lastProgressText = [...groupSteps].reverse().find((s) => s.role === 'assistant' && s.answer)?.answer;
                     const summaryLabel = isAnyRunning
-                      ? `正在调度 ${lastAction.tool || '工具'}...`
+                      ? lastAction.role === 'assistant'
+                        ? '正在分析并规划下一步…'
+                        : `正在${lastAction.tool?.includes('search') ? '搜索资料' : lastAction.tool?.includes('browser') ? '浏览网页' : lastAction.tool?.includes('sandbox') ? '运行分析' : '执行任务'}…`
                       : hasFailed
-                      ? `执行出现异常 (${groupSteps.length} 步)`
-                      : `已完成 ${groupSteps.length} 项自主探索与分析`;
+                      ? `执行过程中有步骤需要注意`
+                      : `已完成 ${completedCount} 项任务活动`;
 
                     return (
                       <div key={groupKey} className="my-2.5 max-w-2xl mx-auto w-full animate-fadeIn">
@@ -516,11 +564,18 @@ export function CockpitView({
                                 )}
                               </div>
 
-                              <span className="text-[11px] font-medium text-zinc-700 truncate">
-                                {summaryLabel}
-                              </span>
+                              <div className="min-w-0">
+                                <span className="text-[11px] font-medium text-zinc-700 truncate block">
+                                  {summaryLabel}
+                                </span>
+                                {lastProgressText && (
+                                  <span className="text-[10px] text-zinc-400 truncate block max-w-sm mt-0.5">
+                                    {lastProgressText}
+                                  </span>
+                                )}
+                              </div>
 
-                              {toolTypes.length > 0 && (
+                              {showExecutionDetails && toolTypes.length > 0 && (
                                 <div className="hidden sm:flex items-center gap-1">
                                   {toolTypes.slice(0, 3).map((t) => (
                                     <span
@@ -535,19 +590,21 @@ export function CockpitView({
                             </div>
 
                             <div className="flex items-center gap-2 flex-shrink-0">
-                              <span className="text-[10px] text-zinc-400 font-mono">
-                                {groupSteps.length} 步行动
+                              <span className="text-[10px] text-zinc-400">
+                                {groupSteps.length} 项活动
                               </span>
-                              <ChevronDown
-                                className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
-                                  isGroupExpanded ? 'rotate-180' : ''
-                                }`}
-                              />
+                              {showExecutionDetails && (
+                                <ChevronDown
+                                  className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
+                                    isGroupExpanded ? 'rotate-180' : ''
+                                  }`}
+                                />
+                              )}
                             </div>
                           </div>
 
                           {/* 展开后的各子步骤列表 */}
-                          {isGroupExpanded && (
+                          {showExecutionDetails && isGroupExpanded && (
                             <div className="px-3 pb-3 pt-1 border-t border-zinc-200/50 space-y-1.5 bg-white/50">
                               {groupSteps.map((st) => {
                                 const isSubExpanded = Boolean(expandedTools[st.id]);
@@ -557,6 +614,26 @@ export function CockpitView({
                                   if (st.tool?.includes('sandbox')) return <Code className="h-3 w-3 text-amber-500" />;
                                   return <Wrench className="h-3 w-3 text-zinc-500" />;
                                 };
+
+                                if (st.role === 'assistant') {
+                                  return (
+                                    <div key={st.id} className="rounded-lg border border-zinc-200/70 bg-white px-3 py-2.5 text-xs shadow-2xs">
+                                      <div className="flex items-start gap-2">
+                                        {st.status === 'RUNNING' ? (
+                                          <RotateCw className="h-3 w-3 mt-0.5 text-blue-500 animate-spin flex-shrink-0" />
+                                        ) : (
+                                          <Sparkles className="h-3 w-3 mt-0.5 text-zinc-400 flex-shrink-0" />
+                                        )}
+                                        <div className="min-w-0">
+                                          <p className="text-[10px] font-medium text-zinc-500 mb-0.5">阶段分析</p>
+                                          <p className="text-[11px] text-zinc-600 leading-relaxed line-clamp-3 whitespace-pre-wrap">
+                                            {st.answer || st.reasoning || st.title}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                }
 
                                 return (
                                   <div
@@ -842,6 +919,7 @@ export function CockpitView({
       {/* ========================================================= */}
       {/* 3. 右侧：副驾驶执行工作台 (Browser / Terminal / Artifact)     */}
       {/* ========================================================= */}
+      {isWorkbenchOpen && (
       <main className="flex-1 flex flex-col min-w-0 bg-[#fafafa]">
         {/* 标签栏：Browser / Terminal / Deliverable / 最大化 */}
         <div className="h-11 border-b border-zinc-200 bg-white px-4 flex items-center justify-between">
@@ -894,6 +972,16 @@ export function CockpitView({
 
           {/* 顶栏辅助控制区 */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setIsWorkbenchExpanded(false);
+                setIsWorkbenchOpen(false);
+              }}
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition"
+              title="收起执行工作区"
+            >
+              <PanelRightClose className="h-4 w-4" />
+            </button>
             {rightTab === 'browser' && activeViewport.url && activeViewport.url !== 'about:blank' && (
               <div className="flex items-center gap-1.5 text-xs text-zinc-500 font-mono truncate max-w-xs bg-zinc-50 border border-zinc-200 px-2.5 py-1 rounded-md">
                 <Lock className="h-3 w-3 text-zinc-400 flex-shrink-0" />
@@ -1285,6 +1373,7 @@ export function CockpitView({
           })()}
         </div>
       </main>
+      )}
     </div>
   );
 }

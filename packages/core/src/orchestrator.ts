@@ -536,7 +536,9 @@ export class OrchestratorService extends Service {
         if (svc?.classify) {
           const { groups, verdicts } = await svc.classify(messages);
           const keepIds = new Set<string>();
-          const groupById = new Map((groups ?? []).map((g: any) => [g.id, g]));
+          const groupById = new Map<string, any>(
+            (groups ?? []).map((g: any) => [g.id, g] as [string, any])
+          );
           for (const v of verdicts ?? []) {
             if (v.action === 'keep') {
               const gid = groupById.get(v.id)?.toolCallId;

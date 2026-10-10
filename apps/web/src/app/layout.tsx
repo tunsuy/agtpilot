@@ -20,7 +20,9 @@ export const metadata: Metadata = {
       { url: '/favicon.png', type: 'image/png' },
     ],
     shortcut: '/favicon.ico',
-    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+    // ?v= 版本参数换 URL 即换缓存键:iOS Safari 对 apple-touch-icon 的抓取缓存在
+    // 「网站数据」里极顽固,URL 不变就永远不重新请求;换 logo 后必须 bump 版本号
+    apple: [{ url: '/icons/apple-touch-icon.png?v=20261009', sizes: '180x180', type: 'image/png' }],
   },
   appleWebApp: {
     capable: true,

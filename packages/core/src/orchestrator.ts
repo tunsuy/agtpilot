@@ -528,8 +528,30 @@ export class OrchestratorService extends Service {
     options: TaskOptions,
     phase: 'task-end' | 'in-loop' = 'task-end'
   ): Promise<Array<{ role: string; content: any }> | null> {
+    const enabled = process.env.AGTPILOT_COMPACTION_CLASSIFY !== '0';
+    let keepToolCallIds: Set<string> | undefined;
+    if (enabled) {
+      try {
+        const svc = this.ctx.reflect.get('compaction') as any;
+        if (svc?.classify) {
+          const { groups, verdicts } = await svc.classify(messages);
+          const keepIds = new Set<string>();
+          const groupById = new Map((groups ?? []).map((g: any) => [g.id, g]));
+          for (const v of verdicts ?? []) {
+            if (v.action === 'keep') {
+              const gid = groupById.get(v.id)?.toolCallId;
+              if (gid) keepIds.add(gid);
+            }
+          }
+          if (keepIds.size > 0) keepToolCallIds = keepIds;
+        }
+      } catch {
+        // 分类失败回退老纪要路径
+      }
+    }
     const model = this.ctx.reflect.get('model');
     return compactConversationMessages(messages, {
+      keepToolCallIds,
       summarize: async (digest) => {
         if (!model) return '';
         const result: ModelStepResult = await model.invokeStep({

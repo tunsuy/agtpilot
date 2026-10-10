@@ -35,6 +35,11 @@ export interface CompactOptions {
   onProgress?: (info: { totalTokens: number; entries: number }) => void;
   thresholdTokens?: number;
   recentMessages?: number;
+  /**
+   * 高价值 toolCallId 白名单（plugin-compaction 裁决为 keep 的调用）：
+   * 命中时该调用与结果原样保留在 keptTexts，不进入纪要流水。
+   */
+  keepToolCallIds?: Set<string>;
 }
 
 /**
@@ -63,9 +68,21 @@ export async function compactConversationMessages(
   for (const m of middle) {
     const text = messageText(m.content);
     if (m.role === 'tool') {
+      const toolCallId: string | undefined =
+        (m as any)?.toolCallId ?? (Array.isArray(m.content) ? (m.content[0] as any)?.toolCallId : undefined);
+      if (toolCallId && options.keepToolCallIds?.has(toolCallId)) {
+        keptTexts.push(m);
+        continue;
+      }
       digestEntries.push(`[工具结果] ${truncateText(text, COMPACT_DIGEST_ENTRY_LIMIT)}`);
       hasDroppable = true;
     } else if (m.role === 'assistant' && isToolCallMessage(m)) {
+      const parts = (m.content as any[]) ?? [];
+      const ids = parts.map((part: any) => part?.toolCallId ?? part?.id).filter(Boolean) as string[];
+      if (ids.length > 0 && ids.every((id) => options.keepToolCallIds?.has(id))) {
+        keptTexts.push(m);
+        continue;
+      }
       for (const part of m.content as any[]) {
         if (part?.type === 'tool-call' || typeof part?.toolCallId === 'string') {
           digestEntries.push(

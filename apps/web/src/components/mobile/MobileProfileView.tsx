@@ -116,7 +116,11 @@ export function MobileProfileView({
   return (
     <div className="px-4 pt-4 pb-28 max-w-lg mx-auto">
       <header className="mb-4 text-center">
-        <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">我的</h1>
+        <div className="flex items-center justify-center gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="AgtPilot" className="h-6 w-6 rounded-md" />
+          <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">我的</h1>
+        </div>
       </header>
 
       {/* 账户卡片 */}

@@ -94,6 +94,12 @@ export function MobileHomeView({
 
   return (
     <div className="px-4 pt-4 pb-28 max-w-lg mx-auto">
+      {/* 品牌行：与 Web 端 Navbar 共用同一份 /logo.svg，保持两端一致 */}
+      <div className="mb-3 flex items-center gap-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.svg" alt="AgtPilot" className="h-7 w-7 rounded-lg" />
+        <span className="text-sm font-semibold tracking-tight text-zinc-900">AgtPilot</span>
+      </div>
       {/* 问候 */}
       <header className="mb-4">
         <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">

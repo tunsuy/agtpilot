@@ -1,0 +1,17 @@
+{
+  "name": "@agtpilot/plugin-decision",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@agtpilot/protocol": "workspace:*",
+    "@agtpilot/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

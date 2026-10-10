@@ -1,5 +1,5 @@
 import type { AgentEvent } from '@agtpilot/protocol';
-import type { ToolDefinition, ModelGateway, PlannerNotifier } from './contracts';
+import type { ToolDefinition, ModelGateway, PlannerNotifier, DecisionGateway } from './contracts';
 import { AgentService } from './agent-service';
 import { OrchestratorService } from './orchestrator';
 
@@ -10,6 +10,10 @@ export type {
   ToolRoute,
   ModelGateway,
   PlannerNotifier,
+  DecisionGateway,
+  DecisionQuestion,
+  DecisionVerdict,
+  DecisionPoint,
   ModelConfigOverride,
   ModelInvokeOptions,
   AgentLoopTool,

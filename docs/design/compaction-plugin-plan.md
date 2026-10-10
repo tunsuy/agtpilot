@@ -37,22 +37,9 @@ prepareStep → reflect.get('compaction')?.buildView(fullMessages)
 
 文件规划：`packages/plugin-compaction/src/{classify.ts, heuristicAsker.ts, fitState.ts, index.ts}` + vitest（`list_dir→drop_result、无关read→drop_call、失败日志→keep`）。
 
-## 4. plugin-decision：通用快判断插座
+## 4. plugin-decision：详见独立规范
 
-`compaction` 是第一个用上 `decision` 的地方。接口：
-
-```ts
-decide(point, state, questions) -> [{ value, confidence, latencyMs, provider, mode }]
-// point: tool-routing | tier-routing | risk-assist | loop-progress
-// questions: choice / score / yes-no 封闭输出；mode: model | heuristic-fallback
-```
-
-- D1 工具路由（先做）：`choice` 代替正则，拿不准回全量。
-- D2 能级切换：任务创建时一次 `choice`，低置信不降档。
-- D3 风险辅助（只升不降，最后接）：`medium` 经 `yes-no` 可升级审批，`high` 永不降级；须先过 injection 对抗集。
-- D4 循环预警（只预警不熔断）：每 5 步旁路 `score`，熔断权仍在签名计数。
-
-红线：只有建议权无裁决权、只能往更安全方向生效、生产只走自托管、每次裁决落 `agtpilot/decision` 审计事件（哈希化）。
+`compaction` 是 `decision` 的首个调用方。职责、接口、四决策点、安全红线、provider 与验收详见 `docs/design/decision-plugin-spec.md`，此处不重复。
 
 ## 5. 实施顺序
 

@@ -173,3 +173,24 @@ export interface ToolRoute {
   /** prompt 关键词匹配（含近期用户消息） */
   test: RegExp;
 }
+
+/** typed 快判断原语（对齐 Jev 品类通用形态） */
+export interface DecisionQuestion {
+  kind: 'choice' | 'score' | 'yes-no';
+  prompt: string;
+  options?: string[];
+  rubric?: string;
+}
+export interface DecisionVerdict {
+  kind: DecisionQuestion['kind'];
+  value: string | number | boolean;
+  confidence: number;
+  latencyMs: number;
+  provider: string;
+  mode: 'model' | 'heuristic-fallback';
+}
+export type DecisionPoint = 'tool-routing' | 'tier-routing' | 'risk-assist' | 'loop-progress';
+export interface DecisionGateway {
+  decide(point: DecisionPoint, state: string, questions: DecisionQuestion[], opts?: { timeoutMs?: number; userId?: string }): Promise<DecisionVerdict[]>;
+  isAvailable(): boolean;
+}

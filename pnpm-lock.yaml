@@ -310,6 +310,22 @@ importers:
         specifier: ^9.0.0
         version: 9.1.0
 
+  packages/plugin-decision:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+    devDependencies:
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@26.6.4)(supports-color@7.2.0)
+
   packages/plugin-desktop:
     dependencies:
       '@agtpilot/core':

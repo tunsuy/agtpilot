@@ -644,16 +644,25 @@ export function CockpitView({
                     // 思考过程折叠态复用 expandedTools（流式期间默认展开，结束后可收起）
                     const reasoningKey = `${st.id}_reasoning`;
                     const reasoningOpen = expandedTools[reasoningKey] ?? isStreaming;
+
+                    // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
+                    // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
+                    if (!st.answer && !st.reasoning && !isStreaming) return null;
+
                     return (
                       <div key={st.id} className="flex items-start gap-3.5 group/ans relative">
                         <div className="h-7 w-7 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
                           <Bot className="h-4 w-4" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="rounded-2xl bg-white border border-zinc-200/80 p-5 shadow-2xs text-xs text-zinc-800 leading-relaxed relative">
-                            {/* 思考过程（推理模型 reasoning 流，可折叠；流式期间默认展开） */}
+                          <div
+                            className={`rounded-2xl bg-white border p-4 md:p-5 shadow-2xs text-xs text-zinc-800 leading-relaxed relative transition-colors duration-300 ${
+                              isStreaming ? 'border-blue-200/80' : 'border-zinc-200/80'
+                            }`}
+                          >
+                            {/* 思考过程（推理模型 reasoning 流，可折叠；左竖线轻量样式，避免框中框） */}
                             {st.reasoning && (
-                              <div className="mb-3 rounded-xl border border-zinc-200/70 bg-zinc-50/80 overflow-hidden">
+                              <div className="mb-3">
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -662,15 +671,13 @@ export function CockpitView({
                                       [reasoningKey]: !reasoningOpen,
                                     }))
                                   }
-                                  className="w-full flex items-center justify-between px-3 py-2 text-left select-none"
+                                  className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 select-none py-0.5"
                                 >
-                                  <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-600">
-                                    <Sparkles className="h-3 w-3 text-zinc-500" />
-                                    <span>思考过程</span>
-                                    {isStreaming && (
-                                      <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
-                                    )}
-                                  </span>
+                                  <Sparkles className={`h-3 w-3 ${isStreaming ? 'text-blue-500' : 'text-zinc-400'}`} />
+                                  <span>思考过程</span>
+                                  {isStreaming && (
+                                    <span className="h-1 w-1 rounded-full bg-blue-500 animate-pulse" />
+                                  )}
                                   <ChevronDown
                                     className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
                                       reasoningOpen ? 'rotate-180' : ''
@@ -678,16 +685,16 @@ export function CockpitView({
                                   />
                                 </button>
                                 {reasoningOpen && (
-                                  <div className="px-3 pb-2.5 text-[11px] text-zinc-500 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-zinc-200/50 pt-2">
+                                  <div className="mt-1 pl-3 border-l-2 border-zinc-200 text-[11px] text-zinc-500 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
                                     {st.reasoning}
                                   </div>
                                 )}
                               </div>
                             )}
 
+                            {/* 尚无任何输出：思考 shimmer 占位（模型生成期间时间线不再静止） */}
                             {isStreaming && !st.answer && !st.reasoning ? (
-                              /* 尚无任何输出：思考 shimmer 占位（模型生成期间时间线不再静止） */
-                              <div className="flex items-center gap-2 text-zinc-400">
+                              <div className="flex items-center gap-2 text-zinc-400 py-0.5">
                                 <span className="relative flex h-2 w-2">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600" />
@@ -695,13 +702,24 @@ export function CockpitView({
                                 <span className="text-[11px] font-medium">{st.title || '正在思考…'}</span>
                               </div>
                             ) : (
-                              <div className="prose prose-zinc prose-chat max-w-none break-words">
-                                <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-                                  {st.answer || st.title}
-                                </ReactMarkdown>
-                                {isStreaming && st.answer && (
-                                  <span className="inline-block w-1.5 h-3.5 bg-zinc-800 animate-pulse ml-0.5 align-text-bottom" />
-                                )}
+                              /* 正文只渲染 answer（title 不再兜底当正文，避免"深度思考中…"大字空段） */
+                              st.answer && (
+                                <div className="prose prose-zinc prose-chat max-w-none break-words">
+                                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                                    {st.answer}
+                                  </ReactMarkdown>
+                                  {isStreaming && (
+                                    <span className="inline-block w-1.5 h-3.5 bg-zinc-800 animate-pulse ml-0.5 align-text-bottom" />
+                                  )}
+                                </div>
+                              )
+                            )}
+
+                            {/* 中断标记：live step 失败时明确失败态（保留已流出的部分文本） */}
+                            {st.status === 'FAILED' && st.role === 'assistant' && (
+                              <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-red-500">
+                                <AlertCircle className="h-3.5 w-3.5" />
+                                <span>回复已中断，以上为部分输出</span>
                               </div>
                             )}
 

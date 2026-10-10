@@ -10,6 +10,17 @@ import { buildProfileSection, type ScenarioProfile } from './scenario-profile';
 
 export const WECHAT_MP_ARTICLE_STYLES = ['深度长文', '干货教程', '热点解读', '观点评论'] as const;
 
+/**
+ * 主题方向预设(2026-10-10 与负责人定:先 AI 垂类,「看行业/追新/上手」三视角不重样)。
+ * 弹窗里点 chip 填入主题,Agent 在该方向下每次挑具体新题;常量增删改即可调整,
+ * 后续可升级为从场景档案自配。
+ */
+export const WECHAT_MP_TOPIC_PRESETS = [
+  'AI 行业观察与判断',
+  'AI 最新产品介绍',
+  'AI 工具与开源项目介绍',
+] as const;
+
 export interface WechatMpWorkshopInput {
   /** 用户指定主题;留空则由 Agent 调研热点选题 */
   topic?: string;

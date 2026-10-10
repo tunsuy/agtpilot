@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildWechatMpWorkshopPrompt } from '../wechat-mp-workshop';
+import { buildWechatMpWorkshopPrompt, WECHAT_MP_TOPIC_PRESETS } from '../wechat-mp-workshop';
 import { normalizeScenarioProfile } from '../scenario-profile';
 
 const profileInput = {
@@ -91,6 +91,24 @@ describe('buildWechatMpWorkshopPrompt · 主题缺省降级链', () => {
   it('有主题:不出现调研回退链(主题即指令)', () => {
     const prompt = buildWechatMpWorkshopPrompt({ topic: '大模型科普', style: '深度长文', count: 1 });
     expect(prompt).toContain('主题:大模型科普');
+    expect(prompt).not.toContain('主题:未指定');
+  });
+});
+
+describe('WECHAT_MP_TOPIC_PRESETS · 方向预设契约', () => {
+  it('三个 AI 垂类方向,互不重复(看行业/追新/上手)', () => {
+    expect(WECHAT_MP_TOPIC_PRESETS).toHaveLength(3);
+    expect(new Set(WECHAT_MP_TOPIC_PRESETS).size).toBe(3);
+    for (const p of WECHAT_MP_TOPIC_PRESETS) expect(p).toContain('AI');
+  });
+
+  it('预设填入主题后走「主题即指令」路径', () => {
+    const prompt = buildWechatMpWorkshopPrompt({
+      topic: WECHAT_MP_TOPIC_PRESETS[0],
+      style: '观点评论',
+      count: 1,
+    });
+    expect(prompt).toContain(`主题:${WECHAT_MP_TOPIC_PRESETS[0]}`);
     expect(prompt).not.toContain('主题:未指定');
   });
 });

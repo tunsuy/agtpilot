@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
-import { WECHAT_MP_ARTICLE_STYLES } from '../../../lib/wechat-mp-workshop';
+import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS } from '../../../lib/wechat-mp-workshop';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
@@ -169,6 +169,23 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
 
       <div className="space-y-1.5">
         <FieldLabel optional>主题</FieldLabel>
+        {/* 方向预设:点 chip 填入主题(Agent 在方向下挑具体新题),再点清空;仍可自由输入 */}
+        <div className="flex flex-wrap gap-1.5">
+          {WECHAT_MP_TOPIC_PRESETS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setTopic(topic === p ? '' : p)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition ${
+                topic === p
+                  ? 'bg-violet-600 text-white border-violet-600'
+                  : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
         <input
           type="text"
           value={topic}

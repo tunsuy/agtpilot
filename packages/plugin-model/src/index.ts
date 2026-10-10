@@ -1,5 +1,5 @@
 import { Context, Service } from '@deepseek-ai/cordis';
-import { generateText, stepCountIs, jsonSchema, tool } from 'ai';
+import { generateText, streamText, stepCountIs, jsonSchema, tool } from 'ai';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
@@ -105,7 +105,10 @@ export class ModelService extends Service implements ModelGateway {
       : undefined;
 
     let stepCounter = 0;
-    const response = await generateText({
+    // streamText 与 generateText options 完全同构（stopWhen/prepareStep/onStepFinish
+    // 均受支持），但工具 execute 只在流被消费期间执行 —— 必须迭代 fullStream
+    // 驱动循环；文本/推理增量同步转发给上层（P1 流式）。
+    const result = streamText({
       model: selectedModel,
       system: options.system,
       messages: options.messages,
@@ -160,23 +163,62 @@ export class ModelService extends Service implements ModelGateway {
       },
     });
 
+    // ---- 消费流：驱动工具执行 + 转发增量（start-step 无 stepNumber 字段，自维护计数） ----
+    let streamStepNumber = 0;
+    try {
+      for await (const part of result.fullStream) {
+        // 中止后不再转发尾部增量（上层收尾走 error 路径，无需残段）
+        if (options.abortSignal?.aborted) break;
+        switch (part.type) {
+          case 'start-step':
+            streamStepNumber++;
+            options.onStepStart?.({ stepNumber: streamStepNumber });
+            break;
+          case 'text-delta':
+            options.onTextDelta?.(part.text);
+            break;
+          case 'reasoning-delta':
+            options.onReasoningDelta?.(part.text);
+            break;
+          case 'error':
+            throw part.error;
+          default:
+            break;
+        }
+      }
+    } catch (err: any) {
+      // abort 时流以 abort part 正常收尾而不抛错 —— 显式转抛，保持与
+      // generateText 相同的中止语义（orchestrator catch → 任务已被主动终止）
+      if (options.abortSignal?.aborted) throw new Error('Aborted');
+      throw err;
+    }
+    if (options.abortSignal?.aborted) throw new Error('Aborted');
+
+    // 工具已在流消费期间由 SDK 执行完毕；这里只收集结果（属性均为 Promise）
     // 用量已在 onStepFinish 按步实时记账（此处整包再记会双倍计数）
+    const [text, finishReason, steps, usage, response] = await Promise.all([
+      result.text,
+      result.finishReason,
+      result.steps,
+      result.usage,
+      result.response,
+    ]);
 
     const budgetStopped =
-      response.finishReason === 'tool-calls' && this.budgetMaxTokens > 0 && this.isBudgetExceeded();
+      finishReason === 'tool-calls' && this.budgetMaxTokens > 0 && this.isBudgetExceeded();
 
     return {
-      text: response.text,
+      text,
       // 预算触顶与步数耗尽分开标识：上层与用户能分辨「为什么停」
-      finishReason: budgetStopped ? 'budget-exceeded' : response.finishReason,
-      stepsCount: response.steps?.length ?? stepCounter,
+      finishReason: budgetStopped ? 'budget-exceeded' : finishReason,
+      stepsCount: steps?.length ?? stepCounter,
       // finishReason 仍为 tool-calls 说明是 stopWhen 截停（模型还想继续调工具）；
       // 预算触顶同样需要强制总结收尾
-      stepsExhausted: response.finishReason === 'tool-calls',
-      responseMessages: response.response?.messages ?? [],
+      stepsExhausted: finishReason === 'tool-calls',
+      responseMessages: response?.messages ?? [],
       usage: {
-        promptTokens: response.usage?.inputTokens ?? 0,
-        completionTokens: response.usage?.outputTokens ?? 0,
+        promptTokens: usage?.inputTokens ?? 0,
+        completionTokens: usage?.outputTokens ?? 0,
       },
     };
   }

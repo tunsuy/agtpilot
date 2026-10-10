@@ -366,6 +366,29 @@ export class OrchestratorService extends Service {
           return Object.keys(adjust).length > 0 ? adjust : undefined;
         },
         abortSignal: options.abortSignal,
+        // 流式可见性接线：每步开始 → step_started（前端"正在思考"指示）；
+        // 文本/推理增量 → assistant_delta（打字机式输出，kind 区分正文与思考过程）
+        onStepStart: ({ stepNumber }: { stepNumber: number }) => {
+          broadcast({
+            type: 'step_started',
+            payload: { stepNumber, reason: 'model-step' },
+            timestamp: Date.now(),
+          });
+        },
+        onTextDelta: (delta: string) => {
+          broadcast({
+            type: 'assistant_delta',
+            payload: { delta, kind: 'text' },
+            timestamp: Date.now(),
+          });
+        },
+        onReasoningDelta: (delta: string) => {
+          broadcast({
+            type: 'assistant_delta',
+            payload: { delta, kind: 'reasoning' },
+            timestamp: Date.now(),
+          });
+        },
         onStepFinish: (info: { stepNumber: number; text: string; finishReason: string }) => {
           currentStep = (info.stepNumber || 1) + 1;
           if (info.text) {
@@ -403,6 +426,13 @@ export class OrchestratorService extends Service {
             timestamp: Date.now(),
           });
         }
+        // 强制总结走非流式 invokeStep，先广播 step_started 让"正在思考"
+        // 指示覆盖这 10-60s 的总结窗口
+        broadcast({
+          type: 'step_started',
+          payload: { reason: 'wrap-up' },
+          timestamp: Date.now(),
+        });
         try {
           const wrapResult: ModelStepResult = await model.invokeStep({
             model: options.model,

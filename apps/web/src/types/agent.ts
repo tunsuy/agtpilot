@@ -62,6 +62,8 @@ export interface MissionStep {
   duration?: string;
   args?: any;
   answer?: string;
+  /** 推理模型思考过程流式文本（与 answer 分开展示，可折叠） */
+  reasoning?: string;
   output?: any;
   error?: string;
   /**
@@ -98,6 +100,8 @@ export interface TerminalLog {
   timestamp: number;
   type: 'command' | 'stdout' | 'stderr' | 'system';
   text: string;
+  /** 归属用户（多用户部署时 SSE 按其过滤，未标记的全局系统日志除外） */
+  userId?: string;
 }
 
 export interface ApprovalRequest {
@@ -106,6 +110,10 @@ export interface ApprovalRequest {
   description: string;
   dangerLevel: 'low' | 'medium' | 'high';
   params: Record<string, any>;
+  /** 发起该审批的任务键（多用户部署时 SSE 按其归属过滤，避免串台/泄露） */
+  taskId?: string;
+  /** 归属用户（SSE 过滤锚点） */
+  userId?: string;
 }
 
 /** 任务中途连接器授权建议（驾驶舱实时弹卡片，一键授权后任务原地继续） */

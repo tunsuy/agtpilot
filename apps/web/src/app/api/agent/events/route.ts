@@ -37,9 +37,19 @@ export async function GET() {
         ...backend.state,
         missions: scopedMissions,
         activeMissionId,
-        // 如果未登录，终端日志与视口状态保持清空
-        terminalLogs: userId ? backend.state.terminalLogs : [],
-        approvalRequests: userId ? backend.state.approvalRequests : [],
+        // 终端日志按归属过滤（未标记 userId 的全局系统日志保留）
+        terminalLogs: userId
+          ? backend.state.terminalLogs.filter((l) => !l.userId || l.userId === userId)
+          : [],
+        // 挂起审批按归属过滤，避免串台/泄露
+        approvalRequests: userId
+          ? backend.state.approvalRequests.filter((r) => !r.userId || r.userId === userId)
+          : [],
+        // 视口（浏览器/终端画面）只在无人占用或归属本人时下发，否则给空白默认
+        viewport:
+          !userId || (backend.state.viewportUserId && backend.state.viewportUserId !== userId)
+            ? { activeTab: 'browser', url: 'about:blank', title: 'Ready', status: 'idle' as const }
+            : backend.state.viewport,
         // 授权建议卡片按用户过滤（id 形如 `${userId}::${connectorId}`）
         connectorSuggestions: userId
           ? backend.state.connectorSuggestions.filter((s) => s.id.startsWith(`${userId}::`))
@@ -57,9 +67,22 @@ export async function GET() {
               return; // 不推送其他用户的任务
             }
           }
+          // 流式增量 / 步骤开始：按任务归属用户过滤（payload 带 userId）
+          if (event.type === 'assistant_delta' || event.type === 'step_started') {
+            if (!userId || event.data?.userId !== userId) {
+              return;
+            }
+          }
           // 记忆库更新（会话结束自动沉淀）按用户过滤
           if (event.type === 'memories_updated') {
             if (!userId || event.data?.userId !== userId) {
+              return;
+            }
+          }
+          // 终端日志 / 视口画面 / 挂起审批：按归属用户过滤（未标记 userId 的全局日志放行）
+          if (event.type === 'terminal_log' || event.type === 'viewport_update' || event.type === 'approval_requested') {
+            const owner = (event.data?.userId ?? event.data?.entry?.userId) as string | undefined;
+            if (!userId || (owner && owner !== userId)) {
               return;
             }
           }

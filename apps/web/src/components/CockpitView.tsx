@@ -639,6 +639,11 @@ export function CockpitView({
                   // ================= 3. 智能体正式回复卡片 (精致沉浸式 Markdown) =================
                   if (block.type === 'assistant') {
                     const st = block.step;
+                    // 流式中的 live step（打字机卡片）：shimmer 占位 / 打字光标 / 思考过程块
+                    const isStreaming = st.status === 'RUNNING' && st.role === 'assistant';
+                    // 思考过程折叠态复用 expandedTools（流式期间默认展开，结束后可收起）
+                    const reasoningKey = `${st.id}_reasoning`;
+                    const reasoningOpen = expandedTools[reasoningKey] ?? isStreaming;
                     return (
                       <div key={st.id} className="flex items-start gap-3.5 group/ans relative">
                         <div className="h-7 w-7 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
@@ -646,13 +651,61 @@ export function CockpitView({
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="rounded-2xl bg-white border border-zinc-200/80 p-5 shadow-2xs text-xs text-zinc-800 leading-relaxed relative">
-                            <div className="prose prose-zinc prose-chat max-w-none break-words">
-                              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-                                {st.answer || st.title}
-                              </ReactMarkdown>
-                            </div>
+                            {/* 思考过程（推理模型 reasoning 流，可折叠；流式期间默认展开） */}
+                            {st.reasoning && (
+                              <div className="mb-3 rounded-xl border border-zinc-200/70 bg-zinc-50/80 overflow-hidden">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedTools((prev) => ({
+                                      ...prev,
+                                      [reasoningKey]: !reasoningOpen,
+                                    }))
+                                  }
+                                  className="w-full flex items-center justify-between px-3 py-2 text-left select-none"
+                                >
+                                  <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-600">
+                                    <Sparkles className="h-3 w-3 text-zinc-500" />
+                                    <span>思考过程</span>
+                                    {isStreaming && (
+                                      <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
+                                    )}
+                                  </span>
+                                  <ChevronDown
+                                    className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
+                                      reasoningOpen ? 'rotate-180' : ''
+                                    }`}
+                                  />
+                                </button>
+                                {reasoningOpen && (
+                                  <div className="px-3 pb-2.5 text-[11px] text-zinc-500 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-zinc-200/50 pt-2">
+                                    {st.reasoning}
+                                  </div>
+                                )}
+                              </div>
+                            )}
 
-                            {st.answer && (
+                            {isStreaming && !st.answer && !st.reasoning ? (
+                              /* 尚无任何输出：思考 shimmer 占位（模型生成期间时间线不再静止） */
+                              <div className="flex items-center gap-2 text-zinc-400">
+                                <span className="relative flex h-2 w-2">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600" />
+                                </span>
+                                <span className="text-[11px] font-medium">{st.title || '正在思考…'}</span>
+                              </div>
+                            ) : (
+                              <div className="prose prose-zinc prose-chat max-w-none break-words">
+                                <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                                  {st.answer || st.title}
+                                </ReactMarkdown>
+                                {isStreaming && st.answer && (
+                                  <span className="inline-block w-1.5 h-3.5 bg-zinc-800 animate-pulse ml-0.5 align-text-bottom" />
+                                )}
+                              </div>
+                            )}
+
+                            {st.answer && !isStreaming && (
                               <button
                                 type="button"
                                 onClick={(e) => {

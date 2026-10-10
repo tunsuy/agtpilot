@@ -525,6 +525,64 @@ export default function Workspace() {
       }
     });
 
+    // 流式增量（打字机）：按 taskId 定位 mission，从尾向前找 RUNNING 的
+    // live step（step_live_ 前缀）按 kind 追加 answer / reasoning；边界
+    // mission_updated 与 delta 在同一 SSE 连接上有序（后端先 flush 再广播
+    // 边界），两种流不会交错错位。找不到 live step 时前端兜底创建。
+    eventSource.addEventListener('assistant_delta', (e: MessageEvent) => {
+      try {
+        const { taskId, segments } = JSON.parse(e.data);
+        if (!taskId || !Array.isArray(segments) || segments.length === 0) return;
+        setMissions((prev) =>
+          prev.map((m) => {
+            if (m.id !== taskId) return m;
+            const steps = [...m.steps];
+            let applied = false;
+            for (let i = steps.length - 1; i >= 0; i--) {
+              const st = steps[i];
+              if (st.id?.startsWith('step_live_') && st.status === 'RUNNING' && st.role === 'assistant') {
+                const next = { ...st };
+                for (const seg of segments) {
+                  if (seg.kind === 'reasoning') {
+                    next.reasoning = (next.reasoning || '') + String(seg.delta || '');
+                  } else {
+                    next.answer = (next.answer || '') + String(seg.delta || '');
+                    next.title = '智能体回复';
+                  }
+                }
+                steps[i] = next;
+                applied = true;
+                break;
+              }
+            }
+            if (!applied) {
+              // 兜底：后端 live step 尚未随 mission_updated 到达（如 SSE 重连初期）
+              const fallback = {
+                id: `step_live_${taskId}_fe_${Date.now()}`,
+                role: 'assistant' as const,
+                title: '智能体回复',
+                status: 'RUNNING' as const,
+                answer: '',
+                reasoning: '',
+                startedAt: Date.now(),
+              };
+              for (const seg of segments) {
+                if (seg.kind === 'reasoning') {
+                  fallback.reasoning = (fallback.reasoning || '') + String(seg.delta || '');
+                } else {
+                  fallback.answer = (fallback.answer || '') + String(seg.delta || '');
+                }
+              }
+              steps.push(fallback);
+            }
+            return { ...m, steps };
+          })
+        );
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
     eventSource.addEventListener('approval_requested', (e: MessageEvent) => {
       try {
         const req: ApprovalRequest = JSON.parse(e.data);

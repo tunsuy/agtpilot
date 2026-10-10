@@ -30,7 +30,26 @@ export interface PlanData {
 }
 
 export interface AgentEvent {
-  type: 'thought' | 'tool_call' | 'tool_result' | 'ui_card' | 'artifact' | 'plan' | 'approval_request' | 'approval_resolved' | 'connector_suggestion' | 'connector_suggestion_resolved' | 'viewport_update' | 'terminal_output' | 'sandbox_deny' | 'done' | 'error';
+  type:
+    | 'thought'
+    | 'tool_call'
+    | 'tool_result'
+    | 'ui_card'
+    | 'artifact'
+    | 'plan'
+    | 'approval_request'
+    | 'approval_resolved'
+    | 'connector_suggestion'
+    | 'connector_suggestion_resolved'
+    | 'viewport_update'
+    | 'terminal_output'
+    | 'sandbox_deny'
+    | 'done'
+    | 'error'
+    /** 每步模型调用开始（前端"正在思考"指示）；payload: { stepNumber?, reason?: 'model-step' | 'wrap-up' } */
+    | 'step_started'
+    /** 模型流式增量；payload: { delta: string, kind: 'text' | 'reasoning' }。taskId 由编排器统一盖章 */
+    | 'assistant_delta';
   payload: Record<string, any>;
   timestamp: number;
 }
@@ -55,6 +74,10 @@ export interface ApprovalRequest {
   description: string;
   dangerLevel: 'low' | 'medium' | 'high';
   params: Record<string, any>;
+  /** 发起该审批的任务键（多用户部署时 SSE 按其归属过滤，避免串台/泄露） */
+  taskId?: string;
+  /** 归属用户（SSE 过滤锚点） */
+  userId?: string;
 }
 
 export interface UICardData {

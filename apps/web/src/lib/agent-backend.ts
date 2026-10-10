@@ -5,11 +5,23 @@ import { ApprovalRequest, ConnectorSuggestion, PlanData, PlanTask } from '@agtpi
 import type { MCPService } from '@agtpilot/plugin-mcp';
 
 import { Mission, MissionStep, ViewportState, TerminalLog } from '../types/agent';
+import {
+  applyDelta,
+  closeLiveStep,
+  ensureLiveStep,
+  finalizeWithAnswer,
+  resolveMission,
+} from './live-steps';
 
 export interface AgentBackendState {
   missions: Mission[];
   activeMissionId: string | null;
   viewport: ViewportState;
+  /**
+   * 当前视口归属用户（浏览器自动化单例的当前占用者）。多用户部署时
+   * viewport_update（含网页截图）只推给占用者本人，其他用户 init 拿空白视口。
+   */
+  viewportUserId?: string | null;
   terminalLogs: TerminalLog[];
   approvalRequests: ApprovalRequest[];
   /** 任务中途连接器授权建议（等待用户一键授权/跳过） */
@@ -33,6 +45,16 @@ class AgentBackend {
   /** 各任务检查点最近一次落盘时间（节流：≥5s 一次） */
   private checkpointSavedAt: Map<string, number> = new Map();
   /**
+   * 流式增量合并缓冲（taskId → { segments, timer, userId }）：
+   * 后端 ~100ms / 160 字符合并一次再广播轻量 assistant_delta SSE 事件，
+   * 避免逐 token 广播 + 前端整树重渲染。绝不走 mission_updated（那会
+   * 全量落盘 + 重发整个 mission）。
+   */
+  private deltaBuffers: Map<
+    string,
+    { segments: Array<{ delta: string; kind: 'text' | 'reasoning' }>; timer: ReturnType<typeof setTimeout> | null; userId?: string }
+  > = new Map();
+  /**
    * in-flight 任务运行时把手(治理「回退弧→前向弧」传导入口):
    * missionId → { userId, env(taskEnv 活引用,删键即时生效), sandbox(taskSandbox
    * 活引用,权限提案批准即热更新), notices(治理提示队列) }。
@@ -51,6 +73,7 @@ class AgentBackend {
         title: 'Ready',
         status: 'idle',
       },
+      viewportUserId: null,
       terminalLogs: [
         {
           id: 'log-init',
@@ -126,6 +149,10 @@ class AgentBackend {
           if (m.status === 'ACTIVE' || m.status === 'WAITING_APPROVAL' || m.status === 'QUEUED') {
             m.status = 'INTERRUPTED';
             if (Array.isArray(m.steps)) {
+              // 中断时 RUNNING 的步骤（含流式 live step）一并标 FAILED，不留僵尸"执行中"
+              m.steps.forEach((st: any) => {
+                if (st.status === 'RUNNING') st.status = 'FAILED';
+              });
               m.steps.push({
                 id: `step_intr_${Date.now()}`,
                 title: '服务重启：任务执行中断（会话已保留，可继续对话续跑）',
@@ -178,10 +205,82 @@ class AgentBackend {
     });
   }
 
+  /**
+   * 事件归属（串台修复）：优先事件自带的 payload.taskId（orchestrator 对
+   * 每个事件盖章，多任务并发/用户切换会话时步骤不再挂错），兜底
+   * activeMissionId（viewport/terminal 等无 taskId 的全局事件仍走后者）。
+   */
+  private resolveMissionFromEvent(event: any): Mission | undefined {
+    return resolveMission(this.state.missions, this.state.activeMissionId, event?.payload);
+  }
+
+  /** 入列一个流式增量段（同 kind 相邻合并），满 100ms 或 160 字符即 flush */
+  private queueDelta(taskId: string, delta: string, kind: 'text' | 'reasoning', userId?: string) {
+    let buf = this.deltaBuffers.get(taskId);
+    if (!buf) {
+      buf = { segments: [], timer: null, userId };
+      this.deltaBuffers.set(taskId, buf);
+    }
+    if (userId) buf.userId = userId;
+    const lastSeg = buf.segments[buf.segments.length - 1];
+    if (lastSeg && lastSeg.kind === kind) {
+      lastSeg.delta += delta;
+    } else {
+      buf.segments.push({ delta, kind });
+    }
+
+    const totalChars = buf.segments.reduce((n, s) => n + s.delta.length, 0);
+    if (totalChars >= 160) {
+      this.flushDeltas(taskId);
+      return;
+    }
+    if (!buf.timer) {
+      buf.timer = setTimeout(() => this.flushDeltas(taskId), 100);
+    }
+  }
+
+  /** 立即 flush 某任务的增量缓冲（边界事件入口同步调用，保证 SSE 顺序） */
+  private flushDeltas(taskId: string) {
+    const buf = this.deltaBuffers.get(taskId);
+    if (!buf) return;
+    if (buf.timer) {
+      clearTimeout(buf.timer);
+      buf.timer = null;
+    }
+    if (buf.segments.length === 0) return;
+    const segments = buf.segments;
+    buf.segments = [];
+    this.broadcast({ type: 'assistant_delta', data: { taskId, segments, userId: buf.userId } });
+  }
+
   private handleEvent(event: any) {
     const timestamp = event.timestamp || Date.now();
 
     switch (event.type) {
+      case 'step_started': {
+        // 每步模型调用开始（或步数耗尽强制总结前）：确保 live assistant
+        // step 存在 —— 模型生成期间时间线不再"静止"，打字机卡片自此就位。
+        const mission = this.resolveMissionFromEvent(event);
+        if (!mission) break;
+        this.flushDeltas(mission.id);
+        ensureLiveStep(mission, event.payload?.stepNumber, event.payload?.reason);
+        this.broadcast({ type: 'mission_updated', data: mission });
+        break;
+      }
+
+      case 'assistant_delta': {
+        // 流式增量：内存累积进 live step（浅层），合并后再广播轻量事件。
+        // 注意不广播 mission_updated —— 逐 token 落盘/重发全量 mission 会压垮
+        // 磁盘与 SSE；边界事件（tool_call/done/error）会先 flush 再发
+        // mission_updated，SSE 单连接有序，前端两种流不会交错错位。
+        const mission = this.resolveMissionFromEvent(event);
+        if (!mission || !event.payload?.delta) break;
+        const kind = event.payload.kind === 'reasoning' ? 'reasoning' : 'text';
+        applyDelta(mission, String(event.payload.delta), kind);
+        this.queueDelta(mission.id, String(event.payload.delta), kind, mission.userId);
+        break;
+      }
+
       case 'viewport_update': {
         this.state.viewport.url = event.payload.url || this.state.viewport.url;
         this.state.viewport.title = event.payload.title || this.state.viewport.title;
@@ -190,27 +289,35 @@ class AgentBackend {
         }
         this.state.viewport.status = 'idle';
 
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
-            mission.viewport = { ...this.state.viewport };
-            this.broadcast({ type: 'mission_updated', data: mission });
-          }
+        // 视口归属：事件自带 taskId（缺失时兜底 activeMission）对应的用户。
+        // 浏览器自动化是单例 —— 占用期间 viewport_update（含截图）只推给占用者
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission?.userId) {
+          this.state.viewportUserId = mission.userId;
+        }
+        if (mission) {
+          mission.viewport = { ...this.state.viewport };
+          this.broadcast({ type: 'mission_updated', data: mission });
         }
 
-        this.broadcast({ type: 'viewport_update', data: this.state.viewport });
+        this.broadcast({
+          type: 'viewport_update',
+          data: { ...this.state.viewport, userId: this.state.viewportUserId ?? undefined },
+        });
         break;
       }
 
       case 'terminal_output': {
+        // 沙盒命令输出按任务归属用户标记（SSE 过滤锚点）
+        const owner = this.resolveMissionFromEvent(event)?.userId;
         if (event.payload.command) {
-          this.addTerminalLog('command', `$ ${event.payload.command}`);
+          this.addTerminalLog('command', `$ ${event.payload.command}`, owner);
         }
         if (event.payload.stdout) {
-          this.addTerminalLog('stdout', event.payload.stdout);
+          this.addTerminalLog('stdout', event.payload.stdout, owner);
         }
         if (event.payload.stderr) {
-          this.addTerminalLog('stderr', event.payload.stderr);
+          this.addTerminalLog('stderr', event.payload.stderr, owner);
         }
         break;
       }
@@ -283,36 +390,43 @@ class AgentBackend {
         if (toolName === 'browser_navigate') {
           this.state.viewport.url = event.payload.url || event.payload.args?.url;
           this.state.viewport.status = 'navigating';
-          if (this.state.activeMissionId) {
-            const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-            if (mission) {
-              mission.viewport = { ...this.state.viewport };
-            }
+          // 视口归属（同 viewport_update）：占用者的导航才广播给占用者本人
+          const navMission = this.resolveMissionFromEvent(event);
+          if (navMission?.userId) {
+            this.state.viewportUserId = navMission.userId;
           }
-          this.broadcast({ type: 'viewport_update', data: this.state.viewport });
+          if (navMission) {
+            navMission.viewport = { ...this.state.viewport };
+          }
+          this.broadcast({
+            type: 'viewport_update',
+            data: { ...this.state.viewport, userId: this.state.viewportUserId ?? undefined },
+          });
         }
 
-        // 挂载到当前任务的步骤（去重逻辑：如果最后一步是相同的处于 RUNNING 状态的工具，则复用更新参数，避免插件与核心双重广播导致的成对重复步骤）
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
-            const lastStep = mission.steps[mission.steps.length - 1];
-            if (lastStep && lastStep.tool === toolName && lastStep.status === 'RUNNING') {
-              lastStep.args = event.payload.args || event.payload;
-            } else {
-              const stepId = `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-              mission.steps.push({
-                id: stepId,
-                title: `执行工具: ${toolName}`,
-                tool: toolName,
-                role: 'tool',
-                status: 'RUNNING',
-                args: event.payload.args || event.payload,
-                startedAt: Date.now(),
-              });
-            }
-            this.broadcast({ type: 'mission_updated', data: mission });
+        // 按事件自带 taskId 归属（串台修复）；工具开始 = 模型解说段收尾
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission) {
+          this.flushDeltas(mission.id);
+          closeLiveStep(mission, { status: 'DONE' });
+
+          // 挂载到该任务的步骤（去重逻辑：如果最后一步是相同的处于 RUNNING 状态的工具，则复用更新参数，避免插件与核心双重广播导致的成对重复步骤）
+          const lastStep = mission.steps[mission.steps.length - 1];
+          if (lastStep && lastStep.tool === toolName && lastStep.status === 'RUNNING') {
+            lastStep.args = event.payload.args || event.payload;
+          } else {
+            const stepId = `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+            mission.steps.push({
+              id: stepId,
+              title: `执行工具: ${toolName}`,
+              tool: toolName,
+              role: 'tool',
+              status: 'RUNNING',
+              args: event.payload.args || event.payload,
+              startedAt: Date.now(),
+            });
           }
+          this.broadcast({ type: 'mission_updated', data: mission });
         }
         break;
       }
@@ -321,33 +435,33 @@ class AgentBackend {
         const toolName = event.payload.tool;
         if (toolName === 'browser_navigate' || !toolName) {
           this.state.viewport.status = 'idle';
-          if (this.state.activeMissionId) {
-            const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-            if (mission && mission.viewport) {
-              mission.viewport.status = 'idle';
-            }
+          const vpMission = this.resolveMissionFromEvent(event);
+          if (vpMission && vpMission.viewport) {
+            vpMission.viewport.status = 'idle';
           }
-          this.broadcast({ type: 'viewport_update', data: this.state.viewport });
+          this.broadcast({
+            type: 'viewport_update',
+            data: { ...this.state.viewport, userId: this.state.viewportUserId ?? undefined },
+          });
         }
 
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission && mission.steps.length > 0) {
-            // 找到最后处于 RUNNING 的该工具步骤并将其标记为完成
-            const targetStep = [...mission.steps].reverse().find((s) => s.status === 'RUNNING' && (!toolName || s.tool === toolName)) || mission.steps[mission.steps.length - 1];
-            if (targetStep && targetStep.status === 'RUNNING') {
-              targetStep.status = 'DONE';
-              targetStep.output = event.payload.output;
-              // 回滚把手随步骤快照落盘(治理不变量 I5:每个行动都留下
-              // 可撤销性声明,irreversible 的在前端/审计里显式可见)
-              if (event.payload.compensation) {
-                targetStep.compensation = event.payload.compensation;
-              }
-              // 真实耗时（工具广播与核心广播双写时取首次完成时间）
-              const elapsed = Date.now() - (targetStep.startedAt || Date.now());
-              targetStep.duration = `${elapsed < 0 ? 0 : elapsed}ms`;
-              this.broadcast({ type: 'mission_updated', data: mission });
+        // 按事件自带 taskId 归属（串台修复）
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission && mission.steps.length > 0) {
+          // 找到最后处于 RUNNING 的该工具步骤并将其标记为完成
+          const targetStep = [...mission.steps].reverse().find((s) => s.status === 'RUNNING' && (!toolName || s.tool === toolName)) || mission.steps[mission.steps.length - 1];
+          if (targetStep && targetStep.status === 'RUNNING') {
+            targetStep.status = 'DONE';
+            targetStep.output = event.payload.output;
+            // 回滚把手随步骤快照落盘(治理不变量 I5:每个行动都留下
+            // 可撤销性声明,irreversible 的在前端/审计里显式可见)
+            if (event.payload.compensation) {
+              targetStep.compensation = event.payload.compensation;
             }
+            // 真实耗时（工具广播与核心广播双写时取首次完成时间）
+            const elapsed = Date.now() - (targetStep.startedAt || Date.now());
+            targetStep.duration = `${elapsed < 0 ? 0 : elapsed}ms`;
+            this.broadcast({ type: 'mission_updated', data: mission });
           }
         }
         break;
@@ -392,13 +506,16 @@ class AgentBackend {
 
       case 'approval_request': {
         const req: ApprovalRequest = event.payload;
-        this.state.approvalRequests.push(req);
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
-            mission.status = 'WAITING_APPROVAL';
-            this.broadcast({ type: 'mission_updated', data: mission });
-          }
+        // 盖章归属（taskId/userId）：SSE 按用户过滤审批卡片，多用户不串台
+        req.taskId = event.payload.taskId;
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission) {
+          req.userId = mission.userId;
+          this.state.approvalRequests.push(req);
+          mission.status = 'WAITING_APPROVAL';
+          this.broadcast({ type: 'mission_updated', data: mission });
+        } else {
+          this.state.approvalRequests.push(req);
         }
         this.broadcast({ type: 'approval_requested', data: req });
         break;
@@ -421,7 +538,9 @@ class AgentBackend {
         this.state.connectorSuggestions = this.state.connectorSuggestions.filter((s) => s.id !== id);
         this.broadcast({ type: 'connector_suggestion_resolved', data: { id, outcome } });
         if (outcome === 'authorized') {
-          this.addTerminalLog('system', '[Connector] 用户已完成中途授权，任务继续执行');
+          // suggestion id 形如 `${userId}::${connectorId}`，取前半段作为归属
+          const uid = typeof id === 'string' ? id.split('::')[0] : undefined;
+          this.addTerminalLog('system', '[Connector] 用户已完成中途授权，任务继续执行', uid);
         }
         break;
       }
@@ -446,43 +565,52 @@ class AgentBackend {
         if (id) {
           this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== id);
         }
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission && mission.status === 'WAITING_APPROVAL') {
-            mission.status = 'ACTIVE';
-            this.broadcast({ type: 'mission_updated', data: mission });
-          }
+        // 按事件自带 taskId 归属（串台修复）
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission && mission.status === 'WAITING_APPROVAL') {
+          mission.status = 'ACTIVE';
+          this.broadcast({ type: 'mission_updated', data: mission });
         }
         if (reason === 'timeout') {
-          this.addTerminalLog('stderr', '[Approval] 审批等待超时，已自动拒绝并继续执行（工具走 rejected 兜底路径）。');
+          this.addTerminalLog(
+            'stderr',
+            '[Approval] 审批等待超时，已自动拒绝并继续执行（工具走 rejected 兜底路径）。',
+            mission?.userId
+          );
         }
         break;
       }
 
       case 'thought': {
         if (event.payload.text) {
-          this.addTerminalLog('system', `[AI 思考与回复] ${event.payload.text}`);
+          this.addTerminalLog('system', `[AI 思考与回复] ${event.payload.text}`, this.resolveMissionFromEvent(event)?.userId);
         }
         break;
       }
 
       case 'done': {
         const finalAnswer = event.payload?.finalAnswer || 'Task completed';
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
-            // 只有真正执行过的 RUNNING 步骤标记完成；PENDING（未执行的看板步骤）
-            // 保持原状态 —— 旧实现把所有 PENDING 强标 DONE、进度强设 100，
-            // 未完成的计划步骤在 UI 上显示为"已完成"，效率面板系统性偏乐观
-            mission.steps.forEach((st) => {
-              if (st.status === 'RUNNING') {
-                st.status = 'DONE';
-                const elapsed = Date.now() - (st.startedAt || Date.now());
-                st.duration = st.duration || `${elapsed < 0 ? 0 : elapsed}ms`;
-              }
-            });
+        // 按事件自带 taskId 归属（串台修复）
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission) {
+          // 先 flush 增量缓冲（SSE 顺序：全部 delta → 边界 mission_updated）
+          this.flushDeltas(mission.id);
+          // 只有真正执行过的 RUNNING 步骤标记完成；PENDING（未执行的看板步骤）
+          // 保持原状态 —— 旧实现把所有 PENDING 强标 DONE、进度强设 100，
+          // 未完成的计划步骤在 UI 上显示为"已完成"，效率面板系统性偏乐观
+          mission.steps.forEach((st) => {
+            if (st.status === 'RUNNING') {
+              st.status = 'DONE';
+              const elapsed = Date.now() - (st.startedAt || Date.now());
+              st.duration = st.duration || `${elapsed < 0 ? 0 : elapsed}ms`;
+            }
+          });
 
-            // 作为独立的 Assistant 回复步骤追加，清晰区分提问、工具调用和最终回复
+          // 终稿合并去重：流式 live step 存在时原地升级为最终回复（权威全文
+          // 覆盖累积部分，稳定 id 让 React 复用同一卡片，不产生重复回复块）；
+          // 无 live step（纯工具任务/收尾总结路径）才追加独立回复步骤
+          const merged = finalizeWithAnswer(mission, finalAnswer);
+          if (!merged) {
             mission.steps.push({
               id: `step_assistant_${Date.now()}`,
               role: 'assistant',
@@ -490,6 +618,7 @@ class AgentBackend {
               status: 'DONE',
               answer: finalAnswer,
             });
+          }
 
             // 执行效率摘要：让"本该 2 步却空转了很多步"的任务一眼可见
             const eff = event.payload?.efficiency;
@@ -510,47 +639,72 @@ class AgentBackend {
             }
             this.broadcast({ type: 'mission_updated', data: mission });
           }
-        }
 
         this.state.viewport.status = 'idle';
-        this.broadcast({ type: 'viewport_update', data: this.state.viewport });
-        this.addTerminalLog('system', `[Agent] 回复完成: ${finalAnswer.slice(0, 100)}`);
+        // 任务完成即释放视口占用（最后一帧仍带占用者 userId 只推给本人，
+        // 之后无人占用，新的全局视口事件恢复全员可见）
+        this.broadcast({
+          type: 'viewport_update',
+          data: { ...this.state.viewport, userId: this.state.viewportUserId ?? undefined },
+        });
+        this.state.viewportUserId = null;
+        this.addTerminalLog('system', `[Agent] 回复完成: ${finalAnswer.slice(0, 100)}`, mission?.userId);
         break;
       }
 
       case 'error': {
         const errorMsg = event.payload?.error || 'Unknown execution error';
-        if (this.state.activeMissionId) {
-          const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-          if (mission) {
-            mission.status = 'DONE';
-            mission.steps.push({
-              id: `step_err_${Date.now()}`,
-              title: `执行异常: ${errorMsg}`,
-              status: 'FAILED',
-            });
-            this.broadcast({ type: 'mission_updated', data: mission });
-          }
+        // 按事件自带 taskId 归属（串台修复）；live step 收尾为 FAILED
+        // （保留已流出的部分文本，用户能看到"进行到哪"）
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission) {
+          this.flushDeltas(mission.id);
+          closeLiveStep(mission, { status: 'FAILED' });
+          mission.status = 'DONE';
+          mission.steps.push({
+            id: `step_err_${Date.now()}`,
+            title: `执行异常: ${errorMsg}`,
+            status: 'FAILED',
+          });
+          this.broadcast({ type: 'mission_updated', data: mission });
         }
-        this.addTerminalLog('stderr', `[Agent Error] ${errorMsg}`);
+        // 失败同样释放视口占用，避免把其他用户永久挡在空白画面外
+        this.state.viewportUserId = null;
+        this.addTerminalLog('stderr', `[Agent Error] ${errorMsg}`, mission?.userId);
         break;
       }
     }
   }
 
-  public addTerminalLog(type: TerminalLog['type'], text: string) {
+  /**
+   * 记终端日志。userId 标记归属用户（多用户部署时 SSE 只推给本人，
+   * 未标记的视为全局系统日志）。
+   */
+  public addTerminalLog(type: TerminalLog['type'], text: string, userId?: string) {
     const entry: TerminalLog = {
       id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       timestamp: Date.now(),
       type,
       text,
+      userId,
     };
     this.state.terminalLogs.push(entry);
     if (this.state.terminalLogs.length > 500) {
       this.state.terminalLogs.shift();
     }
 
-    if (this.state.activeMissionId) {
+    if (userId) {
+      // 归属明确的日志只挂到该用户的 in-flight 任务（按 userId 找，
+      // 而不是 activeMission —— 切换会话时不再挂错）
+      const mission = this.state.missions.find((m) => m.userId === userId && m.status !== 'DONE');
+      if (mission) {
+        if (!mission.terminalLogs) mission.terminalLogs = [];
+        mission.terminalLogs.push(entry);
+        if (mission.terminalLogs.length > 300) {
+          mission.terminalLogs.shift();
+        }
+      }
+    } else if (this.state.activeMissionId) {
       const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
       if (mission) {
         if (!mission.terminalLogs) mission.terminalLogs = [];
@@ -638,6 +792,8 @@ class AgentBackend {
     // 内核未就绪（极早期请求）时必然没有挂起中的审批，直接返回未命中
     if (!this.orchestrator) return false;
     const success = this.orchestrator.submitApproval(approvalId, approved);
+    // 先取归属再移除（userId 供该条日志的 SSE 过滤锚点）
+    const req = this.state.approvalRequests.find((r) => r.id === approvalId);
     this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== approvalId);
 
     if (this.state.activeMissionId) {
@@ -649,7 +805,7 @@ class AgentBackend {
     }
 
     this.broadcast({ type: 'approval_resolved', data: { approvalId, approved } });
-    this.addTerminalLog('system', `[Approval] User ${approved ? 'AUTHORIZED' : 'REJECTED'} action ${approvalId}.`);
+    this.addTerminalLog('system', `[Approval] User ${approved ? 'AUTHORIZED' : 'REJECTED'} action ${approvalId}.`, req?.userId);
     return success;
   }
 
@@ -733,6 +889,9 @@ class AgentBackend {
   }
 
   public stopMission(missionId: string) {
+    // 清掉未广播的流式增量缓冲（残段丢弃，任务即将终止）
+    this.flushDeltas(missionId);
+
     const controller = this.activeAbortControllers.get(missionId);
     if (controller) {
       controller.abort();
@@ -767,7 +926,7 @@ class AgentBackend {
         duration: '0ms',
       });
       this.broadcast({ type: 'mission_updated', data: mission });
-      this.addTerminalLog('system', `[Mission Aborted] ID: ${missionId} has been terminated.`);
+      this.addTerminalLog('system', `[Mission Aborted] ID: ${missionId} has been terminated.`, mission.userId);
     }
   }
 
@@ -813,7 +972,8 @@ class AgentBackend {
           this.state.missions.unshift(targetMission);
           this.addTerminalLog(
             'system',
-            `[Session Restored] ID: ${targetMission.id} 已从持久化库回水（含 ${targetMission.conversationMessages?.length || 0} 条历史会话）`
+            `[Session Restored] ID: ${targetMission.id} 已从持久化库回水（含 ${targetMission.conversationMessages?.length || 0} 条历史会话）`,
+            targetMission.userId
           );
         }
       } catch {
@@ -833,7 +993,7 @@ class AgentBackend {
       });
       this.state.activeMissionId = targetMission.id;
       this.broadcast({ type: 'mission_updated', data: targetMission });
-      this.addTerminalLog('system', `[Session Continued] ID: ${targetMission.id} | New Goal: ${goal}`);
+      this.addTerminalLog('system', `[Session Continued] ID: ${targetMission.id} | New Goal: ${goal}`, targetMission.userId);
     } else {
       const missionId = `mission_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       targetMission = {
@@ -868,7 +1028,7 @@ class AgentBackend {
       }
 
       this.broadcast({ type: 'mission_created', data: targetMission });
-      this.addTerminalLog('system', `[Mission Started] ID: ${missionId} | Goal: ${goal}`);
+      this.addTerminalLog('system', `[Mission Started] ID: ${missionId} | Goal: ${goal}`, options.userId);
     }
 
     const abortController = new AbortController();
@@ -956,7 +1116,7 @@ class AgentBackend {
             const { buildUserMemoryTools } = await import('@/lib/memory-service');
             taskTools = [...(taskTools || []), ...buildUserMemoryTools(uid)];
           } catch (e: any) {
-            this.addTerminalLog('stderr', `[Memory] 用户记忆工具挂载异常: ${e?.message || e}`);
+            this.addTerminalLog('stderr', `[Memory] 用户记忆工具挂载异常: ${e?.message || e}`, uid);
           }
 
           // 2.45 用户级定时巡航工具（同名命名空间 cron_*，与插件路由前缀约定一致）：
@@ -972,7 +1132,7 @@ class AgentBackend {
               }),
             ];
           } catch (e: any) {
-            this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`);
+            this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`, uid);
           }
 
           try {
@@ -989,10 +1149,11 @@ class AgentBackend {
                 injectedTools.push(...userTools);
                 this.addTerminalLog(
                   'system',
-                  `[MCP] 用户连接器挂载: 新连 ${sync.connected.length} / 复用 ${sync.reused.length}，共 ${userTools.length} 个工具`
+                  `[MCP] 用户连接器挂载: 新连 ${sync.connected.length} / 复用 ${sync.reused.length}，共 ${userTools.length} 个工具`,
+                  uid
                 );
                 for (const f of sync.failed) {
-                  this.addTerminalLog('stderr', `[MCP] 连接 ${f.name} 失败: ${f.error}`);
+                  this.addTerminalLog('stderr', `[MCP] 连接 ${f.name} 失败: ${f.error}`, uid);
                 }
               }
             }
@@ -1022,7 +1183,7 @@ class AgentBackend {
             taskTools = [...(taskTools || []), ...injectedTools];
 
           } catch (e: any) {
-            this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`);
+            this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`, uid);
           }
 
           // 用户级非 LLM 服务 Key（搜索/爬取/云端沙箱）：经 runTask taskEnv → session.env
@@ -1047,7 +1208,7 @@ class AgentBackend {
             }
             if (Object.keys(env).length > 0) {
               taskEnv = env;
-              this.addTerminalLog('system', `[Key] 用户级服务密钥注入: ${Object.keys(env).join(', ')}`);
+              this.addTerminalLog('system', `[Key] 用户级服务密钥注入: ${Object.keys(env).join(', ')}`, uid);
             }
           } catch (e) {
             // ignore
@@ -1173,7 +1334,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
                   fmt(agentOutcome) ? `Agent 经验: ${fmt(agentOutcome)}` : '',
                 ].filter(Boolean);
                 if (lines.length > 0) {
-                  this.addTerminalLog('system', `[Memory] 会话结束记忆维护: ${lines.join('；')}`);
+                  this.addTerminalLog('system', `[Memory] 会话结束记忆维护: ${lines.join('；')}`, uid);
                   this.broadcast({
                     type: 'memories_updated',
                     data: {
@@ -1200,7 +1361,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
               title: `执行异常: ${result.error}`,
               status: 'FAILED',
             });
-            this.addTerminalLog('stderr', `[Mission Error] ${result.error}`);
+            this.addTerminalLog('stderr', `[Mission Error] ${result.error}`, targetMission.userId);
             this.broadcast({ type: 'mission_updated', data: targetMission });
           }
         } else {
@@ -1216,7 +1377,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
             },
           ];
           this.broadcast({ type: 'mission_updated', data: targetMission });
-          this.addTerminalLog('stderr', '[Config Required] 当前用户未配置大模型 API Key。请前往顶部「连接器」添加自定义 OpenAI、DeepSeek 或中转站 Key。');
+          this.addTerminalLog('stderr', '[Config Required] 当前用户未配置大模型 API Key。请前往顶部「连接器」添加自定义 OpenAI、DeepSeek 或中转站 Key。', options.userId);
         }
       } catch (err: any) {
         targetMission.status = 'DONE';
@@ -1225,7 +1386,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
           title: `Execution error: ${err.message}`,
           status: 'FAILED',
         });
-        this.addTerminalLog('stderr', `[Mission Error] ${err.message}`);
+        this.addTerminalLog('stderr', `[Mission Error] ${err.message}`, targetMission.userId);
         this.broadcast({ type: 'mission_updated', data: targetMission });
       } finally {
         this.activeAbortControllers.delete(targetMission.id);
@@ -1275,12 +1436,12 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 
     const cronSvc = this.ctx?.cron;
     if (!cronSvc) {
-      this.addTerminalLog('stderr', `[Cron] 调度引擎未就绪，任务 "${jobInfo.name}" 暂未挂载（重启后将自动恢复）。`);
+      this.addTerminalLog('stderr', `[Cron] 调度引擎未就绪，任务 "${jobInfo.name}" 暂未挂载（重启后将自动恢复）。`, userId);
       return;
     }
 
     const ok = cronSvc.register(jobInfo.id, jobInfo.pattern, async () => {
-      this.addTerminalLog('system', `[自动巡航触发] 任务 "${jobInfo.name}" 到达预定时间，开始自主执行...`);
+      this.addTerminalLog('system', `[自动巡航触发] 任务 "${jobInfo.name}" 到达预定时间，开始自主执行...`, userId);
 
       // 更新执行计数与下一次触发时间
       jobInfo.runCount = (jobInfo.runCount || 0) + 1;
@@ -1306,12 +1467,12 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
           userId,
         });
       } catch (err: any) {
-        this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`);
+        this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);
       }
     });
 
     if (!ok) {
-      this.addTerminalLog('stderr', `[Cron] 任务 "${jobInfo.name}" 挂载失败（表达式 "${jobInfo.pattern}" 无效）。`);
+      this.addTerminalLog('stderr', `[Cron] 任务 "${jobInfo.name}" 挂载失败（表达式 "${jobInfo.pattern}" 无效）。`, userId);
       return;
     }
 
@@ -1319,7 +1480,8 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
     this.activeCronJobs.set(jobInfo.id, { userId, name: jobInfo.name });
     this.addTerminalLog(
       'system',
-      `[Cron] 任务 "${jobInfo.name}" (${jobInfo.pattern}) 已挂载，下次触发: ${jobInfo.nextRun || '无'}`
+      `[Cron] 任务 "${jobInfo.name}" (${jobInfo.pattern}) 已挂载，下次触发: ${jobInfo.nextRun || '无'}`,
+      userId
     );
   }
 
@@ -1328,7 +1490,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
     if (!existing) return;
     this.ctx?.cron?.cancel(jobId);
     this.activeCronJobs.delete(jobId);
-    this.addTerminalLog('system', `[Cron] 任务 "${existing.name || jobId}" 已从后台定时池注销。`);
+    this.addTerminalLog('system', `[Cron] 任务 "${existing.name || jobId}" 已从后台定时池注销。`, existing.userId);
   }
 
   public async triggerUserCronJob(userId: string, jobId: string) {
@@ -1337,7 +1499,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
     const jobInfo = jobs.find((j: any) => j.id === jobId);
     if (!jobInfo) return;
 
-    this.addTerminalLog('system', `[手动触发巡航] 任务 "${jobInfo.name}" 开始立即执行...`);
+    this.addTerminalLog('system', `[手动触发巡航] 任务 "${jobInfo.name}" 开始立即执行...`, userId);
     jobInfo.runCount = (jobInfo.runCount || 0) + 1;
     jobInfo.lastRunAt = Date.now();
     saveUserCronJob(userId, jobInfo);
@@ -1353,7 +1515,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
         userId,
       });
     } catch (err: any) {
-      this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`);
+      this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);
     }
   }
 }

@@ -71,6 +71,12 @@ export interface AgentLoopOptions {
   configOverride?: ModelConfigOverride;
   prepareStep?: AgentLoopPrepareStep;
   onStepFinish?: (info: AgentLoopStepInfo) => void;
+  /** 每步模型调用开始（供上层做"正在思考"指示广播） */
+  onStepStart?: (info: { stepNumber: number }) => void;
+  /** 文本增量回调（P1 流式）；实现不支持流式时可缺省不调 */
+  onTextDelta?: (delta: string) => void;
+  /** 推理增量回调（reasoning 模型思考过程）；实现可忽略 */
+  onReasoningDelta?: (delta: string) => void;
 }
 
 export interface AgentLoopResult {

@@ -6,6 +6,7 @@ import Apple from 'next-auth/providers/apple';
 import WeChat from 'next-auth/providers/wechat';
 import { consumeVerifiedCode } from './lib/wechat-store';
 import { isMockAuthAllowed } from './lib/auth-mock';
+import { deriveStableUserId } from './lib/auth-identity';
 
 const configuredProviders: any[] = [];
 
@@ -175,9 +176,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   session: { strategy: 'jwt' },
   secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || 'agtpilot-super-secret-jwt-key-2026',
   callbacks: {
-    jwt({ token, user }) {
+    jwt({ token, user, account }) {
       if (user) {
-        token.id = user.id;
+        token.id = deriveStableUserId(user, account);
         token.role = (user as any).role || 'user';
         token.tier = (user as any).tier || 'Pro';
         token.tokensUsed = (user as any).tokensUsed ?? 3500;

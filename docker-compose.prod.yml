@@ -13,5 +13,8 @@ services:
       - NODE_ENV=production
       - PORT=3000
     volumes:
-      - /opt/agtpilot/data:/app/apps/web/.cache/user_data
-      - /opt/agtpilot/sandbox:/app/apps/web/.cache/sandbox
+      # 用户数据(getDataDir 绝对路径候选 #1;连接器凭证/记忆/任务均在此)
+      - /opt/agtpilot/data:/app/.cache/user_data
+      # 进程 cwd = /app/apps/web:浏览器登录态 profile、沙箱等运行期缓存都落在
+      # cwd/.cache,挂卷持久化(否则小红书扫码登录态随容器重建丢失)
+      - /opt/agtpilot/cache:/app/apps/web/.cache

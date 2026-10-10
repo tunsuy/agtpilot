@@ -122,7 +122,12 @@ export default function Workspace() {
     }
   };
 
-  const handleCreateCronJob = async (job: { name: string; pattern: string; prompt: string }) => {
+  const handleCreateCronJob = async (job: {
+    name: string;
+    pattern: string;
+    prompt: string;
+    scenario?: { key: 'xhs_weekly_topics'; count?: number };
+  }) => {
     try {
       const res = await fetch('/api/cron/jobs', {
         method: 'POST',
@@ -818,6 +823,7 @@ export default function Workspace() {
                   onConnectorAuthorize={handleConnectorAuthorize}
                   onSkipConnectorSuggestion={handleSkipConnectorSuggestion}
                   terminalLogs={terminalLogs}
+                  onOpenDeliverable={() => setMobileTab('deliverables')}
                 />
               )}
 

@@ -65,9 +65,11 @@ export function MobileHomeView({
     [missions]
   );
   const recentDone = useMemo(
-    () => missions.filter((m) => m.status === 'DONE').slice(0, 8),
+    () => missions.filter((m) => m.status !== 'ACTIVE' && m.status !== 'QUEUED' && m.status !== 'WAITING_APPROVAL'),
     [missions]
   );
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const visibleHistory = showAllHistory ? recentDone.slice(0, 50) : recentDone.slice(0, 8);
 
   const submit = () => {
     const text = draft.trim();
@@ -166,8 +168,8 @@ export function MobileHomeView({
         ) : (
           <ul className="space-y-2.5">
             {ongoing.map((m) => {
-              const meta = STATUS_META[m.status];
-              const Icon = meta.icon;
+              const meta = STATUS_META[m.status] || STATUS_META.INTERRUPTED;
+              const Icon = meta.icon || Hourglass;
               const currentStep = [...(m.steps || [])].reverse().find((s) => s.status === 'RUNNING') || (m.steps || [])[m.steps.length - 1];
               return (
                 <li key={m.id}>
@@ -219,19 +221,34 @@ export function MobileHomeView({
         )}
       </section>
 
-      {/* 最近完成 */}
+      {/* 历史任务 */}
       {recentDone.length > 0 && (
         <section className="mt-6">
-          <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 px-1">最近完成</h2>
+          <div className="flex items-center justify-between mb-2 px-1">
+            <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">历史任务 · {recentDone.length}</h2>
+            {recentDone.length > 8 && (
+              <button
+                type="button"
+                onClick={() => setShowAllHistory((v) => !v)}
+                className="text-[11px] text-zinc-400 flex items-center active:text-zinc-600 transition"
+              >
+                {showAllHistory ? '收起' : `查看全部 ${recentDone.length}`} <ChevronRight className={`h-3 w-3 transition ${showAllHistory ? 'rotate-90' : ''}`} />
+              </button>
+            )}
+          </div>
           <ul className="rounded-xl border border-zinc-200 bg-white divide-y divide-zinc-100 overflow-hidden">
-            {recentDone.map((m) => (
+            {visibleHistory.map((m) => (
               <li key={m.id}>
                 <button
                   type="button"
                   onClick={() => onOpenMission(m.id)}
                   className="w-full flex items-center gap-3 px-4 py-3 text-left active:bg-zinc-50 transition"
                 >
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                  {m.status === 'DONE' ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                  ) : (
+                    <Hourglass className="h-4 w-4 text-zinc-300 shrink-0" />
+                  )}
                   <span className="flex-1 text-sm text-zinc-700 truncate">{m.title || '未命名任务'}</span>
                   <span className="text-xs text-zinc-300 shrink-0">{timeAgo(m.startedAt)}</span>
                 </button>

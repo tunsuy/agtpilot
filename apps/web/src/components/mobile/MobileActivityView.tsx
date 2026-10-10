@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   X,
@@ -12,8 +12,10 @@ import {
   Terminal,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   Inbox,
   Plug,
+  FileText,
 } from 'lucide-react';
 import { ApprovalRequest, ConnectorSuggestion, Mission, TerminalLog } from '../../types/agent';
 
@@ -27,6 +29,8 @@ interface MobileActivityViewProps {
   onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
   onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
   terminalLogs: TerminalLog[];
+  /** 跳到交付物 Tab（看最终产物），不传则不显示入口 */
+  onOpenDeliverable?: () => void;
 }
 
 const DANGER_STYLE: Record<ApprovalRequest['dangerLevel'], string> = {
@@ -57,9 +61,9 @@ const STEP_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 
 /**
  * 移动端"动态" —— 收件箱。
- * 顶部：待审批卡片（一键批准/拒绝）；
- * 中部：任务切换 chips；
- * 主体：所选任务的步骤时间线 + 最近执行日志（默认折叠，摘要优先）。
+ * 顶部：待审批卡片（一键批准/拒绝，新请求自动滚到眼前）；
+ * 中部：任务切换 chips（超 12 个可展开全部）；
+ * 主体：所选任务的步骤时间线（默认最近 12 步，可展开全部；步骤正文点标题展开）+ 交付物入口 + 最近执行日志。
  */
 export function MobileActivityView({
   missions,
@@ -71,8 +75,27 @@ export function MobileActivityView({
   onConnectorAuthorize,
   onSkipConnectorSuggestion,
   terminalLogs,
+  onOpenDeliverable,
 }: MobileActivityViewProps) {
   const [logsExpanded, setLogsExpanded] = useState(false);
+  const [showAllMissions, setShowAllMissions] = useState(false);
+  const [showAllSteps, setShowAllSteps] = useState(false);
+  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+  const approvalTopRef = useRef<HTMLDivElement>(null);
+  const prevApprovalCount = useRef(approvalRequests.length);
+  const prevSuggestionCount = useRef(connectorSuggestions.length);
+
+  // 新审批/新授权请求进来时自动滚到眼前（只在数量增加时触发，不打断日常滚动）
+  useEffect(() => {
+    const grew =
+      approvalRequests.length > prevApprovalCount.current ||
+      connectorSuggestions.length > prevSuggestionCount.current;
+    prevApprovalCount.current = approvalRequests.length;
+    prevSuggestionCount.current = connectorSuggestions.length;
+    if (grew) {
+      approvalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [approvalRequests.length, connectorSuggestions.length]);
 
   const mission = useMemo(
     () => missions.find((m) => m.id === activeMissionId) || missions[0] || null,
@@ -89,6 +112,7 @@ export function MobileActivityView({
       <header className="mb-4 text-center">
         <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">动态</h1>
       </header>
+      <div ref={approvalTopRef} className="scroll-mt-4" />
 
       {/* 待审批 */}
       {approvalRequests.length > 0 && (
@@ -194,7 +218,7 @@ export function MobileActivityView({
         <section>
           <div className="-mx-4 px-4 overflow-x-auto scrollbar-none">
             <div className="flex gap-2 w-max pb-1">
-              {missions.slice(0, 12).map((m) => {
+              {(showAllMissions ? missions : missions.slice(0, 12)).map((m) => {
                 const active = mission?.id === m.id;
                 return (
                   <button
@@ -212,21 +236,50 @@ export function MobileActivityView({
                   </button>
                 );
               })}
+              {missions.length > 12 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllMissions((v) => !v)}
+                  className="h-8 px-3.5 rounded-full text-xs font-medium whitespace-nowrap transition border bg-zinc-100 text-zinc-600 border-zinc-200 active:bg-zinc-200"
+                >
+                  {showAllMissions ? '收起' : `全部 ${missions.length}`}
+                </button>
+              )}
             </div>
           </div>
 
           {/* 步骤时间线 */}
           {mission && (
             <div className="mt-3 rounded-xl border border-zinc-200 bg-white px-4 py-4 shadow-sm">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-semibold text-zinc-900 truncate pr-2">{mission.title || '未命名任务'}</p>
                 <span className="text-[11px] text-zinc-400 shrink-0">{Math.round(mission.progress || 0)}%</span>
               </div>
+              {onOpenDeliverable && (
+                <button
+                  type="button"
+                  onClick={onOpenDeliverable}
+                  className="mb-3 flex items-center gap-1 text-xs text-zinc-500 active:text-zinc-800 transition"
+                >
+                  <FileText className="h-3.5 w-3.5" /> 查看交付物 <ChevronRight className="h-3 w-3" />
+                </button>
+              )}
+              {(mission.steps?.length || 0) > 12 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSteps((v) => !v)}
+                  className="mb-2 text-[11px] text-zinc-400 active:text-zinc-600 transition"
+                >
+                  {showAllSteps ? '只看最近 12 步' : `展开全部 ${mission.steps?.length} 步`}
+                </button>
+              )}
               {mission.steps?.length ? (
                 <ol className="relative">
-                  {mission.steps.slice(-12).map((step, idx, arr) => {
+                  {(showAllSteps ? mission.steps : mission.steps.slice(-12)).map((step, idx, arr) => {
                     const Icon = STEP_ICON[step.status] || Circle;
                     const last = idx === arr.length - 1;
+                    const body = (step as any).answer || (step as any).reasoning || '';
+                    const expanded = Boolean(expandedSteps[step.id]);
                     return (
                       <li key={step.id} className="relative flex gap-3 pb-3 last:pb-0">
                         {!last && <span className="absolute left-[9px] top-5 bottom-0 w-px bg-zinc-100" />}
@@ -242,11 +295,23 @@ export function MobileActivityView({
                           }`}
                         />
                         <div className="flex-1 min-w-0">
-                          <p className={`text-[13px] leading-5 ${step.status === 'PENDING' ? 'text-zinc-400' : 'text-zinc-700'}`}>
+                          <button
+                            type="button"
+                            onClick={() => body && setExpandedSteps((p) => ({ ...p, [step.id]: !p[step.id] }))}
+                            className={`w-full text-left text-[13px] leading-5 ${step.status === 'PENDING' ? 'text-zinc-400' : 'text-zinc-700'}`}
+                          >
                             {step.title}
-                          </p>
+                            {body && (
+                              <span className="ml-1.5 text-[11px] text-zinc-300">{expanded ? '收起' : '展开'}</span>
+                            )}
+                          </button>
                           {step.tool && <p className="text-[11px] text-zinc-300 mt-0.5">{step.tool}{step.duration ? ` · ${step.duration}` : ''}</p>}
                           {step.error && <p className="text-[11px] text-red-500 mt-0.5 break-words">{step.error}</p>}
+                          {body && expanded && (
+                            <p className="mt-1.5 text-[12px] leading-5 text-zinc-600 whitespace-pre-wrap break-words bg-zinc-50 rounded-lg px-2.5 py-2">
+                              {String(body).slice(0, 2000)}
+                            </p>
+                          )}
                         </div>
                       </li>
                     );

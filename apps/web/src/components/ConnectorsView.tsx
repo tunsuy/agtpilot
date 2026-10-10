@@ -650,17 +650,17 @@ export function ConnectorsView({
                         {app.category}
                       </span>
                       {app.comingSoon ? (
-                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-amber-50 text-amber-600 border border-amber-200 flex items-center gap-0.5">
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-amber-50 text-amber-600 border border-amber-200 flex items-center gap-0.5 whitespace-nowrap">
                           <Laptop className="h-2.5 w-2.5" />
                           <span>接入开发中</span>
                         </span>
                       ) : app.platformType === 'mobile' || app.mobileAction ? (
-                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-rose-50 text-rose-600 border border-rose-200 flex items-center gap-0.5">
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-rose-50 text-rose-600 border border-rose-200 flex items-center gap-0.5 whitespace-nowrap">
                           <Smartphone className="h-2.5 w-2.5" />
                           <span>支持真机免密</span>
                         </span>
                       ) : (
-                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-zinc-100 text-zinc-500 flex items-center gap-0.5">
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-zinc-100 text-zinc-500 flex items-center gap-0.5 whitespace-nowrap">
                           <Laptop className="h-2.5 w-2.5" />
                           <span>Web 凭证</span>
                         </span>
@@ -702,16 +702,16 @@ export function ConnectorsView({
               </p>
             </div>
 
-            <div className="pt-3 border-t border-zinc-100 flex items-center justify-between">
+            <div className="pt-3 border-t border-zinc-100 flex flex-wrap items-center justify-between gap-y-2">
               <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
                 {app.envVar || ''}
               </span>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
                 {app.isModel && app.status === 'connected' && !app.isDefaultModel && (
                   <button
                     onClick={() => onSetDefaultModel(app.id)}
-                    className="px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition"
+                    className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition"
                   >
                     设为默认
                   </button>
@@ -721,7 +721,7 @@ export function ConnectorsView({
                 {(app.id === 'xiaohongshu' || app.id === 'weibo' || app.id === 'douyin' || app.id === 'bilibili') && onRunPrompt && (
                   <button
                     onClick={() => openWorkshop(app)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 transition shadow-2xs"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 transition shadow-2xs"
                     title="让 Agent 帮你选题、写文案/脚本、配标签，你只需在 App 人工确认发布"
                   >
                     <Sparkles className="h-3 w-3" />
@@ -733,7 +733,7 @@ export function ConnectorsView({
                 {(app.id === 'email_imap' || app.id === 'weekly_report') && onRunPrompt && (
                   <button
                     onClick={() => openWorkshop(app)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 transition shadow-2xs"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 transition shadow-2xs"
                     title={
                       app.id === 'email_imap'
                         ? 'Agent 拉取收件箱，自动分诊为四级优先级并起草回复（发送前逐封经你确认）'
@@ -749,7 +749,7 @@ export function ConnectorsView({
                 {app.id === 'invest_workshop' && onRunPrompt && (
                   <button
                     onClick={() => openWorkshop(app)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition shadow-2xs"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition shadow-2xs"
                     title="个股/基金体检、持仓组合体检、每日盘后复盘——只读投研，数据标注来源与时间戳"
                   >
                     <Sparkles className="h-3 w-3" />
@@ -761,7 +761,7 @@ export function ConnectorsView({
                 {app.id === 'edu_workshop' && onRunPrompt && (
                   <button
                     onClick={() => openWorkshop(app)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition shadow-2xs"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition shadow-2xs"
                     title="文献综述、论文精读、智能备课、学习卡片——只读检索，参考文献附 DOI/arXiv ID，严禁编造引用"
                   >
                     <Sparkles className="h-3 w-3" />
@@ -780,7 +780,7 @@ export function ConnectorsView({
                         );
                       }
                     }}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition shadow-2xs"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition shadow-2xs"
                     title="在手机端可直接唤起已登录的原生 App"
                   >
                     <Smartphone className="h-3 w-3" />
@@ -791,7 +791,7 @@ export function ConnectorsView({
                 {/* 桌面端提示:唤起能力仅在手机端存在 */}
                 {app.mobileAction && !mobileCtx && (
                   <span
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] text-zinc-400 bg-zinc-50 border border-zinc-200"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-[11px] text-zinc-400 bg-zinc-50 border border-zinc-200"
                     title="真机唤起仅在手机浏览器或 Capacitor App 内可用"
                   >
                     <Smartphone className="h-3 w-3" />
@@ -808,7 +808,7 @@ export function ConnectorsView({
                       setBaseUrlInput(app.baseUrl || '');
                       setModelNameInput(app.customModelName || '');
                     }}
-                    className="px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
+                    className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
                     title="手动输入或修改 API Key / Token"
                   >
                     {app.status === 'connected' ? '重新配置' : '配置密钥'}
@@ -867,7 +867,7 @@ export function ConnectorsView({
                             {app.category}
                           </span>
                           <span
-                            className={`text-[9px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5 ${
+                            className={`text-[9px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5 whitespace-nowrap ${
                               app.authType === 'oauth'
                                 ? 'bg-violet-50 text-violet-600 border border-violet-200'
                                 : app.authType === 'none'
@@ -908,16 +908,16 @@ export function ConnectorsView({
                   )}
                 </div>
 
-                <div className="pt-3 border-t border-zinc-100 flex items-center justify-between">
+                <div className="pt-3 border-t border-zinc-100 flex flex-wrap items-center justify-between gap-y-2">
                   <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
                     {app.authType === 'oauth' ? 'OAuth 2.1 + PKCE' : app.optIn ? '本地 stdio 子进程' : app.authType === 'none' ? 'MCP Streamable HTTP' : app.keyMasked || 'MCP Streamable HTTP'}
                   </span>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {app.authType === 'oauth' && (
                       <a
                         href={`/api/connectors/mcp/start?connector=${app.id}`}
-                        className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition shadow-2xs ${
+                        className={`flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium transition shadow-2xs ${
                           app.status === 'connected'
                             ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
                             : 'bg-zinc-900 hover:bg-zinc-800 text-white'
@@ -935,7 +935,7 @@ export function ConnectorsView({
                           setMcpTokenInput('');
                           setMcpNotice('');
                         }}
-                        className="px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                        className="shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
                       >
                         {app.status === 'connected' ? '更新凭证' : '打开授权页'}
                       </button>
@@ -945,7 +945,7 @@ export function ConnectorsView({
                       <button
                         onClick={() => mcpPost({ action: 'connect', connectorId: app.id })}
                         disabled={mcpSaving}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
+                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
                         title="立即重连并刷新工具列表"
                       >
                         <RotateCw className={`h-3 w-3 ${mcpSaving ? 'animate-spin' : ''}`} />
@@ -957,7 +957,7 @@ export function ConnectorsView({
                       <button
                         onClick={() => mcpPost({ action: 'saveToken', connectorId: app.id, token: '1' })}
                         disabled={mcpSaving}
-                        className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
                         title="启用后为你的任务挂载本地浏览器子进程(需服务器已装 Chrome/Chromium)"
                       >
                         {mcpSaving ? <RotateCw className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
@@ -969,7 +969,7 @@ export function ConnectorsView({
                       <button
                         onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
                         disabled={mcpSaving}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-red-600 hover:bg-red-50 transition"
+                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-red-600 hover:bg-red-50 transition"
                         title="停用并断开本地子进程"
                       >
                         <Unplug className="h-3 w-3" />
@@ -981,7 +981,7 @@ export function ConnectorsView({
                       <button
                         onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
                         disabled={mcpSaving}
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-red-600 hover:bg-red-50 transition"
+                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-red-600 hover:bg-red-50 transition"
                         title="清除凭证并断开连接"
                       >
                         <Unplug className="h-3 w-3" />

@@ -452,6 +452,12 @@ export default function Workspace() {
     }
   }, [session?.user?.id, sessionStatus]);
 
+  useEffect(() => {
+    if (session?.user?.id && mobileOverlay === 'connectors') {
+      loadConnectors();
+    }
+  }, [mobileOverlay, session?.user?.id]);
+
   const loadAgentState = async () => {
     try {
       const res = await fetch('/api/agent/state');
@@ -694,9 +700,9 @@ export default function Workspace() {
         workshops: '工坊',
       };
       return (
-        <div className="fixed inset-0 z-40 bg-[#fbfbfd] flex flex-col">
+        <div className="fixed inset-0 z-[60] bg-[#fbfbfd] flex flex-col">
           <header
-            className="h-13 shrink-0 relative flex items-center px-2 bg-white/92 backdrop-blur-lg border-b border-zinc-200/70"
+            className="shrink-0 relative flex items-center px-2 bg-white/92 backdrop-blur-lg border-b border-zinc-200/70"
             style={{ paddingTop: 'env(safe-area-inset-top, 0px)', height: 'calc(3.25rem + env(safe-area-inset-top, 0px))' }}
           >
             <button
@@ -710,7 +716,7 @@ export default function Workspace() {
               {titles[mobileOverlay]}
             </span>
           </header>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom,0px)]">
             {mobileOverlay === 'goals' && (
               <GoalsView
                 goals={goals}

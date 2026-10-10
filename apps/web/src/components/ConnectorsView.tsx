@@ -359,7 +359,7 @@ export function ConnectorsView({
   const connectedCount = connectors.filter((c) => c.status === 'connected').length;
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
+    <div className="w-full max-w-5xl mx-auto px-4 py-6 md:py-12 pb-24 md:pb-8 space-y-8 animate-fadeIn">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -731,8 +731,8 @@ export function ConnectorsView({
 
       {/* MCP Token Config Modal */}
       {mcpConfiguring && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl animate-fadeIn space-y-4">
+        <div className="fixed inset-0 z-[80] bg-black/30 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white border border-zinc-200 p-5 sm:p-6 shadow-xl animate-fadeIn space-y-4 max-h-[92dvh] overflow-y-auto mb-[env(safe-area-inset-bottom,0px)]">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shadow-2xs">
@@ -813,8 +813,8 @@ export function ConnectorsView({
 
       {/* Key Config Modal */}
       {configuringApp && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl animate-fadeIn space-y-4">
+        <div className="fixed inset-0 z-[80] bg-black/30 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white border border-zinc-200 p-5 sm:p-6 shadow-xl animate-fadeIn space-y-4 max-h-[92dvh] overflow-y-auto mb-[env(safe-area-inset-bottom,0px)]">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shadow-2xs">

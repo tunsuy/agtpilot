@@ -58,7 +58,29 @@ export function MobileProfileView({
 }: MobileProfileViewProps) {
   const activeGoals = useMemo(() => goals.filter((g) => g.status === 'active').slice(0, 3), [goals]);
   const activeJobs = useMemo(() => cronJobs.filter((j) => j.status !== 'cancelled').slice(0, 5), [cronJobs]);
-  const connectedCount = connectors.filter((c) => c.status === 'connected').length;
+  const nativeConnected = connectors.filter((c) => c.status === 'connected').length;
+  // MCP 连接器是另一套接口（/api/connectors/mcp），原生列表里看不到，
+  // 这里单独拉一次做合并计数，否则网页配了 MCP、手机“我的”页仍显示 0/N。
+  const [mcpConnected, setMcpConnected] = useState(0);
+  const [mcpTotal, setMcpTotal] = useState(0);
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setMcpConnected(0);
+      setMcpTotal(0);
+      return;
+    }
+    fetch('/api/connectors/mcp')
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d.connectors)) {
+          setMcpConnected(d.connectors.filter((c: any) => c.status === 'connected').length);
+          setMcpTotal(d.connectors.length);
+        }
+      })
+      .catch(() => {});
+  }, [isLoggedIn, connectors.length]);
+  const connectedCount = nativeConnected + mcpConnected;
+  const totalCount = connectors.length + mcpTotal;
 
   // ---- Web Push 通知状态（客户端自治） ----
   const [pushSupport, setPushSupport] = useState<PushSupport>('unsupported');
@@ -295,7 +317,7 @@ export function MobileProfileView({
             <button type="button" onClick={() => onOpenFullView('connectors')} className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-zinc-50 transition">
               <Plug className="h-4 w-4 text-zinc-400" />
               <span className="flex-1 text-sm text-zinc-800">连接器</span>
-              <span className="text-xs text-zinc-400">{connectedCount}/{connectors.length} 已连接</span>
+              <span className="text-xs text-zinc-400">{connectedCount}/{totalCount} 已连接</span>
               <ChevronRight className="h-4 w-4 text-zinc-300" />
             </button>
           </li>

@@ -51,6 +51,9 @@ export default function Workspace() {
   // Agent 实时状态流
   const [missions, setMissions] = useState<Mission[]>([]);
   const [activeMissionId, setActiveMissionId] = useState<string | null>(null);
+  // 推送深链指定的 mission（/?tab=activity&mission=<id>）：等 missions 列表加载到该 id 才选中，
+  // 规避 loadAgentState / SSE init 稍后回写 activeMissionId 覆盖深链目标
+  const [deepLinkMissionId, setDeepLinkMissionId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<ViewportState>({
     activeTab: 'browser',
     url: 'about:blank',
@@ -447,15 +450,36 @@ export default function Workspace() {
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
       const tab = urlParams.get('tab');
-      if (tab === 'connectors') {
+      const mission = urlParams.get('mission');
+      if (mission) {
+        // 任务完成推送深链：直达该 mission（桌面 cockpit / 移动 activity 两种布局渲染不相交，双置安全）
+        setDeepLinkMissionId(mission);
+        setActiveMissionId(mission);
+        setActiveView('cockpit');
+        setMobileTab('activity');
+      } else if (tab === 'connectors') {
         setActiveView('connectors');
       } else if (tab === 'workshops') {
         setActiveView('workshops');
       } else if (tab === 'home' || tab === 'deliverables' || tab === 'activity' || tab === 'profile') {
         setMobileTab(tab);
       }
+      if (mission || tab) {
+        // 深链参数消费后清掉,避免刷新/回退重复触发
+        window.history.replaceState({}, '', window.location.pathname);
+      }
     }
   }, [session?.user?.id, sessionStatus]);
+
+  // 深链目标 mission 已在列表中 → 正式选中并结束等待(SSE init/loadAgentState 的回写已被此 effect 纠正)
+  useEffect(() => {
+    if (!deepLinkMissionId) return;
+    const exists = missions.some((m) => m.id === deepLinkMissionId);
+    if (exists) {
+      setActiveMissionId(deepLinkMissionId);
+      setDeepLinkMissionId(null);
+    }
+  }, [deepLinkMissionId, missions]);
 
   useEffect(() => {
     if (session?.user?.id && mobileOverlay === 'connectors') {
@@ -824,6 +848,7 @@ export default function Workspace() {
                   onSkipConnectorSuggestion={handleSkipConnectorSuggestion}
                   terminalLogs={terminalLogs}
                   onOpenDeliverable={() => setMobileTab('deliverables')}
+                  onRunMission={handleRun}
                 />
               )}
 

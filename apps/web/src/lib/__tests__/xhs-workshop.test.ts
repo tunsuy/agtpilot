@@ -62,3 +62,27 @@ describe('buildXhsWorkshopPrompt · 笔记包格式契约', () => {
     expect(prompt).toContain('真机唤起');
   });
 });
+
+describe('buildXhsWorkshopPrompt · 主题缺省回退(P1 降级链)', () => {
+  it('无主题:调研热点选题,优先 xhs_read_creator_data,末级回退自身知识并注明来源', () => {
+    const prompt = buildXhsWorkshopPrompt({ style: '干货教程', count: 1 });
+    expect(prompt).toContain('主题:未指定');
+    expect(prompt).toContain('xhs_read_creator_data');
+    expect(prompt).toContain('page=hot_topics');
+    expect(prompt).toContain('query=关键词');
+    // 降级链:②MCP/网页搜索 ③自身知识
+    expect(prompt).toContain('知乎热榜');
+    expect(prompt).toContain('网页搜索');
+    expect(prompt).toContain('基于你自身知识');
+    expect(prompt).toContain('注明选题数据来源');
+    // 提示嵌入风格语境
+    expect(prompt).toContain('「干货教程」');
+  });
+
+  it('有主题:不出现调研回退链(主题即指令)', () => {
+    const prompt = buildXhsWorkshopPrompt({ topic: '羽绒服', style: '种草推荐', count: 1 });
+    expect(prompt).toContain('主题:羽绒服');
+    expect(prompt).not.toContain('主题:未指定');
+    expect(prompt).not.toContain('page=hot_topics');
+  });
+});

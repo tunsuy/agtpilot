@@ -18,6 +18,8 @@ import {
   FileText,
 } from 'lucide-react';
 import { ApprovalRequest, ConnectorSuggestion, Mission, TerminalLog } from '../../types/agent';
+import { TopicPickList } from '../workshops/TopicPickCard';
+import { parseTopicPicks } from '../../lib/topic-picks';
 
 interface MobileActivityViewProps {
   missions: Mission[];
@@ -31,6 +33,8 @@ interface MobileActivityViewProps {
   terminalLogs: TerminalLog[];
   /** 跳到交付物 Tab（看最终产物），不传则不显示入口 */
   onOpenDeliverable?: () => void;
+  /** 续聊同一 mission（勾选选题一键成稿的移动端唯一回复入口） */
+  onRunMission?: (prompt: string, title?: string, missionId?: string) => void;
 }
 
 const DANGER_STYLE: Record<ApprovalRequest['dangerLevel'], string> = {
@@ -76,6 +80,7 @@ export function MobileActivityView({
   onSkipConnectorSuggestion,
   terminalLogs,
   onOpenDeliverable,
+  onRunMission,
 }: MobileActivityViewProps) {
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [showAllMissions, setShowAllMissions] = useState(false);
@@ -311,11 +316,28 @@ export function MobileActivityView({
                           </button>
                           {step.tool && <p className="text-[11px] text-zinc-300 mt-0.5">{step.tool}{step.duration ? ` · ${step.duration}` : ''}</p>}
                           {step.error && <p className="text-[11px] text-red-500 mt-0.5 break-words">{step.error}</p>}
-                          {body && expanded && (
-                            <p className="mt-1.5 text-[12px] leading-5 text-zinc-600 whitespace-pre-wrap break-words bg-zinc-50 rounded-lg px-2.5 py-2">
-                              {String(body).slice(0, 2000)}
-                            </p>
-                          )}
+                          {body && expanded &&
+                            (() => {
+                              // 每周选题答案 → 勾选卡片（移动端闭环唯一回复入口）
+                              const parsed = onRunMission ? parseTopicPicks(String(body)) : null;
+                              if (parsed && parsed.picks.length > 0 && onRunMission) {
+                                return (
+                                  <div className="mt-1.5">
+                                    <TopicPickList
+                                      compact
+                                      result={parsed}
+                                      missionId={mission.id}
+                                      onRunMission={onRunMission}
+                                    />
+                                  </div>
+                                );
+                              }
+                              return (
+                                <p className="mt-1.5 text-[12px] leading-5 text-zinc-600 whitespace-pre-wrap break-words bg-zinc-50 rounded-lg px-2.5 py-2">
+                                  {String(body).slice(0, 2000)}
+                                </p>
+                              );
+                            })()}
                         </div>
                       </li>
                     );

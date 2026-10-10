@@ -46,6 +46,8 @@ import {
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { NotePackageList } from './workshops/NotePackageCard';
 import { parseNotePackages } from '../lib/note-package';
+import { TopicPickList } from './workshops/TopicPickCard';
+import { parseTopicPicks } from '../lib/topic-picks';
 import {
   Mission,
   ViewportState,
@@ -727,6 +729,10 @@ export function CockpitView({
                     // 避免原始 markdown → 卡片的闪烁;解析失败则保持普通 markdown 渲染
                     const parsedNote = st.answer && !isStreaming ? parseNotePackages(st.answer) : null;
                     const noteResult = parsedNote && parsedNote.packages.length > 0 ? parsedNote : null;
+                    // 每周选题勾选卡(scenario-loop P1):选题头与笔记包头不相交,先试选题;
+                    // 勾选后「成稿选中」续聊本 mission —— 选题→成稿多步工作流的人工确认点
+                    const parsedPicks = st.answer && !isStreaming ? parseTopicPicks(st.answer) : null;
+                    const pickResult = parsedPicks && parsedPicks.picks.length > 0 ? parsedPicks : null;
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
@@ -786,7 +792,14 @@ export function CockpitView({
                               </div>
                             ) : (
                               /* 正文只渲染 answer（title 不再兜底当正文，避免"深度思考中…"大字空段） */
-                              st.answer && noteResult ? (
+                              st.answer && pickResult ? (
+                                /* 每周选题:可勾选卡片,勾选后一键成稿续聊本任务 */
+                                <TopicPickList
+                                  result={pickResult}
+                                  missionId={activeMissionId || currentMission?.id}
+                                  onRunMission={onRunMission}
+                                />
+                              ) : st.answer && noteResult ? (
                                 /* 小红书笔记包:字段级可复制卡片(复制整篇对齐发布页粘贴顺序) */
                                 <NotePackageList result={noteResult} />
                               ) : (

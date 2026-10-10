@@ -22,6 +22,7 @@ import {
   type XhsManagedRecord,
 } from './user-store';
 import { XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES } from './browser-login';
+import { buildXhsReadGuardrail } from './xhs-read-guardrail';
 
 /**
  * ⚠️ 发布页选择器配置表 —— 全部待真实账号实测(docs/design/workshop-scenario-loop.md §5.4)。
@@ -42,12 +43,41 @@ export const XHS_PUBLISH_SELECTORS = {
   autosaveIndicator: /已(自动)?保存|存为草稿/,
 };
 
-// TODO 实测:创作中心数据页 URL
+// TODO 实测:创作中心数据页 URL(hot_topics 为 P1 新增的选题灵感/热门话题页,URL 待真实账号核实)
 export const XHS_CREATOR_PAGES: Record<string, string> = {
   overview: XHS_CREATOR_HOME,
   notes: 'https://creator.xiaohongshu.com/new/note-manager',
   followers: 'https://creator.xiaohongshu.com/new/fans',
+  hot_topics: 'https://creator.xiaohongshu.com/new/hot-topics',
 };
+
+/** 读工具页面白名单(单一事实源:参数 enum 与 execute 校验共用) */
+export const XHS_READ_PAGES = ['overview', 'notes', 'followers', 'hot_topics'] as const;
+export type XhsReadPage = (typeof XHS_READ_PAGES)[number];
+
+/** 站内搜索页(客户端渲染的 SPA;web_session 作用域 .xiaohongshu.com,登录门同样有效) */
+export const XHS_SEARCH_URL = 'https://www.xiaohongshu.com/search_result';
+
+/** 读目标解析:query 非空即搜索(page 被忽略——模型忘传 page 也要落到搜索,防误用形态) */
+export function resolveReadTarget(
+  page: unknown,
+  query: unknown
+): { url: string; label: string; dynamic: boolean } {
+  const q = typeof query === 'string' ? query.trim().slice(0, 40) : '';
+  if (q) {
+    return {
+      url: `${XHS_SEARCH_URL}?keyword=${encodeURIComponent(q)}`,
+      label: `search:${q}`,
+      dynamic: true,
+    };
+  }
+  const pageKey = (XHS_READ_PAGES as readonly string[]).includes(String(page)) ? String(page) : 'overview';
+  return {
+    url: XHS_CREATOR_PAGES[pageKey] || XHS_CREATOR_PAGES.overview,
+    label: pageKey,
+    dynamic: pageKey === 'hot_topics',
+  };
+}
 
 /** 每日存草稿上限(opt-in 承诺的一部分;可用 env 调整) */
 export function dailyDraftLimit(): number {
@@ -81,7 +111,8 @@ export interface XhsBrowserService {
   navigateAndDistill(
     userId: string | undefined,
     url: string,
-    offset?: number
+    offset?: number,
+    opts?: { renderWaitMs?: number }
   ): Promise<{ url: string; title: string; content: string; nextOffset?: number; totalLength: number; screenshotBase64?: string }>;
   hasCookies(userId: string | undefined, domain: string, names: string[]): Promise<boolean>;
 }
@@ -123,33 +154,68 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
     tools.push({
       name: 'xhs_read_creator_data',
       description:
-        '读取小红书创作中心的数据页(概览/笔记管理/粉丝),返回蒸馏后的 Markdown 与页面截图。' +
-        '只读,不点击不填写。用于复盘账号数据、验证笔记表现。',
+        '读取小红书真实数据(只读,不点击不填写):创作中心数据页(概览/笔记管理/粉丝)、' +
+        '本周热门话题页(page=hot_topics),或按关键词搜索站内笔记热度(query=关键词,如赛道词)。' +
+        '返回蒸馏后的 Markdown 与页面截图,用于选题调研与账号复盘。' +
+        '注意:本工具每任务读取次数有上限,收到上限拒绝提示后请基于已读取的资料继续,不要重试。',
       dangerLevel: 'low',
       parameters: {
         type: 'object',
         properties: {
           page: {
             type: 'string',
-            enum: ['overview', 'notes', 'followers'],
-            description: '数据页(可选,默认 overview)',
+            enum: [...XHS_READ_PAGES],
+            description: '数据页(可选,默认 overview;hot_topics = 热门话题/选题灵感页)',
+          },
+          query: {
+            type: 'string',
+            description: '站内搜索关键词(可选;传了则搜索该关键词相关笔记热度,page 被忽略)',
           },
           offset: { type: 'number', description: '内容续读偏移量(可选)' },
         },
       },
-      execute: async (args: any) => {
+      execute: async (args: any, session: any) => {
         if (!browser) return { success: false, error: '浏览器服务未就绪' };
         try {
-          const pageKey = ['overview', 'notes', 'followers'].includes(args?.page) ? args.page : 'overview';
-          const url = XHS_CREATOR_PAGES[pageKey] || XHS_CREATOR_PAGES.overview;
+          const target = resolveReadTarget(args?.page, args?.query);
+          const missionId = session?.taskId;
+
+          // ① 读侧护栏:每任务上限(拒绝不开浏览器);同用户最小间隔(等待后继续)
+          const guard = buildXhsReadGuardrail().check(missionId, userId);
+          if (!guard.allowed) {
+            return { success: false, rejected: true, error: guard.reason, used: guard.used, cap: guard.cap };
+          }
+          if (guard.waitMs > 0) {
+            await new Promise((r) => setTimeout(r, guard.waitMs));
+          }
 
           if (!(await browser.hasCookies(userId, XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES))) {
-            return { success: false, page: pageKey, error: NOT_LOGGED_IN_HINT };
+            // 登录门在导航前:不烧任务上限、不落审计(与存草稿的 not_logged_in 同语义,引导扫码)
+            return { success: false, page: target.label, error: NOT_LOGGED_IN_HINT };
           }
-          const result = await browser.navigateAndDistill(userId, url, Number(args?.offset) || 0);
+
+          // ② 导航(动态页带 SPA 渲染等待);真实导航才计入护栏
+          const result = await browser.navigateAndDistill(
+            userId,
+            target.url,
+            Number(args?.offset) || 0,
+            target.dynamic ? { renderWaitMs: 6000 } : undefined
+          );
+          buildXhsReadGuardrail().record(missionId, userId);
+
+          // ③ 读审计(复用 title 字段放页名/搜索词;不计入 countTodayDraftSaves——其按 tool 过滤)
+          appendBrowserAudit(userId, {
+            at: Date.now(),
+            tool: 'xhs_read_creator_data',
+            action: 'read',
+            title: target.label,
+            result: 'success',
+            missionId,
+          });
+
           return {
             success: true,
-            page: pageKey,
+            page: target.label,
             url: result.url,
             title: result.title,
             content: result.content,
@@ -160,6 +226,20 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
               : undefined,
           };
         } catch (err: any) {
+          // 导航失败的审计 + 护栏计数也认(真实打开过页面)
+          try {
+            const target = resolveReadTarget(args?.page, args?.query);
+            buildXhsReadGuardrail().record(session?.taskId, userId);
+            appendBrowserAudit(userId, {
+              at: Date.now(),
+              tool: 'xhs_read_creator_data',
+              action: 'read',
+              title: target.label,
+              result: 'failure',
+              error: err?.message || String(err),
+              missionId: session?.taskId,
+            });
+          } catch {}
           return { success: false, error: err?.message || String(err) };
         }
       },

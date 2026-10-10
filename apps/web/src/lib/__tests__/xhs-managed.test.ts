@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -7,23 +7,31 @@ import type { XhsManagedRecord, BrowserAuditEntry } from '@/lib/user-store';
 import type { XhsBrowserService } from '@/lib/xhs-managed';
 
 /**
- * 小红书托管模式单元测试(scenario-loop P2 模块 2)。
+ * 小红书托管模式单元测试(scenario-loop P2 模块 2 + P1 读侧护栏)。
  * 纯决策函数(限频/注入门槛/路径围栏)+ 审计落盘 + 写工具 execute 全链路(fake browser)。
  *
  * 环境隔离:USER_DATA_DIR 指向一次性临时目录(与 governance.spec.ts 同模式),
  * 必须在动态 import 被测模块之前设置。
+ * 读侧护栏:MIN_INTERVAL_MS=0(节流等待在单测里是纯减速)、每用例 reset 单例。
  */
 let tmpDir: string;
 let xm: typeof import('@/lib/xhs-managed');
 let us: typeof import('@/lib/user-store');
+let rg: typeof import('@/lib/xhs-read-guardrail');
 
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agtpilot-xhs-'));
   process.env.USER_DATA_DIR = tmpDir;
   process.env.AGTPILOT_SECRET_KEY = 'xhs-managed-test-key';
+  process.env.AGTPILOT_XHS_READ_MIN_INTERVAL_MS = '0'; // 护栏单例在 import 时读 env
   delete process.env.AGTPILOT_XHS_DRAFT_DAILY_LIMIT;
   us = await import('@/lib/user-store');
   xm = await import('@/lib/xhs-managed');
+  rg = await import('@/lib/xhs-read-guardrail');
+});
+
+beforeEach(() => {
+  rg.buildXhsReadGuardrail().reset();
 });
 
 afterAll(() => {
@@ -315,6 +323,171 @@ describe('xhs_read_creator_data execute', () => {
     expect(r.success).toBe(false);
     expect(r.error).toContain('扫码');
     expect((browser.navigateAndDistill as any).mock.calls.length).toBe(0);
+  });
+});
+
+describe('resolveReadTarget(P1 读目标解析)', () => {
+  it('query 非空即搜索:URL 编码、page 被忽略', () => {
+    const t = xm.resolveReadTarget('notes', '羽绒服 显瘦');
+    expect(t.url).toBe(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent('羽绒服 显瘦')}`);
+    expect(t.label).toBe('search:羽绒服 显瘦');
+    expect(t.dynamic).toBe(true);
+  });
+
+  it('query 过长截断到 40 字符', () => {
+    const long = '字'.repeat(60);
+    const t = xm.resolveReadTarget(undefined, long);
+    expect(t.label).toBe(`search:${'字'.repeat(40)}`);
+  });
+
+  it('hot_topics 是动态页;静态页 dynamic=false;白名单外回落 overview', () => {
+    expect(xm.resolveReadTarget('hot_topics', '').url).toContain('hot-topics');
+    expect(xm.resolveReadTarget('hot_topics', '').dynamic).toBe(true);
+    expect(xm.resolveReadTarget('notes', '').dynamic).toBe(false);
+    expect(xm.resolveReadTarget('hacked', '').url).toBe(xm.XHS_CREATOR_PAGES.overview);
+  });
+
+  it('XHS_READ_PAGES 枚举含 hot_topics(单一事实源)', () => {
+    expect([...xm.XHS_READ_PAGES]).toContain('hot_topics');
+    expect(xm.XHS_READ_PAGES).toHaveLength(4);
+  });
+});
+
+describe('xhs_read_creator_data execute · P1 扩展', () => {
+  it('hot_topics:导航带 SPA 渲染等待(renderWaitMs=6000)', async () => {
+    const uid = 'xhs-p1-hot';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const browser = fakeBrowser(fakePublishPage());
+    const readTool = xm.buildXhsManagedTools(uid, browser).find((t) => t.name === 'xhs_read_creator_data')!;
+
+    const r = await readTool.execute({ page: 'hot_topics' }, { taskId: 'p1-hot', step: 1 });
+    expect(r.success).toBe(true);
+    const call = (browser.navigateAndDistill as any).mock.calls[0];
+    expect(call[1]).toContain('hot-topics');
+    expect(call[3]).toEqual({ renderWaitMs: 6000 });
+  });
+
+  it('query 搜索:走搜索 URL,静态 page 参数被忽略,同样等渲染', async () => {
+    const uid = 'xhs-p1-search';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const browser = fakeBrowser(fakePublishPage());
+    const readTool = xm.buildXhsManagedTools(uid, browser).find((t) => t.name === 'xhs_read_creator_data')!;
+
+    const r = await readTool.execute({ page: 'notes', query: '通勤穿搭' }, { taskId: 'p1-search', step: 1 });
+    expect(r.success).toBe(true);
+    expect(r.page).toBe('search:通勤穿搭');
+    const call = (browser.navigateAndDistill as any).mock.calls[0];
+    expect(call[1]).toBe(`https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent('通勤穿搭')}`);
+    expect(call[3]).toEqual({ renderWaitMs: 6000 });
+  });
+
+  it('静态页不带 opts(零回归:浏览器等待行为不变)', async () => {
+    const uid = 'xhs-p1-static';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const browser = fakeBrowser(fakePublishPage());
+    const readTool = xm.buildXhsManagedTools(uid, browser).find((t) => t.name === 'xhs_read_creator_data')!;
+
+    await readTool.execute({ page: 'notes' }, { taskId: 'p1-static', step: 1 });
+    const call = (browser.navigateAndDistill as any).mock.calls[0];
+    expect(call[3]).toBeUndefined();
+  });
+
+  it('读审计:action=read、label 入 title、missionId 入审计,不计入草稿限频', async () => {
+    const uid = 'xhs-p1-audit';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const readTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(fakePublishPage()))
+      .find((t) => t.name === 'xhs_read_creator_data')!;
+
+    await readTool.execute({ query: '通勤穿搭' }, { taskId: 'p1-audit', step: 1 });
+    const audit = us.getBrowserAudit(uid);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].tool).toBe('xhs_read_creator_data');
+    expect(audit[0].action).toBe('read');
+    expect(audit[0].title).toBe('search:通勤穿搭');
+    expect(audit[0].missionId).toBe('p1-audit');
+    // 读审计不影响每日存草稿计数(其按 tool 过滤)
+    expect(xm.countTodayDraftSaves(audit)).toBe(0);
+  });
+
+  it('达每任务读取上限:第 9 次 rejected 且浏览器零调用', async () => {
+    const uid = 'xhs-p1-cap';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const browser = fakeBrowser(fakePublishPage());
+    const readTool = xm.buildXhsManagedTools(uid, browser).find((t) => t.name === 'xhs_read_creator_data')!;
+
+    // 直接烧满 8 次(真实导航计数)
+    for (let i = 0; i < 8; i++) rg.buildXhsReadGuardrail().record('p1-cap', uid);
+
+    const r = await readTool.execute({ page: 'overview' }, { taskId: 'p1-cap', step: 1 });
+    expect(r.success).toBe(false);
+    expect(r.rejected).toBe(true);
+    expect(r.error).toContain('上限');
+    expect(r.error).toContain('不要');
+    expect((browser.navigateAndDistill as any).mock.calls.length).toBe(0);
+    // 拒绝不落审计(与存草稿限频前置同语义)
+    expect(us.getBrowserAudit(uid)).toHaveLength(0);
+  });
+
+  it('登录失败不烧上限:顺序断言(失败后 used 仍 0,成功后 used=1)', async () => {
+    const uid = 'xhs-p1-gate';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const taskId = 'p1-gate';
+    const guard = rg.buildXhsReadGuardrail();
+
+    // ① 登录门在导航前:失败不计数
+    const failTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(fakePublishPage(), { hasCookies: false }))
+      .find((t) => t.name === 'xhs_read_creator_data')!;
+    const r1 = await failTool.execute({ page: 'overview' }, { taskId, step: 1 });
+    expect(r1.success).toBe(false);
+    expect(r1.error).toContain('扫码');
+    expect(guard.check(taskId, uid).used).toBe(0);
+
+    // ② 登录恢复后首次读取正常计数
+    const okTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(fakePublishPage()))
+      .find((t) => t.name === 'xhs_read_creator_data')!;
+    const r2 = await okTool.execute({ page: 'overview' }, { taskId, step: 1 });
+    expect(r2.success).toBe(true);
+    expect(guard.check(taskId, uid).used).toBe(1);
+  });
+
+  it('导航失败也烧上限并落 failure 审计(真实打开过页面就算一次)', async () => {
+    const uid = 'xhs-p1-fail';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const taskId = 'p1-fail';
+    const guard = rg.buildXhsReadGuardrail();
+    const browser: XhsBrowserService = {
+      ...fakeBrowser(fakePublishPage()),
+      navigateAndDistill: vi.fn(async () => {
+        throw new Error('net::ERR_FAILED');
+      }),
+    };
+    const readTool = xm.buildXhsManagedTools(uid, browser).find((t) => t.name === 'xhs_read_creator_data')!;
+
+    const r = await readTool.execute({ page: 'hot_topics' }, { taskId, step: 1 });
+    expect(r.success).toBe(false);
+    expect(r.error).toContain('net::ERR_FAILED');
+    expect(guard.check(taskId, uid).used).toBe(1);
+    const audit = us.getBrowserAudit(uid);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].result).toBe('failure');
+    expect(audit[0].action).toBe('read');
+    expect(audit[0].title).toBe('hot_topics');
+  });
+
+  it('工具描述含上限与 hot_topics/query 用法(模型可见的契约)', () => {
+    const uid = 'xhs-p1-desc';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const readTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(fakePublishPage()))
+      .find((t) => t.name === 'xhs_read_creator_data')!;
+    expect(readTool.description).toContain('hot_topics');
+    expect(readTool.description).toContain('query');
+    expect(readTool.description).toContain('上限');
+    // 参数 schema 的 page enum 与 XHS_READ_PAGES 同源
+    expect((readTool.parameters as any).properties.page.enum).toEqual([...xm.XHS_READ_PAGES]);
   });
 });
 

@@ -43,6 +43,38 @@ describe('buildXhsWeeklyTopicsPrompt', () => {
     expect(prompt).toContain('条与条之间用单独一行的 --- 分隔');
   });
 
+  it('P1 选题调研:三段降级链(①真实读工具 ②MCP/网页搜索 ③自身知识)', () => {
+    const prompt = buildXhsWeeklyTopicsPrompt({ count: 7, profile });
+    // ① xhs_read_creator_data:hot_topics + 档案赛道关键词,合计至多 6 次,拒绝即降级不重试
+    expect(prompt).toContain('xhs_read_creator_data');
+    expect(prompt).toContain('page=hot_topics');
+    expect(prompt).toContain('query=赛道关键词');
+    expect(prompt).toContain('合计至多 6 次');
+    // ② ③ 降级
+    expect(prompt).toContain('知乎热榜');
+    expect(prompt).toContain('网页搜索');
+    expect(prompt).toContain('基于你自身知识判断');
+    // 【依据】必须注明数据来源
+    expect(prompt).toContain('必须注明数据来源');
+  });
+
+  it('P1 勾选契约:首字段【选题 N】+ 编号语义(勾选时引用的编号)', () => {
+    const prompt = buildXhsWeeklyTopicsPrompt({ count: 7 });
+    expect(prompt).toContain('【选题 1】');
+    expect(prompt).toContain('编号即我勾选时引用的编号');
+  });
+
+  it('P1 总评分隔:全部条目输出完后再用 --- 分隔,然后写总评', () => {
+    const prompt = buildXhsWeeklyTopicsPrompt({ count: 7 });
+    expect(prompt).toContain('全部条目输出完后再用单独一行 --- 分隔');
+  });
+
+  it('P1 界面闭环提示:可勾选卡片一键成稿', () => {
+    const prompt = buildXhsWeeklyTopicsPrompt({ count: 7 });
+    expect(prompt).toContain('可勾选卡片');
+    expect(prompt).toContain('一键成稿');
+  });
+
   it('count 边界:下限 3、上限 10、缺省 7', () => {
     expect(buildXhsWeeklyTopicsPrompt({ count: 1 })).toContain('产出 3 条选题');
     expect(buildXhsWeeklyTopicsPrompt({ count: 99 })).toContain('产出 10 条选题');

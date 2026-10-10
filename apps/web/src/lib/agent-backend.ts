@@ -782,7 +782,8 @@ class AgentBackend {
           title: '任务完成',
           body: `${event.data.title || '任务'}：${(event.data.steps?.filter((s: any) => s.role === 'assistant' && s.answer)?.slice(-1)?.[0]?.answer || '').toString().slice(0, 80) || '点击查看交付成果'}`,
           tag: `mission-done-${missionId}`,
-          url: '/',
+          // 深链直达该任务:选题任务点开即见可勾选卡片(sw.js 已消费 payload.url)
+          url: `/?tab=activity&mission=${missionId}`,
         }).catch(() => {});
       }
     } catch {
@@ -1302,7 +1303,7 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 5. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。
 6. 【步数经济】：多个互相独立的工具调用，请在同一轮一次性并行发出，不要逐个串行等待结果后再发下一个；任务看板（planner）由系统随工具执行成功自动推进，【不要】调用 planner_update_task 汇报进度（仅在需要标记某步骤失败时才使用）；预计两步以内的简单任务直接执行，不要创建规划看板。
 7. 【安静执行】：在工具调用前后不要反复输出“收到”“我先搜索”“我再继续”等过程播报；直接调用工具，由系统活动卡展示进度。只有需要用户补充信息、审批授权、报告不可恢复的阻塞，或给出最终交付时，才向用户输出完整消息。
-8. 【小红书托管边界】：涉及用户小红书账号时 —— 读创作中心数据一律用 xhs_read_creator_data（只读）；把笔记存成草稿一律用 xhs_save_note_draft（需用户审批，终点是草稿箱）；任何情况下不得点击「发布」按钮 —— 发布永远由用户本人在小红书 App 内完成，这是平台合规红线。`,
+8. 【小红书托管边界】：涉及用户小红书账号时 —— 读创作中心数据、热门话题与站内关键词搜索一律用 xhs_read_creator_data（只读，含 page=hot_topics 与 query 关键词搜索；每任务读取次数有上限，收到拒绝提示后基于已读取的资料继续，不要重试）；把笔记存成草稿一律用 xhs_save_note_draft（需用户审批，终点是草稿箱）；任何情况下不得点击「发布」按钮 —— 发布永远由用户本人在小红书 App 内完成，这是平台合规红线。`,
           });
 
           if (result.success && result.messages) {

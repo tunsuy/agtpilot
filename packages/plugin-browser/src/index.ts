@@ -46,7 +46,12 @@ export interface BrowserSessionService {
   /** 该用户的持久化 Page(不存在则启动浏览器) */
   acquirePage(userId?: string): Promise<Page>;
   /** 导航 + Turndown 蒸馏(4000 字符窗口续读) + 截图;事件由调用方自行决定是否发 */
-  navigateAndDistill(userId: string | undefined, url: string, offset?: number): Promise<DistillResult>;
+  navigateAndDistill(
+    userId: string | undefined,
+    url: string,
+    offset?: number,
+    opts?: { renderWaitMs?: number }
+  ): Promise<DistillResult>;
   /** 截取当前帧(不导航;登录轮询用) */
   captureFrame(userId?: string): Promise<FrameCapture>;
   /** 登录态判定:domain 下存在 names 中任一 cookie 即 true */
@@ -122,9 +127,21 @@ class BrowserServiceImpl extends Service implements BrowserSessionService {
     return result;
   }
 
-  async navigateAndDistill(userId: string | undefined, url: string, offset = 0): Promise<DistillResult> {
+  async navigateAndDistill(
+    userId: string | undefined,
+    url: string,
+    offset = 0,
+    opts?: { renderWaitMs?: number }
+  ): Promise<DistillResult> {
     const page = await this.acquirePage(userId);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    // SPA 页(站内搜索/热门话题等客户端渲染)在 domcontentloaded 后内容尚未挂载:
+    // 可选等待 networkidle(尽力而为,长轮询页面可能永不 idle → catch 兜底) + 固定沉降
+    if (opts?.renderWaitMs && opts.renderWaitMs > 0) {
+      await page.waitForLoadState('networkidle', { timeout: opts.renderWaitMs }).catch(() => {});
+      await page.waitForTimeout(1200);
+    }
 
     const title = await page.title();
     const html = await page.content();

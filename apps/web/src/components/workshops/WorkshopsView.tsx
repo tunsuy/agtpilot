@@ -4,7 +4,7 @@
  * 工坊 · 场景化任务模版中心(从连接器页拆出的一级模块)
  *
  * 连接器页管「配了什么凭证」,工坊页管「用它们完成什么事」:
- * - 按用户场景分组的内容/办公/投研/教研工坊卡片;
+ * - 分类 Tab(全部/内容创作/办公提效/…)切换的工坊卡片网格;
  * - 每张卡片实时展示依赖数据源的连接状态(缺必需依赖时给配置入口);
  * - 本地历史支撑「上次参数回填 + 一键重跑」(周报/复盘等周期性场景);
  * - 表单提交/重跑 → buildWorkshopRun 生成结构化 Prompt → onRunPrompt 交给 Agent。
@@ -28,9 +28,6 @@ interface WorkshopsViewProps {
   onRunPrompt: (prompt: string, title?: string) => void | Promise<void>;
   /** 缺必需依赖时跳连接器页配置 */
   onOpenConnectors: () => void;
-  /** 从连接器页「工坊直达」跳转时自动打开对应工坊表单 */
-  autoOpenId?: string | null;
-  onAutoOpenHandled?: () => void;
 }
 
 /** id → 表单组件;新增工坊在此登记 */
@@ -49,11 +46,10 @@ export function WorkshopsView({
   connectors,
   onRunPrompt,
   onOpenConnectors,
-  autoOpenId,
-  onAutoOpenHandled,
 }: WorkshopsViewProps) {
   const [activeId, setActiveId] = useState<WorkshopId | null>(null);
   const [history, setHistory] = useState<WorkshopRunRecord[]>([]);
+  const [tab, setTab] = useState<string>('all');
 
   // MCP 连接器状态:数据源状态点需要(与 ConnectorsView 同源 /api/connectors/mcp)
   const [mcpConnectors, setMcpConnectors] = useState<McpConnectorInfo[]>([]);
@@ -74,16 +70,6 @@ export function WorkshopsView({
     setHistory(recentRuns(20));
   }, []);
 
-  // 从连接器页「工坊直达」跳转:自动打开对应工坊表单
-  useEffect(() => {
-    if (!autoOpenId) return;
-    const def = getWorkshop(autoOpenId);
-    if (def) {
-      setActiveId(def.id);
-      onAutoOpenHandled?.();
-    }
-  }, [autoOpenId]);
-
   const isConnected = (depId: string) =>
     connectors.some((c) => c.id === depId && c.status === 'connected') ||
     mcpConnectors.some((c) => c.id === depId && c.status === 'connected');
@@ -103,6 +89,12 @@ export function WorkshopsView({
   const rerunnable = useMemo(
     () => history.filter((r) => getWorkshop(r.id)).slice(0, 3),
     [history]
+  );
+
+  // 当前 Tab 下的工坊:全部 或 某一分类
+  const visibleWorkshops = useMemo(
+    () => (tab === 'all' ? WORKSHOPS : WORKSHOPS.filter((w) => w.category === tab)),
+    [tab]
   );
 
   return (
@@ -153,93 +145,105 @@ export function WorkshopsView({
         </div>
       )}
 
-      {/* 工坊卡片:按场景分组 */}
-      {WORKSHOP_CATEGORIES.map((cat) => {
-        const items = WORKSHOPS.filter((w) => w.category === cat.key);
-        if (items.length === 0) return null;
-        return (
-          <div key={cat.key} className="space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-              {cat.label}
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {items.map((w) => {
-                const Icon = w.icon;
-                const accent = ACCENTS[w.accent];
-                const missingRequired = w.deps.filter((d) => d.required && !isConnected(d.id));
-                return (
-                  <div
-                    key={w.id}
-                    className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between"
-                  >
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <div className={`h-10 w-10 rounded-xl flex items-center justify-center shadow-2xs ${accent.iconBg}`}>
-                            <Icon className="h-5 w-5" />
-                          </div>
-                          <h3 className="text-xs font-semibold text-zinc-900">{w.name}</h3>
-                        </div>
+      {/* 分类 Tab + 工坊卡片(单一网格,按 Tab 过滤) */}
+      <div className="space-y-3">
+        <div className="-mx-4 px-4 overflow-x-auto scrollbar-none">
+          <div className="flex gap-2 w-max pb-1">
+            {[{ key: 'all', label: '全部' }, ...WORKSHOP_CATEGORIES].map((t) => {
+              const active = tab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setTab(t.key)}
+                  className={`h-8 px-3.5 rounded-full text-xs font-medium whitespace-nowrap transition border ${
+                    active
+                      ? 'bg-zinc-900 text-white border-zinc-900'
+                      : 'bg-white text-zinc-500 border-zinc-200 hover:border-zinc-300 hover:text-zinc-700'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {visibleWorkshops.map((w) => {
+            const Icon = w.icon;
+            const accent = ACCENTS[w.accent];
+            const missingRequired = w.deps.filter((d) => d.required && !isConnected(d.id));
+            return (
+              <div
+                key={w.id}
+                className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between"
+              >
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`h-10 w-10 rounded-xl flex items-center justify-center shadow-2xs ${accent.iconBg}`}>
+                        <Icon className="h-5 w-5" />
                       </div>
-                      <p className="text-xs text-zinc-500 leading-relaxed">{w.desc}</p>
-
-                      {/* 依赖数据源状态:绿点已连接/灰点未配;必需缺失给配置入口 */}
-                      {w.deps.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                          {w.deps.map((d) => (
-                            <span
-                              key={d.id}
-                              className="flex items-center gap-1 text-[10px] text-zinc-500"
-                              title={isConnected(d.id) ? `${d.name} 已连接` : `${d.name} 未连接`}
-                            >
-                              <span
-                                className={`h-1.5 w-1.5 rounded-full ${
-                                  isConnected(d.id) ? 'bg-emerald-500' : 'bg-zinc-300'
-                                }`}
-                              />
-                              <span>{d.name}</span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      {missingRequired.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={onOpenConnectors}
-                          className="flex items-center gap-1.5 text-[11px] font-medium text-amber-700 hover:text-amber-800 transition"
-                        >
-                          <span>
-                            需先配置{missingRequired.map((d) => d.name).join('、')}——去连接器页配置
-                          </span>
-                          <ArrowRight className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="pt-3 mt-1 border-t border-zinc-100 flex items-center justify-between">
-                      <span className="text-[10px] font-mono text-zinc-400">
-                        {(() => {
-                          const last = history.find((h) => h.id === w.id);
-                          return last ? `上次 ${relativeTime(last.at)}` : '尚未使用';
-                        })()}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setActiveId(w.id)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-medium transition shadow-xs ${accent.btn}`}
-                      >
-                        <Sparkles className="h-3 w-3" />
-                        <span>开始</span>
-                      </button>
+                      <h3 className="text-xs font-semibold text-zinc-900">{w.name}</h3>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
+                  <p className="text-xs text-zinc-500 leading-relaxed">{w.desc}</p>
+
+                  {/* 依赖数据源状态:绿点已连接/灰点未配;必需缺失给配置入口 */}
+                  {w.deps.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                      {w.deps.map((d) => (
+                        <span
+                          key={d.id}
+                          className="flex items-center gap-1 text-[10px] text-zinc-500"
+                          title={isConnected(d.id) ? `${d.name} 已连接` : `${d.name} 未连接`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              isConnected(d.id) ? 'bg-emerald-500' : 'bg-zinc-300'
+                            }`}
+                          />
+                          <span>{d.name}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {missingRequired.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={onOpenConnectors}
+                      className="flex items-center gap-1.5 text-[11px] font-medium text-amber-700 hover:text-amber-800 transition"
+                    >
+                      <span>
+                        需先配置{missingRequired.map((d) => d.name).join('、')}——去连接器页配置
+                      </span>
+                      <ArrowRight className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="pt-3 mt-1 border-t border-zinc-100 flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-zinc-400">
+                    {(() => {
+                      const last = history.find((h) => h.id === w.id);
+                      return last ? `上次 ${relativeTime(last.at)}` : '尚未使用';
+                    })()}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveId(w.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-medium transition shadow-xs ${accent.btn}`}
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span>开始</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* 工坊表单弹窗 */}
       {activeWorkshop && ActiveForm && (

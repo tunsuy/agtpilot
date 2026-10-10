@@ -62,8 +62,6 @@ export default function Workspace() {
   const [connectorSuggestions, setConnectorSuggestions] = useState<ConnectorSuggestion[]>([]);
   // 中途授权（粘贴凭证类）：跳到连接器中心并自动打开对应配置弹窗
   const [mcpAutoConfigure, setMcpAutoConfigure] = useState<string | null>(null);
-  // 连接器页「工坊直达」跳转：自动打开工坊页中对应的场景工坊表单
-  const [workshopAutoOpen, setWorkshopAutoOpen] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<ArtifactState | null>(null);
 
   // 连接器状态
@@ -666,21 +664,6 @@ export default function Workspace() {
     setActiveView(view);
   };
 
-  // 连接器页「工坊直达」:带工坊 id 跳转,工坊页自动展开对应表单(桌面/移动统一入口)
-  const handleOpenWorkshops = (workshopId: string) => {
-    if (sessionStatus !== 'loading' && !session?.user) {
-      setAuthModalTab('login');
-      setAuthModalOpen(true);
-      return;
-    }
-    setWorkshopAutoOpen(workshopId);
-    if (isMobile) {
-      setMobileOverlay('workshops');
-    } else {
-      setActiveView('workshops');
-    }
-  };
-
   const currentMission = missions.find((m) => m.id === activeMissionId) || missions[0] || null;
   const connectedCount = connectors.filter((c) => c.status === 'connected').length;
 
@@ -742,7 +725,6 @@ export default function Workspace() {
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
-                onOpenWorkshops={handleOpenWorkshops}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
               />
@@ -756,8 +738,6 @@ export default function Workspace() {
                   setMobileOverlay(null);
                 }}
                 onOpenConnectors={() => setMobileOverlay('connectors')}
-                autoOpenId={workshopAutoOpen}
-                onAutoOpenHandled={() => setWorkshopAutoOpen(null)}
               />
             )}
             {mobileOverlay === 'memories' && (
@@ -987,8 +967,6 @@ export default function Workspace() {
                 connectors={connectors}
                 onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
                 onOpenConnectors={() => handleViewChange('connectors')}
-                autoOpenId={workshopAutoOpen}
-                onAutoOpenHandled={() => setWorkshopAutoOpen(null)}
               />
             </main>
           )}
@@ -999,7 +977,6 @@ export default function Workspace() {
                 connectors={connectors}
                 onSaveKey={handleSaveKey}
                 onSetDefaultModel={handleSetDefaultModel}
-                onOpenWorkshops={handleOpenWorkshops}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
               />

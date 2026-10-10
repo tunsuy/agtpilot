@@ -172,15 +172,3 @@ export const WORKSHOPS: WorkshopDef[] = [
 export function getWorkshop(id: string): WorkshopDef | undefined {
   return WORKSHOPS.find((w) => w.id === id);
 }
-
-/** 连接器卡片上「工坊直达」入口的映射(双向可发现性:连接器页 ↔ 工坊页) */
-export const CONNECTOR_WORKSHOP_LINK: Record<string, WorkshopId> = {
-  xiaohongshu: 'xhs',
-  weibo: 'weibo',
-  douyin: 'video_douyin',
-  bilibili: 'video_bilibili',
-  email_imap: 'email_triage',
-  weekly_report: 'weekly',
-  invest_workshop: 'invest',
-  edu_workshop: 'edu',
-};

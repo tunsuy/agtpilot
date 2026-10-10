@@ -241,36 +241,6 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
       '官方草稿箱 API:Agent 自动撰文、排版并写入公众号草稿箱,人工审核后发布(需已认证公众号 + IP 白名单);移动端仍可唤起微信分享。',
   },
   {
-    id: 'weekly_report',
-    name: '周报生成工坊',
-    icon: 'ClipboardList',
-    category: 'Productivity',
-    noCredential: true,
-    platformType: 'web',
-    description:
-      '办公工坊：Agent 自动从你已连接的平台（Jira/GitHub/飞书/钉钉/腾讯会议/邮箱）拉取本周动态，汇总成结构化周报（概览/重点工作/数据看板/风险/下周计划），经你确认后可投递到邮箱或群机器人；未接数据源时降级为口述整理。',
-  },
-  {
-    id: 'invest_workshop',
-    name: '投研工坊',
-    icon: 'TrendingUp',
-    category: 'Productivity',
-    noCredential: true,
-    platformType: 'web',
-    description:
-      '投研工坊（只读，不构成投资建议）：个股/基金体检（行情+估值+财务+近期动态，🟢🟡🔴 综合信号）、持仓组合体检（配置结构/集中度/压力情景/健康评分）、每日盘后复盘（可配合定时任务自动推送到微信/飞书群）。数据来自已连接的 Tushare / Alpha Vantage / CoinGecko / A股行情连接器，缺失时降级为网络搜索并明示。',
-  },
-  {
-    id: 'edu_workshop',
-    name: '教研工坊',
-    icon: 'GraduationCap',
-    category: 'Productivity',
-    noCredential: true,
-    platformType: 'web',
-    description:
-      '教研工坊（只读，学术诚信）：文献综述（OpenAlex+alphaXiv 检索真实文献、附 DOI/arXiv ID、严禁编造引用）、论文精读（arXiv ID/DOI/标题定位全文，产出精读卡与术语表）、智能备课（按学科/学段/课时生成三维目标教案+课件大纲+随堂测评+分层作业）、学习卡片（把材料转成 Anki 可导入抽认卡）。数据来自已连接的 OpenAlex / alphaXiv / Hugging Face / DeepL 连接器，缺失时降级为网络搜索并明示。',
-  },
-  {
     id: 'twitter',
     name: 'X / Twitter 客户端',
     icon: 'Share2',

@@ -10,7 +10,6 @@ import {
   ShieldCheck,
   RotateCw,
   X,
-  Sparkles,
   Cpu,
   Bot,
   Terminal,
@@ -40,7 +39,6 @@ import {
   MessagesSquare,
   Mail,
   Inbox,
-  ClipboardList,
   Feather,
   Tv,
   Github,
@@ -50,8 +48,6 @@ import {
   LineChart,
   Coins,
   CandlestickChart,
-  Activity,
-  GraduationCap,
   BookOpenText,
   Languages,
   Newspaper,
@@ -59,7 +55,6 @@ import {
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
-import { CONNECTOR_WORKSHOP_LINK } from './workshops/registry';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -152,12 +147,6 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <Mail className={`${className} text-violet-600`} />;
     case 'email_imap':
       return <Inbox className={`${className} text-indigo-600`} />;
-    case 'weekly_report':
-      return <ClipboardList className={`${className} text-sky-600`} />;
-    case 'invest_workshop':
-      return <Activity className={`${className} text-emerald-600`} />;
-    case 'edu_workshop':
-      return <GraduationCap className={`${className} text-indigo-600`} />;
     case 'exa':
       return <Search className={`${className} text-indigo-600`} />;
     case 'tavily':
@@ -188,9 +177,9 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
 const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'models', label: '模型推理', ids: ['deepseek', 'openai', 'custom_llm'] },
   { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'newsnow', 'twitterapi_io', 'deepwiki', 'openalex', 'qcc'] },
-  { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'weekly_report', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
-  { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock', 'invest_workshop'] },
-  { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki', 'edu_workshop'] },
+  { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
+  { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock'] },
+  { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
   { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },
@@ -205,8 +194,6 @@ interface ConnectorsViewProps {
     extra?: { baseUrl?: string; baseUrlEnvVar?: string; modelName?: string; modelNameEnvVar?: string }
   ) => Promise<void>;
   onSetDefaultModel: (modelId: string) => Promise<void>;
-  /** 工坊直达:该连接器承载的场景工坊已迁至工坊页,这里只留跳转入口 */
-  onOpenWorkshops?: (workshopId: string) => void;
   /** 任务中途授权跳转过来时自动打开对应连接器的配置弹窗 */
   autoConfigureId?: string | null;
   onAutoConfigureHandled?: () => void;
@@ -216,7 +203,6 @@ export function ConnectorsView({
   connectors,
   onSaveKey,
   onSetDefaultModel,
-  onOpenWorkshops,
   autoConfigureId,
   onAutoConfigureHandled,
 }: ConnectorsViewProps) {
@@ -513,18 +499,6 @@ export function ConnectorsView({
                     className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition"
                   >
                     设为默认
-                  </button>
-                )}
-
-                {/* 工坊直达:该连接器对应的场景工坊已迁至工坊页(场景入口与凭证配置解耦) */}
-                {CONNECTOR_WORKSHOP_LINK[app.id] && onOpenWorkshops && (
-                  <button
-                    onClick={() => onOpenWorkshops(CONNECTOR_WORKSHOP_LINK[app.id])}
-                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 transition shadow-2xs"
-                    title="打开工坊页中对应的场景工坊,配置好凭证后即可一键发起任务"
-                  >
-                    <Sparkles className="h-3 w-3" />
-                    <span>工坊直达</span>
                   </button>
                 )}
 

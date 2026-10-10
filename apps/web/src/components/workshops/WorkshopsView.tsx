@@ -19,6 +19,7 @@ import type { ScenarioProfile } from '../../lib/scenario-profile';
 import { ScenarioProfileWizard } from './ScenarioProfileWizard';
 import { ACCENTS } from './forms/shared';
 import { ContentWorkshopForm } from './forms/ContentWorkshopForm';
+import { WechatMpWorkshopForm } from './forms/WechatMpWorkshopForm';
 import { EmailTriageForm } from './forms/EmailTriageForm';
 import { WeeklyReportForm } from './forms/WeeklyReportForm';
 import { InvestWorkshopForm } from './forms/InvestWorkshopForm';
@@ -44,6 +45,7 @@ interface WorkshopFormProps {
 /** id → 表单组件;新增工坊在此登记 */
 const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
   xhs: ContentWorkshopForm,
+  wechat_mp: WechatMpWorkshopForm,
   weibo: ContentWorkshopForm,
   video_douyin: ContentWorkshopForm,
   video_bilibili: ContentWorkshopForm,

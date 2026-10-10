@@ -1,6 +1,11 @@
 import * as zlib from 'zlib';
 import type { ToolDefinition } from '@agtpilot/core';
-import { getUserConnectors } from './user-store';
+import {
+  getUserConnectors,
+  getBrowserAudit,
+  appendBrowserAudit,
+  type BrowserAuditEntry,
+} from './user-store';
 
 /**
  * 微信公众号草稿箱直连(官方 API,合规半自动)
@@ -11,6 +16,9 @@ import { getUserConnectors } from './user-store';
  *   → Markdown → 公众号 HTML(内联样式,微信编辑器保留)
  *   → draft/add 写入草稿箱。
  * 发布动作始终由用户在公众平台后台人工完成(不提供 freepublish,内容安全人工终审)。
+ * create_draft 为 dangerLevel high(编排器审批门,投递前用户逐次确认)
+ * + 每日投递上限 + 全程审计(复用 user-store 写操作审计,成败都计)。
+ * 凭证在「工坊 → 公众号文章工坊」表单内配置(专用 /api/wechat-mp route 读写)。
  *
  * 常见错误白话化:40164=IP 白名单、48001=需认证、40001/40125=Secret 错误。
  * 测试可通过 WECHAT_MP_API_BASE 指向 mock 服务。
@@ -40,7 +48,7 @@ export function friendlyWechatError(errcode: number, errmsg: string): string {
     return `接口未授权(${errcode}):该公众号没有草稿箱/素材接口权限。草稿箱 API 仅对已认证公众号开放,请先完成微信认证。`;
   }
   if (errcode === 40001 || errcode === 40125 || errcode === 40013) {
-    return `AppID/AppSecret 校验失败(${errcode}):请在连接器页重新核对「AppID:AppSecret」(公众平台 → 设置与开发 → 基本配置)。`;
+    return `AppID/AppSecret 校验失败(${errcode}):请在「工坊 → 公众号文章工坊」表单的凭证区重新核对「AppID:AppSecret」(公众平台 → 设置与开发 → 基本配置)。`;
   }
   if (errcode === 45009) return '接口调用频率超限(45009),请稍后或明天再试。';
   return `微信接口报错(${errcode}):${errmsg}`;
@@ -62,7 +70,7 @@ async function getAccessToken(
   if (!cred) {
     return {
       error:
-        '未配置公众号凭证:请在连接器页「微信公众号(草稿箱直连)」按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确保已完成微信认证 + 服务器 IP 已加白名单。',
+        '未配置公众号凭证:请在「工坊 → 公众号文章工坊」表单的凭证区按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确保已完成微信认证 + 服务器 IP 已加白名单。',
     };
   }
   const cached = tokenCache.get(userId);
@@ -90,6 +98,38 @@ async function getAccessToken(
   } catch (e: any) {
     return { error: `请求微信接口失败:${e?.message || e}` };
   }
+}
+
+// ---------- 投草稿限频 / 凭证检查 / 审计(scenario-loop 托管承诺,对齐 xhs-managed) ----------
+
+/** 每日投草稿上限(可用 env 调整) */
+export function dailyWechatDraftLimit(): number {
+  const n = Number(process.env.AGTPILOT_WECHAT_DRAFT_DAILY_LIMIT);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
+/** 今日(本地时区)已尝试的投草稿次数(成败都计,保守限频;按 tool 名过滤,与 xhs 审计互不干扰) */
+export function countTodayWechatDrafts(audit: BrowserAuditEntry[], now = new Date()): number {
+  const dayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  return audit.filter((e) => {
+    if (e.tool !== 'wechat_mp_create_draft') return false;
+    const d = new Date(e.at);
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` === dayKey;
+  }).length;
+}
+
+/** 凭证连通性检查:解析 → 强刷 access_token(错误已白话化,可直接回显给用户) */
+export async function checkWechatMpCredential(userId: string): Promise<{ ok: boolean; appId?: string; error?: string }> {
+  const cred = parseWechatMpCredential(getUserConnectors(userId).configs[WECHAT_MP_CRED_KEY]);
+  if (!cred) return { ok: false, error: '未配置凭证(格式:AppID:AppSecret)' };
+  const tok = await getAccessToken(userId, true);
+  if (!tok.token) return { ok: false, appId: cred.appId, error: tok.error };
+  return { ok: true, appId: cred.appId };
+}
+
+/** 换绑/清除凭证时清掉内存 access_token 缓存,旧 token 立即失效 */
+export function resetWechatMpTokenCache(userId: string): void {
+  tokenCache.delete(userId);
 }
 
 // ---------- 封面图:纯 JS 生成渐变 PNG(无第三方依赖) ----------
@@ -369,7 +409,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
   const checkSetup: ToolDefinition = {
     name: 'wechat_mp_check_setup',
     description:
-      '诊断微信公众号草稿箱直连配置:校验 AppID:AppSecret 是否有效、能否获取 access_token,并把 IP 白名单(40164)/未认证(48001)/Secret 错误(40001)等问题翻译成可操作的中文指引。用户配置完公众号连接器后应先调用本工具确认链路通畅。',
+      '诊断微信公众号草稿箱直连配置:校验 AppID:AppSecret 是否有效、能否获取 access_token,并把 IP 白名单(40164)/未认证(48001)/Secret 错误(40001)等问题翻译成可操作的中文指引。用户在「工坊 → 公众号文章工坊」表单的凭证区配置完成后应先调用本工具确认链路通畅。',
     dangerLevel: 'low',
     parameters: { type: 'object', properties: {} },
     execute: async () => {
@@ -379,7 +419,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
           success: false,
           configured: false,
           message:
-            '尚未配置公众号凭证。请引导用户到连接器页「微信公众号(草稿箱直连)」按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确认:1) 公众号已完成微信认证;2) 服务器出口 IP 已加入该页 IP 白名单。',
+            '尚未配置公众号凭证。请引导用户到「工坊 → 公众号文章工坊」表单的凭证区按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确认:1) 公众号已完成微信认证;2) 服务器出口 IP 已加入该页 IP 白名单。',
         };
       }
       const tok = await getAccessToken(userId, true);
@@ -399,8 +439,12 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
   const createDraft: ToolDefinition = {
     name: 'wechat_mp_create_draft',
     description:
-      '把一篇 Markdown 文章经公众号排版(内联样式 HTML)+ 封面处理(可传图片 URL,不传则自动生成渐变占位封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。需要用户先在连接器页配置 AppID:AppSecret(已认证公众号)。',
-    dangerLevel: 'medium',
+      '把一篇 Markdown 文章经公众号排版(内联样式 HTML)+ 封面处理(可传图片 URL,不传则自动生成渐变占位封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在「工坊 → 公众号文章工坊」表单的凭证区配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
+    dangerLevel: 'high',
+    compensation: {
+      kind: 'partially-reversible',
+      undoHint: '草稿可在公众平台后台「草稿箱」中编辑或删除;未影响已发布内容',
+    },
     parameters: {
       type: 'object',
       properties: {
@@ -413,21 +457,51 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
       },
       required: ['title', 'markdown'],
     },
-    execute: async ({ title, markdown, author, digest, cover_url, content_source_url }) => {
+    execute: async (args: any, session: any) => {
+      const { title, markdown, author, digest, cover_url, content_source_url } = args || {};
+      const missionId = session?.taskId;
       const t = String(title || '').trim();
       const md = String(markdown || '');
       if (!t) return { success: false, error: '缺少标题 title' };
       if (!md.trim()) return { success: false, error: '缺少正文 markdown' };
 
+      // ① 限频前置:今日尝试次数(成败都计)达到上限直接拒绝,不请求微信接口、不落审计
+      const todayCount = countTodayWechatDrafts(getBrowserAudit(userId));
+      if (todayCount >= dailyWechatDraftLimit()) {
+        return {
+          success: false,
+          rejected: true,
+          error: `已达今日投草稿上限(${dailyWechatDraftLimit()} 次)。明天再试,或复制文章内容到公众平台后台手动创建。`,
+        };
+      }
+
+      const auditFailure = (error: string) =>
+        appendBrowserAudit(userId, {
+          at: Date.now(),
+          tool: 'wechat_mp_create_draft',
+          action: 'create_draft',
+          title: t,
+          result: 'failure',
+          error,
+          missionId,
+        });
+
       const tok = await getAccessToken(userId);
-      if (!tok.token) return { success: false, error: tok.error };
+      if (!tok.token) {
+        auditFailure('not_configured_or_invalid');
+        return { success: false, error: tok.error };
+      }
 
       const finalTitle = t.length > 64 ? `${t.slice(0, 61)}...` : t;
       const cover = await uploadCover(tok.token, cover_url, finalTitle);
-      if (!cover.mediaId) return { success: false, error: cover.error };
+      if (!cover.mediaId) {
+        auditFailure(cover.error || 'cover_upload_failed');
+        return { success: false, error: cover.error };
+      }
 
       const content = markdownToWechatHtml(md);
       if (Buffer.byteLength(content, 'utf8') > 1.9 * 1024 * 1024) {
+        auditFailure('content_too_large');
         return { success: false, error: '正文过长(公众号上限约 2MB),请精简后重试' };
       }
       const finalDigest = String(digest || '').trim() ? String(digest).trim().slice(0, 120) : deriveDigest(md);
@@ -456,20 +530,33 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
         );
         const data: any = await res.json();
         if (!data.media_id) {
+          const error = friendlyWechatError(data.errcode ?? -1, data.errmsg || '草稿创建失败');
+          auditFailure(error);
           return {
             success: false,
-            error: friendlyWechatError(data.errcode ?? -1, data.errmsg || '草稿创建失败'),
+            error,
           };
         }
+        // ② 审计(成败都落;成功也计数——限频是保守语义)
+        appendBrowserAudit(userId, {
+          at: Date.now(),
+          tool: 'wechat_mp_create_draft',
+          action: 'create_draft',
+          title: finalTitle,
+          result: 'success',
+          missionId,
+        });
         return {
           success: true,
           draft_media_id: data.media_id,
           title: finalTitle,
           cover: cover.usedFallback ? '自动生成渐变占位封面(可在后台替换)' : '使用指定封面图',
-          message: `✅ 草稿已写入公众号草稿箱(media_id: ${data.media_id})。请提醒用户到公众平台后台或订阅号助手 App 人工审核后发布。`,
+          message: `✅ 草稿已写入公众号草稿箱(media_id: ${data.media_id})。请提醒用户到公众平台后台或订阅号助手 App 人工审核后发布。今日已用 ${todayCount + 1}/${dailyWechatDraftLimit()} 次。`,
         };
       } catch (e: any) {
-        return { success: false, error: `草稿创建请求失败:${e?.message || e}` };
+        const message = `草稿创建请求失败:${e?.message || e}`;
+        auditFailure(message);
+        return { success: false, error: message };
       }
     },
   };

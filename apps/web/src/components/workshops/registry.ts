@@ -15,11 +15,13 @@ import {
   ClipboardList,
   TrendingUp,
   GraduationCap,
+  Newspaper,
   type LucideIcon,
 } from 'lucide-react';
 
 export type WorkshopId =
   | 'xhs'
+  | 'wechat_mp'
   | 'weibo'
   | 'video_douyin'
   | 'video_bilibili'
@@ -40,7 +42,7 @@ export interface WorkshopDep {
 
 /** 工坊交付物声明(P0 仅声明性;渲染按输出解析驱动,此处为 P1 交付库注册预留) */
 export interface ArtifactSpec {
-  kind: 'note-package';
+  kind: 'note-package' | 'article-package';
   label: string;
 }
 
@@ -83,6 +85,21 @@ export const WORKSHOPS: WorkshopDef[] = [
     note: 'Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
     profileSlot: 'xhs',
     artifacts: [{ kind: 'note-package', label: '小红书笔记包' }],
+  },
+  {
+    id: 'wechat_mp',
+    name: '公众号文章工坊',
+    category: 'content',
+    desc: 'Agent 选题成稿投草稿箱,你逐次审批放行,公众平台后台人工发布',
+    icon: Newspaper,
+    accent: 'violet',
+    deps: [
+      { id: 'zhihu', name: '知乎热榜' },
+      { id: 'exa', name: '网络搜索' },
+    ],
+    note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议。满意的一篇点「投草稿箱」——经你逐次审批后写入公众号草稿箱(每日有次数上限),最终发布由你在公众平台后台人工完成,Agent 不碰任何发布/群发接口。凭证(AppID:AppSecret,需已认证公众号 + IP 白名单)在本表单凭证区配置,不占连接器页。',
+    profileSlot: 'wechat_mp',
+    artifacts: [{ kind: 'article-package', label: '公众号文章包' }],
   },
   {
     id: 'weibo',

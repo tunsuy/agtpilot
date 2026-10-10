@@ -166,8 +166,6 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <Video className={`${className} text-zinc-900`} />;
     case 'bilibili':
       return <Tv className={`${className} text-sky-500`} />;
-    case 'wechat_mp':
-      return <Share2 className={`${className} text-emerald-600`} />;
     case 'twitter':
       return <Share2 className={`${className} text-zinc-900`} />;
     default:
@@ -186,7 +184,7 @@ const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock'] },
   { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
-  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
+  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'xiaohongshu', 'weibo', 'douyin', 'bilibili', 'twitter'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },
 ];
 const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));

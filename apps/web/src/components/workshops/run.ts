@@ -3,6 +3,7 @@
  * 表单提交与「一键重跑」共用这一份逻辑,保证两处生成的任务完全一致。
  */
 import { buildXhsWorkshopPrompt } from '../../lib/xhs-workshop';
+import { buildWechatMpWorkshopPrompt } from '../../lib/wechat-mp-workshop';
 import {
   buildWeiboWorkshopPrompt,
   buildVideoScriptPrompt,
@@ -44,6 +45,18 @@ export function buildWorkshopRun(
           ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
         }),
         title: `小红书内容工坊 · ${style}`,
+      };
+    }
+    case 'wechat_mp': {
+      const style = str(params.style, '深度长文');
+      return {
+        prompt: buildWechatMpWorkshopPrompt({
+          topic: str(params.topic),
+          style,
+          count: num(params.count),
+          ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
+        }),
+        title: `公众号文章工坊 · ${style}`,
       };
     }
     case 'weibo': {

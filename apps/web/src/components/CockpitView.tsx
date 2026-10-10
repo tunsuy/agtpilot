@@ -46,6 +46,8 @@ import {
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { NotePackageList } from './workshops/NotePackageCard';
 import { parseNotePackages } from '../lib/note-package';
+import { ArticlePackageList } from './workshops/ArticlePackageCard';
+import { parseArticlePackages } from '../lib/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../lib/topic-picks';
 import {
@@ -733,6 +735,11 @@ export function CockpitView({
                     // 勾选后「成稿选中」续聊本 mission —— 选题→成稿多步工作流的人工确认点
                     const parsedPicks = st.answer && !isStreaming ? parseTopicPicks(st.answer) : null;
                     const pickResult = parsedPicks && parsedPicks.picks.length > 0 ? parsedPicks : null;
+                    // 公众号文章包(草稿箱直投):文章包四头全命中 parseNotePackages(会误判),
+                    // 【摘要】是互斥锚 —— article 必须先于 note 判定(渲染顺序固化,测试反证锚定)
+                    const parsedArticle = st.answer && !isStreaming ? parseArticlePackages(st.answer) : null;
+                    const articleResult =
+                      parsedArticle && parsedArticle.packages.length > 0 ? parsedArticle : null;
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
@@ -796,6 +803,13 @@ export function CockpitView({
                                 /* 每周选题:可勾选卡片,勾选后一键成稿续聊本任务 */
                                 <TopicPickList
                                   result={pickResult}
+                                  missionId={activeMissionId || currentMission?.id}
+                                  onRunMission={onRunMission}
+                                />
+                              ) : st.answer && articleResult ? (
+                                /* 公众号文章包:先于笔记包判定(【摘要】互斥锚);投草稿走续聊 + 审批门 */
+                                <ArticlePackageList
+                                  result={articleResult}
                                   missionId={activeMissionId || currentMission?.id}
                                   onRunMission={onRunMission}
                                 />

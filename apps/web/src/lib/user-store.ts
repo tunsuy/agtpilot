@@ -45,7 +45,7 @@ export interface UserScopedData {
   scenarioProfiles?: Record<string, ScenarioProfile>;
   /** 小红书托管模式开关与登录状态(scenario-loop P2;opt-in 默认关闭,零迁移) */
   xhsManaged?: XhsManagedRecord;
-  /** 浏览器写操作审计(存草稿等;上限 200 条滚动,最近在前) */
+  /** 写操作审计(浏览器存草稿/公众号官方 API 投草稿等;上限 200 条滚动,最近在前) */
   browserAudit?: BrowserAuditEntry[];
   updatedAt: number;
 }

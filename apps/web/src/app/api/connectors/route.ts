@@ -224,23 +224,6 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     description: '脚本工坊 + 移动端免凭证：Agent 产出 B站风格中视频脚本（信息密度+弹幕互动点），你制作后唤起 App 人工投稿。',
   },
   {
-    id: 'wechat_mp',
-    name: '微信公众号(草稿箱直连)',
-    icon: 'Share2',
-    category: 'Communication',
-    envVar: 'WECHAT_MP_CREDENTIAL',
-    platformType: 'both',
-    mobileAction: {
-      scheme: 'weixin://',
-      actionName: '唤起微信直接分享',
-      canDirectShare: true,
-    },
-    configHint:
-      '按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置);并把本服务器出口 IP 加入该页「IP 白名单」,否则会报 40164。草稿箱接口仅对已认证公众号开放。',
-    description:
-      '官方草稿箱 API:Agent 自动撰文、排版并写入公众号草稿箱,人工审核后发布(需已认证公众号 + IP 白名单);移动端仍可唤起微信分享。',
-  },
-  {
     id: 'twitter',
     name: 'X / Twitter 客户端',
     icon: 'Share2',

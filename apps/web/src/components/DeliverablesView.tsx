@@ -30,6 +30,59 @@ interface DeliverablesViewProps {
   missions: Mission[];
   onOpenCockpit: (missionId?: string) => void;
   onRunMission: (prompt: string, title?: string) => void;
+  /** mobile：移动端 tab 内嵌时用居中简版标题（无图标/描述），desktop 为完整标题栏 */
+  variant?: 'desktop' | 'mobile';
+}
+
+/** 标题栏操作按钮（分享/复制/下载），桌面标题栏与移动端简版标题共用 */
+function HeaderActions({
+  shared,
+  copied,
+  onShare,
+  onCopy,
+  onDownload,
+}: {
+  shared: boolean;
+  copied: boolean;
+  onShare: () => void;
+  onCopy: () => void;
+  onDownload: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={onShare}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 shadow-2xs transition"
+      >
+        {shared ? (
+          <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
+        ) : (
+          <Share2 className="h-3.5 w-3.5 text-zinc-400" />
+        )}
+        <span>{shared ? '已分享' : '分享'}</span>
+      </button>
+
+      <button
+        onClick={onCopy}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 shadow-2xs transition"
+      >
+        {copied ? (
+          <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
+        ) : (
+          <Copy className="h-3.5 w-3.5 text-zinc-400" />
+        )}
+        <span>{copied ? '已复制' : '复制 Markdown'}</span>
+      </button>
+
+      <button
+        onClick={onDownload}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white shadow-xs transition"
+      >
+        <Download className="h-3.5 w-3.5" />
+        <span>下载 .md</span>
+      </button>
+    </div>
+  );
 }
 
 export function DeliverablesView({
@@ -37,6 +90,7 @@ export function DeliverablesView({
   missions,
   onOpenCockpit,
   onRunMission,
+  variant = 'desktop',
 }: DeliverablesViewProps) {
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -149,7 +203,28 @@ export function DeliverablesView({
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
-      {/* 顶部标题栏 */}
+      {/* 顶部标题栏：移动端居中简版（无图标/描述），桌面完整版；操作按钮两种布局共用 */}
+      {variant === 'mobile' ? (
+        <header className="text-center">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900">
+            交付物
+            <span className="ml-2 align-middle text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 border border-zinc-200/80 text-zinc-600">
+              {allArtifacts.length}
+            </span>
+          </h1>
+          {activeItem && (
+            <div className="mt-3 flex items-center justify-center gap-2">
+              <HeaderActions
+                shared={shared}
+                copied={copied}
+                onShare={handleShare}
+                onCopy={handleCopy}
+                onDownload={handleDownload}
+              />
+            </div>
+          )}
+        </header>
+      ) : (
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2.5">
@@ -169,41 +244,16 @@ export function DeliverablesView({
         </div>
 
         {activeItem && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleShare}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 shadow-2xs transition"
-            >
-              {shared ? (
-                <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
-              ) : (
-                <Share2 className="h-3.5 w-3.5 text-zinc-400" />
-              )}
-              <span>{shared ? '已分享' : '分享'}</span>
-            </button>
-
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 shadow-2xs transition"
-            >
-              {copied ? (
-                <CheckCheck className="h-3.5 w-3.5 text-emerald-600" />
-              ) : (
-                <Copy className="h-3.5 w-3.5 text-zinc-400" />
-              )}
-              <span>{copied ? '已复制' : '复制 Markdown'}</span>
-            </button>
-
-            <button
-              onClick={handleDownload}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white shadow-xs transition"
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>下载 .md</span>
-            </button>
-          </div>
+          <HeaderActions
+            shared={shared}
+            copied={copied}
+            onShare={handleShare}
+            onCopy={handleCopy}
+            onDownload={handleDownload}
+          />
         )}
       </div>
+      )}
 
       {allArtifacts.length === 0 ? (
         /* 空状态 */

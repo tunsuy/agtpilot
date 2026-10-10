@@ -633,17 +633,19 @@ export default function Workspace() {
       return (
         <div className="fixed inset-0 z-40 bg-[#fbfbfd] flex flex-col">
           <header
-            className="h-13 shrink-0 flex items-center gap-2 px-2 bg-white/92 backdrop-blur-lg border-b border-zinc-200/70"
+            className="h-13 shrink-0 relative flex items-center px-2 bg-white/92 backdrop-blur-lg border-b border-zinc-200/70"
             style={{ paddingTop: 'env(safe-area-inset-top, 0px)', height: 'calc(3.25rem + env(safe-area-inset-top, 0px))' }}
           >
             <button
               type="button"
               onClick={() => setMobileOverlay(null)}
-              className="h-9 px-2 -ml-1 flex items-center gap-0.5 text-sm text-zinc-600 active:text-zinc-900 transition"
+              className="h-9 px-2 -ml-1 flex items-center gap-0.5 text-sm text-zinc-600 active:text-zinc-900 transition z-10"
             >
               <ChevronLeft className="h-5 w-5" /> 返回
             </button>
-            <span className="text-sm font-semibold text-zinc-900">{titles[mobileOverlay]}</span>
+            <span className="absolute left-1/2 -translate-x-1/2 text-sm font-semibold text-zinc-900 truncate px-12">
+              {titles[mobileOverlay]}
+            </span>
           </header>
           <div className="flex-1 overflow-y-auto">
             {mobileOverlay === 'goals' && (
@@ -719,6 +721,7 @@ export default function Workspace() {
                   <DeliverablesView
                     artifact={artifact}
                     missions={missions}
+                    variant="mobile"
                     onOpenCockpit={() => setMobileTab('activity')}
                     onRunMission={handleRun}
                   />

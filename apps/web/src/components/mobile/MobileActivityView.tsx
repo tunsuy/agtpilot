@@ -86,7 +86,7 @@ export function MobileActivityView({
 
   return (
     <div className="px-4 pt-4 pb-28 max-w-lg mx-auto">
-      <header className="mb-4">
+      <header className="mb-4 text-center">
         <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">动态</h1>
         <p className="text-sm text-zinc-400 mt-1">需要你出手的事都在最上面。</p>
       </header>

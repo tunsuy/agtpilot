@@ -12,6 +12,7 @@ import {
   Check,
   RotateCw,
   ArrowUp,
+  ArrowDown,
   Lock,
   Shield,
   Copy,
@@ -50,6 +51,7 @@ import { ArticlePackageList } from './workshops/ArticlePackageCard';
 import { parseArticlePackages } from '../lib/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../lib/topic-picks';
+import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
 import {
   Mission,
   ViewportState,
@@ -117,14 +119,26 @@ export function CockpitView({
   const [isWorkbenchExpanded, setIsWorkbenchExpanded] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const stepsEndRef = useRef<HTMLDivElement>(null);
+  /** 对话流滚动容器:智能跟随(贴底才自动滚动),上翻时出「回到底部」按钮 */
+  const flowScrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (rightTab === 'terminal') {
       terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [terminalLogs, rightTab]);
+
+  // 输入框随内容自动长高(多行自适应,上限约 10 行后内部滚动)
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [prompt]);
 
   // 如果 activeMissionId 为 null，说明用户点击了“新建会话”，界面应展示空白就绪状态，而不是强行回退到 missions[0]
   const currentMission = activeMissionId
@@ -143,11 +157,32 @@ export function CockpitView({
 
   const activeArtifact = currentMission?.artifact || (activeMissionId === currentMission?.id ? artifact : null);
 
+  // 智能滚动跟随:只有用户本来就贴在底部时新内容才自动滚动,
+  // 上翻阅读历史不再被强行拽回;切换会话时重置为贴底态
   useEffect(() => {
-    if (currentMission?.steps?.length) {
+    atBottomRef.current = true;
+    setShowJumpToBottom(false);
+  }, [currentMission?.id]);
+
+  useEffect(() => {
+    if (currentMission?.steps?.length && atBottomRef.current) {
       stepsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [currentMission?.steps]);
+
+  const handleFlowScroll = () => {
+    const el = flowScrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    atBottomRef.current = nearBottom;
+    setShowJumpToBottom(!nearBottom);
+  };
+
+  const jumpToBottom = () => {
+    atBottomRef.current = true;
+    setShowJumpToBottom(false);
+    stepsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   const handleCopyArtifact = () => {
     if (!activeArtifact?.content) return;
@@ -161,6 +196,17 @@ export function CockpitView({
     if (!prompt.trim() || isSubmitting) return;
     onRunMission(prompt.trim(), undefined, activeMissionId || undefined);
     setPrompt('');
+    // 发送后回到贴底态,跟进新一轮输出
+    atBottomRef.current = true;
+    setShowJumpToBottom(false);
+  };
+
+  /** 多行输入:Enter 发送、Shift+Enter 换行;中文输入法组词期间的回车不触发发送 */
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
   };
 
   const handleStartNewMission = () => {
@@ -436,73 +482,22 @@ export function CockpitView({
         )}
 
         {/* 核心会话与交互流 (Streamlined Manus / Linear Flow) */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+        <div className="flex-1 relative min-h-0">
+        <div className="absolute inset-0 overflow-y-auto p-4 md:p-6 space-y-6" ref={flowScrollRef} onScroll={handleFlowScroll}>
           {currentMission && currentMission.steps && currentMission.steps.length > 0 ? (
             <div className="space-y-6 max-w-2xl mx-auto w-full">
               {(() => {
-                // 将步骤按【连续工具调用】聚合为组，使长串搜索和调用收纳为单条优雅的行动链
-                type RenderBlock =
-                  | { type: 'user'; step: (typeof currentMission.steps)[0] }
-                  | { type: 'tools'; steps: (typeof currentMission.steps); key: string }
-                  | { type: 'assistant'; step: (typeof currentMission.steps)[0] };
+                // 分块逻辑抽为纯函数(lib/cockpit-blocks):用户气泡 / 工具链聚合块 /
+                // 正式回复卡;执行效率摘要步骤不再冒充「已完成 1 项任务活动」空壳块,
+                // 仅在「查看执行详情」开启时以小字呈现
+                const { blocks, effNotes } = splitStepsIntoBlocks(currentMission.steps);
 
-                const blocks: RenderBlock[] = [];
-                let currentTools: (typeof currentMission.steps) = [];
-                // 兼容旧任务：每个用户轮次中最后一条已完成 assistant 文本视作最终答复。
-                const legacyFinalAssistantIds = new Set<string>();
-                let legacyCandidate: string | undefined;
-                for (const step of currentMission.steps) {
-                  const beginsNewTurn = step.role === 'user' || Boolean(step.userPrompt);
-                  if (beginsNewTurn) {
-                    if (legacyCandidate) legacyFinalAssistantIds.add(legacyCandidate);
-                    legacyCandidate = undefined;
-                  } else if (step.role === 'assistant' && step.status === 'DONE' && step.answer && !step.messageKind) {
-                    legacyCandidate = step.id;
-                  }
-                }
-                if (legacyCandidate) legacyFinalAssistantIds.add(legacyCandidate);
-
-                currentMission.steps.forEach((st, idx) => {
-                  const isUser = st.role === 'user' || Boolean(st.userPrompt);
-                  const isAssistant = (st.role === 'assistant' || Boolean(st.answer)) && !isUser;
-                  const isFinalAssistant = isAssistant && (
-                    st.messageKind === 'final' ||
-                    (!st.messageKind && legacyFinalAssistantIds.has(st.id))
-                  );
-                  // 中间模型轮次是执行过程，不再作为平级大回复；与工具调用一起归入活动块。
-                  const isTool = !isUser && (!isAssistant || !isFinalAssistant);
-
-                  if (isTool) {
-                    currentTools.push(st);
-                  } else {
-                    if (currentTools.length > 0) {
-                      blocks.push({
-                        type: 'tools',
-                        steps: [...currentTools],
-                        key: `tools_group_${idx - currentTools.length}`,
-                      });
-                      currentTools = [];
-                    }
-                    if (isUser) {
-                      blocks.push({ type: 'user', step: st });
-                    } else if (isAssistant) {
-                      blocks.push({ type: 'assistant', step: st });
-                    }
-                  }
-                });
-
-                if (currentTools.length > 0) {
-                  blocks.push({
-                    type: 'tools',
-                    steps: currentTools,
-                    key: `tools_group_final`,
-                  });
-                }
-
-                return blocks.map((block) => {
+                return (
+                  <>
+                  {groupBlocksIntoTurns(blocks).map((turn) => {
                   // ================= 1. 用户提问气泡 (轻量现代感带用户专属头像) =================
-                  if (block.type === 'user') {
-                    const st = block.step;
+                  if (turn.type === 'user') {
+                    const st = turn.step;
                     return (
                       <div key={st.id} className="flex items-start justify-end gap-2.5 pt-2 group">
                         <div className="max-w-[85%] rounded-2xl bg-zinc-900 text-zinc-50 px-4 py-2.5 shadow-sm text-xs leading-relaxed selection:bg-zinc-700">
@@ -525,13 +520,38 @@ export function CockpitView({
                     );
                   }
 
-                  // ================= 2. 工具调用链聚合块 (Manus 风格流线手风琴) =================
+                  // ======== 2. Agent 作答轮(整轮包进一张回复卡:一轮一头像) ========
+                  // 空壳块(无文本也无流式)过滤后为空则整轮不渲染,不出白卡
+                  const renderable = turn.items.filter(
+                    (b) =>
+                      b.type === 'tools' ||
+                      Boolean(b.step.answer || b.step.reasoning) ||
+                      b.step.status === 'RUNNING'
+                  );
+                  if (renderable.length === 0) return null;
+                  const turnStreaming = turn.items.some(
+                    (b) => b.type === 'assistant' && b.step.status === 'RUNNING'
+                  );
+                  return (
+                    <div key={turn.key} className="flex items-start gap-3.5">
+                      <div className="h-7 w-7 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
+                        <Bot className="h-4 w-4" />
+                      </div>
+                      <div
+                        className={`flex-1 min-w-0 rounded-2xl bg-white border shadow-2xs p-4 md:p-5 space-y-3 transition-colors duration-300 ${
+                          turnStreaming ? 'border-blue-200/80' : 'border-zinc-200/80'
+                        }`}
+                      >
+                        {renderable.map((block) => {
+                  // ================= 2a. 工具调用链聚合块 (回复卡内嵌手风琴) =================
                   if (block.type === 'tools') {
                     const groupSteps = block.steps;
                     const groupKey = block.key;
                     const isAnyRunning = groupSteps.some((s) => s.status === 'RUNNING');
                     const hasFailed = groupSteps.some((s) => s.status === 'FAILED');
-                    const isGroupExpanded = expandedTools[groupKey] ?? (showExecutionDetails && isAnyRunning);
+                    // 执行中的活动链默认展开:思考过程(阶段分析)与工具调用实时可见,
+                    // 完成后自动收拢为摘要条;用户手动点过头部则以手动状态为准
+                    const isGroupExpanded = expandedTools[groupKey] ?? isAnyRunning;
 
                     // 提取概览信息
                     const toolTypes = Array.from(new Set(groupSteps.map((s) => s.tool).filter(Boolean)));
@@ -547,8 +567,8 @@ export function CockpitView({
                       : `已完成 ${completedCount} 项任务活动`;
 
                     return (
-                      <div key={groupKey} className="my-2.5 max-w-2xl mx-auto w-full animate-fadeIn">
-                        <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/70 hover:bg-zinc-50 transition overflow-hidden shadow-2xs">
+                      <div key={groupKey} className="animate-fadeIn">
+                        <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/70 hover:bg-zinc-50 transition overflow-hidden">
                           {/* 聚合条目头部 */}
                           <div
                             onClick={() => {
@@ -599,18 +619,16 @@ export function CockpitView({
                               <span className="text-[10px] text-zinc-400">
                                 {groupSteps.length} 项活动
                               </span>
-                              {showExecutionDetails && (
-                                <ChevronDown
-                                  className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
-                                    isGroupExpanded ? 'rotate-180' : ''
-                                  }`}
-                                />
-                              )}
+                              <ChevronDown
+                                className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
+                                  isGroupExpanded ? 'rotate-180' : ''
+                                }`}
+                              />
                             </div>
                           </div>
 
-                          {/* 展开后的各子步骤列表 */}
-                          {showExecutionDetails && isGroupExpanded && (
+                          {/* 展开后的各子步骤列表(点头部即可展开,不再被全局开关挡住) */}
+                          {isGroupExpanded && (
                             <div className="px-3 pb-3 pt-1 border-t border-zinc-200/50 space-y-1.5 bg-white/50">
                               {groupSteps.map((st) => {
                                 const isSubExpanded = Boolean(expandedTools[st.id]);
@@ -746,16 +764,7 @@ export function CockpitView({
                     if (!st.answer && !st.reasoning && !isStreaming) return null;
 
                     return (
-                      <div key={st.id} className="flex items-start gap-3.5 group/ans relative">
-                        <div className="h-7 w-7 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
-                          <Bot className="h-4 w-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div
-                            className={`rounded-2xl bg-white border p-4 md:p-5 shadow-2xs text-xs text-zinc-800 leading-relaxed relative transition-colors duration-300 ${
-                              isStreaming ? 'border-blue-200/80' : 'border-zinc-200/80'
-                            }`}
-                          >
+                      <div key={st.id} className="group/ans relative text-xs text-zinc-800 leading-relaxed">
                             {/* 思考过程（推理模型 reasoning 流，可折叠；左竖线轻量样式，避免框中框） */}
                             {st.reasoning && (
                               <div className="mb-3">
@@ -830,11 +839,33 @@ export function CockpitView({
                               )
                             )}
 
-                            {/* 中断标记：live step 失败时明确失败态（保留已流出的部分文本） */}
+                            {/* 中断标记:live step 失败时明确失败态(保留已流出的部分文本)+ 重新生成入口 */}
                             {st.status === 'FAILED' && st.role === 'assistant' && (
-                              <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-red-500">
-                                <AlertCircle className="h-3.5 w-3.5" />
-                                <span>回复已中断，以上为部分输出</span>
+                              <div className="mt-2.5 flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5 text-[11px] text-red-500">
+                                  <AlertCircle className="h-3.5 w-3.5" />
+                                  <span>回复已中断，以上为部分输出</span>
+                                </div>
+                                {(() => {
+                                  const retryPrompt = findRetryPrompt(currentMission.steps, st.id);
+                                  if (!retryPrompt || currentMission.status === 'ACTIVE') return null;
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        atBottomRef.current = true;
+                                        setShowJumpToBottom(false);
+                                        onRunMission(retryPrompt, undefined, currentMission.id);
+                                      }}
+                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white text-zinc-700 border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition shadow-2xs"
+                                      title="用同一问题在本会话重新生成"
+                                    >
+                                      <RotateCw className="h-3 w-3" />
+                                      <span>重新生成</span>
+                                    </button>
+                                  );
+                                })()}
                               </div>
                             )}
 
@@ -863,14 +894,28 @@ export function CockpitView({
                                 )}
                               </button>
                             )}
-                          </div>
-                        </div>
                       </div>
                     );
                   }
 
                   return null;
-                });
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* 执行效率摘要:调试信息,仅在「查看执行详情」开启时以小字呈现 */}
+                {showExecutionDetails && effNotes.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    {effNotes.map((note, i) => (
+                      <p key={`eff_${i}`} className="text-right text-[10px] font-mono text-zinc-400 leading-relaxed">
+                        {note}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                </>
+                );
               })()}
               <div ref={stepsEndRef} />
             </div>
@@ -888,44 +933,63 @@ export function CockpitView({
             </div>
           )}
         </div>
+        {/* 上翻阅读历史时的「回到底部」浮动按钮(智能跟随:贴底才自动滚动) */}
+        {showJumpToBottom && (
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-white border border-zinc-200 text-[11px] font-medium text-zinc-600 shadow-md hover:bg-zinc-50 transition z-10 animate-fadeIn"
+            title="回到最新消息"
+          >
+            <ArrowDown className="h-3 w-3" />
+            <span>回到底部</span>
+          </button>
+        )}
+        </div>
 
-        {/* 中间底部：Linear 风格流线输入框 */}
+        {/* 中间底部：Linear 风格流线输入框(多行自适应:Enter 发送 / Shift+Enter 换行) */}
         <div className="p-3 md:p-4 border-t border-zinc-200/80 bg-white space-y-2">
           <form
             onSubmit={handleSubmit}
-            className="flex items-center gap-2 bg-zinc-50 hover:bg-zinc-50/80 border border-zinc-200 rounded-xl px-3 py-2 focus-within:border-zinc-400 focus-within:bg-white focus-within:shadow-2xs transition"
+            className="flex items-end gap-2 bg-zinc-50 hover:bg-zinc-50/80 border border-zinc-200 rounded-xl px-3 py-2 focus-within:border-zinc-400 focus-within:bg-white focus-within:shadow-2xs transition"
           >
-            <input
+            <textarea
               ref={inputRef}
-              type="text"
+              rows={1}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={handleInputKeyDown}
               placeholder="指示 AgtPilot 进行网页浏览、代码运行、深入调研..."
-              className="flex-1 bg-transparent border-none text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none"
+              className="flex-1 resize-none bg-transparent border-none text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none leading-relaxed py-1 max-h-[200px] overflow-y-auto"
             />
-            {currentMission && currentMission.status !== 'DONE' && !prompt.trim() ? (
-              <button
-                type="button"
-                onClick={() => onStopMission && onStopMission(currentMission.id)}
-                className="h-7 px-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 flex items-center gap-1 transition flex-shrink-0 text-[11px] font-medium"
-                title="终止执行当前任务"
-              >
-                <Square className="h-3 w-3 fill-red-600" />
-                <span>停止</span>
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!prompt.trim() || isSubmitting}
-                className="h-7 w-7 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-20 text-white flex items-center justify-center transition flex-shrink-0 shadow-2xs"
-              >
-                {isSubmitting ? (
-                  <RotateCw className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ArrowUp className="h-3.5 w-3.5" />
-                )}
-              </button>
-            )}
+            <div className="flex items-center gap-1.5 flex-shrink-0 pb-0.5">
+              {/* 执行中停止键常驻:打字不再把它顶掉,随时可终止;有文字时并排出现发送键 */}
+              {currentMission && currentMission.status !== 'DONE' && (
+                <button
+                  type="button"
+                  onClick={() => onStopMission && onStopMission(currentMission.id)}
+                  className="h-7 px-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 flex items-center gap-1 transition text-[11px] font-medium"
+                  title="终止执行当前任务"
+                >
+                  <Square className="h-3 w-3 fill-red-600" />
+                  <span>停止</span>
+                </button>
+              )}
+              {(!currentMission || currentMission.status === 'DONE' || prompt.trim()) && (
+                <button
+                  type="submit"
+                  disabled={!prompt.trim() || isSubmitting}
+                  className="h-7 w-7 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-20 text-white flex items-center justify-center transition shadow-2xs"
+                  title="发送 (Enter)"
+                >
+                  {isSubmitting ? (
+                    <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+            </div>
           </form>
 
           {/* 底栏模型选择与状态 */}
@@ -948,7 +1012,7 @@ export function CockpitView({
                     ))}
                 </select>
               </div>
-              <span className="text-[10px] text-zinc-400 font-mono hidden sm:inline">Enter 发送</span>
+              <span className="text-[10px] text-zinc-400 font-mono hidden sm:inline">Enter 发送 · Shift+Enter 换行</span>
             </div>
           )}
         </div>

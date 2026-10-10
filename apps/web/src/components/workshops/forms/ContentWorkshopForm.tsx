@@ -6,15 +6,21 @@
  * 触发时服务端按最新档案重建选题 prompt,结果以 DONE 任务交付并推送)。
  */
 import { useEffect, useState } from 'react';
-import { CalendarClock } from 'lucide-react';
+import { CalendarClock, Lightbulb, Loader2 } from 'lucide-react';
 import { XHS_WORKSHOP_STYLES, buildXhsWeeklyTopicsPrompt } from '../../../lib/xhs-workshop';
 import {
   WEIBO_WORKSHOP_STYLES,
   VIDEO_SCRIPT_DURATIONS,
 } from '../../../lib/content-workshops';
+import {
+  findLatestTopicPicks,
+  hasRunningTopicMission,
+  type TopicPicksMissionLike,
+} from '../../../lib/topic-picks';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
-import type { CronJobItem } from '../../../types/agent';
+import type { CronJobItem, Mission } from '../../../types/agent';
 import type { WorkshopDef } from '../registry';
+import { TopicPickList } from '../TopicPickCard';
 import { buildWorkshopRun } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass } from './shared';
@@ -27,6 +33,8 @@ interface Props {
   scenarioProfile?: ScenarioProfile | null;
   /** 点击摘要条「查看/编辑」打开档案向导 */
   onEditProfile?: () => void;
+  /** 全量任务列表(WorkshopsView 下传):弹窗内嵌最近一次选题清单的可勾选卡片 */
+  missions?: Mission[];
 }
 
 /** 订阅日 chip 选项(cron day-of-week:周日 = 0) */
@@ -45,7 +53,7 @@ const SUBSCRIBE_COUNTS = [
   { id: 10, name: '10 条' },
 ];
 
-export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile }: Props) {
+export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile, missions }: Props) {
   const isVideo = workshop.id === 'video_douyin' || workshop.id === 'video_bilibili';
   const isWeibo = workshop.id === 'weibo';
   const isXhs = workshop.id === 'xhs';
@@ -144,6 +152,16 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
     scenarioProfile ? { scenarioProfile } : undefined
   );
 
+  // ---- 本周选题:弹窗内「立即出选题 + 勾选成稿」(闭环从会话页搬进弹窗) ----
+  const topicPicks = isXhs ? findLatestTopicPicks((missions || []) as TopicPicksMissionLike[]) : null;
+  const topicRunning = isXhs ? hasRunningTopicMission(missions || []) : false;
+  /** 发起选题任务:与订阅同款 prompt(已托管登录则读小红书热门话题,否则降级),标题带标记供弹窗回查 */
+  const launchTopics = () =>
+    onRun(
+      buildXhsWeeklyTopicsPrompt({ count: subCount, profile: scenarioProfile ?? undefined }),
+      '小红书每周选题·手动'
+    );
+
   const handleSubmit = () => {
     recordRun(workshop.id, preview.title, params);
     onRun(preview.prompt, preview.title);
@@ -236,6 +254,54 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
           ))}
         </div>
       </div>
+
+      {/* 本周选题:立即出选题 + 弹窗内勾选成稿(不用回会话页;定时订阅与任务页手动触发保留) */}
+      {isXhs && (
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 space-y-2">
+          {topicRunning ? (
+            <p className="text-[11px] text-zinc-500 flex items-center gap-1.5 leading-relaxed">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-500 shrink-0" />
+              选题任务进行中,完成后重开工坊即可在这里勾选清单。
+            </p>
+          ) : topicPicks ? (
+            <>
+              <TopicPickList
+                result={topicPicks.result}
+                missionId={null}
+                compact
+                onRunMission={(prompt) => onRun(prompt, '小红书成稿·勾选选题')}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-zinc-400 leading-relaxed">
+                  清单来自最近一次选题任务;想换一批点「重新生成」。
+                </span>
+                <button
+                  type="button"
+                  onClick={launchTopics}
+                  className="shrink-0 text-[11px] font-medium text-zinc-500 hover:text-violet-600 transition"
+                >
+                  重新生成
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-[11px] text-zinc-500 leading-relaxed">
+                拉取小红书本周热门话题(需已开托管登录;未开则降级知乎热榜/搜索)生成选题清单,
+                勾 1-3 条一键成稿。发起后去任务页看执行,完成清单回到这里勾选。
+              </p>
+              <button
+                type="button"
+                onClick={launchTopics}
+                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium transition shadow-xs"
+              >
+                <Lightbulb className="h-3.5 w-3.5" />
+                立即出选题
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* 订阅 · 每周自动出选题(scenario-loop P2):创建 scenario 型 cron 任务 */}
       {isXhs && !subsLoading && (

@@ -11,7 +11,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Sparkles, Play, Clock, ArrowRight, UserRoundPen } from 'lucide-react';
-import { ConnectorApp, McpConnectorInfo } from '../../types/agent';
+import { ConnectorApp, McpConnectorInfo, Mission } from '../../types/agent';
 import { WORKSHOPS, WORKSHOP_CATEGORIES, getWorkshop, type WorkshopDef, type WorkshopId } from './registry';
 import { buildWorkshopRun } from './run';
 import { recordRun, recentRuns, relativeTime, type WorkshopRunRecord } from './history';
@@ -31,6 +31,8 @@ interface WorkshopsViewProps {
   onRunPrompt: (prompt: string, title?: string) => void | Promise<void>;
   /** 缺必需依赖时跳连接器页配置 */
   onOpenConnectors: () => void;
+  /** 全量任务列表:小红书表单内嵌最近一次选题清单的可勾选卡片 */
+  missions?: Mission[];
 }
 
 /** 表单组件统一 props:scenarioProfile/onEditProfile 仅有 profileSlot 的工坊使用 */
@@ -40,6 +42,7 @@ interface WorkshopFormProps {
   onClose: () => void;
   scenarioProfile?: ScenarioProfile | null;
   onEditProfile?: () => void;
+  missions?: Mission[];
 }
 
 /** id → 表单组件;新增工坊在此登记 */
@@ -59,6 +62,7 @@ export function WorkshopsView({
   connectors,
   onRunPrompt,
   onOpenConnectors,
+  missions,
 }: WorkshopsViewProps) {
   const [activeId, setActiveId] = useState<WorkshopId | null>(null);
   const [history, setHistory] = useState<WorkshopRunRecord[]>([]);
@@ -318,6 +322,7 @@ export function WorkshopsView({
           onClose={() => setActiveId(null)}
           scenarioProfile={activeProfile ?? null}
           onEditProfile={activeWorkshop.profileSlot ? () => setWizardKey(activeWorkshop.profileSlot!) : undefined}
+          missions={missions}
         />
       )}
 

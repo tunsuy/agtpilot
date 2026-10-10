@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { parseTopicPicks, buildTopicPickReplyText, MAX_TOPIC_PICKS, type TopicPick } from '../topic-picks';
+import {
+  parseTopicPicks,
+  buildTopicPickReplyText,
+  findLatestTopicPicks,
+  hasRunningTopicMission,
+  MAX_TOPIC_PICKS,
+  TOPIC_MISSION_TITLE_MARK,
+  type TopicPick,
+  type TopicPicksMissionLike,
+} from '../topic-picks';
 
 /** 标准 7 字段输出样例(与 buildXhsWeeklyTopicsPrompt 的格式契约一致) */
 const STANDARD_TEXT = `本周选题会开完,以下是 7 条候选。
@@ -217,5 +226,77 @@ describe('buildTopicPickReplyText', () => {
 
   it('MAX_TOPIC_PICKS = 3(勾选上限契约)', () => {
     expect(MAX_TOPIC_PICKS).toBe(3);
+  });
+});
+
+describe('findLatestTopicPicks · 弹窗内嵌勾选卡的数据源', () => {
+  const mission = (
+    id: string,
+    title: string,
+    status: string,
+    startedAt: number,
+    answers: Array<string | undefined> = [STANDARD_TEXT]
+  ): TopicPicksMissionLike => ({
+    id,
+    title,
+    status,
+    startedAt,
+    steps: answers.map((answer, i) => ({ role: 'assistant', status: 'DONE', answer, id: `${id}-s${i}` } as any)),
+  });
+
+  it('标题标记 + DONE + 最新优先:取 startedAt 最大的完成任务', () => {
+    const old = mission('m1', '【自动巡航】小红书每周选题', 'DONE', 1000);
+    const fresh = mission('m2', '小红书每周选题·手动', 'DONE', 2000);
+    const found = findLatestTopicPicks([old, fresh]);
+    expect(found?.missionId).toBe('m2');
+    expect(found?.result.picks).toHaveLength(2);
+  });
+
+  it('非 DONE / 标题不含标记的任务被忽略', () => {
+    const running = mission('m1', '小红书每周选题·手动', 'ACTIVE', 3000);
+    const unrelated = mission('m2', '小红书成稿·勾选选题', 'DONE', 2500);
+    expect(findLatestTopicPicks([running, unrelated])).toBeNull();
+  });
+
+  it('任务内从后往前找第一个可解析答案(末步是空壳卡时回退上一步)', () => {
+    const m = mission('m1', '小红书每周选题·手动', 'DONE', 1000, [STANDARD_TEXT, undefined]);
+    const found = findLatestTopicPicks([m]);
+    expect(found?.missionId).toBe('m1');
+    expect(found?.result.picks).toHaveLength(2);
+  });
+
+  it('答案解析不出选题(普通答复)→ null,调用方降级为「立即出选题」', () => {
+    const m = mission('m1', '小红书每周选题·手动', 'DONE', 1000, ['这周没什么好题,随便写写吧。']);
+    expect(findLatestTopicPicks([m])).toBeNull();
+  });
+
+  it('无任务 → null;空列表不崩溃', () => {
+    expect(findLatestTopicPicks([])).toBeNull();
+  });
+
+  it('标题标记常量与两种发起入口的标题都兼容', () => {
+    expect('【自动巡航】小红书每周选题'.includes(TOPIC_MISSION_TITLE_MARK)).toBe(true);
+    expect('小红书每周选题·手动'.includes(TOPIC_MISSION_TITLE_MARK)).toBe(true);
+  });
+});
+
+describe('hasRunningTopicMission · 弹窗防重复发起', () => {
+  it('ACTIVE/QUEUED 命中,DONE/INTERRUPTED 不命中', () => {
+    const mk = (status: string): TopicPicksMissionLike => ({
+      id: status,
+      title: '小红书每周选题·手动',
+      status,
+      startedAt: 1,
+      steps: [],
+    });
+    expect(hasRunningTopicMission([mk('ACTIVE')])).toBe(true);
+    expect(hasRunningTopicMission([mk('QUEUED')])).toBe(true);
+    expect(hasRunningTopicMission([mk('DONE'), mk('INTERRUPTED')])).toBe(false);
+  });
+
+  it('标题不含标记的进行中任务不算选题任务', () => {
+    expect(
+      hasRunningTopicMission([{ id: 'x', title: '小红书成稿·勾选选题', status: 'ACTIVE', startedAt: 1, steps: [] }])
+    ).toBe(false);
   });
 });

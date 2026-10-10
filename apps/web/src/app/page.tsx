@@ -774,6 +774,7 @@ export default function Workspace() {
                   setMobileOverlay(null);
                 }}
                 onOpenConnectors={() => setMobileOverlay('connectors')}
+                missions={missions}
               />
             )}
             {mobileOverlay === 'memories' && (
@@ -1005,6 +1006,7 @@ export default function Workspace() {
                 connectors={connectors}
                 onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
                 onOpenConnectors={() => handleViewChange('connectors')}
+                missions={missions}
               />
             </main>
           )}

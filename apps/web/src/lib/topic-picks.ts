@@ -10,6 +10,23 @@
 
 export const MAX_TOPIC_PICKS = 3;
 
+/** 选题任务标题标记:定时巡航(【自动巡航】小红书每周选题)与弹窗手动发起(…·手动)都含此串,作为查找锚点 */
+export const TOPIC_MISSION_TITLE_MARK = '小红书每周选题';
+
+/** 任务的最小面(结构类型:纯函数模块不引 agent 类型,测试以字面量构造) */
+export interface TopicPicksMissionLike {
+  id: string;
+  title: string;
+  status: string;
+  startedAt: number;
+  steps: Array<{ role?: string; status?: string; answer?: string }>;
+}
+
+export interface LatestTopicPicks {
+  missionId: string;
+  result: TopicPickParseResult;
+}
+
 export interface TopicPick {
   /** 【选题 N】的 N;块内缺失时按出现顺序 1..n 递补 */
   number: number;
@@ -195,4 +212,31 @@ export function buildTopicPickReplyText(selected: TopicPick[]): string {
 
 我勾选的选题(原文):
 ${quoted}`;
+}
+
+/**
+ * 找最近一次「已完成」选题任务的可勾选清单(工坊弹窗内嵌勾选卡用)。
+ * 标题含标记 + status DONE,按 startedAt 取最新;任务内 assistant 步骤从后往前,
+ * 取第一个解析出非空选题的 answer(过程中间答复不算)。无匹配返回 null,调用方降级为「立即出选题」入口。
+ */
+export function findLatestTopicPicks(missions: TopicPicksMissionLike[]): LatestTopicPicks | null {
+  const done = missions
+    .filter((m) => m.title.includes(TOPIC_MISSION_TITLE_MARK) && m.status === 'DONE')
+    .sort((a, b) => b.startedAt - a.startedAt);
+  for (const m of done) {
+    for (let i = m.steps.length - 1; i >= 0; i--) {
+      const st = m.steps[i];
+      if (st.role !== 'assistant' || !st.answer) continue;
+      const result = parseTopicPicks(st.answer);
+      if (result.picks.length > 0) return { missionId: m.id, result };
+    }
+  }
+  return null;
+}
+
+/** 是否有进行中的选题任务(弹窗展示「进行中」提示,避免重复发起) */
+export function hasRunningTopicMission(missions: TopicPicksMissionLike[]): boolean {
+  return missions.some(
+    (m) => m.title.includes(TOPIC_MISSION_TITLE_MARK) && (m.status === 'ACTIVE' || m.status === 'QUEUED')
+  );
 }

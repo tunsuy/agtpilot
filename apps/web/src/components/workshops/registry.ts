@@ -38,6 +38,12 @@ export interface WorkshopDep {
   required?: boolean;
 }
 
+/** 工坊交付物声明(P0 仅声明性;渲染按输出解析驱动,此处为 P1 交付库注册预留) */
+export interface ArtifactSpec {
+  kind: 'note-package';
+  label: string;
+}
+
 export interface WorkshopDef {
   id: WorkshopId;
   name: string;
@@ -49,6 +55,10 @@ export interface WorkshopDef {
   deps: WorkshopDep[];
   /** 安全与流程说明(表单底部展示,来自各工坊的红线约定) */
   note: string;
+  /** 场景档案槽位(scenario-loop §2):声明后首次使用触发档案引导,Prompt 自动注入档案 */
+  profileSlot?: string;
+  /** 结构化交付物声明 */
+  artifacts?: ArtifactSpec[];
 }
 
 export const WORKSHOP_CATEGORIES: Array<{ key: string; label: string; accent: WorkshopAccent }> = [
@@ -71,6 +81,8 @@ export const WORKSHOPS: WorkshopDef[] = [
       { id: 'exa', name: '网络搜索' },
     ],
     note: 'Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
+    profileSlot: 'xhs',
+    artifacts: [{ kind: 'note-package', label: '小红书笔记包' }],
   },
   {
     id: 'weibo',

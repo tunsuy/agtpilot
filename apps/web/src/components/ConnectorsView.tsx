@@ -52,9 +52,14 @@ import {
   Languages,
   Newspaper,
   Twitter,
+  QrCode,
+  ShieldAlert,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
+import { XhsWebLoginModal } from './XhsWebLoginModal';
+import { loginBadgeInfo } from '../lib/browser-login';
+import type { XhsManagedRecord } from '../lib/user-store';
 
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
@@ -311,6 +316,66 @@ export function ConnectorsView({
     }
   };
 
+  // ---- 小红书网页版登录 + 托管模式(scenario-loop P2 模块 1/2) ----
+  const [xhsStatus, setXhsStatus] = useState<{
+    record: XhsManagedRecord | null;
+    dailyLimit: number;
+    todayCount: number;
+  } | null>(null);
+  const [showXhsLogin, setShowXhsLogin] = useState(false);
+  const [showXhsRisk, setShowXhsRisk] = useState(false);
+  const [riskAck, setRiskAck] = useState(false);
+  const [xhsBusy, setXhsBusy] = useState(false);
+  const [xhsNotice, setXhsNotice] = useState('');
+
+  const loadXhsStatus = async () => {
+    try {
+      const res = await fetch('/api/xhs-managed');
+      if (res.status === 401) return; // 未登录静默
+      const data = await res.json();
+      if (data.success) {
+        setXhsStatus({ record: data.record, dailyLimit: data.dailyLimit, todayCount: data.todayCount });
+      }
+    } catch {
+      // 后端未就绪时静默
+    }
+  };
+  useEffect(() => {
+    loadXhsStatus();
+  }, []);
+
+  const xhsPost = async (body: Record<string, unknown>): Promise<boolean> => {
+    setXhsBusy(true);
+    setXhsNotice('');
+    try {
+      const res = await fetch('/api/xhs-managed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setXhsStatus((prev) => (prev ? { ...prev, record: data.record } : prev));
+        return true;
+      }
+      setXhsNotice(data.error || '操作失败');
+      return false;
+    } catch (e: any) {
+      setXhsNotice(e?.message || '网络错误');
+      return false;
+    } finally {
+      setXhsBusy(false);
+    }
+  };
+
+  const daysAgoText = (ts: number): string => {
+    const days = Math.floor((Date.now() - ts) / 86400_000);
+    if (days <= 0) return '今天';
+    if (days === 1) return '昨天';
+    if (days < 30) return `${days} 天前`;
+    return `${Math.floor(days / 30)} 个月前`;
+  };
+
   // ---- Tab 归属:all=全部;other=未策展兜底;其余按 CONNECTOR_TABS 的 ids ----
   const tabIds = tab === 'all' ? null : CONNECTOR_TABS.find((t) => t.key === tab)?.ids ?? null;
   const inTab = (id: string) =>
@@ -485,6 +550,32 @@ export function ConnectorsView({
               <p className="text-xs text-zinc-500 leading-relaxed mb-4">
                 {app.description}
               </p>
+
+              {/* 小红书专属:网页版登录徽标 + 托管模式状态(scenario-loop P2) */}
+              {app.id === 'xiaohongshu' && (
+                <div className="space-y-1.5 mb-4">
+                  {(() => {
+                    const badge = loginBadgeInfo(xhsStatus?.record || undefined);
+                    return badge.loggedIn ? (
+                      <p className={`text-[10px] leading-relaxed ${badge.maybeStale ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {badge.maybeStale
+                          ? `网页版登录可能已过期(${daysAgoText(badge.lastLoginAt!)}登录),建议重新扫码`
+                          : `网页版已登录 · ${daysAgoText(badge.lastLoginAt!)}`}
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-zinc-400 leading-relaxed">
+                        网页版未登录 —— 扫码后 Agent 可读创作数据、存草稿
+                      </p>
+                    );
+                  })()}
+                  {xhsStatus?.record?.enabled && (
+                    <p className="text-[10px] text-zinc-500 leading-relaxed">
+                      托管模式已开启:存草稿每日上限 {xhsStatus.dailyLimit} 次,今日已用 {xhsStatus.todayCount} 次,全部操作落审计
+                    </p>
+                  )}
+                  {xhsNotice && <p className="text-[10px] text-red-500 leading-relaxed">{xhsNotice}</p>}
+                </div>
+              )}
             </div>
 
             <div className="pt-3 border-t border-zinc-100 flex flex-wrap items-center justify-between gap-y-2">
@@ -530,6 +621,47 @@ export function ConnectorsView({
                     <Smartphone className="h-3 w-3" />
                     <span>手机端可用</span>
                   </span>
+                )}
+
+                {/* 小红书专属:网页版扫码登录 + 托管模式开关(scenario-loop P2) */}
+                {app.id === 'xiaohongshu' && (
+                  <>
+                    <button
+                      onClick={() => setShowXhsLogin(true)}
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition shadow-2xs"
+                      title="打开服务器浏览器的小红书登录页,用手机 App 扫码;登录态只落本服务"
+                    >
+                      <QrCode className="h-3 w-3" />
+                      <span>网页版扫码登录</span>
+                    </button>
+                    {xhsStatus?.record?.enabled ? (
+                      <button
+                        onClick={() => void xhsPost({ action: 'disable' })}
+                        disabled={xhsBusy}
+                        className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-50"
+                        title="关闭托管:Agent 不再执行存草稿(登录态保留)"
+                      >
+                        关闭托管
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setRiskAck(false);
+                          setXhsNotice('');
+                          setShowXhsRisk(true);
+                        }}
+                        disabled={xhsBusy || !xhsStatus?.record?.lastLoginAt}
+                        className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-40"
+                        title={
+                          xhsStatus?.record?.lastLoginAt
+                            ? '开启后 Agent 可把笔记存进网页版草稿箱(需审批,有限频,落审计)'
+                            : '先完成网页版扫码登录,才能开启托管模式'
+                        }
+                      >
+                        托管模式·存草稿
+                      </button>
+                    )}
+                  </>
                 )}
 
                 {/* 凭证配置入口：comingSoon（未接入）与 noCredential（免凭证）不提供任何输入 */}
@@ -926,6 +1058,64 @@ export function ConnectorsView({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 小红书网页版扫码登录弹窗(scenario-loop P2 模块 1) */}
+      {showXhsLogin && (
+        <XhsWebLoginModal
+          onClose={() => setShowXhsLogin(false)}
+          onLoggedIn={() => void loadXhsStatus()}
+        />
+      )}
+
+      {/* 托管模式风险明示弹窗(scenario-loop P2 模块 2:开启前的强制确认) */}
+      {showXhsRisk && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl space-y-4">
+            <h3 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-amber-500" />
+              开启「托管模式 · 存草稿」
+            </h3>
+            <div className="space-y-2 text-[11px] text-zinc-600 leading-relaxed">
+              <p>开启后,Agent 可以替你把笔记填进小红书网页版发布页,停在平台的自动保存 —— 终点是草稿箱。请知悉:</p>
+              <ul className="list-disc pl-4 space-y-1">
+                <li><b>风控灰色地带</b>:平台对自动化操作的态度随时可能变化,存在账号被限流/风控的风险,由你自行承担;</li>
+                <li><b>每日上限</b>:存草稿每天至多 {xhsStatus?.dailyLimit ?? 3} 次(超出直接拒绝);</li>
+                <li><b>操作落审计</b>:每次存草稿(含成败)都会记录在本服务的审计日志;</li>
+                <li><b>发布永远归你</b>:发布按钮被代码级围栏永久拦截,Agent 只能存草稿,发布由你本人在 App 内完成。</li>
+              </ul>
+            </div>
+            <label className="flex items-start gap-2 text-xs text-zinc-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={riskAck}
+                onChange={(e) => setRiskAck(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>我已了解上述风险,愿意开启托管模式</span>
+            </label>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowXhsRisk(false)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!riskAck || xhsBusy}
+                onClick={async () => {
+                  const ok = await xhsPost({ action: 'enable', riskAcknowledged: true });
+                  if (ok) setShowXhsRisk(false);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-medium transition shadow-xs"
+              >
+                {xhsBusy ? '开启中…' : '开启托管模式'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { encryptSecret, decryptSecret, isEncrypted } from './secret-box';
 import { getGovernanceBus } from './governance-bus';
+import type { ScenarioProfile } from './scenario-profile';
 import { isPrivateOrReservedIp, DEFAULT_CREDENTIAL_BINDINGS } from '@agtpilot/core';
 
 /**
@@ -40,7 +41,38 @@ export interface UserScopedData {
   sandbox?: SandboxConfigRecord;
   /** 权限提案(deny-log → proposal → 人工审核 → 热更新;只增 + 状态迁移) */
   policyProposals?: PolicyProposalRecord[];
+  /** 工坊场景档案(scenarioKey -> 档案;旧文件未知字段透传,零迁移) */
+  scenarioProfiles?: Record<string, ScenarioProfile>;
+  /** 小红书托管模式开关与登录状态(scenario-loop P2;opt-in 默认关闭,零迁移) */
+  xhsManaged?: XhsManagedRecord;
+  /** 浏览器写操作审计(存草稿等;上限 200 条滚动,最近在前) */
+  browserAudit?: BrowserAuditEntry[];
   updatedAt: number;
+}
+
+/**
+ * 小红书托管模式记录(scenario-loop P2 模块 2):
+ * - enabled:显式 opt-in(默认关),开启前强制阅读风险明示(riskAckAt);
+ * - lastLoginAt:网页版扫码登录成功时间(登录态存浏览器 profile,此处只记时间供过期提醒);
+ * - dailyLimit 缺省 3(可用 AGTPILOT_XHS_DRAFT_DAILY_LIMIT 调整)。
+ */
+export interface XhsManagedRecord {
+  enabled: boolean;
+  enabledAt?: number;
+  riskAckAt?: number;
+  lastLoginAt?: number;
+}
+
+/** 浏览器写操作审计条目:谁在何时用哪个工具对哪个页面做了什么、结果如何(成败都落) */
+export interface BrowserAuditEntry {
+  at: number;
+  tool: string;
+  action: string;
+  title?: string;
+  imageCount?: number;
+  result: 'success' | 'failure';
+  error?: string;
+  missionId?: string;
 }
 
 /**
@@ -403,6 +435,71 @@ export function deleteUserGoal(userId: string, goalId: string) {
   data.goals = (data.goals || []).filter((g: any) => g.id !== goalId);
   saveUserData(data);
   return data.goals;
+}
+
+// 辅助方法：工坊场景档案 (Scenario Profiles —— docs/design/workshop-scenario-loop.md §2)
+// 每用户 × 每场景一份，按 scenarioKey 唯一；upsert 语义同 goals。
+export function getUserScenarioProfiles(userId: string): Record<string, ScenarioProfile> {
+  return getUserData(userId).scenarioProfiles || {};
+}
+
+export function saveUserScenarioProfile(userId: string, profile: ScenarioProfile): Record<string, ScenarioProfile> {
+  const data = getUserData(userId);
+  data.scenarioProfiles = data.scenarioProfiles || {};
+  const existing = data.scenarioProfiles[profile.scenarioKey];
+  // version 不回退：写回是 P1 复盘的职责，P0 编辑保持既有版本号
+  data.scenarioProfiles[profile.scenarioKey] = {
+    ...profile,
+    version: Math.max(profile.version, existing?.version ?? 0),
+    createdAt: existing?.createdAt ?? profile.createdAt,
+    updatedAt: Date.now(),
+  };
+  saveUserData(data);
+  return data.scenarioProfiles;
+}
+
+export function deleteUserScenarioProfile(userId: string, scenarioKey: string): Record<string, ScenarioProfile> {
+  const data = getUserData(userId);
+  if (data.scenarioProfiles) {
+    delete data.scenarioProfiles[scenarioKey];
+  }
+  saveUserData(data);
+  return data.scenarioProfiles || {};
+}
+
+// 辅助方法：小红书托管模式与浏览器审计 (scenario-loop P2 —— docs/design/workshop-scenario-loop.md §5)
+export function getXhsManaged(userId: string): XhsManagedRecord | undefined {
+  return getUserData(userId).xhsManaged;
+}
+
+export function saveXhsManaged(userId: string, record: XhsManagedRecord): XhsManagedRecord {
+  const data = getUserData(userId);
+  data.xhsManaged = { ...data.xhsManaged, ...record, updatedAt: undefined } as XhsManagedRecord;
+  delete (data.xhsManaged as any).updatedAt;
+  saveUserData(data);
+  return data.xhsManaged;
+}
+
+/** 记录网页版登录成功时间(登录态本体在浏览器 profile 目录,这里只记时间) */
+export function markXhsLoginAt(userId: string) {
+  const data = getUserData(userId);
+  data.xhsManaged = { enabled: false, ...(data.xhsManaged || {}), lastLoginAt: Date.now() };
+  saveUserData(data);
+  return data.xhsManaged;
+}
+
+/** 浏览器写操作审计:只增不改,最近在前,上限 200 条滚动 */
+export function appendBrowserAudit(userId: string, entry: BrowserAuditEntry): BrowserAuditEntry[] {
+  const data = getUserData(userId);
+  data.browserAudit = [entry, ...(data.browserAudit || [])].slice(0, 200);
+  saveUserData(data);
+  return data.browserAudit;
+}
+
+/** 读取审计(最近 limit 条);不传 limit = 全量(≤200) */
+export function getBrowserAudit(userId: string, limit?: number): BrowserAuditEntry[] {
+  const all = getUserData(userId).browserAudit || [];
+  return limit ? all.slice(0, limit) : all;
 }
 
 // 辅助方法：Web Push 订阅 (PWA 推送通知)

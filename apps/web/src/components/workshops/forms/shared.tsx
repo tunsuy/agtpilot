@@ -171,7 +171,7 @@ export function WorkshopModalShell({
           {def.note}
         </p>
 
-        {/* Prompt 预览:把将要发给 Agent 的完整任务描述摊开给用户(信任与可纠错) */}
+        {/* Prompt 预览:高级功能(默认折叠)——把将要发给 Agent 的任务描述摊开给需要核对的用户 */}
         <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 overflow-hidden">
           <button
             type="button"
@@ -179,7 +179,7 @@ export function WorkshopModalShell({
             className="w-full flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium text-zinc-500 hover:text-zinc-800 transition"
           >
             <Eye className="h-3.5 w-3.5" />
-            <span>{showPreview ? '收起任务预览' : '查看将发给 Agent 的任务描述'}</span>
+            <span>{showPreview ? '收起任务预览' : '高级 · 查看将发给 Agent 的任务描述'}</span>
           </button>
           {showPreview && (
             <pre className="px-3 pb-3 text-[10px] leading-relaxed text-zinc-500 whitespace-pre-wrap break-all max-h-56 overflow-y-auto">

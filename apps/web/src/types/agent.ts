@@ -193,6 +193,8 @@ export interface CronJobItem {
   name: string;
   pattern: string;
   prompt: string;
+  /** 订阅类任务标记:触发时按最新档案重建 prompt(如 xhs_weekly_topics 每周选题) */
+  scenario?: { key: 'xhs_weekly_topics'; count?: number };
   nextRun?: string;
   runCount: number;
   lastRunAt?: number;

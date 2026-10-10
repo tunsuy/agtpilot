@@ -12,17 +12,27 @@ import { buildInvestPrompt, INVEST_MODES } from '../../lib/invest-workshops';
 import { buildEduPrompt, EDU_MODES } from '../../lib/edu-workshops';
 import { EMAIL_TRIAGE_SCOPES, WEEKLY_REPORT_PERIODS } from '../../lib/office-workshops';
 import type { WorkshopId } from './registry';
+import type { ScenarioProfile } from '../../lib/scenario-profile';
 
 export interface WorkshopRun {
   prompt: string;
   title: string;
 }
 
+/** 运行上下文:场景档案等表单之外的状态,表单与「一键重跑」共用 */
+export interface WorkshopRunContext {
+  scenarioProfile?: ScenarioProfile;
+}
+
 const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback);
 const num = (v: unknown, fallback = 1) =>
   typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 
-export function buildWorkshopRun(id: WorkshopId, params: Record<string, unknown>): WorkshopRun {
+export function buildWorkshopRun(
+  id: WorkshopId,
+  params: Record<string, unknown>,
+  ctx?: WorkshopRunContext
+): WorkshopRun {
   switch (id) {
     case 'xhs': {
       const style = str(params.style, '种草推荐');
@@ -31,6 +41,7 @@ export function buildWorkshopRun(id: WorkshopId, params: Record<string, unknown>
           topic: str(params.topic),
           style,
           count: num(params.count),
+          ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
         }),
         title: `小红书内容工坊 · ${style}`,
       };

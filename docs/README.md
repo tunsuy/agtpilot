@@ -13,6 +13,7 @@
 | [eval-hillclimb-framework.md](./eval-hillclimb-framework.md) | 提案 | 内部评测与自动爬坡框架（借鉴 Anthropic eval/hillclimb 方法论，不引依赖） |
 | [industry-benchmark-evaluation.md](./industry-benchmark-evaluation.md) | 提案 | 外部基准评测接入：Gaia2 / BrowseComp-Plus / OSWorld-Verified / τ²-bench 选型与 adapter 设计 |
 | [decision-model-integration-notes.md](./decision-model-integration-notes.md) | 设计提案 | Jev 类决策模型集成：DecisionGateway 契约、D1–D4 决策点接入、安全红线 |
+| [workshop-scenario-loop.md](./workshop-scenario-loop.md) | 设计提案 | 工坊场景运营循环：场景档案 / 笔记包交付物 / 截图读数回流 / 发布到草稿托管模式（她只出判断、不出搬运） |
 | [cua-integration-notes.md](./cua-integration-notes.md) | 调研笔记 | trycua/cua 计算机使用栈的调研与集成可行性（未运行其代码，集成需锁版本） |
 | [personal-ai-landscape-insights.md](./personal-ai-landscape-insights.md) | 研究结论 / 路线图 | 2026 Personal AI 浪潮对 agtpilot 的启发与路线图（以 §5.4 批判性复核修订版为准） |
 

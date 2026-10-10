@@ -12,6 +12,7 @@ import {
   finalizeWithAnswer,
   resolveMission,
 } from './live-steps';
+import { resolveCronPrompt } from './cron-scenario';
 
 export interface AgentBackendState {
   missions: Mission[];
@@ -1181,6 +1182,25 @@ class AgentBackend {
             // 电子邮件 IMAP 收件:email_list / email_read(始终注入,凭证 execute 时按用户读取,未配置回退复用 SMTP 凭证)
             const { buildEmailImapTools } = await import('@/lib/email-imap');
             injectedTools.push(...buildEmailImapTools(uid));
+
+            // 小红书托管模式(scenario-loop P2):读工具登录过即注入;
+            // 存草稿工具仅在显式 opt-in + 风险已读时注入(dangerLevel high → 审批门)。
+            // 浏览器服务来自 plugin-browser 的 ctx.browser,与登录通道共享同一 Page
+            try {
+              const { buildXhsManagedTools } = await import('@/lib/xhs-managed');
+              const browserSvc = (this.ctx as any)?.browser;
+              const xhsTools = buildXhsManagedTools(uid, browserSvc);
+              if (xhsTools.length > 0) {
+                injectedTools.push(...xhsTools);
+                this.addTerminalLog(
+                  'system',
+                  `[XHS] 托管工具挂载: ${xhsTools.map((t: any) => t.name).join(' / ')}`,
+                  uid
+                );
+              }
+            } catch (e: any) {
+              this.addTerminalLog('stderr', `[XHS] 托管工具挂载异常: ${e?.message || e}`, uid);
+            }
             taskTools = [...(taskTools || []), ...injectedTools];
 
           } catch (e: any) {
@@ -1281,7 +1301,8 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 4. 【中途授权】：当任务确实需要某平台专用能力（如读写 Notion、管理滴答清单日程）但对应连接器未授权时，调用 connector_authorize（action=request，附 connectorId 与一句话理由）向用户发起授权请求 —— 用户会看到授权卡片，工具会等待结果：授权成功则返回新工具清单，用 mcp_call 按名字调用；用户跳过或超时则立即改用 browser_ 系列工具在网页上直接完成操作作为兜底，不要空等或放弃任务。不确定有哪些连接器时先用 connector_authorize（action=list）查看。
 5. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。
 6. 【步数经济】：多个互相独立的工具调用，请在同一轮一次性并行发出，不要逐个串行等待结果后再发下一个；任务看板（planner）由系统随工具执行成功自动推进，【不要】调用 planner_update_task 汇报进度（仅在需要标记某步骤失败时才使用）；预计两步以内的简单任务直接执行，不要创建规划看板。
-7. 【安静执行】：在工具调用前后不要反复输出“收到”“我先搜索”“我再继续”等过程播报；直接调用工具，由系统活动卡展示进度。只有需要用户补充信息、审批授权、报告不可恢复的阻塞，或给出最终交付时，才向用户输出完整消息。`, 
+7. 【安静执行】：在工具调用前后不要反复输出“收到”“我先搜索”“我再继续”等过程播报；直接调用工具，由系统活动卡展示进度。只有需要用户补充信息、审批授权、报告不可恢复的阻塞，或给出最终交付时，才向用户输出完整消息。
+8. 【小红书托管边界】：涉及用户小红书账号时 —— 读创作中心数据一律用 xhs_read_creator_data（只读）；把笔记存成草稿一律用 xhs_save_note_draft（需用户审批，终点是草稿箱）；任何情况下不得点击「发布」按钮 —— 发布永远由用户本人在小红书 App 内完成，这是平台合规红线。`,
           });
 
           if (result.success && result.messages) {
@@ -1462,9 +1483,12 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
         data: { jobId: jobInfo.id, userId, runCount: jobInfo.runCount, nextRun: jobInfo.nextRun },
       });
 
-      // 以任务归属用户的身份启动智能体生命周期执行
+      // 以任务归属用户的身份启动智能体生命周期执行。
+      // scenario 订阅任务(如小红书每周选题)触发时用最新档案重建 prompt,不用建订阅时的快照
       try {
-        await this.runMission(jobInfo.prompt, {
+        const { getUserScenarioProfiles } = require('@/lib/user-store');
+        const prompt = resolveCronPrompt(jobInfo, (key) => getUserScenarioProfiles(userId)[key]);
+        await this.runMission(prompt, {
           title: `【自动巡航】${jobInfo.name}`,
           userId,
         });
@@ -1511,8 +1535,11 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
       data: { jobId: jobInfo.id, userId, runCount: jobInfo.runCount },
     });
 
+    // 与定时触发同源:scenario 订阅任务手动触发也按最新档案重建 prompt
     try {
-      await this.runMission(jobInfo.prompt, {
+      const { getUserScenarioProfiles } = require('@/lib/user-store');
+      const prompt = resolveCronPrompt(jobInfo, (key) => getUserScenarioProfiles(userId)[key]);
+      await this.runMission(prompt, {
         title: `【自动巡航】${jobInfo.name}`,
         userId,
       });

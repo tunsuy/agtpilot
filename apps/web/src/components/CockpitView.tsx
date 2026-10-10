@@ -44,6 +44,8 @@ import {
   Plug,
 } from 'lucide-react';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
+import { NotePackageList } from './workshops/NotePackageCard';
+import { parseNotePackages } from '../lib/note-package';
 import {
   Mission,
   ViewportState,
@@ -721,6 +723,10 @@ export function CockpitView({
                     // 思考过程折叠态复用 expandedTools（流式期间默认展开，结束后可收起）
                     const reasoningKey = `${st.id}_reasoning`;
                     const reasoningOpen = expandedTools[reasoningKey] ?? isStreaming;
+                    // 笔记包(scenario-loop §3):流式期间不解析(文本不完整),流结束一次性切换,
+                    // 避免原始 markdown → 卡片的闪烁;解析失败则保持普通 markdown 渲染
+                    const parsedNote = st.answer && !isStreaming ? parseNotePackages(st.answer) : null;
+                    const noteResult = parsedNote && parsedNote.packages.length > 0 ? parsedNote : null;
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
@@ -780,15 +786,20 @@ export function CockpitView({
                               </div>
                             ) : (
                               /* 正文只渲染 answer（title 不再兜底当正文，避免"深度思考中…"大字空段） */
-                              st.answer && (
-                                <div className="prose prose-zinc prose-chat max-w-none break-words">
-                                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-                                    {st.answer}
-                                  </ReactMarkdown>
-                                  {isStreaming && (
-                                    <span className="inline-block w-1.5 h-3.5 bg-zinc-800 animate-pulse ml-0.5 align-text-bottom" />
-                                  )}
-                                </div>
+                              st.answer && noteResult ? (
+                                /* 小红书笔记包:字段级可复制卡片(复制整篇对齐发布页粘贴顺序) */
+                                <NotePackageList result={noteResult} />
+                              ) : (
+                                st.answer && (
+                                  <div className="prose prose-zinc prose-chat max-w-none break-words">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                                      {st.answer}
+                                    </ReactMarkdown>
+                                    {isStreaming && (
+                                      <span className="inline-block w-1.5 h-3.5 bg-zinc-800 animate-pulse ml-0.5 align-text-bottom" />
+                                    )}
+                                  </div>
+                                )
                               )
                             )}
 

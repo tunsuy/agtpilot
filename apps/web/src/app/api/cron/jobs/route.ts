@@ -3,6 +3,7 @@ import { auth } from '@/auth';
 import { getUserCronJobs, saveUserCronJob, deleteUserCronJob } from '@/lib/user-store';
 import { getNextCronRun, isValidCronPattern } from '@/lib/cron-utils';
 import { getAgentBackend } from '@/lib/agent-backend';
+import { normalizeCronScenario } from '@/lib/cron-scenario';
 
 export async function GET() {
   try {
@@ -60,7 +61,9 @@ export async function POST(req: NextRequest) {
       }
 
       const nextRun = getNextCronRun(trimmedPattern) || new Date(Date.now() + 3600 * 1000).toISOString();
-      const newJob = {
+      // scenario 订阅标记(白名单;触发时按最新档案重建 prompt,prompt 字段仅作展示快照)
+      const scenario = normalizeCronScenario(body.scenario);
+      const newJob: any = {
         id: `cron_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         name: name.trim(),
         pattern: trimmedPattern,
@@ -69,6 +72,7 @@ export async function POST(req: NextRequest) {
         status: 'active',
         nextRun,
       };
+      if (scenario) newJob.scenario = scenario;
       const jobs = saveUserCronJob(userId, newJob);
       // 同步注册到后台 Node.js 内存定时调度器
       backend.registerUserCronJob(userId, newJob);

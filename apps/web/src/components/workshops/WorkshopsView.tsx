@@ -10,11 +10,13 @@
  * - 表单提交/重跑 → buildWorkshopRun 生成结构化 Prompt → onRunPrompt 交给 Agent。
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Sparkles, Play, Clock, ArrowRight } from 'lucide-react';
+import { Sparkles, Play, Clock, ArrowRight, UserRoundPen } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../../types/agent';
 import { WORKSHOPS, WORKSHOP_CATEGORIES, getWorkshop, type WorkshopDef, type WorkshopId } from './registry';
 import { buildWorkshopRun } from './run';
 import { recordRun, recentRuns, relativeTime, type WorkshopRunRecord } from './history';
+import type { ScenarioProfile } from '../../lib/scenario-profile';
+import { ScenarioProfileWizard } from './ScenarioProfileWizard';
 import { ACCENTS } from './forms/shared';
 import { ContentWorkshopForm } from './forms/ContentWorkshopForm';
 import { EmailTriageForm } from './forms/EmailTriageForm';
@@ -30,8 +32,17 @@ interface WorkshopsViewProps {
   onOpenConnectors: () => void;
 }
 
+/** 表单组件统一 props:scenarioProfile/onEditProfile 仅有 profileSlot 的工坊使用 */
+interface WorkshopFormProps {
+  workshop: WorkshopDef;
+  onRun: WorkshopsViewProps['onRunPrompt'];
+  onClose: () => void;
+  scenarioProfile?: ScenarioProfile | null;
+  onEditProfile?: () => void;
+}
+
 /** id → 表单组件;新增工坊在此登记 */
-const FORMS: Record<WorkshopId, React.ComponentType<{ workshop: WorkshopDef; onRun: WorkshopsViewProps['onRunPrompt']; onClose: () => void }>> = {
+const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
   xhs: ContentWorkshopForm,
   weibo: ContentWorkshopForm,
   video_douyin: ContentWorkshopForm,
@@ -50,6 +61,25 @@ export function WorkshopsView({
   const [activeId, setActiveId] = useState<WorkshopId | null>(null);
   const [history, setHistory] = useState<WorkshopRunRecord[]>([]);
   const [tab, setTab] = useState<string>('all');
+
+  // 场景档案:null = 加载中(不阻塞开表单,当无档案);{} = 已加载但无档案(未登录/失败同样降级)
+  const [scenarioProfiles, setScenarioProfiles] = useState<Record<string, ScenarioProfile> | null>(null);
+  // 档案向导打开的槽位;与 activeId 互斥渲染(向导保存/跳过后才进表单)
+  const [wizardKey, setWizardKey] = useState<string | null>(null);
+  // 本会话内跳过过向导的槽位(不落盘,刷新后再给一次机会)
+  const [wizardDismissed, setWizardDismissed] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/scenario-profiles');
+        const data = await res.json();
+        if (data.success) setScenarioProfiles(data.profiles || {});
+        else setScenarioProfiles({});
+      } catch {
+        setScenarioProfiles({});
+      }
+    })();
+  }, []);
 
   // MCP 连接器状态:数据源状态点需要(与 ConnectorsView 同源 /api/connectors/mcp)
   const [mcpConnectors, setMcpConnectors] = useState<McpConnectorInfo[]>([]);
@@ -76,11 +106,32 @@ export function WorkshopsView({
 
   const activeWorkshop = activeId ? getWorkshop(activeId) : null;
   const ActiveForm = activeId ? FORMS[activeId] : null;
+  const activeProfile = activeWorkshop?.profileSlot ? scenarioProfiles?.[activeWorkshop.profileSlot] : undefined;
+
+  /** 重跑/表单共用:取当前档案(不用 localStorage 历史里的过期快照) */
+  const profileCtx = (def: WorkshopDef) =>
+    def.profileSlot && scenarioProfiles?.[def.profileSlot]
+      ? { scenarioProfile: scenarioProfiles[def.profileSlot] }
+      : undefined;
+
+  const handleStart = (w: WorkshopDef) => {
+    // 首次使用有档案槽位的工坊:先建档案(本会话跳过过则不再弹)
+    if (
+      w.profileSlot &&
+      scenarioProfiles &&
+      !scenarioProfiles[w.profileSlot] &&
+      !wizardDismissed.includes(w.profileSlot)
+    ) {
+      setWizardKey(w.profileSlot);
+      return;
+    }
+    setActiveId(w.id);
+  };
 
   const handleRerun = (record: WorkshopRunRecord) => {
     const def = getWorkshop(record.id);
     if (!def) return;
-    const run = buildWorkshopRun(def.id, record.params);
+    const run = buildWorkshopRun(def.id, record.params, profileCtx(def));
     recordRun(def.id, run.title, record.params);
     setHistory(recentRuns(20));
     onRunPrompt(run.prompt, run.title);
@@ -224,15 +275,26 @@ export function WorkshopsView({
                 </div>
 
                 <div className="pt-3 mt-1 border-t border-zinc-100 flex items-center justify-between">
-                  <span className="text-[10px] font-mono text-zinc-400">
+                  <span className="text-[10px] font-mono text-zinc-400 flex items-center gap-2">
                     {(() => {
                       const last = history.find((h) => h.id === w.id);
                       return last ? `上次 ${relativeTime(last.at)}` : '尚未使用';
                     })()}
+                    {w.profileSlot && scenarioProfiles?.[w.profileSlot] && (
+                      <button
+                        type="button"
+                        onClick={() => setWizardKey(w.profileSlot!)}
+                        className="flex items-center gap-0.5 text-violet-600 hover:text-violet-800 transition font-sans"
+                        title="编辑场景档案"
+                      >
+                        <UserRoundPen className="h-3 w-3" />
+                        <span>编辑档案</span>
+                      </button>
+                    )}
                   </span>
                   <button
                     type="button"
-                    onClick={() => setActiveId(w.id)}
+                    onClick={() => handleStart(w)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-medium transition shadow-xs ${accent.btn}`}
                   >
                     <Sparkles className="h-3 w-3" />
@@ -252,6 +314,29 @@ export function WorkshopsView({
           workshop={activeWorkshop}
           onRun={(prompt, title) => onRunPrompt(prompt, title)}
           onClose={() => setActiveId(null)}
+          scenarioProfile={activeProfile ?? null}
+          onEditProfile={activeWorkshop.profileSlot ? () => setWizardKey(activeWorkshop.profileSlot!) : undefined}
+        />
+      )}
+
+      {/* 场景档案向导:首次使用触发,或从卡片/表单回访编辑;保存/跳过后进入表单 */}
+      {wizardKey && (
+        <ScenarioProfileWizard
+          scenarioKey={wizardKey}
+          initial={scenarioProfiles?.[wizardKey] || null}
+          onComplete={(profile) => {
+            setScenarioProfiles((prev) => ({ ...(prev || {}), [wizardKey]: profile }));
+            setWizardKey(null);
+            const def = WORKSHOPS.find((w) => w.profileSlot === wizardKey);
+            if (def && !activeId) setActiveId(def.id);
+          }}
+          onSkip={() => {
+            setWizardDismissed((prev) => [...prev, wizardKey]);
+            setWizardKey(null);
+            const def = WORKSHOPS.find((w) => w.profileSlot === wizardKey);
+            if (def && !activeId) setActiveId(def.id);
+          }}
+          onClose={() => setWizardKey(null)}
         />
       )}
     </div>

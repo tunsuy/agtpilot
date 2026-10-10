@@ -19,10 +19,12 @@ import {
 } from 'lucide-react';
 import { CronJobItem } from '../types/agent';
 import { formatCronNextRun, isValidCronPattern } from '@/lib/cron-utils';
+import { buildXhsWeeklyTopicsPrompt } from '@/lib/xhs-workshop';
+import type { CronScenario } from '@/lib/cron-scenario';
 
 interface CronJobsViewProps {
   jobs: CronJobItem[];
-  onCreateJob: (job: { name: string; pattern: string; prompt: string }) => Promise<void>;
+  onCreateJob: (job: { name: string; pattern: string; prompt: string; scenario?: CronScenario }) => Promise<void>;
   onUpdateJob?: (job: { id: string; name: string; pattern: string; prompt: string }) => Promise<void>;
   onToggleJob: (id: string) => Promise<void>;
   onDeleteJob: (id: string) => Promise<void>;
@@ -43,8 +45,10 @@ export function CronJobsView({
   const [patternInput, setPatternInput] = useState('0 9 * * *');
   const [promptInput, setPromptInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  // 预设带来的场景标记(scenario 任务触发时按最新档案重建 prompt,表单里的 prompt 仅作展示快照)
+  const [presetScenario, setPresetScenario] = useState<CronScenario | null>(null);
 
-  const presets = [
+  const presets: Array<{ title: string; pattern: string; prompt: string; scenario?: CronScenario }> = [
     {
       title: '每日早报 (朝9点)',
       pattern: '0 9 * * *',
@@ -65,6 +69,13 @@ export function CronJobsView({
       pattern: '*/30 * * * *',
       prompt: '访问 GitHub 查看关注的开源项目的最新 release 与 issues，汇总关键更新。',
     },
+    {
+      // 场景订阅预设:触发时按「小红书」场景档案重建选题 prompt(下方 prompt 仅展示快照)
+      title: '小红书每周选题 (周一 9:00)',
+      pattern: '0 9 * * 1',
+      prompt: buildXhsWeeklyTopicsPrompt({ count: 7 }),
+      scenario: { key: 'xhs_weekly_topics', count: 7 },
+    },
   ];
 
   const handleOpenCreate = () => {
@@ -72,6 +83,7 @@ export function CronJobsView({
     setNameInput('');
     setPatternInput('0 9 * * *');
     setPromptInput('');
+    setPresetScenario(null);
     setIsModalOpen(true);
   };
 
@@ -80,6 +92,8 @@ export function CronJobsView({
     setNameInput(job.name);
     setPatternInput(job.pattern);
     setPromptInput(job.prompt);
+    // 编辑时保留原任务的 scenario 标记(触发时重建逻辑不变)
+    setPresetScenario(job.scenario || null);
     setIsModalOpen(true);
   };
 
@@ -100,6 +114,7 @@ export function CronJobsView({
           name: nameInput.trim(),
           pattern: patternInput.trim(),
           prompt: promptInput.trim(),
+          scenario: presetScenario || undefined,
         });
       }
       setNameInput('');
@@ -117,6 +132,7 @@ export function CronJobsView({
     setNameInput(preset.title);
     setPatternInput(preset.pattern);
     setPromptInput(preset.prompt);
+    setPresetScenario(preset.scenario || null);
   };
 
   return (
@@ -224,6 +240,14 @@ export function CronJobsView({
                         <span className="font-mono text-[11px] px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-700 border border-zinc-200/60">
                           {job.pattern}
                         </span>
+                        {job.scenario && (
+                          <span
+                            className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-violet-50 text-violet-700 border border-violet-200/60"
+                            title="订阅类任务:每次触发按最新场景档案重建指令"
+                          >
+                            按档案重建
+                          </span>
+                        )}
                         <span
                           className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
                             isActive

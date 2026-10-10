@@ -4,6 +4,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import {
   Globe,
   Terminal,
@@ -645,8 +646,8 @@ export function CockpitView({
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="rounded-2xl bg-white border border-zinc-200/80 p-5 shadow-2xs text-xs text-zinc-800 leading-relaxed relative">
-                            <div className="prose prose-zinc prose-xs max-w-none break-words">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            <div className="prose prose-zinc prose-chat max-w-none break-words">
+                              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
                                 {st.answer || st.title}
                               </ReactMarkdown>
                             </div>

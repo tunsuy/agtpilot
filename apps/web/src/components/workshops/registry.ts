@@ -17,12 +17,14 @@ import {
   TrendingUp,
   GraduationCap,
   Newspaper,
+  PenLine,
   type LucideIcon,
 } from 'lucide-react';
 
 export type WorkshopId =
   | 'xhs'
   | 'wechat_mp'
+  | 'zhihu'
   | 'weibo'
   | 'video_douyin'
   | 'video_bilibili'
@@ -106,6 +108,23 @@ export const WORKSHOPS: WorkshopDef[] = [
     note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议。满意的一篇点「投草稿箱」——经你逐次审批后写入公众号草稿箱(每日有次数上限),最终发布由你在公众平台后台人工完成,Agent 不碰任何发布/群发接口。凭证(AppID:AppSecret,需已认证公众号 + IP 白名单)在连接器页「微信公众号(草稿箱直连)」卡片配置,表单内可查看状态并测试连接。',
     profileSlot: 'wechat_mp',
     artifacts: [{ kind: 'article-package', label: '公众号文章包' }],
+  },
+  {
+    id: 'zhihu',
+    name: '知乎专栏工坊',
+    category: 'content',
+    desc: 'Agent 选题成稿存进知乎草稿箱,你逐次审批放行,发布由你在知乎人工完成',
+    icon: PenLine,
+    accent: 'violet',
+    deps: [
+      { id: 'newsnow', name: '全网热榜' },
+      { id: 'zhihu', name: '知乎官方 MCP' },
+      { id: 'twitterapi_io', name: 'X / Twitter' },
+      { id: 'exa', name: '网络搜索' },
+    ],
+    note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议(含话题)。满意的一篇点「存入知乎草稿」——经你逐次审批后填进知乎专栏编辑器并停在草稿箱(每日有次数上限,跨端可见),最终发布由你在知乎草稿箱人工完成,Agent 不碰任何发布动作。无需凭证:到连接器页「知乎」卡片扫码登录网页版并开启托管模式即可;知乎官方 MCP(搜索/热榜)可选配,用于选题调研。',
+    profileSlot: 'zhihu',
+    artifacts: [{ kind: 'article-package', label: '知乎文章包' }],
   },
   {
     id: 'weibo',

@@ -141,6 +141,8 @@ export function CockpitView({
   // 小红书托管写操作状态(连接器页 opt-in):笔记包「存入草稿箱」按钮的前提。
   // 判定与 xhs-managed 的 shouldInjectWriteTool 同规则(enabled + riskAckAt)
   const [xhsDraftEnabled, setXhsDraftEnabled] = useState(false);
+  // 知乎托管写操作状态(同规则):文章包「存入知乎草稿」按钮的前提
+  const [zhihuDraftEnabled, setZhihuDraftEnabled] = useState(false);
   useEffect(() => {
     (async () => {
       try {
@@ -151,6 +153,17 @@ export function CockpitView({
         }
       } catch {
         // 未登录/后端未就绪时静默:按钮不出现即可,不阻断会话渲染
+      }
+    })();
+    (async () => {
+      try {
+        const res = await fetch('/api/zhihu-managed');
+        const data = await res.json();
+        if (data.success) {
+          setZhihuDraftEnabled(Boolean(data.record?.enabled && data.record?.riskAckAt));
+        }
+      } catch {
+        // 同上:静默降级
       }
     })();
   }, []);
@@ -873,11 +886,16 @@ export function CockpitView({
                                   onRunMission={onRunMission}
                                 />
                               ) : st.answer && articleResult ? (
-                                /* 公众号文章包:先于笔记包判定(【摘要】互斥锚);投草稿走续聊 + 审批门 */
+                                /* 文章包:先于笔记包判定(【摘要】互斥锚);投草稿走续聊 + 审批门。
+                                   投递目标按任务标题判定(知乎专栏工坊 → zhihu,其余 → 公众号) */
                                 <ArticlePackageList
                                   result={articleResult}
                                   missionId={activeMissionId || currentMission?.id}
                                   onRunMission={onRunMission}
+                                  draftTarget={
+                                    (currentMission?.title || '').startsWith('知乎') ? 'zhihu' : 'wechat_mp'
+                                  }
+                                  draftEnabled={zhihuDraftEnabled}
                                 />
                               ) : st.answer && noteResult ? (
                                 /* 小红书笔记包:字段级可复制卡片 + 开启托管写操作后的「存草稿箱」(续聊 + 审批门) */

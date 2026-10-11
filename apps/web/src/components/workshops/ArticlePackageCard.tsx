@@ -1,12 +1,15 @@
 'use client';
 
 /**
- * 公众号文章包卡片(scenario-loop:草稿箱直投)
+ * 文章包卡片(公众号草稿箱直投 / 知乎浏览器托管存草稿)
  *
  * 把 parseArticlePackages 的结构化结果渲染成「字段级可复制」卡片:
  * 标题候选逐条复制+选中(投草稿用选中标题)、摘要/正文独立复制、一键整卡复制。
- * 底部「投草稿箱」→ 续聊同一 mission,指示 Agent 调 wechat_mp_create_draft
+ * 底部投草稿按钮 → 续聊同一 mission,按 draftTarget 指示 Agent 调
+ * wechat_mp_create_draft / zhihu_save_article_draft
  * (dangerLevel high → 编排器审批门,用户逐次确认);发布永远人工,卡片不碰发布。
+ * 知乎目标下 draftEnabled=false(托管模式未开)时不给按钮,只给引导提示
+ * ——与 NotePackageList 的小红书托管门同款规则。
  */
 import React, { useState } from 'react';
 import { Copy, Check, FileText, ChevronDown, SendHorizonal } from 'lucide-react';
@@ -14,6 +17,7 @@ import { copyToClipboard } from '../../utils/nativeBridge';
 import {
   buildArticlePackageCopyText,
   buildArticlePackageReplyText,
+  type ArticleDraftTarget,
   type ArticlePackage,
   type ArticlePackageParseResult,
 } from '../../lib/article-package';
@@ -52,10 +56,15 @@ function ArticlePackageCard({
   pkg,
   missionId,
   onRunMission,
+  draftTarget = 'wechat_mp',
+  draftEnabled = true,
 }: {
   pkg: ArticlePackage;
   missionId?: string | null;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
+  draftTarget?: ArticleDraftTarget;
+  /** 仅知乎目标使用:false = 托管模式未开,不出按钮只出引导(公众号走凭证内置引导,不经过此门) */
+  draftEnabled?: boolean;
 }) {
   const [selectedTitle, setSelectedTitle] = useState(0);
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
@@ -67,10 +76,12 @@ function ArticlePackageCard({
     setTimeout(() => setCopyState('idle'), 2000);
   };
 
-  /** 投草稿箱:续聊同一 mission,Agent 调 wechat_mp_create_draft(需我审批) */
+  /** 存草稿:续聊同一 mission,Agent 按目标平台调存草稿工具(需我审批) */
   const handleDraft = () => {
-    onRunMission(buildArticlePackageReplyText(pkg, selectedTitle), undefined, missionId || undefined);
+    onRunMission(buildArticlePackageReplyText(pkg, selectedTitle, draftTarget), undefined, missionId || undefined);
   };
+
+  const canDraft = draftTarget !== 'zhihu' || draftEnabled;
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
@@ -184,15 +195,23 @@ function ArticlePackageCard({
           </div>
         )}
 
-        {/* 投草稿箱:续聊本 mission → Agent 调 create_draft(high 审批门);发布永远人工 */}
-        <button
-          type="button"
-          onClick={handleDraft}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition shadow-xs"
-        >
-          <SendHorizonal className="h-3.5 w-3.5" />
-          投草稿箱(经我审批后写入,发布由我在后台人工完成)
-        </button>
+        {/* 存草稿:续聊本 mission → Agent 按目标调存草稿工具(high 审批门);发布永远人工 */}
+        {canDraft ? (
+          <button
+            type="button"
+            onClick={handleDraft}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition shadow-xs"
+          >
+            <SendHorizonal className="h-3.5 w-3.5" />
+            {draftTarget === 'zhihu'
+              ? '存入知乎草稿(经我审批后填入,发布由我在知乎人工完成)'
+              : '投草稿箱(经我审批后写入,发布由我在后台人工完成)'}
+          </button>
+        ) : (
+          <p className="px-3 py-2 rounded-xl bg-zinc-50 border border-zinc-200 text-[11px] text-zinc-500 leading-relaxed">
+            想直接存进知乎草稿箱?到连接器页「知乎」卡片扫码登录并开启托管模式后,这里就会出现「存入知乎草稿」按钮;现在可以先「复制全文」手动粘贴。
+          </p>
+        )}
       </div>
     </div>
   );
@@ -203,17 +222,28 @@ export function ArticlePackageList({
   result,
   missionId,
   onRunMission,
+  draftTarget = 'wechat_mp',
+  draftEnabled = true,
 }: {
   result: ArticlePackageParseResult;
   missionId?: string | null;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
+  draftTarget?: ArticleDraftTarget;
+  draftEnabled?: boolean;
 }) {
   const [showFallback, setShowFallback] = useState(false);
 
   return (
     <div className="space-y-3">
       {result.packages.map((pkg) => (
-        <ArticlePackageCard key={pkg.index} pkg={pkg} missionId={missionId} onRunMission={onRunMission} />
+        <ArticlePackageCard
+          key={pkg.index}
+          pkg={pkg}
+          missionId={missionId}
+          onRunMission={onRunMission}
+          draftTarget={draftTarget}
+          draftEnabled={draftEnabled}
+        />
       ))}
       {result.fallback && (
         <div className="rounded-xl border border-zinc-200 overflow-hidden">

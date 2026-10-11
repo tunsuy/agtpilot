@@ -384,6 +384,58 @@ export function ConnectorsView({
     return `${Math.floor(days / 30)} 个月前`;
   };
 
+  // ---- 知乎网页版登录 + 托管模式(与小红书同构;zhihu-managed) ----
+  const [zhihuStatus, setZhihuStatus] = useState<{
+    record: XhsManagedRecord | null;
+    dailyLimit: number;
+    todayCount: number;
+  } | null>(null);
+  const [showZhihuLogin, setShowZhihuLogin] = useState(false);
+  const [showZhihuRisk, setShowZhihuRisk] = useState(false);
+  const [zhihuRiskAck, setZhihuRiskAck] = useState(false);
+  const [zhihuBusy, setZhihuBusy] = useState(false);
+  const [zhihuNotice, setZhihuNotice] = useState('');
+
+  const loadZhihuStatus = async () => {
+    try {
+      const res = await fetch('/api/zhihu-managed');
+      if (res.status === 401) return; // 未登录静默
+      const data = await res.json();
+      if (data.success) {
+        setZhihuStatus({ record: data.record, dailyLimit: data.dailyLimit, todayCount: data.todayCount });
+      }
+    } catch {
+      // 后端未就绪时静默
+    }
+  };
+  useEffect(() => {
+    loadZhihuStatus();
+  }, []);
+
+  const zhihuPost = async (body: Record<string, unknown>): Promise<boolean> => {
+    setZhihuBusy(true);
+    setZhihuNotice('');
+    try {
+      const res = await fetch('/api/zhihu-managed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setZhihuStatus((prev) => (prev ? { ...prev, record: data.record } : prev));
+        return true;
+      }
+      setZhihuNotice(data.error || '操作失败');
+      return false;
+    } catch (e: any) {
+      setZhihuNotice(e?.message || '网络错误');
+      return false;
+    } finally {
+      setZhihuBusy(false);
+    }
+  };
+
   // ---- Tab 归属:all=全部;other=未策展兜底;其余按 CONNECTOR_TABS 的 ids ----
   const tabIds = tab === 'all' ? null : CONNECTOR_TABS.find((t) => t.key === tab)?.ids ?? null;
   const inTab = (id: string) =>
@@ -803,6 +855,32 @@ export function ConnectorsView({
                       连接异常: {app.lastError}
                     </p>
                   )}
+
+                  {/* 知乎专属:网页版登录徽标 + 托管模式状态(浏览器托管存草稿,与 MCP 凭证互不依赖) */}
+                  {app.id === 'zhihu' && (
+                    <div className="space-y-1.5 mb-2">
+                      {(() => {
+                        const badge = loginBadgeInfo(zhihuStatus?.record || undefined);
+                        return badge.loggedIn ? (
+                          <p className={`text-[10px] leading-relaxed ${badge.maybeStale ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {badge.maybeStale
+                              ? `网页版登录可能已过期(${daysAgoText(badge.lastLoginAt!)}登录),建议重新扫码`
+                              : `网页版已登录 · ${daysAgoText(badge.lastLoginAt!)}`}
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-zinc-400 leading-relaxed">
+                            网页版未登录 —— 扫码后 Agent 可把专栏文章存进知乎草稿箱(跨端可见)
+                          </p>
+                        );
+                      })()}
+                      {zhihuStatus?.record?.enabled && (
+                        <p className="text-[10px] text-zinc-500 leading-relaxed">
+                          托管模式已开启:存草稿每日上限 {zhihuStatus.dailyLimit} 次,今日已用 {zhihuStatus.todayCount} 次,全部操作落审计
+                        </p>
+                      )}
+                      {zhihuNotice && <p className="text-[10px] text-red-500 leading-relaxed">{zhihuNotice}</p>}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-3 border-t border-zinc-100 flex flex-wrap items-center justify-between gap-y-2">
@@ -811,6 +889,63 @@ export function ConnectorsView({
                   </span>
 
                   <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    {/* 知乎专属:网页版扫码登录 + 托管模式开关(浏览器托管,与 MCP token 互不依赖) */}
+                    {app.id === 'zhihu' && (
+                      <>
+                        <button
+                          onClick={() => setShowZhihuLogin(true)}
+                          className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition shadow-2xs"
+                          title="打开服务器浏览器的知乎登录页,用手机 App 扫码;登录态只落本服务"
+                        >
+                          <QrCode className="h-3 w-3" />
+                          <span>网页版扫码登录</span>
+                        </button>
+                        {/* 接管浏览器:投射服务器的已登录浏览器,用户亲自核对/点发布 ——
+                            知乎草稿存服务端跨端可见,发布权归人是唯一闭环 */}
+                        <button
+                          onClick={() =>
+                            window.open(
+                              '/takeover?url=https%3A%2F%2Fwww.zhihu.com%2Fcreator',
+                              '_blank',
+                              'noopener,width=1180,height=860'
+                            )
+                          }
+                          className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition shadow-2xs"
+                          title="接管服务器上已登录的浏览器:直达知乎创作中心草稿箱,画面实时投射,鼠标键盘由你操控(适合人工点发布)"
+                        >
+                          <MonitorPlay className="h-3 w-3" />
+                          <span>接管浏览器</span>
+                        </button>
+                        {zhihuStatus?.record?.enabled ? (
+                          <button
+                            onClick={() => void zhihuPost({ action: 'disable' })}
+                            disabled={zhihuBusy}
+                            className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-50"
+                            title="关闭托管:Agent 不再执行存草稿(登录态保留)"
+                          >
+                            关闭托管
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setZhihuRiskAck(false);
+                              setZhihuNotice('');
+                              setShowZhihuRisk(true);
+                            }}
+                            disabled={zhihuBusy || !zhihuStatus?.record?.lastLoginAt}
+                            className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-40"
+                            title={
+                              zhihuStatus?.record?.lastLoginAt
+                                ? '开启后 Agent 可把文章填进知乎专栏编辑器并停在草稿箱(需审批,有限频,落审计)'
+                                : '先完成网页版扫码登录,才能开启托管模式'
+                            }
+                          >
+                            托管模式·存草稿
+                          </button>
+                        )}
+                      </>
+                    )}
+
                     {app.authType === 'oauth' && (
                       <a
                         href={`/api/connectors/mcp/start?connector=${app.id}`}
@@ -1100,6 +1235,65 @@ export function ConnectorsView({
           onClose={() => setShowXhsLogin(false)}
           onLoggedIn={() => void loadXhsStatus()}
         />
+      )}
+
+      {/* 知乎网页版扫码登录弹窗(同一状态机,platform=zhihu) */}
+      {showZhihuLogin && (
+        <XhsWebLoginModal
+          platform="zhihu"
+          onClose={() => setShowZhihuLogin(false)}
+          onLoggedIn={() => void loadZhihuStatus()}
+        />
+      )}
+
+      {/* 知乎托管模式风险明示弹窗(与小红书同款:开启前的强制确认) */}
+      {showZhihuRisk && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl space-y-4">
+            <h3 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-amber-500" />
+              开启「托管模式 · 存草稿」
+            </h3>
+            <div className="space-y-2 text-[11px] text-zinc-600 leading-relaxed">
+              <p>开启后,Agent 可以替你把文章填进知乎专栏编辑器,停在平台的服务端自动保存 —— 终点是知乎草稿箱(跨端可见)。请知悉:</p>
+              <ul className="list-disc pl-4 space-y-1">
+                <li><b>风控灰色地带</b>:平台对自动化操作的态度随时可能变化,存在账号被限流/风控的风险,由你自行承担;</li>
+                <li><b>每日上限</b>:存草稿每天至多 {zhihuStatus?.dailyLimit ?? 3} 次(超出直接拒绝);</li>
+                <li><b>操作落审计</b>:每次存草稿(含成败)都会记录在本服务的审计日志;</li>
+                <li><b>发布永远归你</b>:发布按钮被代码级围栏永久拦截,Agent 只能存草稿,发布由你本人在知乎草稿箱内完成。</li>
+              </ul>
+            </div>
+            <label className="flex items-start gap-2 text-xs text-zinc-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={zhihuRiskAck}
+                onChange={(e) => setZhihuRiskAck(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>我已了解上述风险,愿意开启托管模式</span>
+            </label>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowZhihuRisk(false)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!zhihuRiskAck || zhihuBusy}
+                onClick={async () => {
+                  const ok = await zhihuPost({ action: 'enable', riskAcknowledged: true });
+                  if (ok) setShowZhihuRisk(false);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-medium transition shadow-xs"
+              >
+                {zhihuBusy ? '开启中…' : '开启托管模式'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 托管模式风险明示弹窗(scenario-loop P2 模块 2:开启前的强制确认) */}

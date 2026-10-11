@@ -1,22 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getAgentBackend } from '@/lib/agent-backend';
-import { markXhsLoginAt } from '@/lib/user-store';
+import { markXhsLoginAt, markZhihuLoginAt } from '@/lib/user-store';
 import {
   LOGIN_POLL_INTERVAL_MS,
   LOGIN_TIMEOUT_MS,
+  LOGIN_PLATFORMS,
   startBrowserLogin,
   subscribeLoginEvents,
   cancelBrowserLogin,
   getLoginSession,
   type LoginDeps,
   type LoginEvent,
+  type LoginPlatform,
 } from '@/lib/browser-login';
 
 export const dynamic = 'force-dynamic';
 
-/** 真实环境依赖:plugin-browser 的 ctx.browser + user-store 登录时间落盘 */
-async function realDeps(): Promise<LoginDeps> {
+/** 真实环境依赖:plugin-browser 的 ctx.browser + user-store 登录时间落盘(按平台落各自字段) */
+async function realDeps(platform: LoginPlatform): Promise<LoginDeps> {
   const backend = getAgentBackend();
   await backend.whenReady();
   const browser = backend.ctx?.browser as LoginDeps['browser'];
@@ -26,15 +28,16 @@ async function realDeps(): Promise<LoginDeps> {
   return {
     browser,
     onLoginSuccess: (userId) => {
-      markXhsLoginAt(userId);
+      if (platform === 'zhihu') markZhihuLoginAt(userId);
+      else markXhsLoginAt(userId);
     },
     pollIntervalMs: LOGIN_POLL_INTERVAL_MS,
     timeoutMs: LOGIN_TIMEOUT_MS,
   };
 }
 
-/** POST:发起登录会话(同用户已有进行中会话 → 409 带既有 sessionId) */
-export async function POST() {
+/** POST:发起登录会话(?platform=xhs|zhihu,缺省 xhs;同用户已有进行中会话 → 409 带既有 sessionId) */
+export async function POST(req: NextRequest) {
   try {
     const session = await auth();
     const userId = session?.user?.id;
@@ -42,9 +45,12 @@ export async function POST() {
       return NextResponse.json({ success: false, error: 'Unauthorized: 请先登录' }, { status: 401 });
     }
 
+    const platformParam = req.nextUrl.searchParams.get('platform') || 'xhs';
+    const platform: LoginPlatform = platformParam in LOGIN_PLATFORMS ? (platformParam as LoginPlatform) : 'xhs';
+
     let deps: LoginDeps;
     try {
-      deps = await realDeps();
+      deps = await realDeps(platform);
     } catch (err: any) {
       return NextResponse.json({ success: false, error: err.message }, { status: 503 });
     }
@@ -55,7 +61,7 @@ export async function POST() {
       (m) => m.userId === userId && m.status === 'ACTIVE'
     );
 
-    const result = startBrowserLogin(userId, deps);
+    const result = startBrowserLogin(userId, deps, platform);
     if ('conflict' in result) {
       return NextResponse.json(
         { success: false, error: '已有进行中的登录会话', sessionId: result.sessionId },

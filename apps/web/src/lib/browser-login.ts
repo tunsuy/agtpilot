@@ -1,9 +1,9 @@
 /**
- * 小红书网页版扫码登录状态机(scenario-loop P2 模块 1)。
+ * 平台网页版扫码登录状态机(scenario-loop P2 模块 1;小红书 + 知乎)。
  *
  * 远程部署形态:浏览器跑在服务器(无头),登录二维码实时截图回传前端,
- * 用户用手机小红书 App 扫码 —— 登录态落在 per-user 持久化 profile 目录,
- * 之后任务工具(xhs_read_creator_data / xhs_save_note_draft)与登录共享同一 Page。
+ * 用户用手机 App 扫码 —— 登录态落在 per-user 持久化 profile 目录,
+ * 之后任务工具(xhs_save_note_draft / zhihu_save_article_draft 等)与登录共享同一 Page。
  *
  * 可测性:浏览器服务/时钟/等待全部依赖注入,mock ctx.browser 即可覆盖
  * 已登录短路、cookie 命中、超时、同用户 409、lastFrame 补发等分支。
@@ -51,6 +51,59 @@ export const LOGIN_TIMEOUT_MS = Number(process.env.AGTPILOT_BROWSER_LOGIN_TIMEOU
 export const LOGIN_SETTLE_MS = 2000;
 /** 终态后 session 保留时长(晚连的 SSE 仍可回放 done) */
 export const LOGIN_SESSION_RETENTION_MS = 60_000;
+
+/** 支持的登录平台(每平台一套站点配置;新增平台只加配置,不改状态机) */
+export type LoginPlatform = 'xhs' | 'zhihu';
+
+export interface LoginPlatformConfig {
+  appName: string;
+  /** 登录起始页(goto 目标;未登录时停在这里等扫码) */
+  startUrl: string;
+  /** cookie 判定用的域名(传给 hasCookies) */
+  cookieDomain: string;
+  /** 登录态 cookie(命中任一即登录) */
+  cookieNames: string[];
+  /** URL 含此模式 = 仍在登录流程(未完成) */
+  loginUrlHint: RegExp;
+  openingDetail: string;
+  waitingDetail: string;
+  /** 扫码态判定文案(可见 = 已处于二维码视图;缺省 = 不做扫码态切换) */
+  qrModeText?: string;
+  /** 非扫码态判定(该输入框可见 = 表单登录视图) */
+  smsInputSelector?: string;
+  /** 切到扫码态的点击目标 */
+  qrSwitchSelector?: string;
+}
+
+export const LOGIN_PLATFORMS: Record<LoginPlatform, LoginPlatformConfig> = {
+  xhs: {
+    appName: '小红书',
+    startUrl: XHS_CREATOR_HOME,
+    cookieDomain: XHS_CREATOR_HOME,
+    cookieNames: XHS_LOGIN_COOKIE_NAMES,
+    loginUrlHint: XHS_LOGIN_URL_HINT,
+    openingDetail: '正在打开小红书创作平台…',
+    waitingDetail: '请用小红书 App 扫描页面中的二维码',
+    qrModeText: XHS_QR_MODE_TEXT,
+    smsInputSelector: XHS_SMS_INPUT_SELECTOR,
+    qrSwitchSelector: XHS_QR_SWITCH_SELECTOR,
+  },
+  zhihu: {
+    appName: '知乎',
+    /** ⚠️ 待真实账号实测:登录起始页 / cookie / 扫码切换选择器,实测后只改这里 */
+    startUrl: 'https://www.zhihu.com/signin',
+    cookieDomain: 'https://www.zhihu.com/',
+    /** z_c0 是知乎主登录态 cookie(登录后跨 zhihu.com 域下发) */
+    cookieNames: ['z_c0'],
+    loginUrlHint: /signin|login/i,
+    openingDetail: '正在打开知乎登录页…',
+    waitingDetail: '请用知乎 App 扫描页面中的二维码',
+    /** 知乎登录页默认常为扫码视图(「打开知乎App扫码」),文本命中即短路 */
+    qrModeText: '扫码',
+    smsInputSelector: 'input[placeholder*="手机号"]',
+    qrSwitchSelector: 'text=扫码登录',
+  },
+};
 
 export type LoginPhase = 'starting' | 'opening' | 'waiting' | 'confirming' | 'success' | 'timeout' | 'cancelled' | 'error';
 
@@ -155,33 +208,36 @@ function emit(session: LoginSession, event: LoginEvent) {
   }
 }
 
-function isLoginUrl(url: string): boolean {
-  return XHS_LOGIN_URL_HINT.test(url || '');
+function isLoginUrl(url: string, hint: RegExp = XHS_LOGIN_URL_HINT): boolean {
+  return hint.test(url || '');
 }
 
 /**
  * 登录判定:cookie 命中 + 当前 URL 已离开登录流程。
- * (⚠️ cookie 名与 URL 形态待实测,集中在文件头常量)
+ * (⚠️ cookie 名与 URL 形态待实测,集中在文件头常量/平台配置表)
  */
 export function checkLoginState(
   hasCookies: boolean,
-  currentUrl: string
+  currentUrl: string,
+  loginUrlHint?: RegExp
 ): boolean {
-  return hasCookies && !isLoginUrl(currentUrl);
+  return hasCookies && !isLoginUrl(currentUrl, loginUrlHint);
 }
 
 /**
- * 登录页默认停在「短信登录」表单,而扫码通道要的是二维码视图:
- * 登录卡挂载后若手机号输入框可见,点击卡右上角角标切到「APP扫一扫登录」。
+ * 登录页默认可能停在「短信/密码登录」表单,而扫码通道要的是二维码视图:
+ * 登录卡挂载后若手机号输入框可见,点击切换入口切到「App 扫码登录」。
  * 尽力而为:站方改版导致选择器失配时返回 false、不抛错,帧流原样展示页面,人工仍可自救。
  * 返回 true = 已确认处于扫码态(含站方本就默认扫码);false = 未确认(卡未挂载/改版/能力缺失)。
  */
 export async function ensureQrLoginMode(
   page: PageLike,
   sleep: (ms: number) => Promise<void>,
-  opts?: { mountWaitMs?: number; switchWaitMs?: number; tickMs?: number }
+  opts?: { mountWaitMs?: number; switchWaitMs?: number; tickMs?: number; cfg?: LoginPlatformConfig }
 ): Promise<boolean> {
   if (!page.isVisible || !page.click) return false;
+  const cfg = opts?.cfg || LOGIN_PLATFORMS.xhs;
+  if (!cfg.qrModeText || !cfg.smsInputSelector || !cfg.qrSwitchSelector) return false;
   const tick = opts?.tickMs ?? 500;
   const visible = async (sel: string) => {
     try {
@@ -191,21 +247,21 @@ export async function ensureQrLoginMode(
       return false;
     }
   };
-  const qrMarker = `text=${XHS_QR_MODE_TEXT}`;
+  const qrMarker = `text=${cfg.qrModeText}`;
 
   // 登录卡客户端渲染:等到两种形态之一出现才算挂载
   const mountDeadline = Date.now() + (opts?.mountWaitMs ?? QR_MOUNT_WAIT_MS);
   let smsVisible = false;
   while (Date.now() < mountDeadline) {
     if (await visible(qrMarker)) return true; // 站方本就默认扫码态
-    smsVisible = await visible(XHS_SMS_INPUT_SELECTOR);
+    smsVisible = await visible(cfg.smsInputSelector);
     if (smsVisible) break;
     await sleep(tick);
   }
   if (!smsVisible) return false;
 
   try {
-    await page.click(XHS_QR_SWITCH_SELECTOR, { timeout: 5000 });
+    await page.click(cfg.qrSwitchSelector, { timeout: 5000 });
   } catch {
     return false;
   }
@@ -222,10 +278,13 @@ export async function ensureQrLoginMode(
 /**
  * 启动登录会话。同用户已有进行中的会话 → 返回 conflict(路由层转 409)。
  * 状态机异步自驱动,调用方拿到 sessionId 后经 SSE 订阅事件。
+ * platform 缺省 xhs(向后兼容旧调用/旧路由);同用户跨平台也共享互斥
+ * (登录 Page 每用户只有一个,一次只能开一场扫码)。
  */
 export function startBrowserLogin(
   userId: string,
-  deps: LoginDeps
+  deps: LoginDeps,
+  platform: LoginPlatform = 'xhs'
 ): { sessionId: string } | { conflict: true; sessionId: string } {
   const existing = userSessionIds.get(userId);
   if (existing && sessions.has(existing) && !sessions.get(existing)!.final) {
@@ -245,11 +304,12 @@ export function startBrowserLogin(
   userSessionIds.set(userId, session.sessionId);
 
   // 状态机自驱动(不阻塞调用方;错误全部收敛为终态事件)
-  void drive(session, deps).catch(() => {});
+  void drive(session, deps, platform).catch(() => {});
   return { sessionId: session.sessionId };
 }
 
-async function drive(session: LoginSession, deps: LoginDeps) {
+async function drive(session: LoginSession, deps: LoginDeps, platform: LoginPlatform) {
+  const cfg = LOGIN_PLATFORMS[platform] || LOGIN_PLATFORMS.xhs;
   const now = deps.now || (() => Date.now());
   const sleep = deps.sleep || ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const pollMs = deps.pollIntervalMs ?? LOGIN_POLL_INTERVAL_MS;
@@ -281,14 +341,15 @@ async function drive(session: LoginSession, deps: LoginDeps) {
 
     if (session.cancelRequested) return finish('cancelled');
 
-    emit(session, { type: 'status', phase: 'opening', detail: '正在打开小红书创作平台…', ts: now() });
-    await page.goto(XHS_CREATOR_HOME, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    emit(session, { type: 'status', phase: 'opening', detail: cfg.openingDetail, ts: now() });
+    await page.goto(cfg.startUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     // 已登录短路:profile 里本来就有有效会话(如 30 天内扫过)
     if (
       checkLoginState(
-        await deps.browser.hasCookies(session.userId, XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES),
-        page.url()
+        await deps.browser.hasCookies(session.userId, cfg.cookieDomain, cfg.cookieNames),
+        page.url(),
+        cfg.loginUrlHint
       )
     ) {
       emit(session, { type: 'status', phase: 'confirming', detail: '检测到已有登录态,正在确认…', ts: now() });
@@ -299,16 +360,17 @@ async function drive(session: LoginSession, deps: LoginDeps) {
       return finish('success', '浏览器已保存登录态,无需重复扫码');
     }
 
-    // 登录页默认是短信登录表单:切到扫码态,用户帧流里看到的才是二维码(尽力而为,失败不阻断)
+    // 登录页可能默认停在表单登录:切到扫码态,用户帧流里看到的才是二维码(尽力而为,失败不阻断)
     await ensureQrLoginMode(page, sleep, {
       mountWaitMs: deps.qrMountWaitMs ?? QR_MOUNT_WAIT_MS,
       switchWaitMs: deps.qrSwitchWaitMs ?? QR_SWITCH_WAIT_MS,
+      cfg,
     });
     if (session.cancelRequested) return finish('cancelled');
 
     emit(
       session,
-      { type: 'status', phase: 'waiting', detail: '请用小红书 App 扫描页面中的二维码', ts: now() }
+      { type: 'status', phase: 'waiting', detail: cfg.waitingDetail, ts: now() }
     );
     // 轮询:推帧 + 登录判定,直到命中 / 超时 / 取消
     const startedAt = now();
@@ -336,10 +398,10 @@ async function drive(session: LoginSession, deps: LoginDeps) {
       );
 
       const hasCookies = await deps.browser
-        .hasCookies(session.userId, XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES)
+        .hasCookies(session.userId, cfg.cookieDomain, cfg.cookieNames)
         .catch(() => false);
 
-      if (checkLoginState(hasCookies, frame.url)) {
+      if (checkLoginState(hasCookies, frame.url, cfg.loginUrlHint)) {
         emit(session, { type: 'status', phase: 'confirming', detail: '扫码成功,正在确认登录…', ts: now() });
         await sleep(settleMs);
         if (session.cancelRequested) {

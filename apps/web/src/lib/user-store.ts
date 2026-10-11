@@ -45,6 +45,8 @@ export interface UserScopedData {
   scenarioProfiles?: Record<string, ScenarioProfile>;
   /** 小红书托管模式开关与登录状态(scenario-loop P2;opt-in 默认关闭,零迁移) */
   xhsManaged?: XhsManagedRecord;
+  /** 知乎托管模式开关与登录状态(与 xhsManaged 同构;opt-in 默认关闭,零迁移) */
+  zhihuManaged?: ZhihuManagedRecord;
   /** 写操作审计(浏览器存草稿/公众号官方 API 投草稿等;上限 200 条滚动,最近在前) */
   browserAudit?: BrowserAuditEntry[];
   updatedAt: number;
@@ -62,6 +64,12 @@ export interface XhsManagedRecord {
   riskAckAt?: number;
   lastLoginAt?: number;
 }
+
+/**
+ * 知乎托管模式记录(与小红书同构):opt-in + 风险已读 + 扫码登录时间。
+ * 每日存草稿上限缺省 3(可用 AGTPILOT_ZHIHU_DRAFT_DAILY_LIMIT 调整)。
+ */
+export type ZhihuManagedRecord = XhsManagedRecord;
 
 /** 浏览器写操作审计条目:谁在何时用哪个工具对哪个页面做了什么、结果如何(成败都落) */
 export interface BrowserAuditEntry {
@@ -486,6 +494,26 @@ export function markXhsLoginAt(userId: string) {
   data.xhsManaged = { enabled: false, ...(data.xhsManaged || {}), lastLoginAt: Date.now() };
   saveUserData(data);
   return data.xhsManaged;
+}
+
+// 知乎托管模式:与小红书三件套同构(开关/风险已读/登录时间)
+export function getZhihuManaged(userId: string): ZhihuManagedRecord | undefined {
+  return getUserData(userId).zhihuManaged;
+}
+
+export function saveZhihuManaged(userId: string, record: ZhihuManagedRecord): ZhihuManagedRecord {
+  const data = getUserData(userId);
+  data.zhihuManaged = { ...data.zhihuManaged, ...record };
+  saveUserData(data);
+  return data.zhihuManaged;
+}
+
+/** 记录知乎网页版登录成功时间(登录态本体在浏览器 profile 目录,这里只记时间) */
+export function markZhihuLoginAt(userId: string) {
+  const data = getUserData(userId);
+  data.zhihuManaged = { enabled: false, ...(data.zhihuManaged || {}), lastLoginAt: Date.now() };
+  saveUserData(data);
+  return data.zhihuManaged;
 }
 
 /** 浏览器写操作审计:只增不改,最近在前,上限 200 条滚动 */

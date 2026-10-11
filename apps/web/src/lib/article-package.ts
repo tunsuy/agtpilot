@@ -156,13 +156,28 @@ export function buildArticlePackageCopyText(pkg: ArticlePackage, titleIndex = 0)
   return [title, pkg.digest, pkg.body].filter(Boolean).join('\n\n');
 }
 
+/** 文章包「存草稿」的投递目标(公众号官方 API / 知乎浏览器托管) */
+export type ArticleDraftTarget = 'wechat_mp' | 'zhihu';
+
 /**
- * 「投草稿箱」续聊回复文本:指示 Agent 调用 wechat_mp_create_draft,
- * title/digest/markdown 逐字内嵌(参数零漂移,不依赖上下文回读)。
+ * 「投草稿箱」续聊回复文本:指示 Agent 调用目标平台的存草稿工具,
+ * 参数逐字内嵌(零漂移,不依赖上下文回读)。
  * 工具为 dangerLevel high → 编排器审批门,用户逐次确认后才真正写入。
  */
-export function buildArticlePackageReplyText(pkg: ArticlePackage, titleIndex = 0): string {
+export function buildArticlePackageReplyText(
+  pkg: ArticlePackage,
+  titleIndex = 0,
+  target: ArticleDraftTarget = 'wechat_mp'
+): string {
   const title = pkg.titles[Math.min(Math.max(titleIndex, 0), pkg.titles.length - 1)] || '';
+  if (target === 'zhihu') {
+    return `请把下面这篇文章存入我的知乎草稿:调用 zhihu_save_article_draft 工具(title/body 严格按下文填写;正文以纯文本填入知乎专栏编辑器,Markdown 记号不排版,复杂格式我接管后调整)。调用前需经我审批确认;发布仍由我在知乎草稿箱人工完成,不要点击任何发布按钮或调用发布类接口。
+
+title:${title}
+
+body:
+${pkg.body}`;
+  }
   return `请把下面这篇公众号文章投入我的草稿箱:调用 wechat_mp_create_draft 工具(title/digest/markdown 严格按下文填写,不传 cover_url,封面自动生成)。调用前需经我审批确认;发布仍由我在公众平台后台人工完成,不要调用任何发布/群发类接口。
 
 title:${title}

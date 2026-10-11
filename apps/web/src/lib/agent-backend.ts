@@ -1241,6 +1241,24 @@ class AgentBackend {
             } catch (e: any) {
               this.addTerminalLog('stderr', `[XHS] 托管工具挂载异常: ${e?.message || e}`, uid);
             }
+
+            // 知乎托管模式(与小红书同规则):存草稿工具仅在显式 opt-in + 风险已读时注入
+            // (dangerLevel high → 审批门)。浏览器服务共享同一 per-user Page
+            try {
+              const { buildZhihuManagedTools } = await import('@/lib/zhihu-managed');
+              const browserSvc = (this.ctx as any)?.browser;
+              const zhihuTools = buildZhihuManagedTools(uid, browserSvc);
+              if (zhihuTools.length > 0) {
+                injectedTools.push(...zhihuTools);
+                this.addTerminalLog(
+                  'system',
+                  `[ZHIHU] 托管工具挂载: ${zhihuTools.map((t: any) => t.name).join(' / ')}`,
+                  uid
+                );
+              }
+            } catch (e: any) {
+              this.addTerminalLog('stderr', `[ZHIHU] 托管工具挂载异常: ${e?.message || e}`, uid);
+            }
             taskTools = [...(taskTools || []), ...injectedTools];
 
           } catch (e: any) {

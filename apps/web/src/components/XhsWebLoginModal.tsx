@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * 小红书网页版扫码登录弹窗(scenario-loop P2 模块 1)。
+ * 平台网页版扫码登录弹窗(scenario-loop P2 模块 1;小红书 + 知乎共用)。
  *
  * 远程部署形态:浏览器在服务器上无头运行,弹窗实时回传页面截图,
- * 用户用手机小红书 App 扫截图里的二维码 —— 全程登录态只落服务器
+ * 用户用手机 App 扫截图里的二维码 —— 全程登录态只落服务器
  * 的 per-user 浏览器 profile,前端只见过画面、不过凭据。
  */
 import { useEffect, useRef, useState } from 'react';
@@ -14,6 +14,8 @@ interface XhsWebLoginModalProps {
   onClose: () => void;
   /** 登录成功回调(连接器页刷新登录徽标) */
   onLoggedIn?: () => void;
+  /** 目标平台(缺省 xhs,向后兼容旧调用) */
+  platform?: 'xhs' | 'zhihu';
 }
 
 type Phase =
@@ -27,12 +29,27 @@ type Phase =
   | 'cancelled'
   | 'error';
 
-const PHASE_HINTS: Record<string, string> = {
-  starting: '正在启动浏览器…',
-  opening: '正在打开小红书创作平台…',
-  waiting: '请用小红书 App 扫描下方二维码',
-  confirming: '扫码成功,正在确认登录…',
-  success: '登录成功,已保存在本服务',
+/** 平台文案(与 browser-login 的 LOGIN_PLATFORMS 同源语义,前端只管展示) */
+const PLATFORM_UI: Record<
+  'xhs' | 'zhihu',
+  { app: string; opening: string; waiting: string; iconClass: string; btnClass: string; subtitle: string }
+> = {
+  xhs: {
+    app: '小红书',
+    opening: '正在打开小红书创作平台…',
+    waiting: '请用小红书 App 扫描下方二维码',
+    iconClass: 'text-red-500',
+    btnClass: 'bg-red-500 hover:bg-red-600',
+    subtitle: '登录态保存在本服务的浏览器环境,只用于读取创作数据与保存草稿',
+  },
+  zhihu: {
+    app: '知乎',
+    opening: '正在打开知乎登录页…',
+    waiting: '请用知乎 App 扫描下方二维码',
+    iconClass: 'text-blue-500',
+    btnClass: 'bg-blue-500 hover:bg-blue-600',
+    subtitle: '登录态保存在本服务的浏览器环境,只用于把文章存进知乎草稿箱',
+  },
 };
 
 /** 剩余时间 mm:ss */
@@ -43,7 +60,15 @@ function fmtRemain(ms: number): string {
 
 const TIMEOUT_MS = 300_000;
 
-export function XhsWebLoginModal({ onClose, onLoggedIn }: XhsWebLoginModalProps) {
+export function XhsWebLoginModal({ onClose, onLoggedIn, platform = 'xhs' }: XhsWebLoginModalProps) {
+  const ui = PLATFORM_UI[platform] || PLATFORM_UI.xhs;
+  const PHASE_HINTS: Record<string, string> = {
+    starting: '正在启动浏览器…',
+    opening: ui.opening,
+    waiting: ui.waiting,
+    confirming: '扫码成功,正在确认登录…',
+    success: '登录成功,已保存在本服务',
+  };
   const [phase, setPhase] = useState<Phase>('idle');
   const [detail, setDetail] = useState<string>('');
   const [frame, setFrame] = useState<string>('');
@@ -65,7 +90,7 @@ export function XhsWebLoginModal({ onClose, onLoggedIn }: XhsWebLoginModalProps)
     startedAtRef.current = Date.now();
 
     try {
-      const res = await fetch('/api/browser/login', { method: 'POST' });
+      const res = await fetch(`/api/browser/login?platform=${platform}`, { method: 'POST' });
       const data = await res.json();
       if (!data.success) {
         // 409:已有进行中的会话 —— 直接接上它的流
@@ -157,12 +182,10 @@ export function XhsWebLoginModal({ onClose, onLoggedIn }: XhsWebLoginModalProps)
         <div className="flex items-start justify-between">
           <div>
             <h3 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-red-500" />
-              小红书网页版 · 扫码登录
+              <ShieldCheck className={`h-4 w-4 ${ui.iconClass}`} />
+              {ui.app}网页版 · 扫码登录
             </h3>
-            <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">
-              登录态保存在本服务的浏览器环境,只用于读取创作数据与保存草稿
-            </p>
+            <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">{ui.subtitle}</p>
           </div>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md">
             <X className="h-4 w-4" />
@@ -215,7 +238,7 @@ export function XhsWebLoginModal({ onClose, onLoggedIn }: XhsWebLoginModalProps)
             <button
               type="button"
               onClick={() => void openSession()}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-medium transition shadow-xs"
+              className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg ${ui.btnClass} text-white text-xs font-medium transition shadow-xs`}
             >
               <RefreshCw className="h-3.5 w-3.5" />
               <span>重试</span>

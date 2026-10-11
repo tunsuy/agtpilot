@@ -4,6 +4,7 @@
  */
 import { buildXhsWorkshopPrompt } from '../../lib/xhs-workshop';
 import { buildWechatMpWorkshopPrompt } from '../../lib/wechat-mp-workshop';
+import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES } from '../../lib/zhihu-workshop';
 import {
   buildWeiboWorkshopPrompt,
   buildVideoScriptPrompt,
@@ -59,6 +60,18 @@ export function buildWorkshopRun(
           ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
         }),
         title: `公众号文章工坊 · ${style}`,
+      };
+    }
+    case 'zhihu': {
+      const style = str(params.style, ZHIHU_ARTICLE_STYLES[0]);
+      return {
+        prompt: buildZhihuWorkshopPrompt({
+          topic: str(params.topic),
+          style,
+          count: num(params.count),
+          ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
+        }),
+        title: `知乎专栏工坊 · ${style}`,
       };
     }
     case 'weibo': {

@@ -11,6 +11,7 @@ import {
   XHS_LOGIN_COOKIE_NAMES,
   XHS_SMS_INPUT_SELECTOR,
   XHS_QR_SWITCH_SELECTOR,
+  LOGIN_PLATFORMS,
   type LoginBrowserDeps,
   type LoginEvent,
   type LoginDeps,
@@ -306,5 +307,67 @@ describe('ensureQrLoginMode', () => {
       throw new Error('selector 失配');
     });
     await expect(ensureQrLoginMode(page, noopSleep)).resolves.toBe(false);
+  });
+});
+
+describe('知乎平台(LOGIN_PLATFORMS.zhihu)', () => {
+  const ZHIHU = LOGIN_PLATFORMS.zhihu;
+
+  it('配置表契约:signin 起始页 / z_c0 cookie / 知乎域', () => {
+    expect(ZHIHU.startUrl).toBe('https://www.zhihu.com/signin');
+    expect(ZHIHU.cookieDomain).toBe('https://www.zhihu.com/');
+    expect(ZHIHU.cookieNames).toEqual(['z_c0']);
+    expect(ZHIHU.loginUrlHint.test('https://www.zhihu.com/signin')).toBe(true);
+    expect(ZHIHU.loginUrlHint.test('https://www.zhihu.com/')).toBe(false);
+  });
+
+  it('platform=zhihu:goto 知乎登录页,hasCookies 用 z_c0 + 知乎域', async () => {
+    const { browser, mocks, page } = makeMockBrowser(); // 永不命中 cookie
+    let t = 0;
+    const { sessionId } = startBrowserLogin(
+      'zh1',
+      baseDeps(browser, { now: () => (t += 50), timeoutMs: 200 }),
+      'zhihu'
+    );
+    await waitUntil(() => !!getLoginSession(sessionId)?.final);
+    expect(page.gotoCalls[0]).toBe(ZHIHU.startUrl);
+    const [, domain, names] = mocks.hasCookies.mock.calls[0];
+    expect(domain).toBe(ZHIHU.cookieDomain);
+    expect(names).toEqual(ZHIHU.cookieNames);
+  });
+
+  it('扫码命中:轮询中 z_c0 出现 → success 并回调 onLoginSuccess', async () => {
+    // cookiesAfter 3 = 短路检查一次 false + 轮询一轮 false + 轮询二轮 true
+    const { browser } = makeMockBrowser({ cookiesAfter: 3 });
+    const onLoginSuccess = vi.fn();
+    const { sessionId } = startBrowserLogin('zh2', baseDeps(browser, { onLoginSuccess }), 'zhihu');
+
+    await waitUntil(() => !!getLoginSession(sessionId)?.final);
+    expect(getLoginSession(sessionId)!.final?.outcome).toBe('success');
+    expect(onLoginSuccess).toHaveBeenCalledWith('zh2');
+  });
+
+  it('跨平台互斥:同用户已有进行中的 xhs 会话 → zhihu 启动也 conflict(共享单 Page)', async () => {
+    const { browser } = makeMockBrowser(); // 永不命中 cookie
+    let t = 0;
+    const deps = baseDeps(browser, { now: () => (t += 50), timeoutMs: 200 });
+    const first = startBrowserLogin('zh3', deps); // 缺省 xhs
+    const second = startBrowserLogin('zh3', deps, 'zhihu');
+
+    expect((second as any).conflict).toBe(true);
+    expect((second as any).sessionId).toBe(first.sessionId);
+    await waitUntil(() => !!getLoginSession(first.sessionId)?.final);
+  });
+
+  it('缺省 platform 回落 xhs:两参调用与旧版行为一致', async () => {
+    const { browser, mocks, page } = makeMockBrowser({ cookiesAfter: 1 });
+    const { sessionId } = startBrowserLogin('zh4', baseDeps(browser));
+    await waitUntil(() => !!getLoginSession(sessionId)?.final);
+    expect(getLoginSession(sessionId)!.final?.outcome).toBe('success');
+    // 短路前 goto 的是 xhs 起始页,cookie 判定用 xhs 域
+    expect(page.gotoCalls[0]).toBe(XHS_CREATOR_HOME);
+    const [, domain, names] = mocks.hasCookies.mock.calls[0];
+    expect(domain).toBe(XHS_CREATOR_HOME);
+    expect(names).toEqual(XHS_LOGIN_COOKIE_NAMES);
   });
 });

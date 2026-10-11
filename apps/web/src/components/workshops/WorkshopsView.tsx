@@ -20,6 +20,7 @@ import { ScenarioProfileWizard } from './ScenarioProfileWizard';
 import { ACCENTS } from './forms/shared';
 import { ContentWorkshopForm } from './forms/ContentWorkshopForm';
 import { WechatMpWorkshopForm } from './forms/WechatMpWorkshopForm';
+import { ZhihuWorkshopForm } from './forms/ZhihuWorkshopForm';
 import { EmailTriageForm } from './forms/EmailTriageForm';
 import { WeeklyReportForm } from './forms/WeeklyReportForm';
 import { PptWorkshopForm } from './forms/PptWorkshopForm';
@@ -51,6 +52,7 @@ interface WorkshopFormProps {
 const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
   xhs: ContentWorkshopForm,
   wechat_mp: WechatMpWorkshopForm,
+  zhihu: ZhihuWorkshopForm,
   weibo: ContentWorkshopForm,
   video_douyin: ContentWorkshopForm,
   video_bilibili: ContentWorkshopForm,

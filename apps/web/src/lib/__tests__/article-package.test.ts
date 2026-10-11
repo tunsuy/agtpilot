@@ -172,4 +172,32 @@ describe('buildArticlePackageReplyText(投草稿箱续聊指令)', () => {
   it('titleIndex 选中哪条标题,内嵌的就是哪条', () => {
     expect(buildArticlePackageReplyText(pkg, 2)).toContain('title:工程化视角看 LLM');
   });
+
+  it('缺省 target 仍是公众号(旧调用方零改动)', () => {
+    expect(buildArticlePackageReplyText(pkg, 0)).toBe(buildArticlePackageReplyText(pkg, 0, 'wechat_mp'));
+  });
+});
+
+describe('buildArticlePackageReplyText · 知乎目标(浏览器托管存草稿)', () => {
+  const pkg = parseArticlePackages(singlePackage).packages[0];
+
+  it('含知乎工具名/审批确认/人工发布围栏,以及逐字内嵌的 title/body', () => {
+    const text = buildArticlePackageReplyText(pkg, 0, 'zhihu');
+    expect(text).toContain('zhihu_save_article_draft');
+    expect(text).toContain('审批确认');
+    expect(text).toContain('人工完成');
+    expect(text).toContain('title:大模型落地:别再谈概念了');
+    expect(text).toContain(`body:\n${LONG_BODY}`);
+    // 纯文本填入口径 + 发布禁令
+    expect(text).toContain('纯文本填入');
+    expect(text).toContain('不要点击任何发布按钮');
+    // 知乎走托管编辑器,不带公众号的 digest/markdown 参数键
+    expect(text).not.toContain('digest:');
+    expect(text).not.toContain('markdown:');
+    expect(text).not.toContain('wechat_mp_create_draft');
+  });
+
+  it('titleIndex 选中哪条标题,内嵌的就是哪条', () => {
+    expect(buildArticlePackageReplyText(pkg, 1, 'zhihu')).toContain('title:从 demo 到生产的三道坎');
+  });
 });

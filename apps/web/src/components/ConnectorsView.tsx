@@ -196,6 +196,9 @@ interface ConnectorsViewProps {
   /** 任务中途授权跳转过来时自动打开对应连接器的配置弹窗 */
   autoConfigureId?: string | null;
   onAutoConfigureHandled?: () => void;
+  /** 工坊依赖点跳转定位:连接器标识填入搜索框过滤到对应卡片(定位完由父层清空) */
+  locateSearch?: string | null;
+  onLocateHandled?: () => void;
 }
 
 export function ConnectorsView({
@@ -204,6 +207,8 @@ export function ConnectorsView({
   onSetDefaultModel,
   autoConfigureId,
   onAutoConfigureHandled,
+  locateSearch,
+  onLocateHandled,
 }: ConnectorsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [tab, setTab] = useState('all');
@@ -246,6 +251,14 @@ export function ConnectorsView({
   useEffect(() => {
     loadMcpConnectors();
   }, []);
+
+  // 工坊依赖点跳转定位:连接器标识直接进搜索框(id 精确匹配过滤到对应卡片)
+  useEffect(() => {
+    if (locateSearch) {
+      setSearchQuery(locateSearch);
+      onLocateHandled?.();
+    }
+  }, [locateSearch]);
 
   // OAuth 回跳结果提示（/?tab=connectors&authorized=xxx / &error=xxx）
   useEffect(() => {
@@ -374,15 +387,16 @@ export function ConnectorsView({
   const tabIds = tab === 'all' ? null : CONNECTOR_TABS.find((t) => t.key === tab)?.ids ?? null;
   const inTab = (id: string) =>
     tab === 'all' || (tab === 'other' ? !TABBED_IDS.has(id) : Boolean(tabIds?.includes(id)));
-  const matchSearch = (name: string, description: string, category: string) =>
+  const matchSearch = (id: string, name: string, description: string, category: string) =>
     !searchQuery ||
+    id.toLowerCase() === searchQuery.toLowerCase() ||
     name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     description.toLowerCase().includes(searchQuery.toLowerCase()) ||
     category.toLowerCase().includes(searchQuery.toLowerCase());
 
-  const filteredMcp = mcpConnectors.filter((c) => inTab(c.id) && matchSearch(c.name, c.description, c.category));
+  const filteredMcp = mcpConnectors.filter((c) => inTab(c.id) && matchSearch(c.id, c.name, c.description, c.category));
 
-  const filtered = connectors.filter((c) => inTab(c.id) && matchSearch(c.name, c.description, c.category));
+  const filtered = connectors.filter((c) => inTab(c.id) && matchSearch(c.id, c.name, c.description, c.category));
 
   const tabCount = (key: string) => {
     const ids = key === 'all' ? null : CONNECTOR_TABS.find((t) => t.key === key)?.ids ?? null;
@@ -415,7 +429,12 @@ export function ConnectorsView({
     }
   };
 
-  const connectedCount = connectors.filter((c) => c.status === 'connected').length;
+  // 已就绪统计:原生连接器与 MCP 连接器合并计数(两者同页混排,漏算 MCP 会虚低;
+  // mcpConnectors 异步加载完成后自动刷新)
+  const connectedCount =
+    connectors.filter((c) => c.status === 'connected').length +
+    mcpConnectors.filter((c) => c.status === 'connected').length;
+  const totalConnectors = connectors.length + mcpConnectors.length;
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-6 md:py-12 pb-24 md:pb-8 space-y-8 animate-fadeIn">
@@ -430,7 +449,7 @@ export function ConnectorsView({
               连接器与原子能力中心
             </h1>
             <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 border border-zinc-200/80 text-zinc-600">
-              已就绪 {connectedCount}/{connectors.length}
+              已就绪 {connectedCount}/{totalConnectors}
             </span>
           </div>
           <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">

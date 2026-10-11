@@ -65,6 +65,8 @@ export default function Workspace() {
   const [connectorSuggestions, setConnectorSuggestions] = useState<ConnectorSuggestion[]>([]);
   // 中途授权（粘贴凭证类）：跳到连接器中心并自动打开对应配置弹窗
   const [mcpAutoConfigure, setMcpAutoConfigure] = useState<string | null>(null);
+  // 工坊依赖点跳转:要定位的连接器标识(进连接器页后填入搜索框,随即清空)
+  const [connectorLocate, setConnectorLocate] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<ArtifactState | null>(null);
 
   // 连接器状态
@@ -859,6 +861,8 @@ export default function Workspace() {
                 onSetDefaultModel={handleSetDefaultModel}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
+                locateSearch={connectorLocate}
+                onLocateHandled={() => setConnectorLocate(null)}
               />
             )}
             {mobileOverlay === 'workshops' && (
@@ -869,7 +873,10 @@ export default function Workspace() {
                   // 任务发起后回到活动页看执行流,关闭工坊覆盖层
                   setMobileOverlay(null);
                 }}
-                onOpenConnectors={() => setMobileOverlay('connectors')}
+                onOpenConnectors={(depId) => {
+                  if (depId) setConnectorLocate(depId);
+                  setMobileOverlay('connectors');
+                }}
                 missions={missions}
               />
             )}
@@ -1101,7 +1108,10 @@ export default function Workspace() {
               <WorkshopsView
                 connectors={connectors}
                 onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
-                onOpenConnectors={() => handleViewChange('connectors')}
+                onOpenConnectors={(depId) => {
+                  if (depId) setConnectorLocate(depId);
+                  handleViewChange('connectors');
+                }}
                 missions={missions}
               />
             </main>
@@ -1115,6 +1125,8 @@ export default function Workspace() {
                 onSetDefaultModel={handleSetDefaultModel}
                 autoConfigureId={mcpAutoConfigure}
                 onAutoConfigureHandled={() => setMcpAutoConfigure(null)}
+                locateSearch={connectorLocate}
+                onLocateHandled={() => setConnectorLocate(null)}
               />
             </main>
           )}

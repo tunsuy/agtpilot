@@ -29,8 +29,8 @@ interface WorkshopsViewProps {
   connectors: ConnectorApp[];
   /** 表单/重跑产出的结构化 Prompt,作为新任务交给 Agent 并跳转任务页 */
   onRunPrompt: (prompt: string, title?: string) => void | Promise<void>;
-  /** 缺必需依赖时跳连接器页配置 */
-  onOpenConnectors: () => void;
+  /** 缺必需依赖时跳连接器页配置;带 depId 时连接器页自动搜索定位到对应卡片 */
+  onOpenConnectors: (depId?: string) => void;
   /** 全量任务列表:小红书表单内嵌最近一次选题清单的可勾选卡片 */
   missions?: Mission[];
 }
@@ -247,14 +247,20 @@ export function WorkshopsView({
                   </div>
                   <p className="text-xs text-zinc-500 leading-relaxed">{w.desc}</p>
 
-                  {/* 依赖数据源状态:绿点已连接/灰点未配;必需缺失给配置入口 */}
+                  {/* 依赖数据源状态:绿点已连接/灰点未配;点依赖项跳连接器页并搜索定位 */}
                   {w.deps.length > 0 && (
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                       {w.deps.map((d) => (
-                        <span
+                        <button
                           key={d.id}
-                          className="flex items-center gap-1 text-[10px] text-zinc-500"
-                          title={isConnected(d.id) ? `${d.name} 已连接` : `${d.name} 未连接`}
+                          type="button"
+                          onClick={() => onOpenConnectors(d.id)}
+                          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 transition"
+                          title={
+                            isConnected(d.id)
+                              ? `${d.name} 已连接,点击到连接器页查看`
+                              : `${d.name} 未连接,点击到连接器页定位配置`
+                          }
                         >
                           <span
                             className={`h-1.5 w-1.5 rounded-full ${
@@ -262,7 +268,7 @@ export function WorkshopsView({
                             }`}
                           />
                           <span>{d.name}</span>
-                        </span>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -270,7 +276,7 @@ export function WorkshopsView({
                   {missingRequired.length > 0 && (
                     <button
                       type="button"
-                      onClick={onOpenConnectors}
+                      onClick={() => onOpenConnectors()}
                       className="flex items-center gap-1.5 text-[11px] font-medium text-amber-700 hover:text-amber-800 transition"
                     >
                       <span>

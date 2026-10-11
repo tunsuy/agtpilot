@@ -53,6 +53,7 @@ import {
   Newspaper,
   Twitter,
   QrCode,
+  MonitorPlay,
   ShieldAlert,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
@@ -647,6 +648,23 @@ export function ConnectorsView({
                     >
                       <QrCode className="h-3 w-3" />
                       <span>网页版扫码登录</span>
+                    </button>
+                    {/* 接管浏览器(scenario-loop §6):投射服务器的已登录浏览器,
+                        用户亲自核对页面/点发布 —— 小红书网页草稿只存浏览器本地,
+                        跨端不可见,发布权归人是唯一闭环 */}
+                    <button
+                      onClick={() =>
+                        window.open(
+                          '/takeover',
+                          '_blank',
+                          'noopener,width=1180,height=860'
+                        )
+                      }
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition shadow-2xs"
+                      title="接管服务器上已登录的浏览器:画面实时投射到这里,鼠标键盘由你操控(适合人工点发布)"
+                    >
+                      <MonitorPlay className="h-3 w-3" />
+                      <span>接管浏览器</span>
                     </button>
                     {xhsStatus?.record?.enabled ? (
                       <button

@@ -48,21 +48,74 @@ function writeRecord(uid: string, over: Partial<XhsManagedRecord>) {
   return us.getXhsManaged(uid);
 }
 
-/** 发布页假 Page:覆盖 xhs_save_note_draft 全链路所需的面 */
-function fakePublishPage(opts: { tagInputFails?: boolean } = {}) {
-  return {
+/**
+ * 发布页假 Page:覆盖 xhs_save_note_draft 全链路所需的面。
+ * 状态机模拟 2026-10-11 改版后的发布页:mode=editor(草稿恢复,标题框直接在场)、
+ * landing(聚合页:入口卡在场)、imgTab(图文标签:上传控件在场、表单未解锁)。
+ */
+function fakePublishPage(
+  opts: { tagInputFails?: boolean; autosaveFails?: boolean; mode?: 'editor' | 'landing' | 'imgTab' } = {}
+) {
+  const state = { mode: opts.mode ?? 'editor', uploads: [] as string[] };
+  const page = {
     goto: vi.fn(async () => {}),
     fill: vi.fn(async () => {}),
     click: vi.fn(async (sel: string) => {
       if (opts.tagInputFails && String(sel).includes('标签')) throw new Error('no tag input');
     }),
-    locator: vi.fn(() => ({ first: () => ({ focus: vi.fn(async () => {}) }) })),
-    keyboard: { insertText: vi.fn(async () => {}), press: vi.fn(async () => {}) },
+    // locator(sel):按选择器语义回放新发布页的 DOM 状态
+    locator: vi.fn((sel: string) => {
+      const s = String(sel);
+      const isTitle = s.includes('标题');
+      const isEntry = s.includes('上传图文');
+      const isUpload = s.includes('upload') || s.includes('file');
+      const count = () => {
+        if (isTitle) return state.mode === 'editor' ? 1 : 0;
+        if (isEntry) return state.mode === 'landing' ? 3 : 0;
+        if (isUpload) return state.mode === 'imgTab' ? 1 : 0;
+        return 0;
+      };
+      return {
+        count: vi.fn(async () => count()),
+        first: () => ({
+          focus: vi.fn(async () => {}),
+          setInputFiles: vi.fn(async (files: any) => {
+            // 上传图片 = 表单解锁(改版核心行为)
+            state.uploads.push(...[].concat(files).map(String));
+            if (state.mode === 'imgTab') state.mode = 'editor';
+          }),
+          waitFor: vi.fn(async () => {}),
+        }),
+        nth: (i: number) => ({
+          click: vi.fn(async () => {
+            // 测试里让第 1 处「上传图文」文本即为可点入口(实测是第 3 处,状态机逻辑同构)
+            if (isEntry && i === 0) state.mode = 'imgTab';
+          }),
+        }),
+      };
+    }),
+    keyboard: {
+      type: vi.fn(async (text: string) => {
+        // 标签按键路径:# 开头的逐键输入在 tagInputFails 里模拟失败
+        if (opts.tagInputFails && String(text).startsWith('#')) throw new Error('type failed');
+      }),
+      insertText: vi.fn(async () => {}),
+      press: vi.fn(async () => {}),
+    },
     waitForTimeout: vi.fn(async () => {}),
-    getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn(async () => {}) }) })),
+    getByText: vi.fn(() => ({
+      first: () => ({
+        // autosaveFails:自动保存指示永远不出现(平台实测常态)
+        waitFor: vi.fn(async () => {
+          if (opts.autosaveFails) throw new Error('timeout');
+        }),
+      }),
+    })),
     setInputFiles: vi.fn(async () => {}),
     screenshot: vi.fn(async () => Buffer.from('jpeg-bytes')),
+    uploadCalls: state.uploads,
   };
+  return page;
 }
 
 function fakeBrowser(page: any, opts: { hasCookies?: boolean } = {}): XhsBrowserService {
@@ -290,10 +343,56 @@ describe('xhs_save_note_draft execute 全链路(fake browser)', () => {
       { taskId: 'm', step: 1 }
     );
     expect(r.success).toBe(true);
-    expect(r.tagsFallback).toBeDefined();
-    expect((r.tagsFallback as string[])[0]).toContain('#穿搭');
-    expect((r.tagsFallback as string[])[0]).toContain('#通勤');
+    // 逐标签降级清单如实返回(不再是拼接后清空的一条)
+    expect(r.tagsFallback).toEqual(['#穿搭', '#通勤']);
+    // 降级标签真的拼进正文(键盘 insertText 收到拼接串)
+    expect(page.keyboard.insertText).toHaveBeenCalledWith(' #穿搭 #通勤');
+    expect(r.message).toContain('正文文本附加');
   });
+
+  it('自动保存未出现 → 仍成功(草稿本就只存浏览器本地,填完即达终点)', async () => {
+    const uid = 'xhs-t7';
+    writeRecord(uid, { enabled: true, riskAckAt: Date.now(), lastLoginAt: Date.now() });
+    const page = fakePublishPage({ autosaveFails: true });
+    const writeTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(page))
+      .find((t) => t.name === 'xhs_save_note_draft')!;
+
+    const r = await writeTool.execute({ title: 't', body: 'x'.repeat(30) }, { taskId: 'm', step: 1 });
+    expect(r.success).toBe(true);
+    expect(r.message).toContain('接管浏览器');
+    expect(r.message).toContain('自动保存未确认');
+    // 审计同样成功,附注说明未等到保存指示
+    const audit = us.getBrowserAudit(uid);
+    expect(audit[0].result).toBe('success');
+    expect(audit[0].error).toContain('自动保存');
+  });
+
+  it(
+    '聚合页链路:点「上传图文」入口 → 上传图解锁表单(2026-10-11 改版状态机)',
+    async () => {
+    const uid = 'xhs-t6';
+    writeRecord(uid, { enabled: true, riskAckAt: Date.now(), lastLoginAt: Date.now() });
+    // landing = 聚合页初始态:入口卡在场、无标题无上传控件
+    const page = fakePublishPage({ mode: 'landing' });
+    const writeTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(page))
+      .find((t) => t.name === 'xhs_save_note_draft')!;
+
+    const r = await writeTool.execute(
+      { title: 't', body: 'x'.repeat(30) },
+      { taskId: 'm', step: 1 }
+    );
+    expect(r.success).toBe(true);
+    // 无图笔记 → 占位封面顶位,上传动作真实发生
+    expect(r.imageCount).toBe(0);
+    expect(page.uploadCalls.length).toBe(1);
+    expect(page.uploadCalls[0]).toMatch(/agtpilot-xhs-cover-.*\.png$/);
+    expect(page.fill).toHaveBeenCalled();
+  },
+    // 状态机里有真实 sleep(等 SPA 出形/入口切换),全链路远超默认 5s
+    30000
+  );
 });
 
 describe('xhs_read_creator_data execute', () => {

@@ -12,6 +12,8 @@
  * ② 本文件的选择器配置表里根本不存在发布按钮;
  * ③ 系统 prompt「托管终点是草稿箱」。Agent 永远不碰「发布」。
  */
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import type { ToolDefinition } from '@agtpilot/core';
 import {
@@ -22,6 +24,7 @@ import {
   type XhsManagedRecord,
 } from './user-store';
 import { XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES } from './browser-login';
+import { buildPlaceholderCover } from './xhs-cover';
 import { buildXhsReadGuardrail } from './xhs-read-guardrail';
 
 /**
@@ -29,17 +32,20 @@ import { buildXhsReadGuardrail } from './xhs-read-guardrail';
  * 实测后只改这里,不改逻辑。表里刻意没有「发布」按钮。
  */
 export const XHS_PUBLISH_SELECTORS = {
-  /** 图文发布页 */
-  publishUrl: 'https://creator.xiaohongshu.com/publish/imgNote',
-  // TODO 实测:标题输入框
+  /**
+   * 图文发布页。2026-10-11 实测改版:旧 publish/imgNote 302 到聚合页 publish/publish,
+   * 默认停在「上传视频」标签,必须点「上传图文」入口进图文流程。
+   */
+  publishUrl: 'https://creator.xiaohongshu.com/publish/publish',
+  /** 「上传图文」入口卡文案(聚合页有 4 个入口卡;真实可点的是第 3 处文本,逐个试) */
+  imgNoteEntryText: '上传图文',
+  /** 标题输入框(实测 placeholder「填写标题会有更多赞哦」,仍含「标题」可模糊匹配) */
   titleInput: 'input[placeholder*="标题"]',
-  // TODO 实测:正文 contenteditable(发布页富文本)
-  bodyEditor: '.ql-editor, [contenteditable="true"]',
-  // TODO 实测:标签输入(输入 # 触发下拉)
-  tagInput: 'input[placeholder*="标签"], input[placeholder*="话题"]',
-  // TODO 实测:图片上传控件
-  imageUpload: 'input[type="file"]',
-  // TODO 实测:自动保存指示文案(等它出现 = 草稿已落)
+  /** 正文 contenteditable(实测改版后为 tiptap 富文本编辑器) */
+  bodyEditor: '.tiptap.ProseMirror, [contenteditable="true"]',
+  /** 图片上传控件(实测 class=upload-input;兼容兜底 type=file) */
+  imageUpload: 'input.upload-input, input[type="file"]',
+  /** 自动保存指示文案(等它出现 = 草稿已落) */
   autosaveIndicator: /已(自动)?保存|存为草稿/,
 };
 
@@ -140,6 +146,74 @@ export function validateImagePaths(
 
 const NOT_LOGGED_IN_HINT =
   '小红书网页版尚未登录或登录态已失效。请引导用户到「连接器页 → 小红书 → 网页版扫码登录」,用小红书 App 扫码完成登录后重试。';
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * 进图文编辑器(2026-10-11 改版后的发布页状态机,实测校准):
+ * - 聚合页默认停「上传视频」标签 → 点「上传图文」入口(同名文本多处,逐个试到生效);
+ * - 图文标签先见上传控件,标题/正文表单要**至少一张图**才渲染(纯文字笔记没了入口);
+ * - 页面有未续完草稿时可能直接开编辑器(标题框已在)——跳过入口与上传。
+ * uploadPaths:上传的图片;编辑器已开(草稿恢复)时不重复上传,返回 false。
+ */
+async function ensureImageNoteEditor(
+  page: any,
+  uploadPaths: string[]
+): Promise<{ editorOpened: boolean; coverUploaded: boolean }> {
+  const hasTitle = () => page.locator(XHS_PUBLISH_SELECTORS.titleInput).count();
+  const hasUpload = () => page.locator(XHS_PUBLISH_SELECTORS.imageUpload).count();
+
+  // ① 等首屏出形(SPA 渲染数秒):标题框=编辑器已开;入口/上传控件=还要走流程
+  let editorOpened = false;
+  for (let i = 0; i < 12; i++) {
+    await sleep(2000);
+    if ((await hasTitle()) > 0) {
+      editorOpened = true;
+      break;
+    }
+    if ((await page.locator(`text=${XHS_PUBLISH_SELECTORS.imgNoteEntryText}`).count()) > 0) break;
+    if ((await hasUpload()) > 0) break;
+  }
+  if (editorOpened) return { editorOpened: true, coverUploaded: false };
+
+  // ② 点「上传图文」入口候选,直到标题框(直接恢复)或上传控件(图文标签)出现
+  for (let i = 0; i < 4; i++) {
+    if ((await hasTitle()) > 0) return { editorOpened: true, coverUploaded: false };
+    const count = await page.locator(`text=${XHS_PUBLISH_SELECTORS.imgNoteEntryText}`).count();
+    if (i >= count) break;
+    try {
+      await page.locator(`text=${XHS_PUBLISH_SELECTORS.imgNoteEntryText}`).nth(i).click({ timeout: 4000 });
+    } catch {
+      // 该处文本不可点(标题/说明),继续下一个候选
+    }
+    for (let k = 0; k < 5 && (await hasTitle()) === 0; k++) await sleep(1500);
+  }
+
+  // ③ 无标题框但有上传控件 → 上传图片解锁表单
+  let coverUploaded = false;
+  if ((await hasTitle()) === 0 && (await hasUpload()) > 0 && uploadPaths.length > 0) {
+    await page.locator(XHS_PUBLISH_SELECTORS.imageUpload).first().setInputFiles(uploadPaths, { timeout: 30000 });
+    coverUploaded = true;
+    for (let i = 0; i < 12 && (await hasTitle()) === 0; i++) await sleep(2000);
+  }
+
+  if ((await hasTitle()) === 0) {
+    throw new Error(
+      '发布页表单未渲染:已尝试进入图文标签并上传封面,标题输入框始终未出现(页面改版或结构变化,需人工核查发布页)'
+    );
+  }
+  return { editorOpened: true, coverUploaded };
+}
+
+/**
+ * 无图笔记的占位封面落盘(发布页改版后表单解锁必须 ≥1 张图)。
+ * 返回临时文件路径;调用方上传后可删除。封面为纯色图,用户发布前在小红书 App 换掉。
+ */
+function writePlaceholderCoverFile(): string {
+  const file = path.join(os.tmpdir(), `agtpilot-xhs-cover-${Date.now()}.png`);
+  fs.writeFileSync(file, buildPlaceholderCover());
+  return file;
+}
 
 /**
  * 构建用户级小红书托管工具。
@@ -251,13 +325,15 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
     tools.push({
       name: 'xhs_save_note_draft',
       description:
-        '把一篇小红书笔记(标题/正文/标签/可选图片)填进网页版发布页,停在平台自动保存 —— ' +
-        '终点是草稿箱,绝不发布(发布按钮被代码级围栏永久拦截)。' +
+        '把一篇小红书笔记(标题/正文/标签/可选图片)填进网页版发布页并停在填好状态 —— ' +
+        '绝不发布(发布按钮被代码级围栏永久拦截),发布由用户经「接管浏览器」亲自完成' +
+        '(2026-10-11 平台改版后网页草稿只存浏览器本地、跨端不可见,不要再引导用户去 App 草稿箱找)。' +
+        '未提供图片时会用占位封面解锁表单,接管后用户可在页面上替换。' +
         '调用前需要用户审批确认。每次调用计入每日上限。',
       dangerLevel: 'high',
       compensation: {
         kind: 'partially-reversible',
-        undoHint: '草稿可在小红书 App 或创作平台的草稿箱中编辑/删除;未保存前可直接清空页面表单',
+        undoHint: '内容只填在发布页表单里,未点发布前页面可直接清空;已存草稿仅存本服务浏览器本地',
       },
       parameters: {
         type: 'object',
@@ -309,58 +385,88 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
             return { success: false, error: NOT_LOGGED_IN_HINT };
           }
 
-          // ③ 图片(可选):路径围栏 + 上传
+          // ③ 图片:路径围栏校验;无图笔记生成占位封面(改版后表单解锁必须 ≥1 张图)
           const imageCount = Array.isArray(args?.image_paths) ? args.image_paths.length : 0;
+          let uploadPaths: string[] = [];
+          let placeholderCover = false;
           if (imageCount > 0) {
             const check = validateImagePaths(args.image_paths, process.cwd());
             if (!check.ok) {
               auditFailure(check.error, imageCount);
               return { success: false, error: check.error };
             }
-            await page.setInputFiles(XHS_PUBLISH_SELECTORS.imageUpload, check.paths, { timeout: 30000 });
-            // 等图片处理渲染
-            await page.waitForTimeout(2000);
+            uploadPaths = check.paths;
+          } else {
+            uploadPaths = [writePlaceholderCoverFile()];
+            placeholderCover = true;
           }
 
-          // ④ 标题(普通 input)
-          await page.fill(XHS_PUBLISH_SELECTORS.titleInput, title, { timeout: 15000 });
+          // ④ 进图文编辑器(改版状态机:入口卡→上传→表单;待续草稿则直接恢复)。
+          //    上传完成后占位封面临时文件即删(已进平台)
+          let editor: Awaited<ReturnType<typeof ensureImageNoteEditor>>;
+          try {
+            editor = await ensureImageNoteEditor(page, uploadPaths);
+          } finally {
+            if (placeholderCover) {
+              try {
+                fs.unlinkSync(uploadPaths[0]);
+              } catch {}
+            }
+          }
 
-          // ⑤ 正文(contenteditable:先聚焦再整体插入)
+          // ⑤ 标题(普通 input;恢复态旧标题被整体覆盖)
+          await page.fill(XHS_PUBLISH_SELECTORS.titleInput, title, { timeout: 20000 });
+
+          // ⑥ 正文(tiptap contenteditable:聚焦→全选清旧→整体插入)
           try {
             await page.click(XHS_PUBLISH_SELECTORS.bodyEditor, { timeout: 10000 });
           } catch {
             await page.locator(XHS_PUBLISH_SELECTORS.bodyEditor).first().focus({ timeout: 5000 });
           }
+          await page.keyboard.press('Control+a');
           await page.keyboard.insertText(body);
 
-          // ⑥ 标签:输入 # 触发下拉后回车;失败降级为拼在正文尾部并注明
+          // ⑦ 标签(改版后无独立标签输入框):正文末尾逐个 #话题→选话题节点;
+          //    insertText 不走按键事件,话题下拉层收不到过滤输入,Enter 会误选
+          //    平台推荐词(实测踩坑),必须用逐键 type 让下拉层跟着过滤。
+          //    失败降级为拼在正文尾部并如实返回。
           const tags: string[] = (Array.isArray(args?.tags) ? args.tags : [])
             .map((t: any) => String(t).replace(/^#/, '').trim())
             .filter(Boolean)
             .slice(0, 10);
           const tagsFallback: string[] = [];
           if (tags.length > 0) {
-            const tagText = tags.map((t) => `#${t}`).join(' ');
-            let tagged = false;
-            try {
-              await page.click(XHS_PUBLISH_SELECTORS.tagInput, { timeout: 5000 });
-              await page.keyboard.insertText(tagText);
-              await page.keyboard.press('Enter');
-              await page.waitForTimeout(800);
-              tagged = true;
-            } catch {
-              tagged = false;
+            for (const tag of tags) {
+              let tagged = false;
+              try {
+                await page.keyboard.type('#', { delay: 100 });
+                await page.keyboard.type(tag, { delay: 80 });
+                await sleep(600);
+                await page.keyboard.press('Enter');
+                await sleep(400);
+                tagged = true;
+              } catch {
+                tagged = false;
+              }
+              if (!tagged) tagsFallback.push(`#${tag}`);
             }
-            if (!tagged) tagsFallback.push(tagText);
+            // 降级路径真的拼进正文(此前只报不拼,提示与行为不符);
+            // 清单保留:如实告知「这些标签成了正文文本,不是话题节点」
+            if (tagsFallback.length > 0) {
+              try {
+                await page.keyboard.insertText(` ${tagsFallback.join(' ')}`);
+              } catch {}
+            }
           }
 
-          // ⑦ 等自动保存指示出现 = 草稿已落(终点;绝不触碰发布)
+          // ⑧ 顺带看一眼自动保存指示(仅作结果附注;平台草稿只存浏览器本地,
+          //    不再是成败判据,10s 等不到就走 —— 别烧任务时长)
           let saved = false;
           try {
             await page
               .getByText(XHS_PUBLISH_SELECTORS.autosaveIndicator)
               .first()
-              .waitFor({ timeout: 30000 });
+              .waitFor({ timeout: 10000 });
             saved = true;
           } catch {
             saved = false;
@@ -373,30 +479,37 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
             screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
           } catch {}
 
-          // ⑧ 审计(成败都落)
+          // ⑧ 审计(填完即成功;自动保存是否落本地只是附加信息,平台草稿本就
+          //    只存浏览器本地、跨端不可见,不再是成败判据)
           appendBrowserAudit(userId, {
             at: Date.now(),
             tool: 'xhs_save_note_draft',
             action: 'save_note_draft',
             title,
             imageCount: imageCount || undefined,
-            result: saved ? 'success' : 'failure',
+            result: 'success',
             error: saved
               ? undefined
-              : tagsFallback.length > 0
-              ? '自动保存指示未出现(可能仍在保存);标签降级拼入正文'
-              : '自动保存指示未出现(可能仍在保存)',
+              : [
+                  '未等到自动保存指示(页面内容不受影响)',
+                  tagsFallback.length > 0 ? '标签降级拼入正文' : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(';') || undefined,
             missionId,
           });
 
           return {
-            success: saved,
+            success: true,
             title,
             imageCount,
             tagsFallback: tagsFallback.length > 0 ? tagsFallback : undefined,
-            message: saved
-              ? `笔记已填入发布页并停在自动保存 —— 请在草稿箱核对(发布由你本人完成)。今日已用 ${todayCount + 1}/${dailyDraftLimit()} 次。`
-              : '笔记已填入发布页,但未等到自动保存指示。请到草稿箱确认是否已存;若未存,用页面截图手动核对后自行保存。',
+            message:
+              `笔记已填入发布页 —— 用户可到连接器页点「接管浏览器」,在投射的画面里核对并亲自完成发布(发布由你本人完成)。` +
+              (saved ? ' 平台已自动保存。' : ' 平台自动保存未确认(其草稿只存浏览器本地,不影响页面上的内容)。') +
+              `今日已用 ${todayCount + 1}/${dailyDraftLimit()} 次。` +
+              (tagsFallback.length > 0 ? ` 标签 ${tagsFallback.join(' ')} 未能生成话题节点,已以正文文本附加。` : '') +
+              (placeholderCover ? ' 本次未提供图片:已用占位封面解锁表单,接管后可在页面上替换。' : ''),
             screenshotBase64: screenshotBase64 || undefined,
           };
         } catch (err: any) {

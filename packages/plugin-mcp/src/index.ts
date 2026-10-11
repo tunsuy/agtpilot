@@ -115,10 +115,39 @@ function buildStdioEnv(extra?: Record<string, string>): Record<string, string> {
     LC_ALL: process.env.LC_ALL,
     TZ: process.env.TZ,
     TMPDIR: process.env.TMPDIR,
+    // npm 镜像源透传：stdio 子进程普遍经 npx 拉起，境内部署可给容器设
+    // npm_config_registry=https://registry.npmmirror.com 加速首启下载
+    npm_config_registry: process.env.npm_config_registry,
   })) {
-    if (typeof v === 'string') base[k] = v;
+    if (typeof v === 'string' && v) base[k] = v;
   }
   return { ...base, ...(extra || {}) };
+}
+
+/**
+ * stdio 子进程 stderr 采集：子进程侧的真实死因（npm 无可写缓存、网络失败、
+ * 缺命令）默认只打到宿主终端，连接器卡片上只剩干巴巴的
+ * "MCP error -32000: Connection closed"，排障全靠盲猜。
+ * 改为 pipe 后逐行转发到宿主 stderr（保留原 inherit 的可见性），同时滚动
+ * 缓存尾部 ~2KB，连接失败时拼进错误信息，用户在连接器中心即可看到死因。
+ */
+function watchStdioStderr(
+  transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport,
+  serverName: string
+): () => string {
+  if (!(transport instanceof StdioClientTransport)) return () => '';
+  // SDK 的 stderr getter 类型收窄：pipe 模式下构造即返回 PassThrough
+  const stream = transport.stderr as NodeJS.ReadableStream | null;
+  if (!stream) return () => '';
+  stream.setEncoding('utf8');
+  let tail = '';
+  stream.on('data', (chunk: string) => {
+    for (const line of String(chunk).split('\n')) {
+      if (line.trim()) process.stderr.write(`[mcp:${serverName}] ${line}\n`);
+    }
+    tail = (tail + String(chunk)).slice(-2048);
+  });
+  return () => tail.trim();
 }
 
 /** 按 config 构建 transport（stdio/sse/http 三种，UserConnection 与进程级连接共用） */
@@ -131,6 +160,8 @@ function buildMCPTransport(
       command: c.command,
       args: c.args || [],
       env: buildStdioEnv(c.env),
+      // stderr 走 pipe 以便采集（watchStdioStderr 负责转发到宿主终端）
+      stderr: 'pipe' as const,
     });
   }
   if (!c.url) throw new Error(`${c.transport} 类型的 MCP Server 必须提供 url 参数。`);
@@ -181,6 +212,8 @@ class UserConnection {
   async connect(): Promise<Client> {
     if (this.client) return this.client;
     if (this.connecting) return this.connecting;
+    // stderr 采集器：闭包内赋值、外层 catch 读取（连接失败的错误信息拼接用）
+    let getStderrTail: () => string = () => '';
     this.connecting = (async () => {
       const client = new Client(
         { name: `agtpilot-${this.config.name}-client`, version: '0.1.0' },
@@ -189,7 +222,9 @@ class UserConnection {
       // 半死连接修复：listTools 成功之前不落地 this.client ——
       // 否则连接成功但工具拉取失败时，连接呈「已连接零工具」的假成功态
       // 且后续 connect() 直接返回，永远不自愈。
-      await client.connect(buildMCPTransport(this.config));
+      const transport = buildMCPTransport(this.config);
+      getStderrTail = watchStdioStderr(transport, this.config.name);
+      await client.connect(transport);
       let tools: any[];
       try {
         ({ tools } = await client.listTools());
@@ -207,6 +242,12 @@ class UserConnection {
     try {
       return await this.connecting;
     } catch (err: any) {
+      // 子进程 stderr 尾部拼进错误信息：Connection closed 只说「进程死了」，
+      // 死因（npm 缓存不可写 / 网络失败 / 命令不存在）在 stderr 里
+      const tail = getStderrTail();
+      if (tail && err instanceof Error) {
+        err.message = `${err.message}｜子进程输出: ${tail.slice(-800)}`;
+      }
       this.lastError = err?.message || String(err);
       throw err;
     }

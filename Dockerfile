@@ -10,9 +10,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# 创建运行安全用户
+# 创建运行安全用户。
+# --create-home 是硬需求：stdio 型 MCP 连接器（全网热榜/X 数据/飞书/钉钉/语雀等）
+# 经 `npx -y <pkg>` 拉起子进程，npm 必须有可写的 ~/.npm 缓存；HOME 目录不存在时
+# npx 启动即崩退，SDK 只报 "MCP error -32000: Connection closed"，所有本地 stdio
+# 连接器全灭。ENV HOME 兜底：Docker 不保证按 passwd 自动设置 HOME 环境变量。
 RUN groupadd --system --gid 1001 nodejs && \
-    useradd --system --uid 1001 nextjs
+    useradd --system --uid 1001 --create-home nextjs
+ENV HOME=/home/nextjs
 
 # 复制公共静态资源与 standalone 产物
 COPY apps/web/public ./apps/web/public

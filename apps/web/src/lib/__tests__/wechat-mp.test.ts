@@ -133,7 +133,7 @@ describe('工具面:审批门与描述契约', () => {
     // 描述写明审批与每日上限(模型可见的契约)
     expect(draft.description).toContain('审批');
     expect(draft.description).toContain('上限');
-    expect(draft.description).toContain('工坊');
+    expect(draft.description).toContain('连接器页');
   });
 });
 
@@ -259,14 +259,14 @@ describe('create_draft execute 全链路(fetch 桩)', () => {
 });
 
 describe('check_setup 与凭证检查', () => {
-  it('未配置:返回引导文案,指向工坊凭证区而非连接器页', async () => {
+  it('未配置:返回引导文案,指向连接器页公众号卡片', async () => {
     const uid = 'wechat-t6';
     const check = wm.buildWechatMpTools(uid)[0];
     const r = await check.execute({}, { taskId: 'm', step: 1 });
     expect(r.success).toBe(false);
     expect(r.configured).toBe(false);
-    expect(r.message).toContain('工坊');
-    expect(r.message).not.toContain('连接器页');
+    expect(r.message).toContain('连接器页');
+    expect(r.message).toContain('微信公众号');
     expect(String(r.message)).toContain('AppID:AppSecret');
   });
 
@@ -282,7 +282,7 @@ describe('check_setup 与凭证检查', () => {
     expect(r2.appId).toBe('wx1234abcd');
   });
 
-  it('checkWechatMpCredential:Secret 错误(40001)→ 白话错误', async () => {
+  it('checkWechatMpCredential:Secret 错误(40001)→ 白话错误指向连接器页', async () => {
     const uid = 'wechat-t8';
     saveCred(uid, CRED);
     stubWechatFetch({
@@ -292,6 +292,31 @@ describe('check_setup 与凭证检查', () => {
     expect(r.ok).toBe(false);
     expect(r.appId).toBe('wx1234abcd');
     expect(r.error).toContain('AppID/AppSecret');
-    expect(r.error).toContain('工坊');
+    expect(r.error).toContain('连接器页');
+  });
+
+  it('换绑 appId 后旧 token 缓存立即失效(缓存键含 appId,不串号)', async () => {
+    const uid = 'wechat-t9';
+    saveCred(uid, CRED);
+    let tokenCalls = 0;
+    stubWechatFetch({
+      '/cgi-bin/stable_token': () => {
+        tokenCalls += 1;
+        return { access_token: `TOK-${tokenCalls}`, expires_in: 7200 };
+      },
+      '/cgi-bin/material/add_material': okMaterial,
+      '/cgi-bin/draft/add': okDraft,
+    });
+    const draft = wm.buildWechatMpTools(uid)[1];
+
+    const r1 = await draft.execute({ title: 't', markdown: BODY }, { taskId: 'm', step: 1 });
+    expect(r1.success).toBe(true);
+    expect(tokenCalls).toBe(1);
+
+    // 换绑到另一个 appId(模拟在连接器页改凭证):新 appId 的缓存键不同 → 重新取 token
+    saveCred(uid, 'wxyz9999:anothersecret');
+    const r2 = await draft.execute({ title: 't', markdown: BODY }, { taskId: 'm', step: 1 });
+    expect(r2.success).toBe(true);
+    expect(tokenCalls).toBe(2);
   });
 });

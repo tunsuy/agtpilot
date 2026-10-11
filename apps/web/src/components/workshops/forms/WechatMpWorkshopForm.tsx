@@ -1,8 +1,9 @@
 /**
- * 公众号文章工坊表单(scenario-loop:凭证彻底搬离连接器页)
+ * 公众号文章工坊表单
  * 主题/风格/篇数 → buildWorkshopRun 交给 Agent;场景档案自动注入(同小红书)。
- * 凭证区:GET /api/wechat-mp 状态;保存并测试(save→check)、清除(撤销授权);
- * 未配置不阻塞创作——投草稿时 wechat_mp_create_draft 会给出白话引导。
+ * 凭证在连接器页「微信公众号(草稿箱直连)」卡片配置(连接器页管「配了什么凭证」,
+ * 工坊页管「用它们完成什么事」);本表单只展示状态 + 测试连接,未配置不阻塞创作
+ * ——投草稿时 wechat_mp_create_draft 会给出白话引导。
  */
 import { useCallback, useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
@@ -17,8 +18,12 @@ interface Props {
   workshop: WorkshopDef;
   onRun: (prompt: string, title?: string) => void | Promise<void>;
   onClose: () => void;
+  /** 场景档案(WorkshopsView 预取下传);有值时注入 Prompt 并展示摘要条 */
   scenarioProfile?: ScenarioProfile | null;
+  /** 点击摘要条「查看/编辑」打开档案向导 */
   onEditProfile?: () => void;
+  /** 未配置凭证时跳连接器页配置(公众号凭证卡片) */
+  onOpenConnectors?: () => void;
 }
 
 interface CredState {
@@ -28,7 +33,7 @@ interface CredState {
   todayCount?: number;
 }
 
-export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile }: Props) {
+export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile, onOpenConnectors }: Props) {
   const saved = lastRunOf(workshop.id)?.params || {};
   const [topic, setTopic] = useState(typeof saved.topic === 'string' ? saved.topic : '');
   const [style, setStyle] = useState<string>(
@@ -36,9 +41,8 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
   );
   const [count, setCount] = useState<number>(typeof saved.count === 'number' ? saved.count : 1);
 
-  // ---- 凭证区(专用 /api/wechat-mp route;secret 永不回传) ----
+  // ---- 凭证状态(只读;读写都在连接器页,此处 GET /api/wechat-mp 查状态/测试) ----
   const [cred, setCred] = useState<CredState | null>(null); // null = 加载中
-  const [credential, setCredential] = useState('');
   const [credBusy, setCredBusy] = useState(false);
   const [credOk, setCredOk] = useState<string | null>(null);
   const [credErr, setCredErr] = useState<string | null>(null);
@@ -66,62 +70,20 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
     loadCred();
   }, [loadCred]);
 
-  const postCred = (body: Record<string, unknown>) =>
-    fetch('/api/wechat-mp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then((r) => r.json());
-
-  /** 保存并测试:save(格式校验前置)→ check(真实打微信接口,错误白话回显) */
-  const handleSaveAndCheck = async () => {
-    setCredBusy(true);
-    setCredOk(null);
-    setCredErr(null);
-    try {
-      const saved = await postCred({ action: 'save', credential: credential.trim() });
-      if (!saved.success) {
-        setCredErr(saved.error || '保存失败');
-        return;
-      }
-      const checked = await postCred({ action: 'check' });
-      if (checked.ok) {
-        setCredOk(`凭证有效 · AppID ${checked.appId || ''}`);
-        setCredential('');
-        await loadCred();
-      } else {
-        setCredErr(checked.error || '凭证校验未通过,请核对后重试');
-      }
-    } catch {
-      setCredErr('请求失败,请稍后重试');
-    } finally {
-      setCredBusy(false);
-    }
-  };
-
+  /** 测试连接:真实打微信接口,错误白话回显(secret 永不回传) */
   const handleCheck = async () => {
     setCredBusy(true);
     setCredOk(null);
     setCredErr(null);
     try {
-      const checked = await postCred({ action: 'check' });
-      if (checked.ok) setCredOk(`凭证有效 · AppID ${checked.appId || ''}`);
-      else setCredErr(checked.error || '凭证校验未通过');
-    } catch {
-      setCredErr('请求失败,请稍后重试');
-    } finally {
-      setCredBusy(false);
-    }
-  };
-
-  const handleClear = async () => {
-    setCredBusy(true);
-    setCredOk(null);
-    setCredErr(null);
-    try {
-      await postCred({ action: 'clear' });
-      setCredOk(null);
-      await loadCred();
+      const res = await fetch('/api/wechat-mp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'check' }),
+      });
+      const data = await res.json();
+      if (data.ok) setCredOk(`凭证有效 · AppID ${data.appId || ''}`);
+      else setCredErr(data.error || '凭证校验未通过,请在连接器页核对');
     } catch {
       setCredErr('请求失败,请稍后重试');
     } finally {
@@ -229,27 +191,24 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
         </div>
       </div>
 
-      {/* 凭证配置区(scenario-loop:从连接器页搬入工坊;secret 永不回传) */}
-      <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 space-y-2.5">
-        <div className="flex items-center gap-1.5">
-          <KeyRound className="h-3.5 w-3.5 text-violet-500" />
-          <span className="text-xs font-medium text-zinc-700">公众号凭证 · 草稿箱直投</span>
-        </div>
-
-        {credErr && (
-          <p className="text-[11px] text-red-600 leading-relaxed break-all">{credErr}</p>
-        )}
-        {credOk && (
-          <p className="text-[11px] text-emerald-600 leading-relaxed break-all">{credOk}</p>
-        )}
-
-        {cred?.configured ? (
-          <div className="space-y-2">
-            <p className="text-[11px] text-zinc-500 leading-relaxed">
-              已配置{cred.appId ? ` · AppID ${cred.appId}` : ''}
-              {typeof cred.dailyLimit === 'number' ? ` · 今日投草稿 ${cred.todayCount ?? 0}/${cred.dailyLimit} 次` : ''}
-            </p>
-            <div className="flex items-center gap-2">
+      {/* 凭证状态行:配置在连接器页;此处只看状态/测试(未配置不阻塞创作) */}
+      <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-700">
+            <KeyRound className="h-3.5 w-3.5 text-violet-500" />
+            {cred?.configured ? (
+              <span className="text-zinc-500 font-normal">
+                已配置{cred.appId ? ` · AppID ${cred.appId}` : ''}
+                {typeof cred.dailyLimit === 'number' ? ` · 今日投草稿 ${cred.todayCount ?? 0}/${cred.dailyLimit} 次` : ''}
+              </span>
+            ) : cred ? (
+              <span className="text-zinc-500 font-normal">公众号凭证未配置(投草稿时 Agent 会提示)</span>
+            ) : (
+              <span className="text-zinc-400 font-normal">凭证状态加载中…</span>
+            )}
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            {cred?.configured && (
               <button
                 type="button"
                 onClick={handleCheck}
@@ -258,42 +217,24 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
               >
                 {credBusy ? '测试中…' : '测试连接'}
               </button>
+            )}
+            {onOpenConnectors && (
               <button
                 type="button"
-                onClick={handleClear}
-                disabled={credBusy}
-                className="px-3 py-1 rounded-lg text-[11px] text-zinc-400 hover:text-red-500 transition disabled:opacity-50"
+                onClick={onOpenConnectors}
+                className="px-3 py-1 rounded-lg text-[11px] font-medium text-violet-600 hover:text-violet-800 transition"
               >
-                清除凭证
+                {cred?.configured ? '管理凭证' : '去连接器页配置'}
               </button>
-            </div>
+            )}
           </div>
-        ) : cred ? (
-          <div className="space-y-2">
-            <input
-              type="password"
-              value={credential}
-              onChange={(e) => setCredential(e.target.value)}
-              placeholder="AppID:AppSecret"
-              className={inputClass}
-              autoComplete="off"
-            />
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] text-zinc-400 leading-relaxed">
-                需已认证公众号;服务器 IP 需加入公众平台 IP 白名单。未配置不阻塞创作,投草稿时 Agent 会提示。
-              </span>
-              <button
-                type="button"
-                onClick={handleSaveAndCheck}
-                disabled={credBusy || !credential.trim()}
-                className="shrink-0 px-3 py-1 rounded-lg text-[11px] font-medium text-white bg-violet-600 hover:bg-violet-700 transition shadow-xs disabled:opacity-50"
-              >
-                {credBusy ? '测试中…' : '保存并测试'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <p className="text-[11px] text-zinc-400">凭证状态加载中…</p>
+        </div>
+        {credErr && <p className="text-[11px] text-red-600 leading-relaxed break-all">{credErr}</p>}
+        {credOk && <p className="text-[11px] text-emerald-600 leading-relaxed break-all">{credOk}</p>}
+        {cred && !cred.configured && (
+          <p className="text-[10px] text-zinc-400 leading-relaxed">
+            需已认证公众号 + 服务器 IP 加白名单;凭证按 AppID:AppSecret 格式在连接器页「微信公众号(草稿箱直连)」卡片填写。
+          </p>
         )}
       </div>
     </WorkshopModalShell>

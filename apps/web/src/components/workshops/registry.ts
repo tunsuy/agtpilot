@@ -97,7 +97,7 @@ export const WORKSHOPS: WorkshopDef[] = [
       { id: 'zhihu', name: '知乎热榜' },
       { id: 'exa', name: '网络搜索' },
     ],
-    note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议。满意的一篇点「投草稿箱」——经你逐次审批后写入公众号草稿箱(每日有次数上限),最终发布由你在公众平台后台人工完成,Agent 不碰任何发布/群发接口。凭证(AppID:AppSecret,需已认证公众号 + IP 白名单)在本表单凭证区配置,不占连接器页。',
+    note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议。满意的一篇点「投草稿箱」——经你逐次审批后写入公众号草稿箱(每日有次数上限),最终发布由你在公众平台后台人工完成,Agent 不碰任何发布/群发接口。凭证(AppID:AppSecret,需已认证公众号 + IP 白名单)在连接器页「微信公众号(草稿箱直连)」卡片配置,表单内可查看状态并测试连接。',
     profileSlot: 'wechat_mp',
     artifacts: [{ kind: 'article-package', label: '公众号文章包' }],
   },
@@ -112,7 +112,7 @@ export const WORKSHOPS: WorkshopDef[] = [
       { id: 'zhihu', name: '知乎热榜' },
       { id: 'exa', name: '网络搜索' },
     ],
-    note: 'Agent 产出正文/话题标签/配图建议。复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
+    note: 'Agent 产出正文/话题标签/配图建议。复制满意的一条 → 表单底部「唤起微博」→ 手机 App 粘贴、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
   },
   {
     id: 'video_douyin',
@@ -125,7 +125,7 @@ export const WORKSHOPS: WorkshopDef[] = [
       { id: 'zhihu', name: '知乎热榜' },
       { id: 'exa', name: '网络搜索' },
     ],
-    note: 'Agent 产出标题/分镜脚本/口播稿/标签/封面文案。你拍摄剪辑后 → 连接器页抖音「真机唤起」→ App 上传、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
+    note: 'Agent 产出标题/分镜脚本/口播稿/标签/封面文案。你拍摄剪辑后 → 表单底部「唤起抖音」→ App 上传、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
   },
   {
     id: 'video_bilibili',
@@ -138,7 +138,7 @@ export const WORKSHOPS: WorkshopDef[] = [
       { id: 'zhihu', name: '知乎热榜' },
       { id: 'exa', name: '网络搜索' },
     ],
-    note: 'Agent 产出标题/分镜脚本/口播稿/标签分区/封面文案。你拍摄剪辑后 → 连接器页B站「真机唤起」→ App 上传、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
+    note: 'Agent 产出标题/分镜脚本/口播稿/标签分区/封面文案。你拍摄剪辑后 → 表单底部「唤起哔哩哔哩」→ App 上传、人工核对后发布。已连接知乎 MCP 时选题走实时热榜。',
   },
   {
     id: 'email_triage',

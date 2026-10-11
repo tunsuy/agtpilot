@@ -18,7 +18,8 @@ import {
  * 发布动作始终由用户在公众平台后台人工完成(不提供 freepublish,内容安全人工终审)。
  * create_draft 为 dangerLevel high(编排器审批门,投递前用户逐次确认)
  * + 每日投递上限 + 全程审计(复用 user-store 写操作审计,成败都计)。
- * 凭证在「工坊 → 公众号文章工坊」表单内配置(专用 /api/wechat-mp route 读写)。
+ * 凭证在连接器页「微信公众号(草稿箱直连)」卡片配置(通用 /api/connectors 读写,
+ * 工坊表单经专用 /api/wechat-mp route 查状态/测试连接)。
  *
  * 常见错误白话化:40164=IP 白名单、48001=需认证、40001/40125=Secret 错误。
  * 测试可通过 WECHAT_MP_API_BASE 指向 mock 服务。
@@ -48,7 +49,7 @@ export function friendlyWechatError(errcode: number, errmsg: string): string {
     return `接口未授权(${errcode}):该公众号没有草稿箱/素材接口权限。草稿箱 API 仅对已认证公众号开放,请先完成微信认证。`;
   }
   if (errcode === 40001 || errcode === 40125 || errcode === 40013) {
-    return `AppID/AppSecret 校验失败(${errcode}):请在「工坊 → 公众号文章工坊」表单的凭证区重新核对「AppID:AppSecret」(公众平台 → 设置与开发 → 基本配置)。`;
+    return `AppID/AppSecret 校验失败(${errcode}):请在连接器页「微信公众号(草稿箱直连)」卡片重新核对「AppID:AppSecret」(公众平台 → 设置与开发 → 基本配置)。`;
   }
   if (errcode === 45009) return '接口调用频率超限(45009),请稍后或明天再试。';
   return `微信接口报错(${errcode}):${errmsg}`;
@@ -60,7 +61,9 @@ interface TokenEntry {
   token: string;
   expiresAt: number;
 }
+/** 缓存键含 appId:连接器页换绑凭证后旧 token 立即失效,不会继续写旧公众号 */
 const tokenCache = new Map<string, TokenEntry>();
+const tokenCacheKey = (userId: string, appId: string) => `${userId}:${appId}`;
 
 async function getAccessToken(
   userId: string,
@@ -70,10 +73,11 @@ async function getAccessToken(
   if (!cred) {
     return {
       error:
-        '未配置公众号凭证:请在「工坊 → 公众号文章工坊」表单的凭证区按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确保已完成微信认证 + 服务器 IP 已加白名单。',
+        '未配置公众号凭证:请在连接器页「微信公众号(草稿箱直连)」卡片按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确保已完成微信认证 + 服务器 IP 已加白名单。',
     };
   }
-  const cached = tokenCache.get(userId);
+  const cacheKey = tokenCacheKey(userId, cred.appId);
+  const cached = tokenCache.get(cacheKey);
   if (!force && cached && cached.expiresAt > Date.now()) return { token: cached.token };
   try {
     const res = await fetch(`${apiBase()}/cgi-bin/stable_token`, {
@@ -90,7 +94,7 @@ async function getAccessToken(
     if (!data.access_token) {
       return { error: friendlyWechatError(data.errcode ?? -1, data.errmsg || 'access_token 获取失败') };
     }
-    tokenCache.set(userId, {
+    tokenCache.set(cacheKey, {
       token: data.access_token,
       expiresAt: Date.now() + Math.max(60, (data.expires_in || 7200) - 300) * 1000,
     });
@@ -127,9 +131,11 @@ export async function checkWechatMpCredential(userId: string): Promise<{ ok: boo
   return { ok: true, appId: cred.appId };
 }
 
-/** 换绑/清除凭证时清掉内存 access_token 缓存,旧 token 立即失效 */
+/** 换绑/清除凭证时清掉内存 access_token 缓存(该用户全部 appId 的条目) */
 export function resetWechatMpTokenCache(userId: string): void {
-  tokenCache.delete(userId);
+  for (const key of tokenCache.keys()) {
+    if (key.startsWith(`${userId}:`)) tokenCache.delete(key);
+  }
 }
 
 // ---------- 封面图:纯 JS 生成渐变 PNG(无第三方依赖) ----------
@@ -409,7 +415,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
   const checkSetup: ToolDefinition = {
     name: 'wechat_mp_check_setup',
     description:
-      '诊断微信公众号草稿箱直连配置:校验 AppID:AppSecret 是否有效、能否获取 access_token,并把 IP 白名单(40164)/未认证(48001)/Secret 错误(40001)等问题翻译成可操作的中文指引。用户在「工坊 → 公众号文章工坊」表单的凭证区配置完成后应先调用本工具确认链路通畅。',
+      '诊断微信公众号草稿箱直连配置:校验 AppID:AppSecret 是否有效、能否获取 access_token,并把 IP 白名单(40164)/未认证(48001)/Secret 错误(40001)等问题翻译成可操作的中文指引。用户在连接器页「微信公众号(草稿箱直连)」卡片配置完成后应先调用本工具确认链路通畅。',
     dangerLevel: 'low',
     parameters: { type: 'object', properties: {} },
     execute: async () => {
@@ -419,7 +425,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
           success: false,
           configured: false,
           message:
-            '尚未配置公众号凭证。请引导用户到「工坊 → 公众号文章工坊」表单的凭证区按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确认:1) 公众号已完成微信认证;2) 服务器出口 IP 已加入该页 IP 白名单。',
+            '尚未配置公众号凭证。请引导用户到连接器页「微信公众号(草稿箱直连)」卡片按 AppID:AppSecret 格式填写(公众平台 → 设置与开发 → 基本配置),并确认:1) 公众号已完成微信认证;2) 服务器出口 IP 已加入该页 IP 白名单。',
         };
       }
       const tok = await getAccessToken(userId, true);
@@ -439,7 +445,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
   const createDraft: ToolDefinition = {
     name: 'wechat_mp_create_draft',
     description:
-      '把一篇 Markdown 文章经公众号排版(内联样式 HTML)+ 封面处理(可传图片 URL,不传则自动生成渐变占位封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在「工坊 → 公众号文章工坊」表单的凭证区配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
+      '把一篇 Markdown 文章经公众号排版(内联样式 HTML)+ 封面处理(可传图片 URL,不传则自动生成渐变占位封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在连接器页「微信公众号(草稿箱直连)」卡片配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
     dangerLevel: 'high',
     compensation: {
       kind: 'partially-reversible',

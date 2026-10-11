@@ -35,7 +35,7 @@ interface WorkshopsViewProps {
   missions?: Mission[];
 }
 
-/** 表单组件统一 props:scenarioProfile/onEditProfile 仅有 profileSlot 的工坊使用 */
+/** 表单组件统一 props:scenarioProfile/onEditProfile 仅有 profileSlot 的工坊使用;onOpenConnectors 供凭证在连接器页的工坊跳转配置 */
 interface WorkshopFormProps {
   workshop: WorkshopDef;
   onRun: WorkshopsViewProps['onRunPrompt'];
@@ -43,6 +43,7 @@ interface WorkshopFormProps {
   scenarioProfile?: ScenarioProfile | null;
   onEditProfile?: () => void;
   missions?: Mission[];
+  onOpenConnectors?: () => void;
 }
 
 /** id → 表单组件;新增工坊在此登记 */
@@ -323,6 +324,7 @@ export function WorkshopsView({
           scenarioProfile={activeProfile ?? null}
           onEditProfile={activeWorkshop.profileSlot ? () => setWizardKey(activeWorkshop.profileSlot!) : undefined}
           missions={missions}
+          onOpenConnectors={onOpenConnectors}
         />
       )}
 

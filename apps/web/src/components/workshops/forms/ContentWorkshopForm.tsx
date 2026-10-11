@@ -6,7 +6,7 @@
  * 触发时服务端按最新档案重建选题 prompt,结果以 DONE 任务交付并推送)。
  */
 import { useEffect, useState } from 'react';
-import { CalendarClock, Lightbulb, Loader2 } from 'lucide-react';
+import { CalendarClock, Lightbulb, Loader2, Smartphone } from 'lucide-react';
 import { XHS_WORKSHOP_STYLES, buildXhsWeeklyTopicsPrompt } from '../../../lib/xhs-workshop';
 import {
   WEIBO_WORKSHOP_STYLES,
@@ -17,6 +17,7 @@ import {
   hasRunningTopicMission,
   type TopicPicksMissionLike,
 } from '../../../lib/topic-picks';
+import { openAppScheme, isNativePlatform } from '../../../utils/nativeBridge';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { CronJobItem, Mission } from '../../../types/agent';
 import type { WorkshopDef } from '../registry';
@@ -36,6 +37,13 @@ interface Props {
   /** 全量任务列表(WorkshopsView 下传):弹窗内嵌最近一次选题清单的可勾选卡片 */
   missions?: Mission[];
 }
+
+/** 真机唤起配置(scenario-loop:免凭证平台卡片从连接器页搬进对应工坊;X 无工坊不迁) */
+const APP_LAUNCH: Record<string, { scheme: string; name: string; fallback: string }> = {
+  weibo: { scheme: 'sinaweibo://', name: '微博', fallback: 'https://m.weibo.cn' },
+  video_douyin: { scheme: 'snssdk1128://', name: '抖音', fallback: 'https://www.douyin.com' },
+  video_bilibili: { scheme: 'bilibili://', name: '哔哩哔哩', fallback: 'https://www.bilibili.com' },
+};
 
 /** 订阅日 chip 选项(cron day-of-week:周日 = 0) */
 const SUBSCRIBE_DAYS = [
@@ -69,6 +77,21 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
   const [count, setCount] = useState<number>(
     typeof saved.count === 'number' ? saved.count : 1
   );
+
+  // ---- 真机唤起(免凭证平台):手机端可拉起已登录的原生 App;桌面端 scheme 打不开,给灰提示 ----
+  const launch = APP_LAUNCH[workshop.id];
+  const [mobileCtx, setMobileCtx] = useState(false);
+  useEffect(() => {
+    let native = false;
+    try {
+      native = isNativePlatform();
+    } catch {
+      // Capacitor 桥未就绪时按 UA 兜底
+    }
+    const uaMobile =
+      typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    setMobileCtx(native || uaMobile);
+  }, []);
 
   // ---- 小红书订阅(scenario 型 cron 任务;同 key 全局至多一个) ----
   const [subsJob, setSubsJob] = useState<CronJobItem | null>(null);
@@ -299,6 +322,34 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
                 立即出选题
               </button>
             </>
+          )}
+        </div>
+      )}
+
+      {/* 真机唤起 · 免凭证发布(手机端拉起原生 App;桌面端灰提示) */}
+      {launch && (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5">
+          <span className="text-[11px] text-zinc-500 leading-relaxed min-w-0">
+            {isVideo ? '剪辑完成后' : '复制满意的内容后'}唤起{launch.name} App 粘贴,人工核对后发布。
+          </span>
+          {mobileCtx ? (
+            <button
+              type="button"
+              onClick={() => openAppScheme(launch.scheme, launch.fallback)}
+              className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition"
+              title={`在手机端直接唤起已登录的${launch.name} App`}
+            >
+              <Smartphone className="h-3 w-3" />
+              <span>唤起{launch.name}</span>
+            </button>
+          ) : (
+            <span
+              className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] text-zinc-400 bg-white border border-zinc-200"
+              title="真机唤起仅在手机浏览器或 Capacitor App 内可用"
+            >
+              <Smartphone className="h-3 w-3" />
+              <span>手机端可用</span>
+            </span>
           )}
         </div>
       )}

@@ -156,6 +156,7 @@ export function apply(ctx: Context) {
   // 2. 检索长期记忆 (memory_recall)
   ctx.agent.registerTool({
     name: 'memory_recall',
+    readOnly: true, // 只读并行门控:纯检索,无副作用
     baseline: true,
     description: '在执行任务前检索长期记忆库，主动获取过去沉淀的用户偏好、项目知识与历史踩坑规则。',
     parameters: {
@@ -188,6 +189,7 @@ export function apply(ctx: Context) {
   // 3. 列出所有沉淀的记忆 (memory_list)
   ctx.agent.registerTool({
     name: 'memory_list',
+    readOnly: true, // 只读并行门控:纯查询,无副作用
     description: '列出当前长期记忆库中所有已记录的用户偏好和项目知识清单。',
     parameters: {
       type: 'object',

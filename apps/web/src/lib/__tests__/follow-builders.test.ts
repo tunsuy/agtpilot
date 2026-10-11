@@ -234,10 +234,11 @@ describe('follow_builders_fetch_feed 工具', () => {
     return buildFollowBuildersTools()[0];
   }
 
-  it('工具契约:只读 low、参数为 rangeHours/categories', () => {
+  it('工具契约:只读 low、并行门控 readOnly、参数为 rangeHours/categories', () => {
     const t = tool();
     expect(t.name).toBe('follow_builders_fetch_feed');
     expect(t.dangerLevel).toBe('low');
+    expect(t.readOnly).toBe(true);
     expect((t.parameters as any).properties.rangeHours).toBeDefined();
     expect((t.parameters as any).properties.categories).toBeDefined();
   });

@@ -534,6 +534,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   // 6. 顶级 Firecrawl 反爬穿透与纯净 Markdown 抓取 (browser_firecrawl_scrape)
   ctx.agent.registerTool({
     name: 'browser_firecrawl_scrape',
+    readOnly: true, // 只读并行门控:Firecrawl API 调用,不触碰共享浏览器会话
     description:
       '使用 Firecrawl 网页爬取引擎抓取目标网址，返回纯净的高可读性 Markdown 正文（每次最多 4000 字符）。' +
       '内容被截断时携带 offset 参数（返回值中的 nextOffset）可续读后续内容，无需换 URL 重抓。',

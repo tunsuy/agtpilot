@@ -405,6 +405,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
   // 4. 安全读取文件 (sandbox_read_file)
   ctx.agent.registerTool({
     name: 'sandbox_read_file',
+    readOnly: true, // 只读并行门控:纯读文件,无副作用
     description: '读取工作区中指定文件的文本内容 (支持按行读取与防超大文件截断保护)',
     dangerLevel: 'low',
     parameters: {
@@ -508,6 +509,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
   // 6. 目录浏览 (sandbox_list_dir)
   ctx.agent.registerTool({
     name: 'sandbox_list_dir',
+    readOnly: true, // 只读并行门控:纯读目录,无副作用
     description: '列出指定目录下的所有文件与子文件夹详情',
     dangerLevel: 'low',
     parameters: {

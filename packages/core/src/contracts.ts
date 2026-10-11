@@ -147,6 +147,13 @@ export interface ToolDefinition {
   parameters: Record<string, any>;
   dangerLevel?: 'low' | 'medium' | 'high';
   /**
+   * 只读声明(只读并行门控):true = 本工具无任何副作用(不落盘、不改外部状态、
+   * 不发布、不独占共享会话)。同一轮里只读工具彼此并行执行;非只读工具
+   * (含未声明者,保守视为写)独占串行 —— 等在途只读结束后单独执行,
+   * 期间不放行任何调用。调度实现见 tool-gate.ts。
+   */
+  readOnly?: boolean;
+  /**
    * 副作用补偿声明(持久状态治理不变量 I5:每个行动都要留下可回滚的「把手」)。
    * 编排器在 tool_result 事件里透传给上层,由持久化层随任务步骤快照落盘 ——
    * reversible 支持事后撤销,irreversible 在事前就明确告知(配合审批门)。

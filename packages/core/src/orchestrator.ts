@@ -16,6 +16,7 @@ import {
 import { messageText, truncateToolOutput, TOOL_OUTPUT_LIMIT } from './text';
 import { compactConversationMessages } from './compaction';
 import { appendStepNotice } from './notice';
+import { ToolGate } from './tool-gate';
 import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
 /** 默认步数上限（一步 = 一轮模型调用）。可用环境变量 AGTPILOT_MAX_STEPS 或单任务 maxSteps 覆盖。
@@ -112,6 +113,9 @@ export class OrchestratorService extends Service {
     const FAILURE_GUARD_THRESHOLD = 3;
     // 效率统计（识别空转任务）
     const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0 };
+    // 只读并行门控(读写锁,一次任务一把):SDK 对同轮全部工具调用是 Promise.all
+    // 并发触发的 —— readOnly 工具保留并发红利,非只读工具经此收敛为独占串行
+    const toolGate = new ToolGate();
     // 当前步序号（1-based，供工具会话上下文使用）
     let currentStep = 1;
 
@@ -222,19 +226,24 @@ export class OrchestratorService extends Service {
           timestamp: Date.now(),
         });
 
-        // 真实调用工具
-        let output: any;
-        try {
-          output = await toolDef.execute(args, {
-            taskId,
-            step: currentStep,
-            env: options.taskEnv,
-            userId: options.userId,
-            sandbox: options.taskSandbox,
-          });
-        } catch (err: any) {
-          output = { error: err.message };
-        }
+        // 真实调用工具(经只读并行门控:readOnly 并行、其余独占串行。
+        // 审批等待在门控之外已完成,不会拿着独占锁等人工审批)
+        const invoke = async (): Promise<any> => {
+          try {
+            return await toolDef.execute(args, {
+              taskId,
+              step: currentStep,
+              env: options.taskEnv,
+              userId: options.userId,
+              sandbox: options.taskSandbox,
+            });
+          } catch (err: any) {
+            return { error: err.message };
+          }
+        };
+        let output: any = toolDef.readOnly
+          ? await toolGate.runReadonly(invoke)
+          : await toolGate.runExclusive(invoke);
 
         // 失败统计 + 连续失败守卫：同一工具连续失败达阈值时注入换思路提示
         //（仍然返回真实报错，不拦截执行，避免误杀合法的重试序列）

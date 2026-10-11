@@ -342,6 +342,7 @@ export function buildFollowBuildersTools(): ToolDefinition[] {
         '含各 feed 生成时间与新鲜度标记(stale 非空 = 上游可能断更,须在日报中提示)。' +
         '服务端有 30 分钟缓存,重复调用不增加上游压力。',
       dangerLevel: 'low',
+      readOnly: true, // 只读并行门控:纯拉取公共 feed,无副作用
       parameters: {
         type: 'object',
         properties: {

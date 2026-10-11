@@ -32,6 +32,7 @@ export function apply(ctx: Context) {
   // 1. git_status: 查看当前 Git 工作区与分支状态
   ctx.agent.registerTool({
     name: 'git_status',
+    readOnly: true, // 只读并行门控:execFile 直调 git 只读命令,不经 shell
     description: '查看当前工程代码库的 Git 状态（当前分支、未提交的文件变动、新增未跟踪文件）。',
     parameters: {
       type: 'object',
@@ -56,6 +57,7 @@ export function apply(ctx: Context) {
   // 2. git_diff: 获取修改对比 Diff
   ctx.agent.registerTool({
     name: 'git_diff',
+    readOnly: true, // 只读并行门控:execFile 直调 git 只读命令,不经 shell
     description: '获取代码库中工作区与暂存区的详细 Git Diff 补丁内容，用于精准代码审查。',
     parameters: {
       type: 'object',
@@ -220,6 +222,7 @@ export function apply(ctx: Context) {
   // 5. codebase_search_symbols: 全局代码符号与关键词检索
   ctx.agent.registerTool({
     name: 'codebase_search_symbols',
+    readOnly: true, // 只读并行门控:grep 检索,不经 shell,无副作用
     baseline: true,
     description: '在整个代码工程中高速全文检索符号、函数、类定义或关键字符串，自动忽略 node_modules、.git 等噪音目录。',
     parameters: {

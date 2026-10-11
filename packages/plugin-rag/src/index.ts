@@ -229,6 +229,7 @@ export function apply(ctx: Context) {
   // 2. 关键词检索召回 (rag_search)
   ctx.agent.registerTool({
     name: 'rag_search',
+    readOnly: true, // 只读并行门控:纯检索,无副作用
     description: '在当前用户的私有文档知识库中进行关键词相关度检索（bag-of-words 余弦相似度），召回最匹配的文档片段正文。只能检索到当前用户自己索引的文档。',
     parameters: {
       type: 'object',
@@ -252,6 +253,7 @@ export function apply(ctx: Context) {
   // 3. 列出已索引知识库清单 (rag_list_indexed)
   ctx.agent.registerTool({
     name: 'rag_list_indexed',
+    readOnly: true, // 只读并行门控:纯查询,无副作用
     description: '查看当前用户私有 RAG 知识库中已建立索引的全部文档列表及切片数量。',
     parameters: {
       type: 'object',

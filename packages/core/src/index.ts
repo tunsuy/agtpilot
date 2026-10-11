@@ -47,6 +47,7 @@ export {
 } from './compaction';
 export type { CompactOptions, DigestSummarizer } from './compaction';
 export { appendStepNotice, STEP_NOTICE_PREFIX } from './notice';
+export { ToolGate } from './tool-gate';
 export type { StepNoticeMessage } from './notice';
 export { isPrivateOrReservedIp, guardUrlHost } from './net-guard';
 export type { HostLookup, UrlGuardResult } from './net-guard';

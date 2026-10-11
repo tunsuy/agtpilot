@@ -265,6 +265,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   // 1. 统一多层级智能检索 (search_web)
   ctx.agent.registerTool({
     name: 'search_web',
+    readOnly: true, // 只读并行门控:纯检索,无副作用
     description: '在互联网上搜索指定关键词或问题，自动在 Exa 神经语义搜索、Tavily Agent 搜索以及零 Key 多源聚合(Bing 国际区真实摘要 + Google News RSS 时效新闻 + Wikipedia)间进行多层级路由与容灾降级。零 Key 层返回真实内容摘要,多数情况下无需再逐个打开网页',
     dangerLevel: 'low',
     parameters: {
@@ -343,6 +344,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   // 2. 独立暴露 Exa 神经语义搜索工具 (search_exa)
   ctx.agent.registerTool({
     name: 'search_exa',
+    readOnly: true, // 只读并行门控:纯检索,无副作用
     description: '使用 Exa.ai 原生神经网络语义搜索引擎，基于语义 Embedding 精准匹配网页与正文 Highlight',
     dangerLevel: 'low',
     // P5:config 未带 Key 时声明 env 依赖 —— 用户个人空间(taskEnv)或
@@ -377,6 +379,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   // 3. 独立暴露 Tavily 搜索工具 (search_tavily)
   ctx.agent.registerTool({
     name: 'search_tavily',
+    readOnly: true, // 只读并行门控:纯检索,无副作用
     description: '使用 Tavily 官方 API 搜索针对大模型优化的结构化内容',
     dangerLevel: 'low',
     // P5:同 search_exa,缺 Key 不挂载

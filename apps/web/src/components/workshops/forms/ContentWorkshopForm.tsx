@@ -191,10 +191,10 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
   };
 
   const topicPlaceholder = isVideo
-    ? '留空则由 Agent 抓知乎热榜/搜索热点自动选题,如：AI 工具月度盘点'
+    ? '留空则由 Agent 调研全网热榜/搜索热点自动选题,如：AI 工具月度盘点'
     : isXhs && scenarioProfile?.positioning.niche
     ? `留空则按你的「${scenarioProfile.positioning.niche}」赛道调研热点选题`
-    : '留空则由 Agent 抓知乎热榜/搜索热点自动选题,如：秋冬通勤穿搭';
+    : '留空则由 Agent 调研全网热榜/搜索热点自动选题,如：秋冬通勤穿搭';
 
   return (
     <WorkshopModalShell
@@ -310,7 +310,7 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
           ) : (
             <>
               <p className="text-[11px] text-zinc-500 leading-relaxed">
-                拉取小红书本周热门话题(需已开托管登录;未开则降级知乎热榜/搜索)生成选题清单,
+                拉取小红书本周热门话题(需已开托管登录;未开则降级全网热榜/搜索)生成选题清单,
                 勾 1-3 条一键成稿。发起后去任务页看执行,完成清单回到这里勾选。
               </p>
               <button

@@ -4,10 +4,11 @@
  * 分工:Agent 只做选题调研与内容生产;发布动作始终由用户在手机 App 内人工完成
  * (平台 2026-03 起严打「AI 托管代发」账号,辅助创作+人工发布是明确允许的形态)。
  * 选题数据源(scenario-loop P1):已登录时优先 xhs_read_creator_data 读真实热门话题/站内搜索,
- * 其次知乎热榜/搜索类 MCP 工具,再次网页搜索工具,最后模型自身知识。
+ * 其余情况按 workshop-sources.ts 的检索梯度(NewsNow 全网热榜/知乎/X/网页搜索)降级取材。
  * 场景档案(ScenarioProfile)注入:长期人设优先级高于单次风格选择(scenario-loop §2)。
  */
 import { buildProfileSection, type ScenarioProfile } from './scenario-profile';
+import { TOPIC_RESEARCH_SOURCES } from './workshop-sources';
 
 export const XHS_WORKSHOP_STYLES = ['种草推荐', '干货教程', '测评对比', '生活分享'] as const;
 
@@ -28,7 +29,9 @@ export function buildXhsWorkshopPrompt({ topic, style, count, profile }: XhsWork
   const profileSection = profile ? buildProfileSection(profile) : null;
   const topicSection = t
     ? `主题:${t}`
-    : `主题:未指定。请先调研热点选题——若可用 xhs_read_creator_data 工具(page=hot_topics 读热门话题,或 query=关键词搜索,合计至多 6 次),优先用它;其次使用知乎热榜/站内搜索类 MCP 工具(若已连接),再次使用可用的网页搜索工具;都没有则基于你自身知识选一个适合「${style}」的高共鸣主题,并注明选题数据来源。`;
+    : `主题:未指定。请先调研热点选题——若可用 xhs_read_creator_data 工具(page=hot_topics 读热门话题,或 query=关键词搜索,合计至多 6 次),优先用它;其余情况按以下数据源梯度调研(已连接哪个用哪个,数据来源必须真实):
+${TOPIC_RESEARCH_SOURCES}
+综合调研结果选一个适合「${style}」的高共鸣主题,并注明选题数据来源。`;
 
   return `【小红书内容工坊 · 半自动运营】
 你只负责选题与内容生产;最终发布由我在手机小红书 App 内人工确认完成,严禁替我自动发布或调用任何自动发帖工具。
@@ -87,8 +90,8 @@ export function buildXhsWeeklyTopicsPrompt({ count, profile }: XhsWeeklyTopicsIn
 
 ${profileSection ? `${profileSection}\n\n` : ''}选题调研要求(按优先级降级,数据来源必须真实):
 - ① 若可用 xhs_read_creator_data 工具:先用 page=hot_topics 读本周热门话题,再用 query=赛道关键词(从账号档案提取 2-3 个)搜索站内相关笔记热度。两类读取合计至多 6 次,达到上限会收到拒绝提示,届时直接进入 ②,不要重试。
-- ② 工具不可用或读取失败:改用知乎热榜/站内搜索类 MCP 工具(若已连接)调研近期热点,其次使用可用的网页搜索工具。
-- ③ 都没有:基于你自身知识判断。
+- ② 工具不可用或读取失败:按以下数据源梯度调研近期热点(已连接哪个用哪个):
+${TOPIC_RESEARCH_SOURCES}
 - 每条选题的【依据】必须注明数据来源(读了哪个页/搜了什么词/哪个热榜/或明确写「基于自身知识判断」),不得含糊。
 ${insightsNote}
 产出 ${n} 条选题,每条严格按以下字段顺序与字段头输出(字段头用【】,必须独占一行;除以下字段外不要输出寒暄、总结或任何多余段落):

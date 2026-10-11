@@ -50,10 +50,12 @@ describe('buildXhsWeeklyTopicsPrompt', () => {
     expect(prompt).toContain('page=hot_topics');
     expect(prompt).toContain('query=赛道关键词');
     expect(prompt).toContain('合计至多 6 次');
-    // ② ③ 降级
-    expect(prompt).toContain('知乎热榜');
+    // ② ③ 降级:共享检索梯度(NewsNow/知乎/X/网页搜索)→ 自身知识
+    expect(prompt).toContain('mcp_newsnow_');
+    expect(prompt).toContain('mcp_zhihu_');
+    expect(prompt).toContain('mcp_twitterapi_io_');
     expect(prompt).toContain('网页搜索');
-    expect(prompt).toContain('基于你自身知识判断');
+    expect(prompt).toContain('基于自身知识判断');
     // 【依据】必须注明数据来源
     expect(prompt).toContain('必须注明数据来源');
   });

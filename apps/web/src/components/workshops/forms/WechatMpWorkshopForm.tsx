@@ -159,7 +159,7 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
           placeholder={
             scenarioProfile?.positioning.niche
               ? `留空则按你的「${scenarioProfile.positioning.niche}」赛道调研热点选题`
-              : '留空则由 Agent 抓知乎热榜/搜索热点自动选题,如:AI 工具月度盘点'
+              : '留空则由 Agent 调研全网热榜/搜索热点自动选题,如:AI 工具月度盘点'
           }
           className={inputClass}
         />

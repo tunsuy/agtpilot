@@ -70,10 +70,12 @@ describe('buildXhsWorkshopPrompt · 主题缺省回退(P1 降级链)', () => {
     expect(prompt).toContain('xhs_read_creator_data');
     expect(prompt).toContain('page=hot_topics');
     expect(prompt).toContain('query=关键词');
-    // 降级链:②MCP/网页搜索 ③自身知识
-    expect(prompt).toContain('知乎热榜');
+    // 降级链②:共享检索梯度(NewsNow/知乎/X/网页搜索)③自身知识
+    expect(prompt).toContain('mcp_newsnow_');
+    expect(prompt).toContain('mcp_zhihu_');
+    expect(prompt).toContain('mcp_twitterapi_io_');
     expect(prompt).toContain('网页搜索');
-    expect(prompt).toContain('基于你自身知识');
+    expect(prompt).toContain('基于自身知识判断');
     expect(prompt).toContain('注明选题数据来源');
     // 提示嵌入风格语境
     expect(prompt).toContain('「干货教程」');

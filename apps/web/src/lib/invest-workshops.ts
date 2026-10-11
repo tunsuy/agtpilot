@@ -5,6 +5,7 @@
  * onRunPrompt 作为新任务交给 Agent 执行。行情数据全部来自用户已连接的 MCP 连接器:
  * - Tushare(A股/基金/财务/宏观)、Alpha Vantage(美股/外汇/大宗商品/加密货币)、
  *   CoinGecko(加密货币)、A股实时行情 AkShare(本地 stdio);
+ * - 消息面热榜:全网热榜 NewsNow(mcp_newsnow,含财联社/金十数据等财经榜);
  * - 缺数据源时用网络搜索尽力而为并明示,绝不编造行情数字。
  *
  * 合规红线:所有输出仅供参考、不构成投资建议;关键数据必须标注来源与时间戳;
@@ -79,7 +80,7 @@ const DATA_SOURCE_RULES = `数据源使用规则(只用已连接的,缺失的直
 - A股/基金行情、财务报表、宏观数据:优先 Tushare 工具与 A股实时行情工具(a_stock 开头)
 - 美股/外汇/大宗商品/加密货币行情与基本面:Alpha Vantage 工具(alphavantage 开头)
 - 加密货币价格/市值/链上数据:CoinGecko 工具(coingecko 开头)
-- 新闻、公告、研报观点、市场热点:网络搜索工具
+- 新闻、公告、研报观点、市场热点:若已连接全网热榜 NewsNow(mcp_newsnow_*,含财联社/金十数据/华尔街见闻等财经热榜)优先用它取热点,配合网络搜索工具交叉补充
 若以上行情连接器一个都没配置,用网络搜索尽力完成,并在报告开头注明「未配置行情连接器,数据可能有延迟;建议到连接器页配置 Tushare / Alpha Vantage / CoinGecko / A股实时行情以获得精确实时数据」。`;
 
 const COMPLIANCE_FOOTER = `合规红线(必须遵守):

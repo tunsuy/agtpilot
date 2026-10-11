@@ -77,12 +77,14 @@ describe('buildWechatMpWorkshopPrompt · 文章包格式契约', () => {
 });
 
 describe('buildWechatMpWorkshopPrompt · 主题缺省降级链', () => {
-  it('无主题:知乎热榜/网页搜索 → 自身知识并注明来源', () => {
+  it('无主题:检索梯度(NewsNow/知乎/X/网页搜索) → 自身知识并注明来源', () => {
     const prompt = buildWechatMpWorkshopPrompt({ style: '热点解读', count: 1 });
     expect(prompt).toContain('主题:未指定');
-    expect(prompt).toContain('知乎热榜');
+    expect(prompt).toContain('mcp_newsnow_');
+    expect(prompt).toContain('mcp_zhihu_');
+    expect(prompt).toContain('mcp_twitterapi_io_');
     expect(prompt).toContain('网页搜索');
-    expect(prompt).toContain('基于你自身知识');
+    expect(prompt).toContain('基于自身知识判断');
     expect(prompt).toContain('注明选题数据来源');
     // 风格嵌入选题语境
     expect(prompt).toContain('「热点解读」');

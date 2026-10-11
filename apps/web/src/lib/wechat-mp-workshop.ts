@@ -8,6 +8,7 @@
  */
 import { buildProfileSection, type ScenarioProfile } from './scenario-profile';
 import { WECHAT_MD_THEMES, DEFAULT_WECHAT_MD_THEME_ID } from './wechat-md-themes';
+import { TOPIC_RESEARCH_SOURCES } from './workshop-sources';
 
 export const WECHAT_MP_ARTICLE_STYLES = ['深度长文', '干货教程', '热点解读', '观点评论'] as const;
 
@@ -45,7 +46,9 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profil
   const themeId = WECHAT_MD_THEMES.some((x) => x.id === (theme || '').trim()) ? (theme || '').trim() : DEFAULT_WECHAT_MD_THEME_ID;
   const topicSection = t
     ? `主题:${t}`
-    : `主题:未指定。请先调研热点选题——优先使用知乎热榜/站内搜索类 MCP 工具(若已连接),其次使用可用的网页搜索工具;都没有则基于你自身知识选一个适合「${style}」的高共鸣主题,并注明选题数据来源。`;
+    : `主题:未指定。请先调研热点选题——按以下数据源梯度调研(已连接哪个用哪个,数据来源必须真实):
+${TOPIC_RESEARCH_SOURCES}
+综合调研结果选一个适合「${style}」的高共鸣主题,并注明选题数据来源。`;
 
   return `【微信公众号内容工坊 · 草稿箱直投】
 你负责选题、撰写公众号文章并整理成结构化文章包;把文章写入我的草稿箱用 wechat_mp_create_draft 工具,调用前我会收到审批确认;最终发布永远由我在公众平台后台人工完成,严禁调用任何群发/发布(freepublish)类接口。

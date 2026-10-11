@@ -4,8 +4,11 @@
  * 与小红书工坊(xhs-workshop.ts)同一分工:Agent 只做选题调研与内容生产;
  * 发布动作始终由用户在手机 App 内人工完成(「真机唤起」→ 粘贴 → 人工核对发布)。
  * 各平台均无对个人开放的自动发布 API,任何「自动代发」都违反平台规则,严禁实现。
- * 选题优先走已连接的知乎热榜/搜索类 MCP 工具,其次网页搜索工具,最后模型自身知识。
+ * 选题数据源统一走 workshop-sources.ts 的检索梯度(NewsNow 全网热榜/知乎/X/网页搜索),
+ * 微博工坊额外点名 NewsNow 的「微博实时热搜」;最后模型自身知识兜底。
  */
+
+import { TOPIC_RESEARCH_SOURCES } from './workshop-sources';
 
 // ---------- 微博 ----------
 
@@ -25,7 +28,9 @@ export function buildWeiboWorkshopPrompt({ topic, style, count }: WeiboWorkshopI
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
   const topicSection = t
     ? `主题:${t}`
-    : `主题:未指定。请先调研热点选题——优先使用知乎热榜/站内搜索类 MCP 工具(若已连接),其次使用可用的网页搜索工具;都没有则基于你自身知识选一个适合「${style}」、有公共讨论度的主题,并简述选题理由。`;
+    : `主题:未指定。请先调研热点选题——若已连接全网热榜 NewsNow(mcp_newsnow_*),优先读「微博实时热搜」榜(与微博场景最贴合);其余情况按以下数据源梯度调研(已连接哪个用哪个,数据来源必须真实):
+${TOPIC_RESEARCH_SOURCES}
+综合调研结果选一个适合「${style}」、有公共讨论度的主题,并简述选题理由。`;
 
   return `【微博内容工坊 · 半自动运营】
 你只负责选题与内容生产;最终发布由我在手机微博 App 内人工确认完成,严禁替我自动发布或调用任何自动发帖工具。
@@ -90,7 +95,9 @@ export function buildVideoScriptPrompt({ topic, platform, duration, count }: Vid
   const p = PLATFORM_NOTES[platform] || PLATFORM_NOTES.douyin;
   const topicSection = t
     ? `主题:${t}`
-    : `主题:未指定。请先调研热点选题——优先使用知乎热榜/站内搜索类 MCP 工具(若已连接),其次使用可用的网页搜索工具;都没有则基于你自身知识选一个适合${p.name}「${duration}」时长、有传播潜力的主题,并简述选题理由。`;
+    : `主题:未指定。请先调研热点选题——按以下数据源梯度调研(已连接哪个用哪个,数据来源必须真实):
+${TOPIC_RESEARCH_SOURCES}
+综合调研结果选一个适合${p.name}「${duration}」时长、有传播潜力的主题,并简述选题理由。`;
 
   return `【${p.name}短视频脚本工坊 · 半自动运营】
 你只负责选题与脚本创作;拍摄与发布由我人工完成,严禁替我自动发布或调用任何自动投稿工具。

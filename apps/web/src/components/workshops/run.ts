@@ -54,6 +54,7 @@ export function buildWorkshopRun(
           topic: str(params.topic),
           style,
           count: num(params.count),
+          ...(params.theme ? { theme: str(params.theme) } : {}),
           ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
         }),
         title: `公众号文章工坊 · ${style}`,

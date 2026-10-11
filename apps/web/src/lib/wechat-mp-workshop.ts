@@ -7,8 +7,12 @@
  * 场景档案(ScenarioProfile)注入:长期人设优先级高于单次风格选择(scenario-loop §2)。
  */
 import { buildProfileSection, type ScenarioProfile } from './scenario-profile';
+import { WECHAT_MD_THEMES, DEFAULT_WECHAT_MD_THEME_ID } from './wechat-md-themes';
 
 export const WECHAT_MP_ARTICLE_STYLES = ['深度长文', '干货教程', '热点解读', '观点评论'] as const;
+
+/** 排版主题选项(供表单 chip 与 prompt 共用;id 透传 wechat_mp_create_draft 的 theme 参数) */
+export const WECHAT_MP_THEME_OPTIONS = WECHAT_MD_THEMES.map((t) => ({ id: t.id, name: t.name }));
 
 /**
  * 主题方向预设(2026-10-10 与负责人定:先 AI 垂类,「看行业/追新/上手」三视角不重样)。
@@ -28,14 +32,17 @@ export interface WechatMpWorkshopInput {
   style: string;
   /** 产出篇数 1-3 */
   count: number;
+  /** 排版主题 id(wechat-md-themes);缺省默认主题 */
+  theme?: string;
   /** 场景档案;无档案或档案为空时不注入(prompt 与无档案时逐字节一致) */
   profile?: ScenarioProfile;
 }
 
-export function buildWechatMpWorkshopPrompt({ topic, style, count, profile }: WechatMpWorkshopInput): string {
+export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profile }: WechatMpWorkshopInput): string {
   const t = (topic || '').trim();
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
   const profileSection = profile ? buildProfileSection(profile) : null;
+  const themeId = WECHAT_MD_THEMES.some((x) => x.id === (theme || '').trim()) ? (theme || '').trim() : DEFAULT_WECHAT_MD_THEME_ID;
   const topicSection = t
     ? `主题:${t}`
     : `主题:未指定。请先调研热点选题——优先使用知乎热榜/站内搜索类 MCP 工具(若已连接),其次使用可用的网页搜索工具;都没有则基于你自身知识选一个适合「${style}」的高共鸣主题,并注明选题数据来源。`;
@@ -45,6 +52,7 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, profile }: We
 ${profileSection ? `\n${profileSection}\n` : ''}
 ${topicSection}
 文章风格:${style}
+排版主题:${themeId}(投草稿箱时把该值作为 wechat_mp_create_draft 的 theme 参数传入)
 产出数量:${n} 篇
 
 每篇文章是一个「文章包」,严格按以下字段顺序与字段头输出(字段头用【】,必须独占一行;除以下字段外不要输出寒暄、总结或任何多余段落):

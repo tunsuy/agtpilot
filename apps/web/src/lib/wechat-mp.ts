@@ -1,5 +1,7 @@
 import * as zlib from 'zlib';
 import type { ToolDefinition } from '@agtpilot/core';
+import { renderWechatMarkdown } from './wechat-md-render';
+import { WECHAT_MD_THEMES, DEFAULT_WECHAT_MD_THEME_ID } from './wechat-md-themes';
 import {
   getUserConnectors,
   getBrowserAudit,
@@ -210,137 +212,16 @@ export function generateCoverPng(seed: string): Buffer {
 }
 
 // ---------- Markdown → 公众号 HTML(内联样式) ----------
+// 渲染核心已升级为 doocs/md 式主题体系(markdown-it + 主题 CSS + juice 内联),
+// 实现在 wechat-md-render.ts / wechat-md-themes.ts;此处保留入口转发:
+// email-smtp.ts 复用同一渲染器(邮件客户端同样只认内联样式)。
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function inlineMd(s: string): string {
-  const codes: string[] = [];
-  let out = s.replace(/`([^`]+)`/g, (_, c) => {
-    codes.push(c);
-    return `\u0000${codes.length - 1}\u0000`;
-  });
-  out = escapeHtml(out);
-  out = out.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)\)/g,
-    '<img src="$2" alt="$1" style="max-width:100%;border-radius:8px;margin:8px 0;display:block;">'
-  );
-  out = out.replace(
-    /\[([^\]]+)\]\(([^)\s]+)\)/g,
-    '<a href="$2" style="color:#576b95;text-decoration:none;">$1</a>'
-  );
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong style="color:#222;">$1</strong>');
-  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  out = out.replace(/\u0000(\d+)\u0000/g, (_, i) =>
-    `<code style="background:#f5f5f5;padding:2px 4px;border-radius:4px;font-size:14px;color:#c7254e;">${escapeHtml(
-      codes[+i]
-    )}</code>`
-  );
-  return out;
-}
-
-/** 行级 Markdown 解析:标题/段落/列表/引用/代码块/分割线/图片,产出带内联样式的公众号 HTML */
-export function markdownToWechatHtml(md: string): string {
-  const lines = (md || '').replace(/\r\n/g, '\n').split('\n');
-  const out: string[] = [];
-  let i = 0;
-  let listBuf: { type: 'ul' | 'ol'; items: string[] } | null = null;
-  const flushList = () => {
-    if (!listBuf) return;
-    out.push(
-      `<${listBuf.type} style="margin:8px 0;padding-left:24px;">${listBuf.items
-        .map((it) => `<li style="margin:4px 0;line-height:1.8;">${it}</li>`)
-        .join('')}</${listBuf.type}>`
-    );
-    listBuf = null;
-  };
-  const blockStart = /^(#{1,4}\s|```|>|\s*(---|\*\*\*)\s*$|\s*[-*+]\s|\s*\d+[.)]\s)/;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^```/.test(line)) {
-      flushList();
-      const buf: string[] = [];
-      i++;
-      while (i < lines.length && !/^```/.test(lines[i])) {
-        buf.push(lines[i]);
-        i++;
-      }
-      i++; // 跳过结尾 fence
-      out.push(
-        `<pre style="background:#f6f8fa;padding:12px;border-radius:8px;overflow-x:auto;font-size:13px;line-height:1.6;margin:10px 0;"><code>${escapeHtml(
-          buf.join('\n')
-        )}</code></pre>`
-      );
-      continue;
-    }
-    const h = line.match(/^(#{1,4})\s+(.*)$/);
-    if (h) {
-      flushList();
-      const lv = h[1].length;
-      const tag = `h${Math.min(lv, 3)}`;
-      const size = lv === 1 ? '20px' : lv === 2 ? '18px' : '16px';
-      out.push(
-        `<${tag} style="font-size:${size};font-weight:700;color:#222;margin:18px 0 10px;line-height:1.4;">${inlineMd(
-          h[2]
-        )}</${tag}>`
-      );
-      i++;
-      continue;
-    }
-    if (/^\s*(---|\*\*\*)\s*$/.test(line)) {
-      flushList();
-      out.push('<hr style="border:none;border-top:1px solid #e5e5e5;margin:16px 0;">');
-      i++;
-      continue;
-    }
-    const q = line.match(/^>\s?(.*)$/);
-    if (q) {
-      flushList();
-      const buf: string[] = [q[1]];
-      i++;
-      while (i < lines.length) {
-        const q2 = lines[i].match(/^>\s?(.*)$/);
-        if (!q2) break;
-        buf.push(q2[1]);
-        i++;
-      }
-      out.push(
-        `<blockquote style="border-left:3px solid #d0d0d0;padding:6px 12px;color:#666;background:#fafafa;margin:10px 0;border-radius:0 6px 6px 0;">${buf
-          .map((b) => inlineMd(b))
-          .join('<br>')}</blockquote>`
-      );
-      continue;
-    }
-    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
-    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (ul || ol) {
-      const type: 'ul' | 'ol' = ul ? 'ul' : 'ol';
-      const text = ul ? ul[1] : ol![1];
-      if (!listBuf || listBuf.type !== type) {
-        flushList();
-        listBuf = { type, items: [] };
-      }
-      listBuf.items.push(inlineMd(text));
-      i++;
-      continue;
-    }
-    if (!line.trim()) {
-      flushList();
-      i++;
-      continue;
-    }
-    flushList();
-    const buf: string[] = [line];
-    i++;
-    while (i < lines.length && lines[i].trim() && !blockStart.test(lines[i])) {
-      buf.push(lines[i]);
-      i++;
-    }
-    out.push(`<p style="margin:10px 0;line-height:1.8;">${buf.map((b) => inlineMd(b)).join('<br>')}</p>`);
-  }
-  flushList();
-  return `<section style="font-size:15px;color:#3f3f3f;letter-spacing:0.3px;">${out.join('\n')}</section>`;
+/**
+ * Markdown → 公众号可用的内联样式 HTML。
+ * @param themeId 排版主题 id(wechat-md-themes.ts);缺省/未注册 → 默认主题
+ */
+export function markdownToWechatHtml(md: string, themeId?: string): string {
+  return renderWechatMarkdown(md, themeId);
 }
 
 /** 摘要兜底:去 Markdown 语法后截取 */
@@ -445,7 +326,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
   const createDraft: ToolDefinition = {
     name: 'wechat_mp_create_draft',
     description:
-      '把一篇 Markdown 文章经公众号排版(内联样式 HTML)+ 封面处理(可传图片 URL,不传则自动生成渐变占位封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在连接器页「微信公众号(草稿箱直连)」卡片配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
+      '把一篇 Markdown 文章经公众号排版(四套主题可选:微信绿/科技蓝/暖橙/极简黑白,内联样式 HTML)+ 封面处理(可传图片 URL,不传则自动生成渐变占位封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在连接器页「微信公众号(草稿箱直连)」卡片配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
     dangerLevel: 'high',
     compensation: {
       kind: 'partially-reversible',
@@ -456,6 +337,11 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
       properties: {
         title: { type: 'string', description: '文章标题,不超过 64 字,超长自动截断' },
         markdown: { type: 'string', description: '文章正文,Markdown 格式(标题/列表/引用/代码块/图片均可)' },
+        theme: {
+          type: 'string',
+          description: `排版主题 id:${WECHAT_MD_THEMES.map((t) => `${t.id}(${t.name})`).join(' / ')};缺省为 ${DEFAULT_WECHAT_MD_THEME_ID}`,
+          enum: WECHAT_MD_THEMES.map((t) => t.id),
+        },
         author: { type: 'string', description: '作者名(可选)' },
         digest: { type: 'string', description: '摘要,不超过 120 字(可选,缺省自动从正文提取)' },
         cover_url: { type: 'string', description: '封面图 URL(可选,不传则自动生成占位封面,用户可在后台替换)' },
@@ -464,7 +350,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
       required: ['title', 'markdown'],
     },
     execute: async (args: any, session: any) => {
-      const { title, markdown, author, digest, cover_url, content_source_url } = args || {};
+      const { title, markdown, theme, author, digest, cover_url, content_source_url } = args || {};
       const missionId = session?.taskId;
       const t = String(title || '').trim();
       const md = String(markdown || '');
@@ -505,7 +391,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
         return { success: false, error: cover.error };
       }
 
-      const content = markdownToWechatHtml(md);
+      const content = markdownToWechatHtml(md, typeof theme === 'string' ? theme : undefined);
       if (Buffer.byteLength(content, 'utf8') > 1.9 * 1024 * 1024) {
         auditFailure('content_too_large');
         return { success: false, error: '正文过长(公众号上限约 2MB),请精简后重试' };

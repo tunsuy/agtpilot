@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
-import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS } from '../../../lib/wechat-mp-workshop';
+import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS, WECHAT_MP_THEME_OPTIONS } from '../../../lib/wechat-mp-workshop';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
@@ -40,6 +40,10 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
     typeof saved.style === 'string' ? saved.style : WECHAT_MP_ARTICLE_STYLES[0]
   );
   const [count, setCount] = useState<number>(typeof saved.count === 'number' ? saved.count : 1);
+  // 排版主题:投草稿时作为 wechat_mp_create_draft 的 theme 参数,决定公众号内联样式
+  const [theme, setTheme] = useState<string>(
+    typeof saved.theme === 'string' ? saved.theme : WECHAT_MP_THEME_OPTIONS[0].id
+  );
 
   // ---- 凭证状态(只读;读写都在连接器页,此处 GET /api/wechat-mp 查状态/测试) ----
   const [cred, setCred] = useState<CredState | null>(null); // null = 加载中
@@ -91,7 +95,7 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
     }
   };
 
-  const params = { topic, style, count };
+  const params = { topic, style, count, theme };
   const preview = buildWorkshopRun(
     workshop.id,
     params,
@@ -167,6 +171,17 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
           options={WECHAT_MP_ARTICLE_STYLES.map((s) => ({ id: s, name: s }))}
           value={style}
           onChange={setStyle}
+          accent={workshop.accent}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <FieldLabel optional>排版主题</FieldLabel>
+        {/* 投草稿时经 theme 参数传给 wechat_mp_create_draft,决定公众号正文内联样式 */}
+        <ChipGroup
+          options={WECHAT_MP_THEME_OPTIONS}
+          value={theme}
+          onChange={setTheme}
           accent={workshop.accent}
         />
       </div>

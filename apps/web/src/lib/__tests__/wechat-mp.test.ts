@@ -155,11 +155,13 @@ describe('create_draft execute 全链路(fetch 桩)', () => {
     expect(us.getBrowserAudit(uid)).toHaveLength(0);
   });
 
-  it('成功链路:三段 fetch(token→add_material→draft/add)→ 审计 success + missionId + 今日用量', async () => {
+  it('成功链路:四段 fetch(token→commons检索→add_material→draft/add)→ 审计 success + missionId + 今日用量', async () => {
     const uid = 'wechat-t2';
     saveCred(uid, CRED);
     const fetchMock = stubWechatFetch({
       '/cgi-bin/stable_token': okToken,
+      // commons 无可用图 → 回退纯排版封面(无浏览器环境再回退渐变)
+      'commons.wikimedia.org': () => ({ query: { pages: {} } }),
       '/cgi-bin/material/add_material': okMaterial,
       '/cgi-bin/draft/add': okDraft,
     });
@@ -173,12 +175,13 @@ describe('create_draft execute 全链路(fetch 桩)', () => {
     expect(r.draft_media_id).toBe('DRAFT_MEDIA_ID');
     expect(r.message).toContain('今日已用 1/3');
     expect(r.message).toContain('人工');
-    // 三段调用顺序:stable_token → add_material(占位封面)→ draft/add
+    // 四段调用顺序:stable_token → commons(主题图检索)→ add_material → draft/add
     const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-    expect(urls).toHaveLength(3);
+    expect(urls).toHaveLength(4);
     expect(urls[0]).toContain('stable_token');
-    expect(urls[1]).toContain('add_material');
-    expect(urls[2]).toContain('draft/add');
+    expect(urls[1]).toContain('commons.wikimedia.org');
+    expect(urls[2]).toContain('add_material');
+    expect(urls[3]).toContain('draft/add');
     // 审计落盘且带 missionId
     const audit = us.getBrowserAudit(uid);
     expect(audit).toHaveLength(1);
@@ -242,6 +245,7 @@ describe('create_draft execute 全链路(fetch 桩)', () => {
     saveCred(uid, CRED);
     const fetchMock = stubWechatFetch({
       '/cgi-bin/stable_token': okToken,
+      'commons.wikimedia.org': () => ({ query: { pages: {} } }),
       '/cgi-bin/material/add_material': okMaterial,
       '/cgi-bin/draft/add': okDraft,
     });
@@ -252,9 +256,317 @@ describe('create_draft execute 全链路(fetch 桩)', () => {
     expect(r.success).toBe(true);
     expect((r.title as string).length).toBeLessThanOrEqual(64);
     // 请求体里的 digest 来自正文兜底(deriveDigest)
-    const body = JSON.parse(fetchMock.mock.calls[2][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[3][1].body);
     expect(body.articles[0].digest.length).toBeGreaterThan(0);
     expect(body.articles[0].digest.length).toBeLessThanOrEqual(120);
+  });
+});
+
+/** fake 浏览器:acquirePage → 共享页(只许 context(),碰其他方法即记为污染);context().newPage() → 临时页 */
+function fakeCoverBrowser(opts: { failScreenshot?: boolean } = {}) {
+  let acquired = 0;
+  const tempCalls: Array<{ m: string; a?: any }> = [];
+  let closed = false;
+  const temp = {
+    setViewportSize: async (v: any) => tempCalls.push({ m: 'setViewportSize', a: v }),
+    setContent: async (html: string, o?: any) => tempCalls.push({ m: 'setContent', a: html }),
+    waitForTimeout: async (ms: number) => tempCalls.push({ m: 'waitForTimeout', a: ms }),
+    screenshot: async (o: any) => {
+      tempCalls.push({ m: 'screenshot', a: o });
+      if (opts.failScreenshot) throw new Error('shot fail');
+      return Buffer.from('PNGCOVER_BYTES');
+    },
+    close: async () => {
+      closed = true;
+    },
+  };
+  const shared = {
+    // 共享页被导航/操作即污染(封面渲染只许开临时标签页)
+    polluted: 0,
+    goto: async () => {
+      shared.polluted++;
+    },
+    context: () => ({ newPage: async () => temp }),
+  };
+  const svc = {
+    acquirePage: async () => {
+      acquired++;
+      return shared;
+    },
+  };
+  return { svc, shared, temp, tempCalls, acquired: () => acquired, isClosed: () => closed };
+}
+
+
+describe('内容排版封面(浏览器临时标签页渲染)', () => {
+  it('渲染成功:900×383 临时页渲染 + 截图 + 关页;共享页零污染;标题/摘要/主题色入图', async () => {
+    const fb = fakeCoverBrowser();
+    const png = await wm.renderContentCoverPng(fb.svc, 'u-cover', {
+      title: '大模型落地实践<b>指南</b>',
+      digest: '从场景到工程的一揽子路径。',
+      author: '老王',
+      themeId: 'warm-orange',
+    });
+    expect(png).not.toBeNull();
+    expect(png!.toString()).toBe('PNGCOVER_BYTES');
+    // 视口与截图参数
+    expect(fb.tempCalls.find((c) => c.m === 'setViewportSize')?.a).toEqual({ width: 900, height: 383 });
+    expect(fb.tempCalls.find((c) => c.m === 'screenshot')?.a?.type).toBe('png');
+    // HTML 转义 + 摘要 + 作者 + 主题 accent(暖橙)入图
+    const html = fb.tempCalls.find((c) => c.m === 'setContent')?.a as string;
+    expect(html).toContain('大模型落地实践&lt;b&gt;指南&lt;/b&gt;');
+    expect(html).toContain('从场景到工程的一揽子路径。');
+    expect(html).toContain('老王');
+    expect(html).toContain('#c05a10');
+    expect(html).toContain('-webkit-line-clamp: 2');
+    // 临时页关闭;共享页未被动过
+    expect(fb.isClosed()).toBe(true);
+    expect(fb.shared.polluted).toBe(0);
+    expect(fb.acquired()).toBe(1);
+  });
+
+  it('截图抛错 → 返回 null(调用方回退渐变),临时页仍被关闭', async () => {
+    const fb = fakeCoverBrowser({ failScreenshot: true });
+    const png = await wm.renderContentCoverPng(fb.svc, 'u-cover2', { title: 't' });
+    expect(png).toBeNull();
+    expect(fb.isClosed()).toBe(true);
+  });
+
+  it('execute 集成:无 cover_url 且图库无可用图 → 浏览器渲染纯排版封面上传;正文主题色一致', async () => {
+    const uid = 'wechat-cover1';
+    saveCred(uid, CRED);
+    const fetchMock = stubWechatFetch({
+      '/cgi-bin/stable_token': okToken,
+      'commons.wikimedia.org': () => ({ query: { pages: {} } }),
+      '/cgi-bin/material/add_material': okMaterial,
+      '/cgi-bin/draft/add': okDraft,
+    });
+    const fb = fakeCoverBrowser();
+    const draft = wm.buildWechatMpTools(uid, fb.svc)[1];
+
+    const r = await draft.execute(
+      { title: '智能体年度观察', markdown: BODY, digest: '一年内值得记住的变化。', theme: 'classic-green' },
+      { taskId: 'm-cover', step: 1 }
+    );
+    expect(r.success).toBe(true);
+    expect(r.cover).toContain('排版封面');
+    expect(r.coverImageSource).toBeUndefined();
+    // 上传的就是渲染出的字节(FormData 的 media blob;调用序:token→commons→add_material→draft)
+    const form = fetchMock.mock.calls[2][1].body as FormData;
+    const blob = form.get('media') as Blob;
+    expect(Buffer.from(await blob.arrayBuffer()).toString()).toBe('PNGCOVER_BYTES');
+    // HTML 用 classic-green 主题色(微信绿),纯排版无照片底
+    const html = fb.tempCalls.find((c) => c.m === 'setContent')?.a as string;
+    expect(html).toContain('#0a9d4e');
+    expect(html).not.toContain('data:image/');
+    expect(fb.shared.polluted).toBe(0);
+  });
+
+  it('execute 集成:浏览器渲染失败 → 回退渐变占位,不阻塞投草稿', async () => {
+    const uid = 'wechat-cover2';
+    saveCred(uid, CRED);
+    stubWechatFetch({
+      '/cgi-bin/stable_token': okToken,
+      'commons.wikimedia.org': () => ({ query: { pages: {} } }),
+      '/cgi-bin/material/add_material': okMaterial,
+      '/cgi-bin/draft/add': okDraft,
+    });
+    const fb = fakeCoverBrowser({ failScreenshot: true });
+    const draft = wm.buildWechatMpTools(uid, fb.svc)[1];
+
+    const r = await draft.execute({ title: 't', markdown: BODY }, { taskId: 'm', step: 1 });
+    expect(r.success).toBe(true);
+    expect(r.cover).toContain('渐变占位');
+  });
+
+  it('execute 集成:指定 cover_url → 完全不碰浏览器', async () => {
+    const uid = 'wechat-cover3';
+    saveCred(uid, CRED);
+    stubWechatFetch({
+      '/cgi-bin/stable_token': okToken,
+      '/cgi-bin/material/add_material': okMaterial,
+      '/cgi-bin/draft/add': okDraft,
+    });
+    // cover_url 下载走 fetch 桩:额外路由 image.example.com
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: any) => {
+        const s = String(url);
+        if (s.includes('stable_token')) return { ok: true, json: async () => okToken(''), headers: new Map() };
+        if (s.includes('add_material')) return { ok: true, json: async () => okMaterial(''), headers: new Map() };
+        if (s.includes('draft/add')) return { ok: true, json: async () => okDraft(''), headers: new Map() };
+        if (s.includes('example.com')) {
+          return {
+            ok: true,
+            json: async () => ({}),
+            headers: new Map([['content-type', 'image/png']]),
+            arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+          };
+        }
+        throw new Error(`unexpected fetch: ${s}`);
+      })
+    );
+    const fb = fakeCoverBrowser();
+    const draft = wm.buildWechatMpTools(uid, fb.svc)[1];
+
+    const r = await draft.execute(
+      { title: 't', markdown: BODY, cover_url: 'https://example.com/cover.png' },
+      { taskId: 'm', step: 1 }
+    );
+    expect(r.success).toBe(true);
+    expect(r.cover).toBe('使用指定封面图');
+    expect(fb.acquired()).toBe(0);
+  });
+});
+
+describe('主题配图检索(Wikimedia Commons)', () => {
+  const PHOTO = Buffer.from('P'.repeat(6000)); // ≥5KB 才过大小下限
+  const PHOTO2 = Buffer.from('Q'.repeat(6000));
+
+  function commonsPage(id: number, o: { w: number; h: number; license: string; mime?: string; thumb?: string }) {
+    return {
+      pageid: id,
+      title: `File:test${id}.jpg`,
+      imageinfo: [
+        {
+          thumburl: o.thumb || `https://commons.example/thumb${id}.jpg`,
+          url: `https://commons.example/file${id}.jpg`,
+          descriptionurl: `https://commons.example/wiki/File:test${id}.jpg`,
+          width: o.w,
+          height: o.h,
+          mime: o.mime || 'image/jpeg',
+          extmetadata: { LicenseShortName: { value: o.license } },
+        },
+      ],
+    };
+  }
+
+  /** fetch 桩:api.php 返回 pages;thumbN 下载路由按前缀匹配 */
+  function stubCommonsFetch(pages: unknown[], thumbs: Record<string, Buffer>, apiOk = true) {
+    const mock = vi.fn(async (url: any) => {
+      const s = String(url);
+      if (s.includes('api.php')) {
+        if (!apiOk) return { ok: false, json: async () => ({}) };
+        return { ok: true, json: async () => ({ query: { pages } }) };
+      }
+      for (const [prefix, buf] of Object.entries(thumbs)) {
+        if (s.includes(prefix)) {
+          return { ok: true, json: async () => ({}), arrayBuffer: async () => buf };
+        }
+      }
+      throw new Error(`unexpected fetch: ${s}`);
+    });
+    vi.stubGlobal('fetch', mock);
+    return mock;
+  }
+
+  it('过滤规则:只要 CC0/公共领域横图(≥800 宽、比例 1.4~3.2),CC BY/竖图/小图全跳过', async () => {
+    const pages = [
+      commonsPage(1, { w: 1600, h: 800, license: 'CC BY 4.0' }), // 署名义务无法履行 → 跳过
+      commonsPage(2, { w: 800, h: 1200, license: 'CC0' }), // 竖图 → 跳过
+      commonsPage(3, { w: 600, h: 400, license: 'CC0' }), // 小图 → 跳过
+      commonsPage(4, { w: 1200, h: 500, license: 'CC0' }), // ✓
+    ];
+    stubCommonsFetch(pages, { thumb4: PHOTO });
+    const img = await wm.searchCommonsImage('robot technology');
+    expect(img).not.toBeNull();
+    expect(img!.bytes.equals(PHOTO)).toBe(true);
+    expect(img!.mime).toBe('image/jpeg');
+    expect(img!.pageUrl).toContain('File:test4');
+  });
+
+  it('全部 CC BY → null(宁缺毋滥,不做无法署名的商用封面)', async () => {
+    stubCommonsFetch([commonsPage(1, { w: 1600, h: 800, license: 'CC BY-SA 4.0' })], { thumb1: PHOTO });
+    const img = await wm.searchCommonsImage('x');
+    expect(img).toBeNull();
+  });
+
+  it('空关键词 → null 且不发起请求;API 非 200 → null', async () => {
+    const mock = stubCommonsFetch([], {});
+    expect(await wm.searchCommonsImage('   ')).toBeNull();
+    expect(mock.mock.calls.length).toBe(0);
+
+    stubCommonsFetch([commonsPage(1, { w: 1600, h: 800, license: 'CC0' })], {}, false);
+    expect(await wm.searchCommonsImage('k')).toBeNull();
+  });
+
+  it('execute 集成:检索到主题图 + 浏览器叠加标题排版 → "主题配图+排版"回执带来源', async () => {
+    const uid = 'wechat-photo1';
+    saveCred(uid, CRED);
+    // 两张可用图随机挑,下载路由都命中同一张字节避免随机性
+    const pages = [
+      commonsPage(1, { w: 1500, h: 700, license: 'CC0', thumb: 'https://commons.example/thumbA' }),
+      commonsPage(2, { w: 1300, h: 600, license: 'Public domain', thumb: 'https://commons.example/thumbB' }),
+    ];
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: any) => {
+        const s = String(url);
+        calls.push(s);
+        if (s.includes('api.php') && s.includes('commons')) return { ok: true, json: async () => ({ query: { pages } }) };
+        if (s.includes('thumbA') || s.includes('thumbB')) {
+          return { ok: true, json: async () => ({}), arrayBuffer: async () => PHOTO };
+        }
+        if (s.includes('stable_token')) return { ok: true, json: async () => okToken(''), headers: new Map() };
+        if (s.includes('add_material')) return { ok: true, json: async () => okMaterial(''), headers: new Map() };
+        if (s.includes('draft/add')) return { ok: true, json: async () => okDraft(''), headers: new Map() };
+        throw new Error(`unexpected fetch: ${s}`);
+      })
+    );
+    const fb = fakeCoverBrowser();
+    const draft = wm.buildWechatMpTools(uid, fb.svc)[1];
+
+    const r = await draft.execute(
+      { title: '机器人产业年报', markdown: BODY, digest: '产能与人形机器人的拐点。', cover_keywords: 'robot factory' },
+      { taskId: 'm-photo', step: 1 }
+    );
+    expect(r.success).toBe(true);
+    expect(r.cover).toContain('主题配图');
+    expect(r.cover).toContain('叠加标题排版');
+    expect(String(r.coverImageSource)).toContain('wiki/File:test');
+    // 渲染 HTML:照片 data URL 打底 + 白字(照片变体)
+    const html = fb.tempCalls.find((c) => c.m === 'setContent')?.a as string;
+    expect(html).toContain('data:image/jpeg;base64,');
+    expect(html).toContain('scrim');
+    expect(html).toContain('rgba(13,16,22,0.86)');
+    // 上传的是叠加排版后的截图,不是原图
+    const fetchMock = (globalThis as any).fetch as any;
+    const formBody = fetchMock.mock.calls.find((c: any[]) => String(c[0]).includes('add_material'))[1].body as FormData;
+    const blob = formBody.get('media') as Blob;
+    expect(Buffer.from(await blob.arrayBuffer()).toString()).toBe('PNGCOVER_BYTES');
+    expect(fb.shared.polluted).toBe(0);
+  });
+
+  it('execute 集成:无浏览器时检索到主题图 → 原图直接作封面(jpeg)', async () => {
+    const uid = 'wechat-photo2';
+    saveCred(uid, CRED);
+    const pages = [commonsPage(7, { w: 1500, h: 700, license: 'CC0', thumb: 'https://commons.example/thumbC' })];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: any) => {
+        const s = String(url);
+        if (s.includes('api.php')) return { ok: true, json: async () => ({ query: { pages } }) };
+        if (s.includes('thumbC')) return { ok: true, json: async () => ({}), arrayBuffer: async () => PHOTO2 };
+        if (s.includes('stable_token')) return { ok: true, json: async () => okToken(''), headers: new Map() };
+        if (s.includes('add_material')) return { ok: true, json: async () => okMaterial(''), headers: new Map() };
+        if (s.includes('draft/add')) return { ok: true, json: async () => okDraft(''), headers: new Map() };
+        throw new Error(`unexpected fetch: ${s}`);
+      })
+    );
+    const draft = wm.buildWechatMpTools(uid)[1]; // 不传 browser
+
+    const r = await draft.execute(
+      { title: 't', markdown: BODY, cover_keywords: 'robot' },
+      { taskId: 'm', step: 1 }
+    );
+    expect(r.success).toBe(true);
+    expect(r.cover).toContain('直接作封面');
+    const fetchMock = (globalThis as any).fetch as any;
+    const formBody = fetchMock.mock.calls.find((c: any[]) => String(c[0]).includes('add_material'))[1].body as FormData;
+    const blob = formBody.get('media') as Blob;
+    expect(Buffer.from(await blob.arrayBuffer()).equals(PHOTO2)).toBe(true);
+    expect(blob.type).toBe('image/jpeg');
   });
 });
 

@@ -71,9 +71,16 @@ export default function Workspace() {
 
   // 连接器状态
   const [connectors, setConnectors] = useState<ConnectorApp[]>([]);
+  // MCP 连接器就绪数（Navbar 徽标/首页统计并入用；ConnectorsView 页内另有全量列表）
+  const [mcpConnectedCount, setMcpConnectedCount] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   // 乐观派发的占位会话 id：真实 mission_created 到达时摘除（见 handleRun / mission_created）
   const pendingLocalMissionIdRef = useRef<string | null>(null);
+  // 当前查看的会话 id：SSE 闭包里拿不到最新 state，经 ref 读（artifact 归属判断用）
+  const activeMissionIdRef = useRef<string | null>(activeMissionId);
+  useEffect(() => {
+    activeMissionIdRef.current = activeMissionId;
+  }, [activeMissionId]);
 
   // 长效记忆状态
   const [memories, setMemories] = useState<MemoryItem[]>([]);
@@ -304,6 +311,16 @@ export default function Workspace() {
     }
   };
 
+  const loadMcpConnectedCount = async () => {
+    try {
+      const res = await fetch('/api/connectors/mcp');
+      const data = await res.json();
+      if (data.success) setMcpConnectedCount(data.connectedCount || 0);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleSaveKey = async (
     envVar: string,
     value: string,
@@ -520,12 +537,14 @@ export default function Workspace() {
 
     if (session?.user?.id) {
       loadConnectors();
+      loadMcpConnectedCount();
       loadMemories();
       loadCronJobs();
       loadGoals();
       loadAgentState();
     } else if (sessionStatus !== 'loading') {
       setConnectors([]);
+      setMcpConnectedCount(0);
       setMemories([]);
       setCronJobs([]);
       setGoals([]);
@@ -576,6 +595,14 @@ export default function Workspace() {
       loadConnectors();
     }
   }, [mobileOverlay, session?.user?.id]);
+
+  // ConnectorsView 内的 MCP 连接/断开只更新其内部状态、不回调父层；
+  // 视图切换时重取一次 MCP 就绪数，让 Navbar 徽标/首页统计追平
+  useEffect(() => {
+    if (session?.user?.id && activeView !== 'connectors') {
+      loadMcpConnectedCount();
+    }
+  }, [activeView, session?.user?.id]);
 
   const loadAgentState = async () => {
     try {
@@ -763,9 +790,20 @@ export default function Workspace() {
 
     eventSource.addEventListener('artifact_updated', (e: MessageEvent) => {
       try {
-        const art = JSON.parse(e.data);
+        const art: ArtifactState = JSON.parse(e.data);
         setArtifact(art);
-        setRightTab('artifact');
+        // 归属到所属会话（后端 mission_updated 先行,这里兜底合并,
+        // 防止某个会话的产物只在全局 latestArtifact 里"孤儿化"）
+        if (art?.taskId) {
+          setMissions((prev) =>
+            prev.map((m) => (m.id === art.taskId && !m.artifact ? { ...m, artifact: art } : m))
+          );
+        }
+        // 正在浏览别的历史会话时不要强切右栏 —— 产物属于谁就只在
+        // 用户正看着它的会话时才把"成果"页签顶上来,避免串台抢焦点
+        if (!art?.taskId || art.taskId === activeMissionIdRef.current) {
+          setRightTab('artifact');
+        }
       } catch (err) {
         console.error(err);
       }
@@ -799,7 +837,9 @@ export default function Workspace() {
   };
 
   const currentMission = missions.find((m) => m.id === activeMissionId) || missions[0] || null;
-  const connectedCount = connectors.filter((c) => c.status === 'connected').length;
+  // 原生 + MCP 一并计入（与 ConnectorsView 页头「已就绪 N/M」口径一致）
+  const connectedCount =
+    connectors.filter((c) => c.status === 'connected').length + mcpConnectedCount;
 
   if (!mounted || !mobileReady) return null;
 
@@ -1043,6 +1083,7 @@ export default function Workspace() {
                 onRunMission={handleRun}
                 missions={missions}
                 connectors={connectors}
+                mcpConnectedCount={mcpConnectedCount}
                 goals={goals}
                 memories={memories}
                 cronJobs={cronJobs}

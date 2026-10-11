@@ -1210,9 +1210,10 @@ class AgentBackend {
             );
 
             // 微信公众号草稿箱直连:wechat_mp_check_setup / wechat_mp_create_draft
-            // 始终注入(未配置时返回引导文案),凭证在 execute 时才从 user-store 按用户读取
+            // 始终注入(未配置时返回引导文案),凭证在 execute 时才从 user-store 按用户读取。
+            // 浏览器服务传入用于"内容排版封面"渲染(临时标签页,失败自动回退渐变)
             const { buildWechatMpTools } = await import('@/lib/wechat-mp');
-            injectedTools.push(...buildWechatMpTools(uid));
+            injectedTools.push(...buildWechatMpTools(uid, (this.ctx as any)?.browser));
 
             // 电子邮件 SMTP 直发:email_send(同样始终注入,凭证 execute 时按用户读取)
             const { buildEmailTools } = await import('@/lib/email-smtp');

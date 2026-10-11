@@ -40,6 +40,8 @@ interface HomeViewProps {
   onRunMission: (prompt: string, title?: string) => void;
   missions: Mission[];
   connectors: ConnectorApp[];
+  /** MCP 连接器就绪数，并入「N 个渠道就绪」统计（与连接器页口径一致） */
+  mcpConnectedCount?: number;
   goals?: GoalItem[];
   memories?: MemoryItem[];
   cronJobs?: CronJobItem[];
@@ -57,6 +59,7 @@ export function HomeView({
   onRunMission,
   missions,
   connectors,
+  mcpConnectedCount = 0,
   goals = [],
   memories = [],
   cronJobs = [],
@@ -126,7 +129,8 @@ export function HomeView({
     setPromptText('');
   };
 
-  const connectedCount = (connectors || []).filter((c) => c.status === 'connected').length;
+  const connectedCount =
+    (connectors || []).filter((c) => c.status === 'connected').length + mcpConnectedCount;
   const activeGoalsCount = goals.filter((g) => g.status === 'active').length;
   const activeCronCount = cronJobs.filter((j) => j.status === 'active').length;
 

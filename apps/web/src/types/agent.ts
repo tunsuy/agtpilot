@@ -162,6 +162,8 @@ export interface ArtifactState {
     mime: string;
     sizeBytes: number;
   };
+  /** 产物归属的任务 id（核心层盖章）——历史会话切换时按它防串台 */
+  taskId?: string;
 }
 
 export interface User {

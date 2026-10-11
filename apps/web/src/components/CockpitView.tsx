@@ -55,7 +55,7 @@ import { parseArticlePackages } from '../lib/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../lib/topic-picks';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
-import { narrateStep } from '../lib/activity-narration';
+import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
 import {
   Mission,
   ViewportState,
@@ -207,13 +207,20 @@ export function CockpitView({
 
   const activeTerminalLogs = currentMission?.terminalLogs || (activeMissionId === currentMission?.id ? terminalLogs : []);
 
-  const activeArtifact = currentMission?.artifact || (activeMissionId === currentMission?.id ? artifact : null);
+  // 严格按当前会话归属取产物:历史会话没有 artifact 时不再回退全局
+  // latestArtifact —— 那是"最近一次"产物,常属于别的任务,切换历史会话时
+  // 右栏"成果"会把不属于它的交付物串台展示
+  const activeArtifact =
+    currentMission?.artifact ||
+    (artifact && artifact.taskId === currentMission?.id ? artifact : null);
 
   // 智能滚动跟随:只有用户本来就贴在底部时新内容才自动滚动,
   // 上翻阅读历史不再被强行拽回;切换会话时重置为贴底态
   useEffect(() => {
     atBottomRef.current = true;
     setShowJumpToBottom(false);
+    // 会话切换后产物列表整体更换,选中索引一并归零,避免停留在越界/错位项
+    setSelectedArtifactIndex(0);
   }, [currentMission?.id]);
 
   useEffect(() => {
@@ -618,7 +625,10 @@ export function CockpitView({
 
                     // 提取概览信息
                     const lastAction = groupSteps[groupSteps.length - 1];
-                    const completedCount = groupSteps.filter((s) => s.status === 'DONE').length;
+                    // 会话流只渲染真实动作(带工具)的步骤,头部计数与摘要同步只数
+                    // 这些——否则元步骤(已完成一轮推理等)会让「N 项活动」多于可见行
+                    const toolSteps = groupSteps.filter((s) => s.tool);
+                    const completedCount = toolSteps.filter((s) => s.status === 'DONE').length;
                     const lastProgressText = [...groupSteps].reverse().find((s) => s.role === 'assistant' && s.answer)?.answer;
                     const summaryLabel = isAnyRunning
                       ? lastAction.role === 'assistant'
@@ -666,7 +676,7 @@ export function CockpitView({
 
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <span className="text-[10px] text-zinc-400">
-                                {groupSteps.length} 项活动
+                                {toolSteps.length} 项活动
                               </span>
                               <ChevronDown
                                 className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
@@ -682,8 +692,7 @@ export function CockpitView({
                               {/* 叙述模式只列真实动作(带工具名的步骤):「阶段分析」「已完成
                                   一轮推理」这类元步骤不进会话流——中间推理由收拢头部的
                                   摘要行与回复卡的思考过程承载,避免叙述流被占位提示刷屏 */}
-                              {groupSteps
-                                .filter((st) => st.tool)
+                              {toolSteps
                                 .map((st) => {
                                 const isSubExpanded = Boolean(expandedTools[st.id]);
                                 const getIcon = () => {
@@ -737,7 +746,7 @@ export function CockpitView({
                                           <span className="text-[9px] text-red-600 font-mono">失败</span>
                                         ) : (
                                           <span className="text-[9px] text-zinc-400 font-mono">
-                                            {st.duration || '完成'}
+                                            {formatActivityDuration(st.duration) ?? '完成'}
                                           </span>
                                         )}
                                         <ChevronDown
@@ -960,6 +969,36 @@ export function CockpitView({
                 </>
                 );
               })()}
+              {/* 步骤间隙的「任务还活着」指示:mission 仍在跑但此刻没有任何 RUNNING
+                  步骤(上一工具已完成、下一轮模型还没吐 start-step —— 中转延迟或
+                  瞬时卡住时这个窗口可长达数分钟),会话流此前会静止在「已完成 x
+                  项活动」,看起来像卡死。补一行持续跳动的衔接指示 + 间隙已耗时 */}
+              {currentMission.status === 'ACTIVE' &&
+                !currentMission.steps.some((s) => s.status === 'RUNNING') && (
+                  <div className="flex items-center gap-2 text-zinc-400 py-0.5 pl-[42px]">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600" />
+                    </span>
+                    <span className="text-[11px] font-medium">正在衔接下一步…</span>
+                    <span className="text-[10px] font-mono text-zinc-400">
+                      ·{' '}
+                      <ElapsedTick
+                        startedAt={(() => {
+                          const steps = currentMission.steps;
+                          for (let i = steps.length - 1; i >= 0; i--) {
+                            if (!steps[i].startedAt) continue;
+                            const ms = steps[i].duration
+                              ? Number.parseInt(String(steps[i].duration).replace(/[^\d]/g, ''), 10)
+                              : 0;
+                            return steps[i].startedAt! + (Number.isFinite(ms) ? ms : 0);
+                          }
+                          return currentMission.startedAt;
+                        })()}
+                      />
+                    </span>
+                  </div>
+                )}
               <div ref={stepsEndRef} />
             </div>
           ) : (

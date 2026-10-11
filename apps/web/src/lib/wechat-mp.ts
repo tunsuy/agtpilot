@@ -14,7 +14,9 @@ import {
  *
  * 链路:凭证(AppID:AppSecret,按用户加密存 user-store,执行时才读取)
  *   → stable_token 换 access_token(内存缓存,提前 5 分钟过期)
- *   → 封面图(用户给 URL 则下载,否则纯 JS 生成渐变占位 PNG)上传永久素材
+ *   → 封面图(用户给 URL 则下载;否则按主题关键词检索 Wikimedia Commons
+ *     免版权图(CC0/公共领域)并用共享浏览器临时标签页叠加标题排版;
+ *     检索不到回退纯排版封面,浏览器不可用回退纯 JS 渐变占位)上传永久素材
  *   → Markdown → 公众号 HTML(内联样式,微信编辑器保留)
  *   → draft/add 写入草稿箱。
  * 发布动作始终由用户在公众平台后台人工完成(不提供 freepublish,内容安全人工终审)。
@@ -211,6 +213,181 @@ export function generateCoverPng(seed: string): Buffer {
   ]);
 }
 
+// ---------- 主题配图检索(Wikimedia Commons,CC0/公共领域,免 key) ----------
+
+const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
+// Wikimedia 拒绝无 UA 请求(403);声明产品身份
+const COMMONS_UA = 'AgtPilot/1.0 (wechat-cover-image; server-side; https://agtpilot.local)';
+
+export interface CommonsImage {
+  bytes: Buffer;
+  mime: string;
+  /** 文件详情页(来源披露/人工核验用) */
+  pageUrl: string;
+}
+
+/**
+ * 按关键词检索一张可安全商用的横图:只接受 CC0/公共领域(公众号公开发布,
+ * CC BY/CC BY-SA 的署名义务在封面场景无法履行,宁可不要)。任何一步失败
+ * 返回 null,调用方回退排版封面——图片检索绝不阻塞投草稿。
+ */
+export async function searchCommonsImage(keywords: string): Promise<CommonsImage | null> {
+  try {
+    const kw = (keywords || '').trim().slice(0, 80);
+    if (!kw) return null;
+    const url =
+      `${COMMONS_API}?action=query&format=json&generator=search` +
+      `&gsrsearch=${encodeURIComponent(`${kw} filetype:bitmap`)}&gsrnamespace=6&gsrlimit=20` +
+      `&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata&iiurlwidth=1200`;
+    const r = await fetch(url, { headers: { 'User-Agent': COMMONS_UA }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    const data: any = await r.json();
+    const pages: any[] = Object.values(data?.query?.pages || {});
+    const usable = pages.filter((p) => {
+      const ii = p?.imageinfo?.[0];
+      if (!ii) return false;
+      if (ii.mime !== 'image/jpeg' && ii.mime !== 'image/png') return false;
+      const w = Number(ii.width) || 0;
+      const h = Number(ii.height) || 0;
+      if (w < 800 || h < 300) return false;
+      const ratio = w / h;
+      if (ratio < 1.4 || ratio > 3.2) return false; // 封面 2.35:1,过窄/过长裁切后失焦
+      const lic = String(ii.extmetadata?.LicenseShortName?.value || '').toLowerCase();
+      return lic.includes('cc0') || lic.includes('public domain') || lic.startsWith('pd');
+    });
+    if (usable.length === 0) return null;
+    // 前几名里随机挑一张:同题多篇文章封面不全雷同
+    const pick = usable[Math.floor(Math.random() * Math.min(usable.length, 8))];
+    const ii = pick.imageinfo[0];
+    const dl = await fetch(ii.thumburl || ii.url, {
+      headers: { 'User-Agent': COMMONS_UA },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!dl.ok) return null;
+    const bytes = Buffer.from(await dl.arrayBuffer());
+    if (bytes.length < 5 * 1024 || bytes.length > 8 * 1024 * 1024) return null;
+    return { bytes, mime: ii.mime, pageUrl: ii.descriptionurl || String(pick.title || '') };
+  } catch {
+    return null;
+  }
+}
+
+// ---------- 内容排版封面(浏览器临时标签页渲染,失败回退纯渐变) ----------
+
+/** 浏览器服务最小面(与 plugin-browser 的 ctx.browser 同构;测试可 mock) */
+export interface WechatCoverBrowserService {
+  acquirePage(userId?: string): Promise<any>;
+}
+
+/** 各排版主题对应的封面主色/底色(封面与正文风格一致) */
+const COVER_THEME_ACCENTS: Record<string, [string, string]> = {
+  'classic-green': ['#0a9d4e', '#eafaf1'],
+  'tech-blue': ['#174ea6', '#ecf3fd'],
+  'warm-orange': ['#c05a10', '#fdf1e5'],
+  'ink-minimal': ['#20242a', '#f3f4f6'],
+};
+
+function escapeHtml(s: string): string {
+  return String(s || '').replace(/[&<>"']/g, (c) => {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string;
+  });
+}
+
+/** 标题视觉宽度(CJK 记 2,其他记 1)——决定字号档位 */
+function visualWidth(s: string): number {
+  let w = 0;
+  for (const ch of s || '') w += ch.charCodeAt(0) > 0xff ? 2 : 1;
+  return w;
+}
+
+/** 封面排版 HTML(导出仅供可视化调试/测试断言);photoDataUrl 存在时走"照片打底 + 白字排版"变体 */
+export function coverHtml(opts: {
+  title: string;
+  digest?: string;
+  author?: string;
+  themeId?: string;
+  photoDataUrl?: string;
+}): string {
+  const [accent, tint] = COVER_THEME_ACCENTS[opts.themeId || ''] || COVER_THEME_ACCENTS['tech-blue'];
+  const w = visualWidth(opts.title);
+  const titleSize = w > 48 ? 42 : w > 28 ? 52 : 62;
+  const digest = (opts.digest || '').slice(0, 60);
+  const byline = escapeHtml((opts.author || '').slice(0, 12) || 'AgtPilot');
+  const photo = Boolean(opts.photoDataUrl);
+  const titleColor = photo ? '#ffffff' : '#1d2129';
+  const digestColor = photo ? 'rgba(255,255,255,0.80)' : '#5a6472';
+  const bylineColor = photo ? '#ffffff' : accent;
+  const markColor = photo ? 'rgba(255,255,255,0.55)' : '#9aa3af';
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 900px; height: 383px; overflow: hidden; }
+body {
+  font-family: "WenQuanYi Zen Hei", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: ${photo ? `#10141a url(${opts.photoDataUrl}) center / cover no-repeat` : `linear-gradient(135deg, ${tint} 0%, #ffffff 62%, ${tint} 100%)`};
+  position: relative;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 0 64px;
+}
+/* 照片变体:左深右浅横向蒙版,白字压得住任意底图 */
+${photo ? `.scrim { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(13,16,22,0.86) 0%, rgba(13,16,22,0.55) 46%, rgba(13,16,22,0.10) 100%); }` : ''}
+${photo ? '' : `.deco { position: absolute; border-radius: 50%; pointer-events: none; }
+.deco1 { width: 320px; height: 320px; right: -110px; top: -130px; background: ${accent}; opacity: 0.10; }
+.deco2 { width: 190px; height: 190px; right: 60px; bottom: -95px; background: ${accent}; opacity: 0.07; }
+.deco3 { width: 120px; height: 120px; right: 190px; top: 46px; border: 2px solid ${accent}; opacity: 0.18; background: none; }`}
+.bar { position: absolute; left: 0; top: 0; bottom: 0; width: 10px; background: ${accent}; }
+h1 {
+  color: ${titleColor}; font-size: ${titleSize}px; line-height: 1.32; font-weight: 700;
+  letter-spacing: 0.5px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; max-width: 740px;
+  ${photo ? 'text-shadow: 0 2px 14px rgba(0,0,0,0.45);' : 'text-shadow: 0 1px 0 rgba(255,255,255,0.8);'}
+}
+.digest {
+  margin-top: 18px; color: ${digestColor}; font-size: 15px; line-height: 1.5;
+  max-width: 680px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.byline {
+  position: absolute; left: 64px; bottom: 30px;
+  display: flex; align-items: center; gap: 8px;
+  color: ${bylineColor}; font-size: 13px; font-weight: 700; letter-spacing: 2px;
+}
+.byline::before { content: ""; width: 22px; height: 2px; background: ${accent}; }
+.mark { position: absolute; right: 64px; bottom: 30px; color: ${markColor}; font-size: 11px; letter-spacing: 1px; }
+</style></head><body>
+${photo ? '<div class="scrim"></div>' : '<div class="deco deco1"></div><div class="deco deco2"></div><div class="deco deco3"></div>'}
+<div class="bar"></div>
+<h1>${escapeHtml(opts.title)}</h1>
+${digest ? `<div class="digest">${escapeHtml(digest)}</div>` : ''}
+<div class="byline">${byline}</div>
+<div class="mark">AgtPilot · 智能体创作</div>
+</body></html>`;
+}
+
+/**
+ * 渲染"标题/摘要入图"的内容封面:共享浏览器上下文里开**临时标签页**,
+ * 不触碰用户的共享页(登录态/任务执行不受影响)。任何一步失败返回 null,
+ * 调用方回退纯渐变占位——封面渲染绝不阻塞投草稿主链路。
+ */
+export async function renderContentCoverPng(
+  browser: WechatCoverBrowserService,
+  userId: string,
+  opts: { title: string; digest?: string; author?: string; themeId?: string; photoDataUrl?: string }
+): Promise<Buffer | null> {
+  let temp: any;
+  try {
+    const shared = await browser.acquirePage(userId);
+    temp = await shared.context().newPage();
+    await temp.setViewportSize({ width: 900, height: 383 });
+    await temp.setContent(coverHtml(opts), { waitUntil: 'domcontentloaded' });
+    await temp.waitForTimeout(150); // 字体/排版沉降
+    return await temp.screenshot({ type: 'png' });
+  } catch {
+    return null;
+  } finally {
+    if (temp) await temp.close().catch(() => {});
+  }
+}
+
 // ---------- Markdown → 公众号 HTML(内联样式) ----------
 // 渲染核心已升级为 doocs/md 式主题体系(markdown-it + 主题 CSS + juice 内联),
 // 实现在 wechat-md-render.ts / wechat-md-themes.ts;此处保留入口转发:
@@ -245,32 +422,86 @@ function deriveDigest(md: string): string {
 async function uploadCover(
   token: string,
   coverUrl: string | undefined,
-  title: string
-): Promise<{ mediaId?: string; usedFallback: boolean; error?: string }> {
+  opts: {
+    userId: string;
+    title: string;
+    digest?: string;
+    author?: string;
+    themeId?: string;
+    keywords?: string;
+    browser?: WechatCoverBrowserService;
+  }
+): Promise<{
+  mediaId?: string;
+  coverKind: 'user-image' | 'auto-photo-typeset' | 'auto-photo-raw' | 'auto-typeset' | 'auto-gradient';
+  photoPageUrl?: string;
+  error?: string;
+}> {
   let bytes: Buffer;
   let filename = 'cover.png';
   let ct = 'image/png';
-  let usedFallback = false;
+  let coverKind: 'user-image' | 'auto-photo-typeset' | 'auto-photo-raw' | 'auto-typeset' | 'auto-gradient' =
+    'user-image';
+  let photoPageUrl: string | undefined;
   if (coverUrl && coverUrl.trim()) {
     try {
       const r = await fetch(coverUrl.trim());
-      if (!r.ok) return { mediaId: undefined, usedFallback: false, error: `封面图下载失败:HTTP ${r.status}` };
+      if (!r.ok) return { mediaId: undefined, coverKind, error: `封面图下载失败:HTTP ${r.status}` };
       const mime = (r.headers.get('content-type') || '').split(';')[0].trim();
       if (!mime.startsWith('image/')) {
-        return { mediaId: undefined, usedFallback: false, error: `封面链接不是图片(content-type: ${mime || '未知'})` };
+        return { mediaId: undefined, coverKind, error: `封面链接不是图片(content-type: ${mime || '未知'})` };
       }
       bytes = Buffer.from(await r.arrayBuffer());
       if (bytes.length > 10 * 1024 * 1024) {
-        return { mediaId: undefined, usedFallback: false, error: '封面图超过微信 10MB 限制' };
+        return { mediaId: undefined, coverKind, error: '封面图超过微信 10MB 限制' };
       }
       ct = mime;
       filename = mime.includes('png') ? 'cover.png' : mime.includes('gif') ? 'cover.gif' : 'cover.jpg';
     } catch (e: any) {
-      return { mediaId: undefined, usedFallback: false, error: `封面图下载失败:${e?.message || e}` };
+      return { mediaId: undefined, coverKind, error: `封面图下载失败:${e?.message || e}` };
     }
   } else {
-    bytes = generateCoverPng(title);
-    usedFallback = true;
+    // 主题配图优先:免版权图库检索 + 标题排版叠加;逐级回退,绝不阻塞
+    const photo = await searchCommonsImage(opts.keywords || opts.title);
+    if (photo) {
+      photoPageUrl = photo.pageUrl;
+      const rendered = opts.browser
+        ? await renderContentCoverPng(opts.browser, opts.userId, {
+            title: opts.title,
+            digest: opts.digest,
+            author: opts.author,
+            themeId: opts.themeId,
+            photoDataUrl: `data:${photo.mime};base64,${photo.bytes.toString('base64')}`,
+          })
+        : null;
+      if (rendered && rendered.length) {
+        bytes = rendered;
+        coverKind = 'auto-photo-typeset';
+      } else {
+        // 浏览器不可用:原图直接作封面(仍是主题相关真图)
+        bytes = photo.bytes;
+        ct = photo.mime;
+        filename = photo.mime.includes('png') ? 'cover.png' : 'cover.jpg';
+        coverKind = 'auto-photo-raw';
+      }
+    } else {
+      // 检索不到:纯排版封面(标题/摘要入图)
+      const rendered = opts.browser
+        ? await renderContentCoverPng(opts.browser, opts.userId, {
+            title: opts.title,
+            digest: opts.digest,
+            author: opts.author,
+            themeId: opts.themeId,
+          })
+        : null;
+      if (rendered && rendered.length) {
+        bytes = rendered;
+        coverKind = 'auto-typeset';
+      } else {
+        bytes = generateCoverPng(opts.title);
+        coverKind = 'auto-gradient';
+      }
+    }
   }
   const form = new FormData();
   // Buffer<ArrayBufferLike> 不满足 BlobPart 类型,拷进独立 Uint8Array
@@ -283,16 +514,20 @@ async function uploadCover(
   if (!data.media_id) {
     return {
       mediaId: undefined,
-      usedFallback,
+      coverKind,
+      photoPageUrl,
       error: friendlyWechatError(data.errcode ?? -1, data.errmsg || '封面素材上传失败'),
     };
   }
-  return { mediaId: data.media_id, usedFallback };
+  return { mediaId: data.media_id, coverKind, photoPageUrl };
 }
 
 // ---------- 工具工厂(按用户闭包,凭证执行时才从 user-store 读取) ----------
 
-export function buildWechatMpTools(userId: string): ToolDefinition[] {
+export function buildWechatMpTools(
+  userId: string,
+  browser?: WechatCoverBrowserService
+): ToolDefinition[] {
   const checkSetup: ToolDefinition = {
     name: 'wechat_mp_check_setup',
     description:
@@ -326,7 +561,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
   const createDraft: ToolDefinition = {
     name: 'wechat_mp_create_draft',
     description:
-      '把一篇 Markdown 文章经公众号排版(四套主题可选:微信绿/科技蓝/暖橙/极简黑白,内联样式 HTML)+ 封面处理(可传图片 URL,不传则自动生成渐变占位封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在连接器页「微信公众号(草稿箱直连)」卡片配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
+      '把一篇 Markdown 文章经公众号排版(四套主题可选:微信绿/科技蓝/暖橙/极简黑白,内联样式 HTML)+ 封面处理(可传图片 URL;不传则按 cover_keywords 检索 Wikimedia Commons 免版权真实配图并叠加标题排版,检索不到回退标题/摘要排版封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在连接器页「微信公众号(草稿箱直连)」卡片配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
     dangerLevel: 'high',
     compensation: {
       kind: 'partially-reversible',
@@ -344,13 +579,18 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
         },
         author: { type: 'string', description: '作者名(可选)' },
         digest: { type: 'string', description: '摘要,不超过 120 字(可选,缺省自动从正文提取)' },
-        cover_url: { type: 'string', description: '封面图 URL(可选,不传则自动生成占位封面,用户可在后台替换)' },
+        cover_url: { type: 'string', description: '封面图 URL(可选,不传则自动生成封面,用户可在后台替换)' },
+        cover_keywords: {
+          type: 'string',
+          description:
+            '封面主题关键词(可选,建议英文,如 "robot technology city night");不传则用标题检索。用于从 Wikimedia Commons 免版权图库(CC0/公共领域)检索贴合主题的真实配图并叠加标题排版;检索不到回退纯排版封面',
+        },
         content_source_url: { type: 'string', description: '原文链接(可选,显示为「阅读原文」)' },
       },
       required: ['title', 'markdown'],
     },
     execute: async (args: any, session: any) => {
-      const { title, markdown, theme, author, digest, cover_url, content_source_url } = args || {};
+      const { title, markdown, theme, author, digest, cover_url, cover_keywords, content_source_url } = args || {};
       const missionId = session?.taskId;
       const t = String(title || '').trim();
       const md = String(markdown || '');
@@ -385,18 +625,29 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
       }
 
       const finalTitle = t.length > 64 ? `${t.slice(0, 61)}...` : t;
-      const cover = await uploadCover(tok.token, cover_url, finalTitle);
+      // 摘要先行:内容封面要把摘要排进图里(封面渲染在正文 HTML 之前)
+      const finalDigest = String(digest || '').trim() ? String(digest).trim().slice(0, 120) : deriveDigest(md);
+      const finalAuthor = author ? String(author).slice(0, 8) : '';
+      const themeId = typeof theme === 'string' ? theme : undefined;
+      const cover = await uploadCover(tok.token, cover_url, {
+        userId,
+        title: finalTitle,
+        digest: finalDigest,
+        author: finalAuthor,
+        themeId,
+        keywords: typeof cover_keywords === 'string' ? cover_keywords : undefined,
+        browser,
+      });
       if (!cover.mediaId) {
         auditFailure(cover.error || 'cover_upload_failed');
         return { success: false, error: cover.error };
       }
 
-      const content = markdownToWechatHtml(md, typeof theme === 'string' ? theme : undefined);
+      const content = markdownToWechatHtml(md, themeId);
       if (Buffer.byteLength(content, 'utf8') > 1.9 * 1024 * 1024) {
         auditFailure('content_too_large');
         return { success: false, error: '正文过长(公众号上限约 2MB),请精简后重试' };
       }
-      const finalDigest = String(digest || '').trim() ? String(digest).trim().slice(0, 120) : deriveDigest(md);
 
       try {
         const res = await fetch(
@@ -408,7 +659,7 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
               articles: [
                 {
                   title: finalTitle,
-                  author: author ? String(author).slice(0, 8) : '',
+                  author: finalAuthor,
                   digest: finalDigest,
                   content,
                   content_source_url: content_source_url || '',
@@ -442,7 +693,17 @@ export function buildWechatMpTools(userId: string): ToolDefinition[] {
           success: true,
           draft_media_id: data.media_id,
           title: finalTitle,
-          cover: cover.usedFallback ? '自动生成渐变占位封面(可在后台替换)' : '使用指定封面图',
+          cover:
+            cover.coverKind === 'user-image'
+              ? '使用指定封面图'
+              : cover.coverKind === 'auto-photo-typeset'
+                ? '自动检索主题配图(Wikimedia Commons CC0/公共领域)并叠加标题排版,可在后台替换'
+                : cover.coverKind === 'auto-photo-raw'
+                  ? '自动检索主题配图(Wikimedia Commons CC0/公共领域)直接作封面,可在后台替换'
+                  : cover.coverKind === 'auto-typeset'
+                    ? '自动生成排版封面(标题/摘要已入图,未检索到贴合主题的免版权图,可在后台替换)'
+                    : '自动生成渐变占位封面(渲染服务暂不可用,可在后台替换)',
+          ...(cover.photoPageUrl ? { coverImageSource: cover.photoPageUrl } : {}),
           message: `✅ 草稿已写入公众号草稿箱(media_id: ${data.media_id})。请提醒用户到公众平台后台或订阅号助手 App 人工审核后发布。今日已用 ${todayCount + 1}/${dailyWechatDraftLimit()} 次。`,
         };
       } catch (e: any) {

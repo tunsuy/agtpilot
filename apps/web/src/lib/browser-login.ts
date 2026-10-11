@@ -14,11 +14,18 @@ import type { XhsManagedRecord } from './user-store';
 /** ⚠️ 待真实账号实测的常量:登录页 URL、登录态 cookie 名。实测后修正这里,不改逻辑。 */
 export const XHS_CREATOR_HOME = 'https://creator.xiaohongshu.com/';
 /**
- * 登录态判定 cookie。⚠️ 2026-10-10 冒烟实测发现:a1 是匿名访客首访就会被种的设备
- * cookie,不能当登录信号(全新 profile 打开首页即被误判「已登录」);只有 web_session
- * 才代表真实扫码登录。判定语义是「命中任一即登录」,所以这里必须只放 web_session。
+ * 登录态判定 cookie(命中任一即登录)。2026-10-11 真实账号扫码实测修正:
+ * - a1 等设备 cookie 匿名首访即种,不能当登录信号;
+ * - web_session 是主站(www)扫码登录标记,创作者平台扫码后并不会落下
+ *   (实测登录成功后 cookie 库里没有它),只认它会漏判;
+ * - 创作者平台登录后实际落下 access-token-creator.xiaohongshu.com 与
+ *   galaxy_creator_session_id 这组会话 cookie(匿名访问时不存在,登录独有)。
  */
-export const XHS_LOGIN_COOKIE_NAMES = ['web_session'];
+export const XHS_LOGIN_COOKIE_NAMES = [
+  'web_session', // 主站扫码登录
+  'access-token-creator.xiaohongshu.com', // 创作者平台会话 token
+  'galaxy_creator_session_id', // 创作者平台会话 id
+];
 /** URL 出现在登录流程中(如重定向回登录页)则视为未登录完成 */
 export const XHS_LOGIN_URL_HINT = /login/i;
 

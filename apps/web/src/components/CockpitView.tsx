@@ -137,6 +137,22 @@ export function CockpitView({
   const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'source' | 'social'>('preview');
   const [selectedArtifactIndex, setSelectedArtifactIndex] = useState<number>(0);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+  // 小红书托管写操作状态(连接器页 opt-in):笔记包「存入草稿箱」按钮的前提。
+  // 判定与 xhs-managed 的 shouldInjectWriteTool 同规则(enabled + riskAckAt)
+  const [xhsDraftEnabled, setXhsDraftEnabled] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/xhs-managed');
+        const data = await res.json();
+        if (data.success) {
+          setXhsDraftEnabled(Boolean(data.record?.enabled && data.record?.riskAckAt));
+        }
+      } catch {
+        // 未登录/后端未就绪时静默:按钮不出现即可,不阻断会话渲染
+      }
+    })();
+  }, []);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(true);
   const [isWorkbenchExpanded, setIsWorkbenchExpanded] = useState(false);
@@ -662,7 +678,12 @@ export function CockpitView({
                           {/* 展开后的各子步骤列表(点头部即可展开,不再被全局开关挡住) */}
                           {isGroupExpanded && (
                             <div className="px-3 pb-3 pt-1 border-t border-zinc-200/50 space-y-1.5 bg-white/50">
-                              {groupSteps.map((st) => {
+                              {/* 叙述模式只列真实动作(带工具名的步骤):「阶段分析」「已完成
+                                  一轮推理」这类元步骤不进会话流——中间推理由收拢头部的
+                                  摘要行与回复卡的思考过程承载,避免叙述流被占位提示刷屏 */}
+                              {groupSteps
+                                .filter((st) => st.tool)
+                                .map((st) => {
                                 const isSubExpanded = Boolean(expandedTools[st.id]);
                                 const getIcon = () => {
                                   if (st.tool?.includes('search')) return <Search className="h-3 w-3 text-blue-500" />;
@@ -671,28 +692,8 @@ export function CockpitView({
                                   return <Wrench className="h-3 w-3 text-zinc-500" />;
                                 };
 
-                                if (st.role === 'assistant') {
-                                  return (
-                                    <div key={st.id} className="rounded-lg border border-zinc-200/70 bg-white px-3 py-2.5 text-xs shadow-2xs">
-                                      <div className="flex items-start gap-2">
-                                        {st.status === 'RUNNING' ? (
-                                          <RotateCw className="h-3 w-3 mt-0.5 text-blue-500 animate-spin flex-shrink-0" />
-                                        ) : (
-                                          <Sparkles className="h-3 w-3 mt-0.5 text-zinc-400 flex-shrink-0" />
-                                        )}
-                                        <div className="min-w-0">
-                                          <p className="text-[10px] font-medium text-zinc-500 mb-0.5">阶段分析</p>
-                                          <p className="text-[11px] text-zinc-600 leading-relaxed line-clamp-3 whitespace-pre-wrap">
-                                            {st.answer || st.reasoning || st.title}
-                                          </p>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                }
-
-                                // 叙述模式:工具步骤翻译成用户可读的行动语言(正在…/✓ 完成态
-                                // 由 status 组装);原始工具名与 JSON 入参收进展开区点开核对
+                                // 工具步骤翻译成用户可读的行动语言(正在…/✓ 完成态由
+                                // status 组装);原始工具名与 JSON 入参收进展开区点开核对
                                 const narrated = narrateStep(st);
                                 const narratedLabel = narrated?.label ?? st.tool ?? '执行任务';
                                 const narratedDetail = narrated?.detail;
@@ -869,8 +870,13 @@ export function CockpitView({
                                   onRunMission={onRunMission}
                                 />
                               ) : st.answer && noteResult ? (
-                                /* 小红书笔记包:字段级可复制卡片(复制整篇对齐发布页粘贴顺序) */
-                                <NotePackageList result={noteResult} />
+                                /* 小红书笔记包:字段级可复制卡片 + 开启托管写操作后的「存草稿箱」(续聊 + 审批门) */
+                                <NotePackageList
+                                  result={noteResult}
+                                  missionId={activeMissionId || currentMission?.id}
+                                  onRunMission={onRunMission}
+                                  draftEnabled={xhsDraftEnabled}
+                                />
                               ) : (
                                 st.answer && (
                                   <div className="prose prose-zinc prose-chat max-w-none break-words">

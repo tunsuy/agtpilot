@@ -8,10 +8,11 @@
  * 对齐小红书发布页粘贴顺序)。复制走 nativeBridge.copyToClipboard(Capacitor → web 降级)。
  */
 import React, { useState } from 'react';
-import { Copy, Check, FileText, ChevronDown } from 'lucide-react';
+import { Copy, Check, FileText, ChevronDown, SendHorizonal } from 'lucide-react';
 import { copyToClipboard } from '../../utils/nativeBridge';
 import {
   buildNotePackageCopyText,
+  buildNotePackageDraftReplyText,
   type NotePackage,
   type NotePackageParseResult,
 } from '../../lib/note-package';
@@ -46,7 +47,18 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 
-function NotePackageCard({ pkg }: { pkg: NotePackage }) {
+function NotePackageCard({
+  pkg,
+  missionId,
+  onRunMission,
+  draftEnabled,
+}: {
+  pkg: NotePackage;
+  missionId?: string | null;
+  onRunMission?: (prompt: string, title?: string, missionId?: string) => void;
+  /** 小红书托管写操作已开启(连接器页 opt-in)时才有「存草稿箱」按钮 */
+  draftEnabled?: boolean;
+}) {
   const [selectedTitle, setSelectedTitle] = useState(0);
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
 
@@ -54,6 +66,11 @@ function NotePackageCard({ pkg }: { pkg: NotePackage }) {
     const ok = await copyToClipboard(buildNotePackageCopyText(pkg, selectedTitle));
     setCopyState(ok ? 'ok' : 'fail');
     setTimeout(() => setCopyState('idle'), 2000);
+  };
+
+  /** 存草稿箱:续聊同一 mission,Agent 调 xhs_save_note_draft(需我审批) */
+  const handleDraft = () => {
+    onRunMission?.(buildNotePackageDraftReplyText(pkg, selectedTitle), undefined, missionId || undefined);
   };
 
   return (
@@ -101,7 +118,7 @@ function NotePackageCard({ pkg }: { pkg: NotePackage }) {
                     : 'hover:bg-zinc-50 border border-transparent'
                 }`}
                 onClick={() => setSelectedTitle(i)}
-                title="点击选为整篇复制的标题"
+                title="点击选为整篇复制/存草稿的标题"
               >
                 <span
                   className={`text-xs font-medium ${i === selectedTitle ? 'text-violet-700' : 'text-zinc-700'}`}
@@ -168,20 +185,54 @@ function NotePackageCard({ pkg }: { pkg: NotePackage }) {
             <span>💡 {pkg.publishAdvice}</span>
           </div>
         )}
+
+        {/* 存草稿箱:续聊本 mission → Agent 调 xhs_save_note_draft(high 审批门);发布永远人工 */}
+        {onRunMission && draftEnabled && (
+          <button
+            type="button"
+            onClick={handleDraft}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition shadow-xs"
+          >
+            <SendHorizonal className="h-3.5 w-3.5" />
+            存入草稿箱(经我审批后写入,发布由我在小红书 App 完成)
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 /** 笔记包列表:多卡垂直堆叠 + 尾部「原始文本」折叠(fallback 不丢内容) */
-export function NotePackageList({ result }: { result: NotePackageParseResult }) {
+export function NotePackageList({
+  result,
+  missionId,
+  onRunMission,
+  draftEnabled,
+}: {
+  result: NotePackageParseResult;
+  missionId?: string | null;
+  onRunMission?: (prompt: string, title?: string, missionId?: string) => void;
+  /** 小红书托管写操作已开启时才渲染「存入草稿箱」按钮;未开启给一行引导 */
+  draftEnabled?: boolean;
+}) {
   const [showFallback, setShowFallback] = useState(false);
 
   return (
     <div className="space-y-3">
       {result.packages.map((pkg) => (
-        <NotePackageCard key={pkg.index} pkg={pkg} />
+        <NotePackageCard
+          key={pkg.index}
+          pkg={pkg}
+          missionId={missionId}
+          onRunMission={onRunMission}
+          draftEnabled={draftEnabled}
+        />
       ))}
+      {onRunMission && !draftEnabled && (
+        <p className="text-[10px] text-zinc-400 leading-relaxed">
+          想直接存进小红书草稿箱?到连接器页「小红书创作者服务」开启托管写操作(需已扫码登录),这里就会出现一键存草稿按钮。
+        </p>
+      )}
       {result.fallback && (
         <div className="rounded-xl border border-zinc-200 overflow-hidden">
           <button

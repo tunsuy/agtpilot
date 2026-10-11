@@ -54,6 +54,7 @@ import { parseArticlePackages } from '../lib/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../lib/topic-picks';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
+import { narrateStep } from '../lib/activity-narration';
 import {
   Mission,
   ViewportState,
@@ -533,7 +534,8 @@ export function CockpitView({
             <div className="space-y-6 max-w-2xl mx-auto w-full">
               {(() => {
                 // 分块逻辑抽为纯函数(lib/cockpit-blocks):用户气泡 / 工具链聚合块 /
-                // 正式回复卡;执行效率摘要与原始详情已迁移至右侧「执行动态」tab
+                // 正式回复卡。叙述模式默认在会话流(工具步骤翻译成人话动作);
+                // 原始工具名与入参出参默认在右侧「执行动态」tab 查看
                 const { blocks } = splitStepsIntoBlocks(currentMission.steps);
 
                 return (
@@ -689,6 +691,12 @@ export function CockpitView({
                                   );
                                 }
 
+                                // 叙述模式:工具步骤翻译成用户可读的行动语言(正在…/✓ 完成态
+                                // 由 status 组装);原始工具名与 JSON 入参收进展开区点开核对
+                                const narrated = narrateStep(st);
+                                const narratedLabel = narrated?.label ?? st.tool ?? '执行任务';
+                                const narratedDetail = narrated?.detail;
+
                                 return (
                                   <div
                                     key={st.id}
@@ -707,12 +715,14 @@ export function CockpitView({
                                         <div className="h-4.5 w-4.5 rounded bg-zinc-50 border border-zinc-100 flex items-center justify-center flex-shrink-0">
                                           {getIcon()}
                                         </div>
-                                        <span className="font-mono text-[11px] font-semibold text-zinc-800">
-                                          {st.tool || 'orchestrator'}
+                                        <span className="text-[11px] font-medium text-zinc-800 truncate">
+                                          {st.status === 'RUNNING' ? `正在${narratedLabel}` : narratedLabel}
                                         </span>
-                                        <span className="text-[10px] text-zinc-400 truncate">
-                                          {st.args?.query || st.args?.url || st.args?.command || st.title}
-                                        </span>
+                                        {narratedDetail && (
+                                          <span className="text-[10px] text-zinc-400 truncate">
+                                            {narratedDetail}
+                                          </span>
+                                        )}
                                       </div>
 
                                       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1313,7 +1323,7 @@ export function CockpitView({
             </div>
           )}
 
-          {/* 3. 执行动态活动流 (用户视角的行动叙述,默认智能跟随滚动) */}
+          {/* 3. 执行动态(内部原始视角:工具名/入参出参,默认原始模式;叙述在会话流) */}
           {rightTab === 'activity' && <ActivityFeedView steps={currentMission?.steps || []} />}
 
           {/* 4. 最终交付物成果 (Deliverable Artifact Canvas) */}

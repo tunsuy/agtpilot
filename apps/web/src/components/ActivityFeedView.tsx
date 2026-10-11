@@ -24,9 +24,10 @@ import { narrateStep, formatActivityDuration, type ActivityKind } from '../lib/a
 import { splitStepsIntoBlocks } from '../lib/cockpit-blocks';
 
 /**
- * 右侧工作台「执行动态」活动流：把内部 loop 翻译成用户能读懂的行动语言，
- * 实时跟随滚动。默认叙述模式；「原始模式」展示工具名与入参出参（替代旧的中栏
- * 「查看执行详情」）。执行中条目旋转图标 + 呼吸点，完成显示 ✓ 与真实耗时。
+ * 右侧工作台「执行动态」活动流：内部原始视角 —— 默认原始模式，条目直接展示
+ * 工具名与入参出参（开发者视图）；「叙述模式」切换为人话行动语言（叙述的默认
+ * 位置在主会话框的工具链块，这里只是备用视角）。执行中条目旋转图标 + 呼吸点，
+ * 完成显示 ✓ 与真实耗时。
  */
 
 const KIND_ICON: Record<ActivityKind, React.ComponentType<{ className?: string }>> = {
@@ -50,7 +51,8 @@ function displayDuration(st: MissionStep): string | undefined {
 }
 
 export function ActivityFeedView({ steps }: { steps: MissionStep[] }) {
-  const [rawMode, setRawMode] = useState(false);
+  // 右栏定位是内部原始视角：叙述模式的默认展示位在主会话框,这里默认展示原始
+  const [rawMode, setRawMode] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   /** 智能跟随：贴底才自动滚动，上翻阅读不被拽回（对齐对话流行为） */
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -100,7 +102,7 @@ export function ActivityFeedView({ steps }: { steps: MissionStep[] }) {
             className={`px-2 py-0.5 rounded-md transition ${
               rawMode ? 'bg-white text-zinc-900 shadow-2xs font-semibold' : 'hover:text-zinc-900'
             }`}
-            title="展示工具名与入参出参（开发者视图）"
+            title="展示工具名与入参出参（内部原始视角,默认）"
           >
             原始模式
           </button>
@@ -135,6 +137,9 @@ export function ActivityFeedView({ steps }: { steps: MissionStep[] }) {
             const dur = displayDuration(st);
             const isExpanded = Boolean(expandedIds[st.id]);
             const hasRawDetail = Boolean(st.args || st.output || st.tool);
+            // 原始模式:条目直接展示工具名(等宽字体);叙述模式才用「正在…」话术
+            const showRaw = rawMode && !isUser;
+            const entryLabel = showRaw ? st.tool || 'orchestrator' : item.label;
 
             return (
               <div key={st.id} className={isUser ? 'pt-2' : ''}>
@@ -174,9 +179,9 @@ export function ActivityFeedView({ steps }: { steps: MissionStep[] }) {
                               : isFailed
                                 ? 'text-red-600 font-medium'
                                 : 'text-zinc-600'
-                        }`}
+                        } ${showRaw ? 'font-mono' : ''}`}
                       >
-                        {isUser ? item.label : isRunning ? `正在${item.label}` : item.label}
+                        {isUser || showRaw ? entryLabel : isRunning ? `正在${entryLabel}` : entryLabel}
                       </span>
                       {dur && !isUser && (
                         <span className="text-[10px] text-zinc-400 font-mono flex-shrink-0">{dur}</span>

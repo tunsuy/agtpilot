@@ -35,6 +35,7 @@ import {
   User,
   ChevronDown,
   Wrench,
+  Activity,
   Search,
   Code,
   AlertCircle,
@@ -45,6 +46,7 @@ import {
   Plug,
 } from 'lucide-react';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
+import { ActivityFeedView } from './ActivityFeedView';
 import { NotePackageList } from './workshops/NotePackageCard';
 import { parseNotePackages } from '../lib/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
@@ -62,6 +64,27 @@ import {
   ConnectorApp,
 } from '../types/agent';
 
+/**
+ * 跳动的已耗时徽标（叶子组件自持 1s 定时器，只重渲染自身）：
+ * 任务执行中 / 思考占位附带已耗时，慢模型首 token 前的长静默窗口
+ * 持续有数字变化，不再「看似卡死」。<60s 显示秒，超 1 分钟显示 m+s。
+ */
+function ElapsedTick({ startedAt, className }: { startedAt?: number; className?: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
+  if (!startedAt) return null;
+  const total = Math.floor(Math.max(0, now - startedAt) / 1000);
+  return (
+    <span className={className || 'font-mono'}>
+      {total < 60 ? `${total}s` : `${Math.floor(total / 60)}m${total % 60}s`}
+    </span>
+  );
+}
+
 interface CockpitViewProps {
   missions: Mission[];
   activeMissionId: string | null;
@@ -74,8 +97,8 @@ interface CockpitViewProps {
   onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
   onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
   artifact: ArtifactState | null;
-  rightTab: 'browser' | 'terminal' | 'artifact';
-  onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact') => void;
+  rightTab: 'browser' | 'terminal' | 'artifact' | 'activity';
+  onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact' | 'activity') => void;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
   onStopMission?: (missionId: string) => Promise<void> | void;
   onNewSession?: () => void;
@@ -113,7 +136,6 @@ export function CockpitView({
   const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'source' | 'social'>('preview');
   const [selectedArtifactIndex, setSelectedArtifactIndex] = useState<number>(0);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
-  const [showExecutionDetails, setShowExecutionDetails] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(true);
   const [isWorkbenchExpanded, setIsWorkbenchExpanded] = useState(false);
@@ -144,6 +166,18 @@ export function CockpitView({
   const currentMission = activeMissionId
     ? (missions.find((m) => m.id === activeMissionId) || null)
     : null;
+
+  // 任务进入 ACTIVE（新任务 / 续聊 / 选中运行中会话）时自动切到「执行动态」：
+  // 用户第一眼看到 agent 正在做什么；浏览中不再被视口更新抢走焦点（见 page.tsx 粘性规则）
+  const prevMissionStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const status = currentMission?.status || null;
+    const prev = prevMissionStatusRef.current;
+    prevMissionStatusRef.current = status;
+    if (status === 'ACTIVE' && prev !== 'ACTIVE') {
+      onRightTabChange('activity');
+    }
+  }, [currentMission?.id, currentMission?.status, onRightTabChange]);
 
   // 关键修复：当切换历史会话时，右侧浏览器、终端与交付成果紧密绑定当前选中的会话
   const activeViewport = currentMission?.viewport || (activeMissionId === currentMission?.id ? viewport : {
@@ -341,15 +375,6 @@ export function CockpitView({
                   <ListTodo className="h-3.5 w-3.5" />
                   <span>任务活动</span>
                 </span>
-                {currentMission && (
-                  <button
-                    type="button"
-                    onClick={() => setShowExecutionDetails((value) => !value)}
-                    className="text-[10px] text-zinc-400 hover:text-zinc-700 transition"
-                  >
-                    {showExecutionDetails ? '收起详情' : '查看执行详情'}
-                  </button>
-                )}
               </div>
             </div>
 
@@ -384,7 +409,12 @@ export function CockpitView({
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600" />
                       </span>
-                      <span className="font-medium text-[11px]">正在处理...</span>
+                      <span className="font-medium text-[11px]">正在处理…</span>
+                      {currentMission.startedAt && (
+                        <span className="text-[11px] font-mono text-blue-600/80">
+                          · <ElapsedTick startedAt={currentMission.startedAt} />
+                        </span>
+                      )}
                     </div>
                   ) : currentMission.status === 'WAITING_APPROVAL' ? (
                     <div className="flex items-center gap-1.5 text-amber-700 bg-amber-50 -mx-1 px-1 rounded">
@@ -447,37 +477,52 @@ export function CockpitView({
           </div>
         )}
 
-        {/* 人机协同安全授权横幅 (如在中间流也需要响应) */}
+        {/* 人机协同安全授权横幅 (如在中间流也需要响应)。
+            多张审批全部堆叠展示：只渲染 [0] 时，排在后面的卡片要么看不见
+            要么被误当成同一张点两次——正是「点了两次才生效」的观感来源 */}
         {approvalRequests.length > 0 && (
-          <div className="m-3 p-3.5 rounded-xl border border-amber-200 bg-amber-50/90 shadow-xs flex items-center justify-between animate-fadeIn">
-            <div className="flex items-center gap-2.5">
-              <div className="h-8 w-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
-                <Shield className="h-4 w-4" />
-              </div>
-              <div>
-                <span className="text-xs font-semibold text-zinc-900 block">
-                  需要安全审批授权: {approvalRequests[0].action}
-                </span>
-                <p className="text-[11px] text-zinc-600 mt-0.5">
-                  {approvalRequests[0].description}
-                </p>
-              </div>
-            </div>
+          <div className="m-3 space-y-2 animate-fadeIn">
+            {approvalRequests.length > 1 && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700">
+                <Shield className="h-3 w-3" />
+                {approvalRequests.length} 项待审批
+              </span>
+            )}
+            {approvalRequests.map((req) => (
+              <div
+                key={req.id}
+                className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/90 shadow-xs flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="h-8 w-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
+                    <Shield className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-xs font-semibold text-zinc-900 block truncate">
+                      需要安全审批授权: {req.action}
+                    </span>
+                    <p className="text-[11px] text-zinc-600 mt-0.5 line-clamp-2">
+                      {req.description}
+                    </p>
+                  </div>
+                </div>
 
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button
-                onClick={() => onApproval(approvalRequests[0].id, false)}
-                className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 transition"
-              >
-                拒绝
-              </button>
-              <button
-                onClick={() => onApproval(approvalRequests[0].id, true)}
-                className="px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-xs"
-              >
-                放行
-              </button>
-            </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => onApproval(req.id, false)}
+                    className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 transition"
+                  >
+                    拒绝
+                  </button>
+                  <button
+                    onClick={() => onApproval(req.id, true)}
+                    className="px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-xs"
+                  >
+                    放行
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -488,9 +533,8 @@ export function CockpitView({
             <div className="space-y-6 max-w-2xl mx-auto w-full">
               {(() => {
                 // 分块逻辑抽为纯函数(lib/cockpit-blocks):用户气泡 / 工具链聚合块 /
-                // 正式回复卡;执行效率摘要步骤不再冒充「已完成 1 项任务活动」空壳块,
-                // 仅在「查看执行详情」开启时以小字呈现
-                const { blocks, effNotes } = splitStepsIntoBlocks(currentMission.steps);
+                // 正式回复卡;执行效率摘要与原始详情已迁移至右侧「执行动态」tab
+                const { blocks } = splitStepsIntoBlocks(currentMission.steps);
 
                 return (
                   <>
@@ -554,7 +598,6 @@ export function CockpitView({
                     const isGroupExpanded = expandedTools[groupKey] ?? isAnyRunning;
 
                     // 提取概览信息
-                    const toolTypes = Array.from(new Set(groupSteps.map((s) => s.tool).filter(Boolean)));
                     const lastAction = groupSteps[groupSteps.length - 1];
                     const completedCount = groupSteps.filter((s) => s.status === 'DONE').length;
                     const lastProgressText = [...groupSteps].reverse().find((s) => s.role === 'assistant' && s.answer)?.answer;
@@ -600,19 +643,6 @@ export function CockpitView({
                                   </span>
                                 )}
                               </div>
-
-                              {showExecutionDetails && toolTypes.length > 0 && (
-                                <div className="hidden sm:flex items-center gap-1">
-                                  {toolTypes.slice(0, 3).map((t) => (
-                                    <span
-                                      key={t}
-                                      className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-zinc-200/60 text-zinc-600"
-                                    >
-                                      {t}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
                             </div>
 
                             <div className="flex items-center gap-2 flex-shrink-0">
@@ -797,7 +827,8 @@ export function CockpitView({
                               </div>
                             )}
 
-                            {/* 尚无任何输出：思考 shimmer 占位（模型生成期间时间线不再静止） */}
+                            {/* 尚无任何输出：思考 shimmer 占位（模型生成期间时间线不再静止）；
+                                附带跳动的已耗时，长静默窗口也能看出「活着」 */}
                             {isStreaming && !st.answer && !st.reasoning ? (
                               <div className="flex items-center gap-2 text-zinc-400 py-0.5">
                                 <span className="relative flex h-2 w-2">
@@ -805,6 +836,11 @@ export function CockpitView({
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600" />
                                 </span>
                                 <span className="text-[11px] font-medium">{st.title || '正在思考…'}</span>
+                                {st.startedAt && (
+                                  <span className="text-[10px] font-mono text-zinc-400">
+                                    · <ElapsedTick startedAt={st.startedAt} />
+                                  </span>
+                                )}
                               </div>
                             ) : (
                               /* 正文只渲染 answer（title 不再兜底当正文，避免"深度思考中…"大字空段） */
@@ -904,16 +940,6 @@ export function CockpitView({
                     </div>
                   );
                 })}
-                {/* 执行效率摘要:调试信息,仅在「查看执行详情」开启时以小字呈现 */}
-                {showExecutionDetails && effNotes.length > 0 && (
-                  <div className="space-y-1 pt-1">
-                    {effNotes.map((note, i) => (
-                      <p key={`eff_${i}`} className="text-right text-[10px] font-mono text-zinc-400 leading-relaxed">
-                        {note}
-                      </p>
-                    ))}
-                  </div>
-                )}
                 </>
                 );
               })()}
@@ -1025,17 +1051,18 @@ export function CockpitView({
       <main className="flex-1 flex flex-col min-w-0 bg-[#fafafa]">
         {/* 标签栏：Browser / Terminal / Deliverable / 最大化 */}
         <div className="h-11 border-b border-zinc-200 bg-white px-4 flex items-center justify-between">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
             <button
               onClick={() => onRightTabChange('browser')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+              title="实时浏览器"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap flex-shrink-0 ${
                 rightTab === 'browser'
                   ? 'bg-zinc-100 text-zinc-900 font-semibold'
                   : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
               }`}
             >
               <Globe className="h-3.5 w-3.5" />
-              <span>实时浏览器</span>
+              <span>浏览器</span>
               {currentMission?.status === 'ACTIVE' && activeViewport.status === 'navigating' && (
                 <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-ping" />
               )}
@@ -1043,14 +1070,15 @@ export function CockpitView({
 
             <button
               onClick={() => onRightTabChange('terminal')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+              title="运行终端"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap flex-shrink-0 ${
                 rightTab === 'terminal'
                   ? 'bg-zinc-100 text-zinc-900 font-semibold'
                   : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
               }`}
             >
               <Terminal className="h-3.5 w-3.5" />
-              <span>运行终端</span>
+              <span>终端</span>
               {activeTerminalLogs.length > 0 && (
                 <span className="text-[10px] bg-zinc-200 text-zinc-600 px-1 rounded-sm">
                   {activeTerminalLogs.length}
@@ -1059,15 +1087,32 @@ export function CockpitView({
             </button>
 
             <button
+              onClick={() => onRightTabChange('activity')}
+              title="执行动态：智能体每一步行动的用户视角活动流"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap flex-shrink-0 ${
+                rightTab === 'activity'
+                  ? 'bg-zinc-100 text-zinc-900 font-semibold'
+                  : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
+              }`}
+            >
+              <Activity className="h-3.5 w-3.5" />
+              <span>动态</span>
+              {currentMission?.status === 'ACTIVE' && (
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
+              )}
+            </button>
+
+            <button
               onClick={() => onRightTabChange('artifact')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+              title="交付成果"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap flex-shrink-0 ${
                 rightTab === 'artifact'
                   ? 'bg-zinc-100 text-zinc-900 font-semibold'
                   : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
               }`}
             >
               <FileText className="h-3.5 w-3.5" />
-              <span>交付成果</span>
+              <span>成果</span>
               {activeArtifact && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
             </button>
           </div>
@@ -1084,12 +1129,8 @@ export function CockpitView({
             >
               <PanelRightClose className="h-4 w-4" />
             </button>
-            {rightTab === 'browser' && activeViewport.url && activeViewport.url !== 'about:blank' && (
-              <div className="flex items-center gap-1.5 text-xs text-zinc-500 font-mono truncate max-w-xs bg-zinc-50 border border-zinc-200 px-2.5 py-1 rounded-md">
-                <Lock className="h-3 w-3 text-zinc-400 flex-shrink-0" />
-                <span className="truncate">{activeViewport.url}</span>
-              </div>
-            )}
+            {/* 当前页面地址不在 tab 栏重复显示：浏览器画布本体顶部已有完整地址栏，
+                这里再放一份既冗余又挤占 tab 横向空间（窄屏下被挤换行的元凶） */}
 
             {rightTab === 'artifact' && activeArtifact && (
               <button
@@ -1272,7 +1313,10 @@ export function CockpitView({
             </div>
           )}
 
-          {/* 3. 最终交付物成果 (Deliverable Artifact Canvas) */}
+          {/* 3. 执行动态活动流 (用户视角的行动叙述,默认智能跟随滚动) */}
+          {rightTab === 'activity' && <ActivityFeedView steps={currentMission?.steps || []} />}
+
+          {/* 4. 最终交付物成果 (Deliverable Artifact Canvas) */}
           {rightTab === 'artifact' && (() => {
             // 提取当前任务中所有生成过的产物（支持多轮输出的多文档产物列表）
             const missionArtifacts: Array<{ title: string; type: string; content: string; id: string }> = [];

@@ -29,7 +29,10 @@ export async function GET() {
     missions: scopedMissions,
     activeMissionId,
     terminalLogs: userId ? backend.state.terminalLogs : [],
-    approvalRequests: userId ? backend.state.approvalRequests : [],
+    // 挂起审批按归属过滤，与 events 路由同规则，避免串台/泄露
+    approvalRequests: userId
+      ? backend.state.approvalRequests.filter((r) => !r.userId || r.userId === userId)
+      : [],
     // 授权建议卡片按用户过滤（id 形如 `${userId}::${connectorId}`）
     connectorSuggestions: userId
       ? backend.state.connectorSuggestions.filter((s) => s.id.startsWith(`${userId}::`))

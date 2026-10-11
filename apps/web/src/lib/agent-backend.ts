@@ -512,13 +512,18 @@ class AgentBackend {
         const mission = this.resolveMissionFromEvent(event);
         if (mission) {
           req.userId = mission.userId;
-          this.state.approvalRequests.push(req);
           mission.status = 'WAITING_APPROVAL';
-          this.broadcast({ type: 'mission_updated', data: mission });
-        } else {
+        }
+        // 审批卡片先于 mission_updated 广播：mission_updated 带同步全量落盘
+        // （任务大时秒级），卡片不能排在磁盘 I/O 后面让用户干等；
+        // push 去重防御同 id 重复入队
+        if (!this.state.approvalRequests.some((r) => r.id === req.id)) {
           this.state.approvalRequests.push(req);
         }
         this.broadcast({ type: 'approval_requested', data: req });
+        if (mission) {
+          this.broadcast({ type: 'mission_updated', data: mission });
+        }
         break;
       }
 
@@ -799,12 +804,13 @@ class AgentBackend {
     const req = this.state.approvalRequests.find((r) => r.id === approvalId);
     this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== approvalId);
 
-    if (this.state.activeMissionId) {
-      const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-      if (mission && mission.status === 'WAITING_APPROVAL') {
-        mission.status = 'ACTIVE';
-        this.broadcast({ type: 'mission_updated', data: mission });
-      }
+    // 状态恢复按审批自己的 taskId 定位（不是 activeMissionId）：
+    // 多会话/多用户并发时点错对象会把别的任务徽标卡在「等待授权」
+    const targetId = req?.taskId || this.state.activeMissionId;
+    const mission = targetId ? this.state.missions.find((m) => m.id === targetId) : undefined;
+    if (mission && mission.status === 'WAITING_APPROVAL') {
+      mission.status = 'ACTIVE';
+      this.broadcast({ type: 'mission_updated', data: mission });
     }
 
     this.broadcast({ type: 'approval_resolved', data: { approvalId, approved } });
@@ -995,6 +1001,9 @@ class AgentBackend {
         status: 'DONE',
       });
       this.state.activeMissionId = targetMission.id;
+      // 派发即点亮「正在思考」live step：续聊场景下用户气泡与思考占位
+      // 同帧到达，记忆构建/压缩/首轮模型调用等静默窗口不再像卡死
+      ensureLiveStep(targetMission);
       this.broadcast({ type: 'mission_updated', data: targetMission });
       this.addTerminalLog('system', `[Session Continued] ID: ${targetMission.id} | New Goal: ${goal}`, targetMission.userId);
     } else {
@@ -1030,6 +1039,9 @@ class AgentBackend {
         }
       }
 
+      // 同上：新任务也随 mission_created 带上「正在思考」占位，
+      // 用户提问气泡出现的同时智能体头像与思考指示即刻可见
+      ensureLiveStep(targetMission);
       this.broadcast({ type: 'mission_created', data: targetMission });
       this.addTerminalLog('system', `[Mission Started] ID: ${missionId} | Goal: ${goal}`, options.userId);
     }
@@ -1381,6 +1393,9 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
 
           if (!result.success && result.error) {
             targetMission.status = 'DONE';
+            // 派发期创建的「正在思考」live step 兜底收尾(幂等:
+            // orchestrator error 事件已收过则此处空操作)
+            closeLiveStep(targetMission, { status: 'FAILED' });
             targetMission.steps.push({
               id: `step_err`,
               title: `执行异常: ${result.error}`,
@@ -1406,6 +1421,8 @@ ${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
         }
       } catch (err: any) {
         targetMission.status = 'DONE';
+        // 同上:预编排阶段(记忆构建/配置加载等)抛错时收掉思考占位
+        closeLiveStep(targetMission, { status: 'FAILED' });
         targetMission.steps.push({
           id: `step_err`,
           title: `Execution error: ${err.message}`,

@@ -12,9 +12,21 @@ export async function GET() {
   const encoder = new TextEncoder();
 
   let unsubscribe: (() => void) | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   const stream = new ReadableStream({
     start(controller) {
+      // 心跳保活：代理/负载均衡会掐断静默连接，EventSource 到 TCP 超时才发现
+      // （可达分钟级），期间广播的审批卡片等事件全部丢失——卡片"迟到"的主因。
+      // 25s 一帧 SSE 注释行，只占连接不进事件分发
+      heartbeatTimer = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(': ping\n\n'));
+        } catch {
+          // 连接已关闭，忽略
+        }
+      }, 25_000);
+
       // 1. 发送初始化状态（如果未登录，则不发送任何历史任务；如果已登录，合并用户专属任务与内存中的进行中任务）
       let scopedMissions: any[] = [];
       if (userId) {
@@ -101,6 +113,9 @@ export async function GET() {
       });
     },
     cancel() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+      }
       if (unsubscribe) {
         unsubscribe();
       }

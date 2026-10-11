@@ -43,7 +43,7 @@ export default function Workspace() {
   // 移动端专属状态：底部 tab + 全屏覆盖层（复用桌面视图做"更多"入口）
   const [mobileTab, setMobileTab] = useState<MobileTab>('home');
   const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'patrol' | 'workshops' | null>(null);
-  const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact'>('browser');
+  const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact' | 'activity'>('browser');
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
@@ -70,6 +70,8 @@ export default function Workspace() {
   // 连接器状态
   const [connectors, setConnectors] = useState<ConnectorApp[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // 乐观派发的占位会话 id：真实 mission_created 到达时摘除（见 handleRun / mission_created）
+  const pendingLocalMissionIdRef = useRef<string | null>(null);
 
   // 长效记忆状态
   const [memories, setMemories] = useState<MemoryItem[]>([]);
@@ -345,14 +347,17 @@ export default function Workspace() {
   };
 
   const handleApproval = async (approvalId: string, approved: boolean) => {
+    // 乐观移除：卡片先消失再等 POST 返回。POST 若卡顿半秒，旧逻辑里卡片
+    // 一直挂着，用户自然会再点一次（第二个 ApprovalRequest 由此而来）
+    setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
     try {
       await fetch('/api/agent/approval', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ approvalId, approved }),
       });
-      setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
     } catch (err) {
+      // 网络失败时提示；后端广播 approval_resolved 会同步真实状态
       console.error(err);
     }
   };
@@ -412,6 +417,52 @@ export default function Workspace() {
     // 如果指定了 targetMissionId，或者当前正处于某会话且不是全新发起的，则沿用该会话
     const missionId = targetMissionId !== undefined ? targetMissionId : activeMissionId || undefined;
 
+    // 乐观派发：不等后端 mission_created（冷启动 ensureRuntime / 网络往返可达数秒），
+    // 先在前端立起会话 —— 用户气泡与「正在思考」占位即刻可见；后端事件到达后原位替换。
+    // 新任务记入 pendingLocalMissionIdRef，mission_created 到达时摘除占位会话；
+    // 续聊沿用真实 missionId，后端 mission_updated 会整包覆盖乐观步骤。
+    const optimisticLiveStep = {
+      id: `step_live_${missionId || 'local'}_fe_${Date.now()}`,
+      role: 'assistant' as const,
+      messageKind: 'progress' as const,
+      title: '正在思考…',
+      status: 'RUNNING' as const,
+      answer: '',
+      reasoning: '',
+      startedAt: Date.now(),
+    };
+    const optimisticUserStep = {
+      id: `step_user_fe_${Date.now()}`,
+      role: 'user' as const,
+      title: text.trim(),
+      userPrompt: text.trim(),
+      status: 'DONE' as const,
+    };
+    if (missionId && missions.some((m) => m.id === missionId)) {
+      setMissions((prev) =>
+        prev.map((m) =>
+          m.id === missionId
+            ? { ...m, status: 'ACTIVE', steps: [...m.steps, optimisticUserStep, optimisticLiveStep] }
+            : m
+        )
+      );
+      setActiveMissionId(missionId);
+    } else {
+      const localMission: Mission = {
+        id: `mission_local_${Date.now()}`,
+        userId: session?.user?.id,
+        title: title || text.trim(),
+        status: 'ACTIVE',
+        progress: 0,
+        startedAt: Date.now(),
+        steps: [optimisticUserStep, optimisticLiveStep],
+        conversationMessages: [],
+      };
+      pendingLocalMissionIdRef.current = localMission.id;
+      setMissions((prev) => [localMission, ...prev]);
+      setActiveMissionId(localMission.id);
+    }
+
     try {
       await fetch('/api/agent/run', {
         method: 'POST',
@@ -420,6 +471,43 @@ export default function Workspace() {
       });
     } catch (e) {
       console.error(e);
+      // 派发失败：乐观会话立即标失败，不留永转的「正在思考」占位
+      const failTitle = '任务派发失败';
+      const failText = '无法连接服务器，请检查网络后重试。';
+      if (pendingLocalMissionIdRef.current) {
+        const localId = pendingLocalMissionIdRef.current;
+        pendingLocalMissionIdRef.current = null;
+        setMissions((prev) =>
+          prev.map((m) =>
+            m.id === localId
+              ? {
+                  ...m,
+                  status: 'INTERRUPTED',
+                  steps: [
+                    ...m.steps.filter((s) => !s.id.startsWith('step_live_')),
+                    { ...optimisticLiveStep, status: 'FAILED', title: failTitle, answer: failText },
+                  ],
+                }
+              : m
+          )
+        );
+      } else if (missionId) {
+        setMissions((prev) =>
+          prev.map((m) =>
+            m.id === missionId
+              ? {
+                  ...m,
+                  status: 'INTERRUPTED',
+                  steps: m.steps.map((s) =>
+                    s.id.startsWith('step_live_') && s.status === 'RUNNING'
+                      ? { ...s, status: 'FAILED', title: failTitle, answer: failText }
+                      : s
+                  ),
+                }
+              : m
+          )
+        );
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -527,7 +615,9 @@ export default function Workspace() {
       try {
         const vp = JSON.parse(e.data);
         setViewport((prev) => ({ ...prev, ...vp }));
-        setRightTab('browser');
+        // 视口更新自动带看浏览器，但「执行动态」是粘性的：任务执行期间
+        // 用户正盯着活动流时不被抢走焦点（想看浏览随时手点）
+        setRightTab((prev) => (prev === 'activity' ? prev : 'browser'));
       } catch (err) {
         console.error(err);
       }
@@ -545,7 +635,13 @@ export default function Workspace() {
     eventSource.addEventListener('mission_created', (e: MessageEvent) => {
       try {
         const mission: Mission = JSON.parse(e.data);
-        setMissions((prev) => [mission, ...prev.filter((m) => m.id !== mission.id)]);
+        // 后端真实会话落地 → 摘除乐观占位会话（真实会话自带用户步骤与思考占位）
+        const pendingLocalId = pendingLocalMissionIdRef.current;
+        pendingLocalMissionIdRef.current = null;
+        setMissions((prev) => [
+          mission,
+          ...prev.filter((m) => m.id !== mission.id && m.id !== pendingLocalId),
+        ]);
         setActiveMissionId(mission.id);
         setActiveView('cockpit');
         setMobileTab('activity');

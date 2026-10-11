@@ -187,3 +187,12 @@ nextjs-portal,
 next-route-announcer {
   display: none !important;
 }
+
+/* 横向滚动容器隐藏滚动条（标签栏等挤换行防护;此前 scrollbar-none 类未定义实为空操作） */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

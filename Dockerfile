@@ -43,6 +43,45 @@ RUN apt-get update && \
     chmod -R a+rX /opt/a-stock
 ENV PATH="/opt/a-stock/bin:${PATH}"
 
+# qiaomu-bento-ppt skill(PPT 工坊 · bento 单文件 HTML 演示页生成,MIT):
+# 纯 Python 标准库脚本 + 内置官方 bento shell 与规范快照,无需 pip 依赖;
+# 固定 commit 55c63c8(与仓内 upstream.lock.json 校验的内置快照一致)。
+# node:20-slim 无 git/curl,用 node 内置 fetch 下载 GitHub tarball 后解包;
+# 层尾跑 skill 自带的 locate 自检,确保 shell/规范快照齐备才算构建成功。
+# Agent 经 sandbox_run_command 以绝对路径调用(ppt-workshop.ts 契约)。
+RUN node -e "fetch('https://codeload.github.com/joeseesun/qiaomu-bento-ppt/tar.gz/55c63c836f42bc9175757d077428c395cd93effe').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()}).then(b=>require('node:fs').writeFileSync('/tmp/bento-skill.tgz',Buffer.from(b)))" && \
+    mkdir -p /opt/skills/qiaomu-bento-ppt && \
+    tar -xzf /tmp/bento-skill.tgz -C /opt/skills/qiaomu-bento-ppt --strip-components=1 && \
+    rm -f /tmp/bento-skill.tgz && \
+    chmod -R a+rX /opt/skills && \
+    python3 /opt/skills/qiaomu-bento-ppt/scripts/bento_deck.py locate | grep -q '"standalone": true'
+
+# ppt-master skill(PPT 工坊 · 真 .pptx 交付,MIT)+ 专用 venv + CJK 字体:
+# - 固定 commit b4efe3d,tarball 里 skill 子树在 <repo>/skills/ppt-master/,
+#   --strip-components=2 直接解到 /opt/skills/ppt-master(SKILL_DIR 契约路径);
+# - 裁掉 templates/sounds(13MB,仅 narration 音频用,工坊契约禁用音频);
+#   icons(49MB)保留 —— Quick 流程的图标池契约(templates/icons/README.md)要用;
+# - 依赖只装 SVG→PPTX 核心六件(PyYAML/python-pptx/XlsxWriter/skia-pathops/
+#   uharfbuzz/Pillow,2026-10-11 本机全链路冒烟验证);**严禁装 PyMuPDF(AGPL)**,
+#   生图/搜索/音频/文档转换等可选依赖一律不装(工坊契约为离线手写 SVG 路线);
+# - venv 不进 PATH(PATH 首位是 A股 venv),契约里命令显式用 /opt/ppt-master/bin/python3;
+# - fonts-noto-cjk:text_measure.py calibrate 按系统字体实测中文字宽,缺字体则排版失准;
+# - 层尾门禁:attribution_guard(skill 完整性)+ 核心依赖 import 双自检。
+RUN node -e "fetch('https://codeload.github.com/hugohe3/ppt-master/tar.gz/b4efe3ddf237a97a42880164759162f8e2412f2f').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()}).then(b=>require('node:fs').writeFileSync('/tmp/ppt-master.tgz',Buffer.from(b)))" && \
+    mkdir -p /opt/skills/ppt-master && \
+    tar -xzf /tmp/ppt-master.tgz -C /opt/skills/ppt-master --strip-components=3 --wildcards '*/skills/ppt-master/*' && \
+    rm -f /tmp/ppt-master.tgz && \
+    rm -rf /opt/skills/ppt-master/templates/sounds && \
+    chmod -R a+rX /opt/skills && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends fonts-noto-cjk && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m venv /opt/ppt-master && \
+    /opt/ppt-master/bin/pip install --no-cache-dir \
+      PyYAML "python-pptx>=0.6.21" XlsxWriter skia-pathops uharfbuzz Pillow && \
+    /opt/ppt-master/bin/python3 /opt/skills/ppt-master/scripts/attribution_guard.py && \
+    /opt/ppt-master/bin/python3 -c "import yaml, pptx, xlsxwriter, pathops, uharfbuzz, PIL; print('ppt-master deps ok')"
+
 # ---- 业务代码（standalone 产物；变更只作废以下薄层）----
 
 # 复制公共静态资源与 standalone 产物

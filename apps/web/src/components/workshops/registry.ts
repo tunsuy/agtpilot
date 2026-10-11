@@ -18,6 +18,7 @@ import {
   GraduationCap,
   Newspaper,
   PenLine,
+  Rss,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -31,6 +32,7 @@ export type WorkshopId =
   | 'email_triage'
   | 'weekly'
   | 'ppt'
+  | 'follow_builders'
   | 'invest'
   | 'edu';
 
@@ -206,6 +208,19 @@ export const WORKSHOPS: WorkshopDef[] = [
     accent: 'sky',
     deps: [],
     note: '生成后跳转任务页,双路线按「输出形态」选择:① 网页演示页——镜像内置 qiaomu-bento-ppt skill(MIT,构建全程无需联网)产出单文件 .bento.html,中央画布直接放映,下载后双击离线放映、浏览器内可继续编辑;② PPTX 文件——镜像内置 ppt-master skill(MIT,Quick 无交互流程)手写 SVG 经质检导出原生可编辑 .pptx,画布下载卡片一键保存,PowerPoint/WPS/Keynote 可直接二改。大纲先行再排版;数据必须真实并注明来源,严禁编造;不引用外链媒体,保持交付物离线可用。',
+  },
+  {
+    id: 'follow_builders',
+    name: 'AI Builders 日报',
+    category: 'office',
+    desc: '聚合 AI builder 的 X 动态 / 播客 / 官方博客,一键出日报,每条带原文链接',
+    icon: Rss,
+    accent: 'sky',
+    deps: [
+      { id: 'twitterapi_io', name: 'X / Twitter' },
+      { id: 'exa', name: '网络搜索' },
+    ],
+    note: '数据来自 follow-builders 开源项目(MIT)的公共中央 feed,上游每日用 X 官方 API + 播客转写 + 博客抓取更新,读取无需任何凭证。Agent 用只读工具拉取素材后按你选的语言/时间范围/类别改写成日报:同一人多条动态合并、每条带原文链接、结尾注明数据时间;上游超 48 小时未更新会在日报开头明示数据可能过期,并可降级到已连接的 X 连接器/网页搜索自取(注明降级)。全程只读、无任何发布动作。',
   },
   {
     id: 'invest',

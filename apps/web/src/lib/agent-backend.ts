@@ -1241,6 +1241,11 @@ class AgentBackend {
             const { buildEmailImapTools } = await import('@/lib/email-imap');
             injectedTools.push(...buildEmailImapTools(uid));
 
+            // AI Builders 日报:follow_builders_fetch_feed(只读公共 feed,无需凭证,
+            // 服务端 30 分钟缓存;始终注入,非日报任务用不到时 LLM 自然忽略)
+            const { buildFollowBuildersTools } = await import('@/lib/follow-builders');
+            injectedTools.push(...buildFollowBuildersTools());
+
             // 小红书托管模式(scenario-loop P2):读工具登录过即注入;
             // 存草稿工具仅在显式 opt-in + 风险已读时注入(dangerLevel high → 审批门)。
             // 浏览器服务来自 plugin-browser 的 ctx.browser,与登录通道共享同一 Page

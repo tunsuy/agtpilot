@@ -11,6 +11,12 @@ import {
 } from '../../lib/content-workshops';
 import { buildEmailTriagePrompt, buildWeeklyReportPrompt } from '../../lib/office-workshops';
 import { buildPptWorkshopPrompt, PPT_PURPOSES } from '../../lib/ppt-workshop';
+import {
+  buildFollowBuildersPrompt,
+  FB_RANGES,
+  FB_LANGUAGES,
+  FB_CATEGORIES,
+} from '../../lib/follow-builders-workshop';
 import { buildInvestPrompt, INVEST_MODES } from '../../lib/invest-workshops';
 import { buildEduPrompt, EDU_MODES } from '../../lib/edu-workshops';
 import { EMAIL_TRIAGE_SCOPES, WEEKLY_REPORT_PERIODS } from '../../lib/office-workshops';
@@ -134,6 +140,25 @@ export function buildWorkshopRun(
           output: str(params.output, 'bento'),
         }),
         title: `PPT 演示稿 · ${PPT_PURPOSES.find((p) => p.id === purpose)?.name || '演示页'}`,
+      };
+    }
+    case 'follow_builders': {
+      const range = str(params.range, FB_RANGES[0].id);
+      const language = str(params.language, FB_LANGUAGES[0]);
+      return {
+        prompt: buildFollowBuildersPrompt({
+          language,
+          range,
+          ...(Array.isArray(params.categories) && params.categories.length > 0
+            ? {
+                categories: (params.categories as unknown[]).filter(
+                  (c): c is string =>
+                    typeof c === 'string' && FB_CATEGORIES.some((fc) => fc.id === c)
+                ),
+              }
+            : {}),
+        }),
+        title: `AI Builders 日报 · ${FB_RANGES.find((r) => r.id === range)?.name || '最近 24 小时'}`,
       };
     }
     case 'invest': {

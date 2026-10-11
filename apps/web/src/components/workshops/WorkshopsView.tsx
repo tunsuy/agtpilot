@@ -24,6 +24,7 @@ import { ZhihuWorkshopForm } from './forms/ZhihuWorkshopForm';
 import { EmailTriageForm } from './forms/EmailTriageForm';
 import { WeeklyReportForm } from './forms/WeeklyReportForm';
 import { PptWorkshopForm } from './forms/PptWorkshopForm';
+import { FollowBuildersForm } from './forms/FollowBuildersForm';
 import { InvestWorkshopForm } from './forms/InvestWorkshopForm';
 import { EduWorkshopForm } from './forms/EduWorkshopForm';
 
@@ -59,6 +60,7 @@ const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
   email_triage: EmailTriageForm,
   weekly: WeeklyReportForm,
   ppt: PptWorkshopForm,
+  follow_builders: FollowBuildersForm,
   invest: InvestWorkshopForm,
   edu: EduWorkshopForm,
 };

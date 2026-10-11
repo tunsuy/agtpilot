@@ -416,7 +416,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     icon: 'CandlestickChart',
     category: 'Finance',
     description:
-      '基于 AkShare 的开源 A股数据 MCP（本地 stdio，免凭证免注册）：实时价格、历史 K线、公司信息、大盘概览、财务数据。需服务器预装 Python 包 a-stock-mcp-server（pip install a-stock-mcp-server）；本地子进程默认关闭，点「启用」后才挂载。',
+      '基于 AkShare 的开源 A股数据 MCP（本地 stdio，免凭证免注册）：实时价格、历史 K线、公司信息、大盘概览、财务数据。生产镜像已内置 python3 venv（/opt/a-stock），点「启用」即可用；本地开发需自行 pip install a-stock-mcp-server。',
     authType: 'none',
     optIn: true,
     tokenEnvVar: 'MCP_ASTOCK_OPTIN',

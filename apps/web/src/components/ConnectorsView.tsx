@@ -606,14 +606,15 @@ export function ConnectorsView({
                   </button>
                 )}
 
-                {/* 桌面端提示:唤起能力仅在手机端存在 */}
+                {/* 桌面端提示:唤起能力仅在手机端存在(纯图标+悬浮提示,窄卡片下
+                    不与 envVar/配置按钮抢宽度——此前文字版会把底部行挤断行) */}
                 {app.mobileAction && !mobileCtx && (
                   <span
-                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-[11px] text-zinc-400 bg-zinc-50 border border-zinc-200"
+                    className="flex shrink-0 items-center px-2 py-1 rounded-lg text-[11px] text-zinc-400 bg-zinc-50 border border-zinc-200"
                     title="真机唤起仅在手机浏览器或 Capacitor App 内可用"
+                    aria-label="真机唤起仅手机端可用"
                   >
                     <Smartphone className="h-3 w-3" />
-                    <span>手机端可用</span>
                   </span>
                 )}
 

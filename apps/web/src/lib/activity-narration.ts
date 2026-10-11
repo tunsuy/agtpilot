@@ -143,6 +143,11 @@ export function narrateStep(step: MissionStep): NarratedActivity | null {
       if (step.title?.includes('总结')) return { kind: 'think', label: '整理最终结论' };
       return { kind: 'think', label: '思考' };
     }
+    // 已完成:有 reasoning = 实打实的思考段(数据判定,不依赖写死的标题字符串;
+    // 纯思考无正文对应 closeLiveStep 的「已完成一轮推理」,有正文则两段皆有)
+    if (step.reasoning) {
+      return { kind: 'think', label: '完成深度思考', detail: clip(step.reasoning, 60) };
+    }
     if (step.answer) return { kind: 'think', label: '完成阶段分析', detail: clip(step.answer, 60) };
     return { kind: 'think', label: '完成一轮推理' };
   }

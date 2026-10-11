@@ -93,6 +93,29 @@ describe('narrateStep assistant 阶段', () => {
     const n = narrateStep(step({ role: 'assistant', status: 'DONE', answer: '' }));
     expect(n?.label).toBe('完成一轮推理');
   });
+
+  it('完成且有 reasoning → 完成深度思考(数据判定,不依赖标题字符串)', () => {
+    const n = narrateStep(
+      step({ role: 'assistant', status: 'DONE', answer: '', reasoning: '先分析问题再决定检索' })
+    );
+    expect(n?.kind).toBe('think');
+    expect(n?.label).toBe('完成深度思考');
+    expect(n?.detail).toBe('先分析问题再决定检索');
+  });
+
+  it('完成且 reasoning+answer 并存 → 仍按思考段叙述(思考是步骤主属性)', () => {
+    const n = narrateStep(
+      step({ role: 'assistant', status: 'DONE', answer: '中间结论', reasoning: '推导过程' })
+    );
+    expect(n?.label).toBe('完成深度思考');
+    expect(n?.detail).toBe('推导过程');
+  });
+
+  it('完成仅 answer 无 reasoning → 完成阶段分析(旧路径不受影响)', () => {
+    const n = narrateStep(step({ role: 'assistant', status: 'DONE', answer: '中间结论' }));
+    expect(n?.label).toBe('完成阶段分析');
+    expect(n?.detail).toBe('中间结论');
+  });
 });
 
 describe('narrateStep 用户步骤与 formatActivityDuration', () => {

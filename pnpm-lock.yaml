@@ -407,6 +407,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^2.0.133
         version: 2.0.133(zod@3.25.76)
+      '@ai-sdk/openai-compatible':
+        specifier: ^1.0.58
+        version: 1.0.58(zod@3.25.76)
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
         version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
@@ -414,7 +417,7 @@ importers:
         specifier: ^5.0.273
         version: 5.0.273(zod@3.25.76)
       zod:
-        specifier: ^3.24.0
+        specifier: ^3.25.76
         version: 3.25.76
 
   packages/plugin-notify:

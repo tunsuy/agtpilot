@@ -2,6 +2,7 @@ import { Context, Service } from '@deepseek-ai/cordis';
 import { generateText, streamText, stepCountIs, jsonSchema, tool } from 'ai';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
 import { ModelStepResult } from '@agtpilot/protocol';
 import type {
@@ -299,15 +300,23 @@ export class ModelService extends Service implements ModelGateway {
       const baseURL = configOverride?.baseURL || process.env.CUSTOM_LLM_BASE_URL || undefined;
       const modelName =
         configOverride?.modelName || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o';
-      const provider = createOpenAI({
+      // 用 openai-compatible 而非 openai:中转/自建端点常按 DeepSeek-R1 惯例
+      // 在 SSE chunk 的 delta.reasoning_content 里流式输出思考过程,
+      // @ai-sdk/openai 的 chat 解析不了它(思考过程整段丢失);
+      // @ai-sdk/openai-compatible 同时识别 reasoning_content 与 reasoning,
+      // 才能把思考增量转成 reasoning-delta 走 onReasoningDelta 回调
+      const provider = createOpenAICompatible({
+        name: 'custom-llm',
         apiKey,
-        baseURL,
+        baseURL: baseURL || 'https://api.openai.com/v1',
       });
       return provider(modelName);
     }
 
     if (activeModelId === 'local_llm') {
-      // 本地推理（Ollama 等 OpenAI 兼容端点）：敏感数据不出机，无需真实 Key
+      // 本地推理（Ollama 等 OpenAI 兼容端点）：敏感数据不出机,无需真实 Key。
+      // 同样走 openai-compatible:本地部署的推理模型(qwen3 等)也会经
+      // delta.reasoning / reasoning_content 吐思考过程,openai 识别不了
       const apiKey = configOverride?.apiKey || process.env.LOCAL_LLM_API_KEY || 'ollama';
       const baseURL = configOverride?.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1';
       const modelName =
@@ -315,7 +324,11 @@ export class ModelService extends Service implements ModelGateway {
         this.preferred.modelNames['local_llm'] ||
         process.env.LOCAL_LLM_MODEL_NAME ||
         'qwen2.5:14b';
-      const provider = createOpenAI({ apiKey, baseURL });
+      const provider = createOpenAICompatible({
+        name: 'local-llm',
+        apiKey,
+        baseURL,
+      });
       return provider(modelName);
     }
 

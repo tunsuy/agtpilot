@@ -241,7 +241,14 @@ export function DeliverablesView({
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
+    <div
+      className={
+        variant === 'mobile'
+          ? // 移动端与「动态」页同款容器:px-4 pt-4 pb-28 max-w-lg,标题位置对齐
+            'w-full max-w-lg mx-auto px-4 pt-4 pb-28 space-y-8 animate-fadeIn'
+          : 'w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn'
+      }
+    >
       {/* 顶部标题栏：移动端居中简版（无图标/描述），桌面完整版；操作按钮两种布局共用 */}
       {variant === 'mobile' ? (
         <header className="text-center">

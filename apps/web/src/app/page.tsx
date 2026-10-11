@@ -929,15 +929,13 @@ export default function Workspace() {
               )}
 
               {mobileTab === 'deliverables' && (
-                <div className="pb-16">
-                  <DeliverablesView
-                    artifact={artifact}
-                    missions={missions}
-                    variant="mobile"
-                    onOpenCockpit={() => setMobileTab('activity')}
-                    onRunMission={handleRun}
-                  />
-                </div>
+                <DeliverablesView
+                  artifact={artifact}
+                  missions={missions}
+                  variant="mobile"
+                  onOpenCockpit={() => setMobileTab('activity')}
+                  onRunMission={handleRun}
+                />
               )}
 
               {mobileTab === 'activity' && (

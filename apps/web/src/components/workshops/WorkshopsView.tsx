@@ -22,6 +22,7 @@ import { ContentWorkshopForm } from './forms/ContentWorkshopForm';
 import { WechatMpWorkshopForm } from './forms/WechatMpWorkshopForm';
 import { EmailTriageForm } from './forms/EmailTriageForm';
 import { WeeklyReportForm } from './forms/WeeklyReportForm';
+import { PptWorkshopForm } from './forms/PptWorkshopForm';
 import { InvestWorkshopForm } from './forms/InvestWorkshopForm';
 import { EduWorkshopForm } from './forms/EduWorkshopForm';
 
@@ -55,6 +56,7 @@ const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
   video_bilibili: ContentWorkshopForm,
   email_triage: EmailTriageForm,
   weekly: WeeklyReportForm,
+  ppt: PptWorkshopForm,
   invest: InvestWorkshopForm,
   edu: EduWorkshopForm,
 };

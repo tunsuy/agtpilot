@@ -1,13 +1,32 @@
+/**
+ * 二进制文件产物的元信息(S2 · ppt-master 真 .pptx 交付):
+ * 文件本体存服务端文件库(artifact-files.ts,按用户隔离),
+ * mission JSON 里只带 fileId 与展示元数据,不落二进制内容。
+ */
+export interface ArtifactFileMeta {
+  /** 服务端文件库内的文件 id(下载路由凭此定位) */
+  fileId: string;
+  /** 下载/展示用文件名(含扩展名) */
+  fileName: string;
+  /** MIME 类型(如 application/vnd.openxmlformats-officedocument.presentationml.presentation) */
+  mime: string;
+  /** 文件字节数(前端展示体积) */
+  sizeBytes: number;
+}
+
 export interface ArtifactData {
   id: string;
   title: string;
-  type: 'code' | 'html' | 'markdown' | 'chart';
+  /** file:二进制文件产物(如 .pptx),content 只放人类可读摘要,本体走 fileMeta.fileId 下载 */
+  type: 'code' | 'html' | 'markdown' | 'chart' | 'file';
   content: string;
   language?: string;
   description?: string;
   timestamp: number;
   /** 产生该产物的任务键（多用户部署时前端按其归属任务，避免串台） */
   taskId?: string;
+  /** type='file' 时必带:服务端文件库定位信息 */
+  fileMeta?: ArtifactFileMeta;
 }
 
 export interface PlanTask {

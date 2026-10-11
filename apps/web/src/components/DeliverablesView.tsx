@@ -20,6 +20,7 @@ import {
   Smartphone,
   Eye,
   Share2,
+  FileDown,
 } from 'lucide-react';
 import { ArtifactState, Mission } from '../types/agent';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
@@ -38,12 +39,14 @@ interface DeliverablesViewProps {
 function HeaderActions({
   shared,
   copied,
+  downloadLabel = '下载 .md',
   onShare,
   onCopy,
   onDownload,
 }: {
   shared: boolean;
   copied: boolean;
+  downloadLabel?: string;
   onShare: () => void;
   onCopy: () => void;
   onDownload: () => void;
@@ -79,7 +82,7 @@ function HeaderActions({
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white shadow-xs transition"
       >
         <Download className="h-3.5 w-3.5" />
-        <span>下载 .md</span>
+        <span>{downloadLabel}</span>
       </button>
     </div>
   );
@@ -94,7 +97,7 @@ export function DeliverablesView({
 }: DeliverablesViewProps) {
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'markdown' | 'code' | 'chart'>('all');
+  const [filterType, setFilterType] = useState<'all' | 'markdown' | 'code' | 'chart' | 'html' | 'file'>('all');
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   const [deliverableViewMode, setDeliverableViewMode] = useState<'doc' | 'social'>('doc');
 
@@ -108,6 +111,7 @@ export function DeliverablesView({
       missionId?: string;
       missionTitle?: string;
       timestamp: number;
+      fileMeta?: { fileId: string; fileName: string; mime: string; sizeBytes: number };
     }> = [];
 
     const seenContents = new Set<string>();
@@ -123,6 +127,7 @@ export function DeliverablesView({
           missionId: m.id,
           missionTitle: m.title,
           timestamp: m.startedAt,
+          fileMeta: m.artifact.fileMeta,
         });
       }
     });
@@ -134,6 +139,7 @@ export function DeliverablesView({
         type: artifact.type || 'markdown',
         content: artifact.content,
         timestamp: Date.now(),
+        fileMeta: artifact.fileMeta,
       });
     }
 
@@ -170,11 +176,33 @@ export function DeliverablesView({
 
   const handleDownload = () => {
     if (!activeItem?.content) return;
-    const blob = new Blob([activeItem.content], { type: 'text/markdown;charset=utf-8;' });
+    // file 产物(如 .pptx):本体在服务端文件库,走下载路由(cookie 鉴权)
+    if (activeItem.type === 'file' && activeItem.fileMeta?.fileId) {
+      const link = document.createElement('a');
+      link.href = `/api/artifacts/file?fileId=${encodeURIComponent(activeItem.fileMeta.fileId)}`;
+      link.setAttribute('download', activeItem.fileMeta.fileName || '');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+    // html 产物(如 bento 演示页)按网页下载,其余仍为 Markdown 文档
+    const isHtml = activeItem.type === 'html';
+    const blob = new Blob([activeItem.content], {
+      type: isHtml ? 'text/html;charset=utf-8;' : 'text/markdown;charset=utf-8;',
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
+    const baseTitle = activeItem.title || 'deliverable';
     link.href = url;
-    link.setAttribute('download', `${activeItem.title || 'deliverable'}.md`);
+    link.setAttribute(
+      'download',
+      isHtml
+        ? /\.html?$/i.test(baseTitle)
+          ? baseTitle
+          : `${baseTitle}.bento.html`
+        : `${baseTitle}.md`
+    );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -195,9 +223,20 @@ export function DeliverablesView({
     }
   };
 
+  // 下载按钮文案随产物类型:file → 下载文件名,html → 下载演示页,其余 .md
+  const downloadLabel = !activeItem
+    ? '下载 .md'
+    : activeItem.type === 'file'
+      ? `下载 ${activeItem.fileMeta?.fileName || '文件'}`
+      : activeItem.type === 'html'
+        ? '下载演示页'
+        : '下载 .md';
+
   const getTypeIcon = (type: string) => {
     if (type === 'code') return <Code2 className="h-3.5 w-3.5 text-blue-500" />;
     if (type === 'chart') return <PieChart className="h-3.5 w-3.5 text-purple-500" />;
+    if (type === 'html') return <Globe className="h-3.5 w-3.5 text-emerald-500" />;
+    if (type === 'file') return <FileDown className="h-3.5 w-3.5 text-sky-500" />;
     return <FileText className="h-3.5 w-3.5 text-zinc-600" />;
   };
 
@@ -212,6 +251,7 @@ export function DeliverablesView({
               <HeaderActions
                 shared={shared}
                 copied={copied}
+                downloadLabel={downloadLabel}
                 onShare={handleShare}
                 onCopy={handleCopy}
                 onDownload={handleDownload}
@@ -242,6 +282,7 @@ export function DeliverablesView({
           <HeaderActions
             shared={shared}
             copied={copied}
+            downloadLabel={downloadLabel}
             onShare={handleShare}
             onCopy={handleCopy}
             onDownload={handleDownload}
@@ -302,6 +343,8 @@ export function DeliverablesView({
                   { id: 'markdown', label: '文档' },
                   { id: 'code', label: '代码' },
                   { id: 'chart', label: '图表' },
+                  { id: 'html', label: '演示页' },
+                  { id: 'file', label: '文件' },
                 ] as const
               ).map((tab) => (
                 <button
@@ -442,6 +485,57 @@ export function DeliverablesView({
                       rawContent={activeItem.content}
                       title={activeItem.title}
                     />
+                  </div>
+                ) : activeItem.type === 'file' ? (
+                  /* file 产物(ppt-master 真 .pptx 等二进制):下载卡片 + 摘要 */
+                  <div className="p-4 md:p-6 min-w-0 space-y-4">
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50/60 p-6 flex flex-col sm:flex-row items-center gap-4 shadow-2xs">
+                      <div className="h-14 w-14 rounded-2xl bg-sky-50 border border-sky-200/70 flex items-center justify-center flex-shrink-0">
+                        <FileDown className="h-7 w-7 text-sky-600" />
+                      </div>
+                      <div className="min-w-0 text-center sm:text-left">
+                        <p className="text-sm font-semibold text-zinc-900 truncate max-w-full">
+                          {activeItem.fileMeta?.fileName || activeItem.title || '交付文件'}
+                        </p>
+                        <p className="text-[11px] text-zinc-400 mt-0.5 font-mono">
+                          {activeItem.fileMeta
+                            ? `${(activeItem.fileMeta.sizeBytes / 1024).toFixed(0)} KB · ${activeItem.fileMeta.mime.split('/').pop()}`
+                            : '文件产物'}
+                        </p>
+                      </div>
+                      <a
+                        href={`/api/artifacts/file?fileId=${encodeURIComponent(activeItem.fileMeta?.fileId || '')}`}
+                        download={activeItem.fileMeta?.fileName || undefined}
+                        className={`ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium shadow-xs transition ${
+                          activeItem.fileMeta?.fileId
+                            ? 'bg-zinc-900 hover:bg-zinc-800 text-white'
+                            : 'bg-zinc-100 text-zinc-400 pointer-events-none'
+                        }`}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        <span>下载文件</span>
+                      </a>
+                    </div>
+                    <div className="prose prose-zinc prose-sm max-w-none leading-relaxed">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {activeItem.content}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                ) : activeItem.type === 'html' ? (
+                  /* html 产物(bento 演示页/自包含网页):iframe srcDoc 沙箱放映。
+                     不给 allow-same-origin —— 演示页脚本运行在独立源,拿不到主站
+                     cookie/storage;allow-scripts 保证其翻页/动画/图表可用。 */
+                  <div className="p-4 md:p-6 min-w-0">
+                    <iframe
+                      title={activeItem.title || '演示页'}
+                      srcDoc={activeItem.content}
+                      sandbox="allow-scripts allow-popups"
+                      className="w-full aspect-video rounded-xl border border-zinc-200 bg-white shadow-2xs"
+                    />
+                    <p className="mt-2 text-[11px] text-zinc-400 leading-relaxed">
+                      网页演示页:画面内可翻页放映;下载保存 .bento.html 后双击即可离线放映,浏览器内可继续编辑。
+                    </p>
                   </div>
                 ) : (
                   <div className="p-6 md:p-8 prose prose-zinc prose-sm max-w-none leading-relaxed min-h-[500px]">

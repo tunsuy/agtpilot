@@ -9,6 +9,7 @@ import {
   buildVideoScriptPrompt,
 } from '../../lib/content-workshops';
 import { buildEmailTriagePrompt, buildWeeklyReportPrompt } from '../../lib/office-workshops';
+import { buildPptWorkshopPrompt, PPT_PURPOSES } from '../../lib/ppt-workshop';
 import { buildInvestPrompt, INVEST_MODES } from '../../lib/invest-workshops';
 import { buildEduPrompt, EDU_MODES } from '../../lib/edu-workshops';
 import { EMAIL_TRIAGE_SCOPES, WEEKLY_REPORT_PERIODS } from '../../lib/office-workshops';
@@ -106,6 +107,20 @@ export function buildWorkshopRun(
           extras: str(params.extras),
         }),
         title: `周报生成 · ${WEEKLY_REPORT_PERIODS.find((p) => p.id === period)?.name || '周报'}`,
+      };
+    }
+    case 'ppt': {
+      const purpose = str(params.purpose, 'report');
+      return {
+        prompt: buildPptWorkshopPrompt({
+          topic: str(params.topic),
+          material: str(params.material),
+          purpose,
+          style: str(params.style, 'business'),
+          pages: num(params.pages, 12),
+          output: str(params.output, 'bento'),
+        }),
+        title: `PPT 演示稿 · ${PPT_PURPOSES.find((p) => p.id === purpose)?.name || '演示页'}`,
       };
     }
     case 'invest': {

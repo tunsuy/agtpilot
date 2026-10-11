@@ -155,6 +155,13 @@ export interface ArtifactState {
   type?: string;
   content: string;
   postMeta?: ArtifactSocialPostMeta;
+  /** type='file' 时携带:二进制文件本体在服务端文件库,凭 fileId 走 /api/artifacts/file 下载 */
+  fileMeta?: {
+    fileId: string;
+    fileName: string;
+    mime: string;
+    sizeBytes: number;
+  };
 }
 
 export interface User {

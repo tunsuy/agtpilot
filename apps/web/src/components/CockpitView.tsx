@@ -44,6 +44,7 @@ import {
   Eye,
   Smartphone,
   Plug,
+  FileDown,
 } from 'lucide-react';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { ActivityFeedView } from './ActivityFeedView';
@@ -1335,7 +1336,8 @@ export function CockpitView({
           {/* 4. 最终交付物成果 (Deliverable Artifact Canvas) */}
           {rightTab === 'artifact' && (() => {
             // 提取当前任务中所有生成过的产物（支持多轮输出的多文档产物列表）
-            const missionArtifacts: Array<{ title: string; type: string; content: string; id: string }> = [];
+            type FileMeta = { fileId: string; fileName: string; mime: string; sizeBytes: number };
+            const missionArtifacts: Array<{ title: string; type: string; content: string; id: string; fileMeta?: FileMeta }> = [];
             const seen = new Set<string>();
 
             // 从 steps 中扫描是否有通过 artifact_render 输出的产物
@@ -1358,6 +1360,7 @@ export function CockpitView({
                 title: activeArtifact.title || '交付产物',
                 type: activeArtifact.type || 'markdown',
                 content: activeArtifact.content,
+                fileMeta: activeArtifact.fileMeta as FileMeta | undefined,
               });
             }
 
@@ -1365,11 +1368,33 @@ export function CockpitView({
 
             const handleDownloadCurrent = () => {
               if (!currentArtifact?.content) return;
-              const blob = new Blob([currentArtifact.content], { type: 'text/markdown;charset=utf-8;' });
+              // file 产物(如 .pptx):本体在服务端文件库,走下载路由(cookie 鉴权)
+              if (currentArtifact.type === 'file' && currentArtifact.fileMeta?.fileId) {
+                const link = document.createElement('a');
+                link.href = `/api/artifacts/file?fileId=${encodeURIComponent(currentArtifact.fileMeta.fileId)}`;
+                link.setAttribute('download', currentArtifact.fileMeta.fileName || '');
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                return;
+              }
+              // html 产物(如 bento 演示页)按网页下载,其余仍为 Markdown 文档
+              const isHtml = currentArtifact.type === 'html';
+              const blob = new Blob([currentArtifact.content], {
+                type: isHtml ? 'text/html;charset=utf-8;' : 'text/markdown;charset=utf-8;',
+              });
               const url = URL.createObjectURL(blob);
               const link = document.createElement('a');
+              const baseTitle = currentArtifact.title || 'deliverable';
               link.href = url;
-              link.setAttribute('download', `${currentArtifact.title || 'deliverable'}.md`);
+              link.setAttribute(
+                'download',
+                isHtml
+                  ? /\.html?$/i.test(baseTitle)
+                    ? baseTitle
+                    : `${baseTitle}.bento.html`
+                  : `${baseTitle}.md`
+              );
               document.body.appendChild(link);
               link.click();
               document.body.removeChild(link);
@@ -1473,7 +1498,13 @@ export function CockpitView({
                       <button
                         onClick={handleDownloadCurrent}
                         className="p-1.5 rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-600 transition shadow-2xs"
-                        title="下载文档文件 (.md)"
+                        title={
+                          currentArtifact?.type === 'file'
+                            ? `下载文件 (${currentArtifact.fileMeta?.fileName || '附件'})`
+                            : currentArtifact?.type === 'html'
+                              ? '下载演示页 (.html)'
+                              : '下载文档文件 (.md)'
+                        }
                       >
                         <Download className="h-3.5 w-3.5" />
                       </button>
@@ -1492,11 +1523,65 @@ export function CockpitView({
                         />
                       </div>
                     ) : artifactViewMode === 'preview' ? (
-                      <div className="prose prose-zinc prose-sm max-w-none leading-relaxed animate-fadeIn p-2 md:p-4">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {currentArtifact.content}
-                        </ReactMarkdown>
-                      </div>
+                      currentArtifact.type === 'file' ? (
+                        /* file 产物(ppt-master 真 .pptx 等二进制):本体在服务端文件库,
+                           画布只出下载卡片 + 人类可读摘要,不经模型上下文。 */
+                        <div className="animate-fadeIn w-full min-w-0 space-y-4">
+                          <div className="rounded-2xl border border-zinc-200 bg-zinc-50/60 p-6 flex flex-col sm:flex-row items-center gap-4 shadow-2xs">
+                            <div className="h-14 w-14 rounded-2xl bg-sky-50 border border-sky-200/70 flex items-center justify-center flex-shrink-0">
+                              <FileDown className="h-7 w-7 text-sky-600" />
+                            </div>
+                            <div className="min-w-0 text-center sm:text-left">
+                              <p className="text-sm font-semibold text-zinc-900 truncate max-w-full">
+                                {currentArtifact.fileMeta?.fileName || currentArtifact.title || '交付文件'}
+                              </p>
+                              <p className="text-[11px] text-zinc-400 mt-0.5 font-mono">
+                                {currentArtifact.fileMeta
+                                  ? `${(currentArtifact.fileMeta.sizeBytes / 1024).toFixed(0)} KB · ${currentArtifact.fileMeta.mime.split('/').pop()}`
+                                  : '文件产物'}
+                              </p>
+                            </div>
+                            <a
+                              href={`/api/artifacts/file?fileId=${encodeURIComponent(currentArtifact.fileMeta?.fileId || '')}`}
+                              download={currentArtifact.fileMeta?.fileName || undefined}
+                              className={`ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium shadow-xs transition ${
+                                currentArtifact.fileMeta?.fileId
+                                  ? 'bg-zinc-900 hover:bg-zinc-800 text-white'
+                                  : 'bg-zinc-100 text-zinc-400 pointer-events-none'
+                              }`}
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              <span>下载文件</span>
+                            </a>
+                          </div>
+                          <div className="prose prose-zinc prose-sm max-w-none leading-relaxed px-2">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {currentArtifact.content}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+                      ) : currentArtifact.type === 'html' ? (
+                        /* html 产物(bento 演示页/自包含网页):iframe srcDoc 沙箱放映。
+                           不给 allow-same-origin —— 演示页脚本运行在独立源,拿不到主站
+                           cookie/storage;allow-scripts 保证其翻页/动画/图表可用。 */
+                        <div className="animate-fadeIn w-full min-w-0">
+                          <iframe
+                            title={currentArtifact.title || '演示页'}
+                            srcDoc={currentArtifact.content}
+                            sandbox="allow-scripts allow-popups"
+                            className="w-full aspect-video rounded-xl border border-zinc-200 bg-white shadow-2xs"
+                          />
+                          <p className="mt-2 text-[11px] text-zinc-400 leading-relaxed">
+                            网页演示页:画面内可翻页放映;点右上下载按钮保存 .bento.html,双击即可离线放映,浏览器内可继续编辑。
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="prose prose-zinc prose-sm max-w-none leading-relaxed animate-fadeIn p-2 md:p-4">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {currentArtifact.content}
+                          </ReactMarkdown>
+                        </div>
+                      )
                     ) : (
                       <div className="animate-fadeIn">
                         <pre className="p-4 rounded-xl bg-zinc-950 text-zinc-200 text-xs font-mono overflow-x-auto leading-relaxed border border-zinc-800">

@@ -1150,6 +1150,32 @@ class AgentBackend {
             this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`, uid);
           }
 
+          // 2.46 PPT 工坊 · bento 演示稿交付工具(ppt_check_env / ppt_publish_deck):
+          // publish 工具在服务端直接读沙箱工作区构建好的 .bento.html 并经
+          // ArtifactService 挂上中央画布 —— 单文件演示页 600KB+,严禁让模型经
+          // artifact_render 回显内容(撑爆上下文)。围栏根与 plugin-sandbox 无
+          // config 挂载时一致(process.cwd()),两侧读写语义对齐。
+          try {
+            const { buildPptDeckTools } = await import('@/lib/ppt-deck');
+            const { saveArtifactFile } = await import('@/lib/artifact-files');
+            taskTools = [
+              ...(taskTools || []),
+              ...buildPptDeckTools({
+                createArtifact: (data, taskId) => {
+                  const svc = (this.ctx as any)?.artifact;
+                  if (!svc) throw new Error('ArtifactService 未挂载,无法发布演示页');
+                  return svc.createOrUpdateArtifact(data, taskId);
+                },
+                // S2:ppt-master 真 .pptx 交付 —— 二进制收进用户级文件库
+                // (getDataDir()/artifact_files/<uid>/),产物只带 fileId 元数据,
+                // 前端凭 /api/artifacts/file?fileId= 下载(鉴权 = 登录用户本人分区)。
+                storeFile: (input) => saveArtifactFile({ userId: uid, ...input }),
+              }),
+            ];
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[PPT] 演示稿工具挂载异常: ${e?.message || e}`, uid);
+          }
+
           try {
             const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
             const { buildConnectorBridgeTools } = await import('@/lib/connector-bridge');

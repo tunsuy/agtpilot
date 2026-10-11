@@ -27,6 +27,8 @@ export {
   estimateToolTokens,
   toolSearchTokenThreshold,
   selectActiveTools,
+  widenMountedTools,
+  filterToolsByEnv,
   stableStringify,
 } from './routing';
 export type { RoutableTool } from './routing';
@@ -48,6 +50,8 @@ export { appendStepNotice, STEP_NOTICE_PREFIX } from './notice';
 export type { StepNoticeMessage } from './notice';
 export { isPrivateOrReservedIp, guardUrlHost } from './net-guard';
 export type { HostLookup, UrlGuardResult } from './net-guard';
+export { classifyBrowserFailure } from './browser-failure';
+export type { BrowserFailureKind, BrowserFailureGuide } from './browser-failure';
 export {
   DEFAULT_CREDENTIAL_BINDINGS,
   buildChildEnv,
@@ -57,7 +61,7 @@ export {
 } from './sandbox-fence';
 export type { SandboxSessionPolicy, CredentialDecision, FenceDecision } from './sandbox-fence';
 export { AgentService } from './agent-service';
-export { OrchestratorService } from './orchestrator';
+export { OrchestratorService, DEFAULT_SYSTEM_PROMPT } from './orchestrator';
 export type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
 // ---- Cordis 模块增强：内核依赖的服务契约 ----

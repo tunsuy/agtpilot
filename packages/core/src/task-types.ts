@@ -66,6 +66,10 @@ export interface TaskEfficiency {
   toolsTotal: number;
   /** 是否启用了按需挂载（false = 全量声明） */
   routed: boolean;
+  /** 本次运行消耗的输入 tokens（工具声明 + 历史前缀；成本可观测的前提） */
+  promptTokens: number;
+  /** 本次运行消耗的输出 tokens */
+  completionTokens: number;
 }
 
 export interface TaskResult {

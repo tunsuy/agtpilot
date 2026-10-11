@@ -8,6 +8,8 @@ import {
 } from './contracts';
 import {
   selectActiveTools,
+  widenMountedTools,
+  filterToolsByEnv,
   stableStringify,
   estimateTextTokens,
 } from './routing';
@@ -30,10 +32,11 @@ const LOOP_TRIGGER_COUNT = 4;
 /** 高危操作审批等待上限（毫秒），超时自动拒绝并释放任务，杜绝永久悬挂。0 = 永不超时 */
 const APPROVAL_TIMEOUT_MS = Math.max(0, Number(process.env.AGTPILOT_APPROVAL_TIMEOUT_MS) || 5 * 60_000);
 
-const DEFAULT_SYSTEM_PROMPT =
+/** 缺省系统提示（CLI 单用户路径；Web 层传入自己的产品化提示） */
+export const DEFAULT_SYSTEM_PROMPT =
   '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用已接入的原子工具来完成任务。\n' +
   '当缺少某个平台的专用工具或连接器未授权时，优先使用可用的网页浏览类工具直接在网页上完成操作作为兜底，而不是放弃任务。\n' +
-  '多个互相独立的工具调用请在同一轮并行发出；任务看板由系统随工具执行自动推进，无需调用 planner_update_task 汇报进度。';
+  '多个互相独立的工具调用请在同一轮并行发起。独立检索尤其如此：把主题拆成多个不同角度的关键词/信息源，一轮批量发出全部搜索，等结果齐了再汇总决定下一步 —— 每轮只发一个查询会成倍浪费模型往返与上下文重发；浏览多个互不依赖的网页同理。任务看板由系统随工具执行自动推进，无需调用 planner_update_task 汇报进度。';
 
 export class OrchestratorService extends Service {
   private pendingApprovals: Map<string, (approved: boolean) => void> = new Map();
@@ -117,7 +120,21 @@ export class OrchestratorService extends Service {
     const globalTools = this.ctx.agent.getTools();
     const taskTools = options.taskTools || [];
     const taskToolNames = new Set(taskTools.map((t) => t.name));
-    const allTools = [...globalTools.filter((g) => !taskToolNames.has(g.name)), ...taskTools];
+    const mergedTools = [...globalTools.filter((g) => !taskToolNames.has(g.name)), ...taskTools];
+    // P5 缺 Key 工具不挂载:剔除后下游(路由/loopTools/效率统计)全部只见
+    // availableTools;被剔除清单写进系统提示,模型在决策点就改用替代工具
+    const { mounted: allTools, missingKeyTools } = filterToolsByEnv(mergedTools, options.taskEnv);
+    // 「缺 Key」事实传导到模型可见层(P5 长期项):替代 auto-distill 记忆
+    // 「存了但模型下次仍照调」的断链 —— 决策点直接告知不要调用 + 指引替代
+    const missingKeyNote =
+      missingKeyTools.length > 0
+        ? '\n\n【工具可用性】以下工具因对应服务 Key 未配置,本次未挂载:' +
+          missingKeyTools
+            .map((t) => `${t.name}(${(t.requiredEnv || []).join('/')})`)
+            .join('、') +
+          '。不要尝试调用它们,请直接使用已挂载的替代工具完成任务;确需启用时,在最终答复中提示用户在个人空间配置对应 Key 后重新发起任务。'
+        : '';
+    const systemPrompt = (options.system || DEFAULT_SYSTEM_PROMPT) + missingKeyNote;
     const loopTools: AgentLoopTool[] = allTools.map((toolDef) => ({
       name: toolDef.name,
       description: toolDef.description,
@@ -292,7 +309,15 @@ export class OrchestratorService extends Service {
       this.ctx.agent.getToolRoutes(),
       options.activeTools
     );
-    const toolsMounted = routedTools ? routedTools.length : allTools.length;
+    // 任务内路由结果「只扩不缩」：mountedNames 冻结为初始路由集合，
+    // 每步重算只并入新增（如工具结果里出现 URL → 把浏览器组扩进来），
+    // 集合不变/缩容都不写回 —— 工具声明前缀跨步稳定，provider 前缀缓存
+    // （DeepSeek/OpenAI 自动缓存）不再每步 miss 全价重付 schema + 历史前缀。
+    const mountedNames = new Set<string>(routedTools || []);
+    let toolsMounted = routedTools ? routedTools.length : allTools.length;
+    // 用量累计（成本可观测）：loop 主循环 + 步数耗尽后的强制总结轮都要付费；
+    // 先声明后赋值 —— buildEfficiency 闭包在收尾时读取最终值
+    let usageAcc = { promptTokens: 0, completionTokens: 0 };
     const buildEfficiency = (stepsCount: number): TaskEfficiency => ({
       stepsCount,
       toolCalls: stats.toolCalls,
@@ -306,13 +331,15 @@ export class OrchestratorService extends Service {
       toolsMounted,
       toolsTotal: allTools.length,
       routed: Boolean(routedTools),
+      promptTokens: usageAcc.promptTokens,
+      completionTokens: usageAcc.completionTokens,
     });
 
     try {
       // ---- 主循环：完全交给模型网关的内置 agent loop ----
       const loopResult = await model.runAgentLoop({
         model: options.model,
-        system: options.system || DEFAULT_SYSTEM_PROMPT,
+        system: systemPrompt,
         messages: baseMessages as any,
         configOverride: options.configOverride,
         maxSteps,
@@ -322,6 +349,8 @@ export class OrchestratorService extends Service {
         // 1) 动态路由（仅初始路由已启用时生效）：用近期消息（含工具结果——
         //    搜索结果里出现 URL 自然该把浏览器工具组挂进来）重算本步可见工具，
         //    解决"路由在任务开始时一次性冻结、中途需要的工具永远声明不到"的问题；
+        //    重算结果经 widenMountedTools「只扩不缩」并入冻结集合（见其注释——
+        //    全量替换会每步打破 provider 前缀缓存，扩容那一步才写回一次）；
         // 2) 任务内压缩（始终启用）：上下文超阈值时把较早的工具消息蒸馏成纪要
         //    并重写本步消息 —— 长研究任务不再等到收尾才压缩，模型全程视野清爽。
         //    压缩后的消息成为循环后续状态（SDK 原生支持 messages 重写），
@@ -339,7 +368,11 @@ export class OrchestratorService extends Service {
               .map((m) => messageText(m.content))
               .join('\n');
             const next = selectActiveTools(recentText, allTools, this.ctx.agent.getToolRoutes());
-            if (next) adjust.activeTools = next;
+            const widened = widenMountedTools(mountedNames, next);
+            if (widened) {
+              adjust.activeTools = widened;
+              toolsMounted = widened.length;
+            }
           }
           try {
             const compacted = await this.compactConversation(messages, options, 'in-loop');
@@ -401,10 +434,11 @@ export class OrchestratorService extends Service {
         },
       });
 
-      // 用量上报（plugin-router 的预算统计消费）
-      if (loopResult.usage) {
-        this.ctx.emit('agtpilot/usage', { ...loopResult.usage, taskId });
-      }
+      // 主循环用量入账（强制总结轮在下方补记，之后统一上报）
+      usageAcc = {
+        promptTokens: loopResult.usage?.promptTokens || 0,
+        completionTokens: loopResult.usage?.completionTokens || 0,
+      };
 
       const stepsCount = Math.max(1, loopResult.stepsCount || 1);
       let finalAnswer: string = loopResult.text || '';
@@ -436,15 +470,26 @@ export class OrchestratorService extends Service {
         try {
           const wrapResult: ModelStepResult = await model.invokeStep({
             model: options.model,
-            system: `${options.system || DEFAULT_SYSTEM_PROMPT}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`,
+            system: `${systemPrompt}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`,
             messages: conversation as any,
             configOverride: options.configOverride,
             disableTools: true,
           });
           finalAnswer = wrapResult.text || finalAnswer;
+          // 强制总结轮同样要付费：补记进任务用量
+          if (wrapResult.usage) {
+            usageAcc.promptTokens += wrapResult.usage.promptTokens || 0;
+            usageAcc.completionTokens += wrapResult.usage.completionTokens || 0;
+          }
         } catch {
           // 总结调用失败时，回退到已有的最后一段文本
         }
+      }
+
+      // 用量上报（plugin-router 预算统计 + apps/web mission 落库消费）：
+      // 放在强制总结之后，报的是本任务的完整账单
+      if (usageAcc.promptTokens + usageAcc.completionTokens > 0) {
+        this.ctx.emit('agtpilot/usage', { ...usageAcc, taskId });
       }
 
       if (!finalAnswer) {

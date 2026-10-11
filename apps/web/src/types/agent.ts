@@ -84,6 +84,8 @@ export interface Mission {
   startedAt: number;
   steps: MissionStep[];
   conversationMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
+  /** 任务级累计 token 用量（多轮追问续跑时逐次累加；成本可观测） */
+  usage?: { promptTokens: number; completionTokens: number };
   viewport?: ViewportState;
   terminalLogs?: TerminalLog[];
   artifact?: ArtifactState | null;

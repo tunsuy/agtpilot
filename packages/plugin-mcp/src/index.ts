@@ -536,11 +536,16 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export function apply(ctx: Context, config: MCPPluginConfig = {}) {
-  // 工具路由自注册：prompt 命中外部工具服务类关键词时挂载本插件工具组。
-  // 工具本体按前缀约定由应用层提供（CLI: bin.ts 的 mcp_connect_* 包装）。
+  // 工具路由自注册：prompt 命中外部工具服务类关键词时挂载「连接管理」工具组
+  // （CLI 场景的 mcp_connect_* 包装）。
+  // 刻意不再覆盖全部 mcp_ 前缀：数据工具的挂载由应用层按「服务器粒度」注册
+  // （Web: mcp-connectors.ts 的 buildUserMcpToolRoutes，按 prompt 点名的数据源
+  // 只挂对应服务器，而非"多源检索"一网打尽——114 工具目录下曾把全部 MCP
+  // 服务器都挂上）。任务中途新授权连接器的代理调用（mcp_call /
+  // connector_authorize）由应用层标记 baseline 常驻。
   ctx.agent.registerToolRoute({
     id: 'mcp',
-    prefixes: ['mcp_'],
+    prefixes: ['mcp_connect_'],
     test: /(mcp|外部工具服务|连接器)/i,
   });
 

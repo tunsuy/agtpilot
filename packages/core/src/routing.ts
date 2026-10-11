@@ -106,6 +106,59 @@ export function selectActiveTools(
   return Array.from(matched);
 }
 
+/**
+ * 任务内「只扩不缩」合并：把本步重算的 next 并入冻结的 mounted 集合。
+ *
+ * `prepareStep` 每步都会用近期消息重算路由（解决"中途需要的工具声明不到"），
+ * 但全量替换会让工具声明前缀每步都变——provider 前缀缓存（DeepSeek/OpenAI
+ * 自动缓存）每步 miss，每轮全价重付 schema + 历史前缀。因此任务内只在
+ * **扩容**的那一步写回（一次缓存重建换新增工具），缩容不回退（下一任务
+ * 的初始路由自然回到小集合）。
+ *
+ * 就地修改 mounted（调用方持有的稳定集合）；无新增工具返回 null
+ * （调用方不写回 activeTools）。
+ */
+export function widenMountedTools(mounted: Set<string>, next?: string[]): string[] | null {
+  if (!next) return null;
+  let widened = false;
+  for (const name of next) {
+    if (!mounted.has(name)) {
+      mounted.add(name);
+      widened = true;
+    }
+  }
+  return widened ? Array.from(mounted) : null;
+}
+
+/**
+ * 缺 Key 工具不挂载(loop 执行优化 P5)。
+ *
+ * `requiredEnv` 声明的外部服务 Key 任一名字在 taskEnv(用户个人空间,
+ * 多用户隔离)或 process.env 中存在才算已配置;缺 Key 的工具直接剔除 ——
+ * 挂一个秒败的壳只会诱使模型调用后浪费轮次(种草任务 40% 有效率的主要
+ * 贡献者)。missingKeyTools 同时返回,供编排器把「未配置」事实写进系统
+ * 提示,让模型在决策点就知道改用替代工具,而不是只躺在记忆里(auto-distill
+ * 存了「Firecrawl/Tavily 缺 Key」模型下次仍照调)。
+ */
+export function filterToolsByEnv<T extends { requiredEnv?: string[] }>(
+  tools: T[],
+  taskEnv?: Record<string, string>,
+): { mounted: T[]; missingKeyTools: T[] } {
+  const mounted: T[] = [];
+  const missingKeyTools: T[] = [];
+  for (const tool of tools) {
+    if (
+      tool.requiredEnv &&
+      !tool.requiredEnv.some((key) => process.env[key] || taskEnv?.[key])
+    ) {
+      missingKeyTools.push(tool);
+    } else {
+      mounted.push(tool);
+    }
+  }
+  return { mounted, missingKeyTools };
+}
+
 /** 参数归一化：递归排序 key、字符串去空白标点小写化，用于模糊死循环检测 */
 export function stableStringify(value: any): any {
   if (Array.isArray(value)) return value.map(stableStringify);

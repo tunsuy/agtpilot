@@ -330,6 +330,40 @@ describe('xhs_save_note_draft execute 全链路(fake browser)', () => {
     expect(audit[0].error).toBe('not_logged_in');
   });
 
+  it('Playwright 超时(页面改版) → 指引型失败:转向用户接管,而非裸报错(P4)', async () => {
+    const uid = 'xhs-t4b';
+    writeRecord(uid, { enabled: true, riskAckAt: Date.now(), lastLoginAt: Date.now() });
+    const page = fakePublishPage();
+    // ⑤ 标题填写选择器超时 —— 生产 2026-10-11 改版故障的真实形态
+    (page.fill as any).mockRejectedValue(
+      new Error('locator.fill: Timeout 20000ms exceeded waiting for selector "input[placeholder*=标题]"')
+    );
+    const writeTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(page))
+      .find((t) => t.name === 'xhs_save_note_draft')!;
+
+    const r: any = await writeTool.execute({ title: 't', body: 'x'.repeat(30) }, { taskId: 'm', step: 1 });
+    expect(r.success).toBe(false);
+    // 归因明确(不再是只有堆栈式的原始 message)
+    expect(r.kind).toBe('page-structure');
+    expect(r.error).toContain('页面结构变化或加载过慢');
+    // 下一步指引:交付文本 + 引导用户接管浏览器
+    expect(r.hint).toContain('接管浏览器');
+    expect(r.hint).toContain('最终答复');
+    // 失败审计照落
+    const audit = us.getBrowserAudit(uid);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].result).toBe('failure');
+    expect(audit[0].error).toContain('Timeout');
+  });
+
+  it('buildDraftFailurePayload:网络类失败保持通用指引(不带接管转向)', () => {
+    const r = xm.buildDraftFailurePayload('net::ERR_NAME_NOT_RESOLVED');
+    expect(r.kind).toBe('network');
+    expect(r.hint).not.toContain('接管浏览器');
+    expect(r.hint).toContain('换一个信息源');
+  });
+
   it('标签输入失败 → 降级:tagsFallback 拼入正文并如实返回', async () => {
     const uid = 'xhs-t5';
     writeRecord(uid, { enabled: true, riskAckAt: Date.now(), lastLoginAt: Date.now() });

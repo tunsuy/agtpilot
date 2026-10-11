@@ -151,6 +151,9 @@ export function buildConnectorBridgeTools(deps: ConnectorHubDeps): ToolDefinitio
       '授权成功后返回新挂载的工具清单，之后用 mcp_call 工具按名字调用它们。' +
       '可先用 action=list 查看当前所有连接器的授权状态。用户跳过或超时时，改用 browser_ 系列工具兜底完成任务。',
     dangerLevel: 'medium',
+    // 常驻声明：路由开启时也始终可见——它是"任务中途缺连接器"的唯一出口，
+    // 走关键词路由会把模型引向盲目 browser_ 兜底（工具按需挂载 P2）
+    baseline: true,
     parameters: {
       type: 'object',
       properties: {
@@ -247,6 +250,8 @@ export function buildConnectorBridgeTools(deps: ConnectorHubDeps): ToolDefinitio
       '主要用于任务中途新授权的连接器（其工具不在本任务的初始工具表里）。' +
       '初始就挂载的 mcp_ 工具请优先直接调用，不必经过本工具。',
     dangerLevel: 'medium',
+    // 常驻声明：与 connector_authorize 同理——中途授权后的工具只能经它调用
+    baseline: true,
     parameters: {
       type: 'object',
       properties: {

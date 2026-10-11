@@ -159,6 +159,15 @@ export interface ToolDefinition {
   execute: (args: any, session: ToolSession) => Promise<any>;
   /** 基线工具：任何任务都挂载（体积小且通用的规划/交付/记忆类），由插件自声明 */
   baseline?: boolean;
+  /**
+   * 外部服务 Key 依赖声明(loop 执行优化 P5)：本工具执行依赖的环境变量名
+   * (任一存在即视为已配置,如 ['EXA_API_KEY'])。编排器挂载前按
+   * taskEnv(用户个人空间,多用户隔离) ∪ process.env 判定,缺 Key 时直接
+   * 不挂载,并把「未配置」事实写进系统提示 —— 避免挂一个秒败的壳诱使
+   * 模型调用后浪费轮次(实测 13ms 秒败 × N 次直接拖垮任务有效率)。
+   * 插件 config 已带 Key 时不声明此项。
+   */
+  requiredEnv?: string[];
 }
 
 /**

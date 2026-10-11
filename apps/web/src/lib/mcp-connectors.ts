@@ -1,4 +1,5 @@
 import type { MCPServerConfig } from '@agtpilot/plugin-mcp';
+import type { ToolRoute } from '@agtpilot/core';
 import { getUserConnectors, getMcpAuth } from './user-store';
 import { UserMcpOAuthProvider } from './mcp-oauth-provider';
 
@@ -52,6 +53,8 @@ export interface McpConnectorDef {
   /** 弹窗内的引导文案 */
   authHint?: string;
   docUrl?: string;
+  /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+  routeWords?: string[];
   servers: McpServerDef[];
 }
 
@@ -64,6 +67,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: 'Notion 官方托管 MCP：读写页面与数据库、搜索工作区，一键授权免填 Key。',
     authType: 'oauth',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["notion"],
     quickAuthUrl: 'https://www.notion.so/help/notion-mcp',
     servers: [{ name: 'notion', url: 'https://mcp.notion.com/mcp', label: 'Notion 全量' }],
   },
@@ -74,6 +79,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: '任务与日程管理：创建/查询/完成待办、清单管理，一键授权直连官方 MCP。',
     authType: 'oauth',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["滴答清单", "dida365", "待办"],
     servers: [{ name: 'dida365', url: 'https://mcp.dida365.com' }],
   },
   {
@@ -83,6 +90,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: '2.5 亿+ 学术文献检索：论文、作者、机构与引用关系，科研调研利器。',
     authType: 'oauth',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["openalex", "学术文献", "论文检索", "引用关系"],
     servers: [{ name: 'openalex', url: 'https://mcp.openalex.org/mcp' }],
   },
   {
@@ -92,6 +101,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: '企业工商信息查询：公司背景、风险、知识产权、经营与高管信息（官方 MCP，一键授权）。',
     authType: 'oauth',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["企查查", "工商信息", "公司背景", "企业风险"],
     scope: 'mcp:tools',
     servers: [{ name: 'qcc', url: 'https://agent.qcc.com/mcp/company/stream', label: '企业工商' }],
   },
@@ -102,6 +113,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: '腾讯设计平台官方 MCP：设计稿读写、设计系统与导出，一键授权直连。',
     authType: 'oauth',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["ardot", "腾讯设计", "设计稿", "设计系统"],
     docUrl: 'https://docs.ardot.tencent.com/ardot-mcp/introduction.html',
     servers: [{ name: 'ardot', url: 'https://ardot.tencent.com/mcp' }],
   },
@@ -113,6 +126,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'Atlassian 官方托管 MCP（Rovo）：Jira 工单查询/创建/流转、Confluence 页面读写与搜索、Bitbucket 仓库，一键授权直连（仅支持 Atlassian Cloud）。',
     authType: 'oauth',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["jira", "confluence", "atlassian", "工单"],
     quickAuthUrl: 'https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/',
     docUrl: 'https://www.atlassian.com/platform/rovo-mcp',
     servers: [
@@ -133,6 +148,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Cloud',
     description: '地理编码、POI 搜索、驾车/公交/步行路线规划、天气查询（官方 MCP，粘贴 Key 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["高德", "amap", "路线规划", "poi", "地理编码"],
     tokenEnvVar: 'MCP_AMAP_KEY',
     quickAuthUrl: 'https://console.amap.com/dev/key/app',
     authHint: '在高德开放平台创建「Web 服务」类型 Key，复制后粘贴到下方',
@@ -146,6 +163,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Cloud',
     description: '地点检索、正/逆地理编码、路线规划、天气与行政区划（官方 MCP，粘贴 AK 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["百度地图"],
     tokenEnvVar: 'MCP_BAIDU_MAP_AK',
     quickAuthUrl: 'https://lbs.baidu.com/apiconsole/key',
     authHint: '在百度地图开放平台创建「服务端」应用获取 AK，并启用 MCP 服务，复制后粘贴到下方',
@@ -159,6 +178,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: '读写腾讯文档、智能表格与空间文件：创建、搜索、编辑、导出（官方 MCP，粘贴 Token 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["腾讯文档", "智能表格"],
     tokenEnvVar: 'MCP_TENCENT_DOCS_TOKEN',
     quickAuthUrl: 'https://docs.qq.com/open/auth/mcp.html',
     authHint: '打开授权页登录，复制页面上的 Token 并粘贴到下方',
@@ -179,6 +200,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Communication',
     description: '会议管理、查询、录制与智能纪要（官方 MCP，粘贴 Token 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["腾讯会议", "会议纪要"],
     tokenEnvVar: 'MCP_TENCENT_MEETING_TOKEN',
     quickAuthUrl: 'https://meeting.tencent.com/ai-skill.html',
     authHint: '打开授权页登录腾讯会议，复制页面上的 Token 并粘贴到下方',
@@ -198,6 +221,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Cloud',
     description: '网约车预估/叫车、地点检索与出行路线规划（官方 MCP，粘贴 Key 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["滴滴", "叫车", "网约车"],
     tokenEnvVar: 'MCP_DIDI_KEY',
     quickAuthUrl: 'https://mcp.didichuxing.com',
     authHint: '打开滴滴开发者控制台登录并激活个人 MCP Key，复制后粘贴到下方',
@@ -211,6 +236,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Cloud',
     description: '网盘文件管理：列表、上传、下载、分享链接与目录整理（官方 MCP，粘贴 Token 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["微云", "网盘"],
     tokenEnvVar: 'MCP_WEIYUN_TOKEN',
     quickAuthUrl: 'https://www.weiyun.com/act/openclaw',
     authHint: '打开微云 Skill 配置页登录，复制 MCP Token 并粘贴到下方（整段 env 粘贴也可以，会自动提取）',
@@ -230,6 +257,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: '企业知识库检索、阅读、创建与文档管理（官方 MCP，粘贴 Token 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["乐享", "知识库检索"],
     tokenEnvVar: 'MCP_LEXIANG_TOKEN',
     quickAuthUrl: 'https://lexiangla.com/ai/claw',
     authHint: '打开乐享凭证页登录，复制访问令牌粘贴到下方',
@@ -249,6 +278,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Productivity',
     description: '笔记创建、搜索、整理与管理（官方 MCP，粘贴 API Key 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["有道云笔记", "youdao"],
     tokenEnvVar: 'MCP_YOUDAO_NOTE_KEY',
     quickAuthUrl: 'https://mopen.163.com/#/dashboard',
     authHint: '打开授权页登录 MCP 平台，在 API 管理创建 API Key 并粘贴到下方',
@@ -271,6 +302,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'GitHub 官方托管 MCP：仓库/Issue/PR 查询与操作、代码搜索、Actions 状态（粘贴 Fine-grained Personal Access Token 即用）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["github"],
     tokenEnvVar: 'MCP_GITHUB_PAT',
     quickAuthUrl: 'https://github.com/settings/personal-access-tokens/new',
     authHint:
@@ -293,6 +326,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       '知乎数据开放平台官方 MCP：站内搜索问答/文章、全网聚合搜索、实时热榜（粘贴 Access Secret 即用，每天免费 1000 次）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["知乎", "zhihu"],
     tokenEnvVar: 'MCP_ZHIHU_SECRET',
     quickAuthUrl: 'https://developer.zhihu.com/profile',
     authHint: '登录知乎数据开放平台个人页，复制 Access Secret 粘贴到下方（一处密钥同时开通搜索/全网/热榜三个能力）',
@@ -330,6 +365,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     category: 'Engineering',
     description: 'Devin 团队出品：对任意 GitHub 公开仓库提问，理解大型开源代码库（免凭证直连）。',
     authType: 'none',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["deepwiki", "代码知识库"],
     servers: [{ name: 'deepwiki', url: 'https://mcp.deepwiki.com/mcp' }],
   },
   {
@@ -340,6 +377,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'Playwright 官方 MCP：让 Agent 打开网页、点击、填表、截图、抓取动态渲染内容（本地 stdio 无头 Chromium，免凭证）。需服务器已安装 Chrome/Chromium；因是重型本地子进程，默认关闭，点「启用」后才为你的任务挂载。',
     authType: 'none',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["playwright", "浏览器自动化"],
     optIn: true,
     tokenEnvVar: 'MCP_BROWSER_OPTIN',
     docUrl: 'https://github.com/microsoft/playwright-mcp',
@@ -362,6 +401,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'Tushare Pro 官方 MCP：A股/基金/期货行情、财务报表、宏观与指数数据（官方托管远程直连，粘贴个人 Token；积分制，注册即有免费额度）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["tushare", "投研", "财务报表"],
     tokenEnvVar: 'MCP_TUSHARE_TOKEN',
     quickAuthUrl: 'https://tushare.pro/user/token',
     authHint:
@@ -384,6 +425,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'Alpha Vantage 官方托管 MCP：全球股票、外汇、大宗商品、加密货币的实时报价与 20 年历史数据、技术指标、基本面（免费 API Key 直连，已收录 Anthropic 官方 MCP 目录）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["alphavantage", "alpha vantage"],
     tokenEnvVar: 'MCP_ALPHAVANTAGE_KEY',
     quickAuthUrl: 'https://www.alphavantage.co/support/#api-key',
     authHint:
@@ -405,6 +448,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'CoinGecko 官方 MCP（免凭证远程直连）：100 万+ 加密资产实时/历史价格、市值与成交量、DeFi 池与链上数据。免费档为共享限流；工具数量多，默认关闭，点「启用」后才为你的任务挂载。',
     authType: 'none',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["coingecko", "加密货币", "币价", "defi"],
     optIn: true,
     tokenEnvVar: 'MCP_COINGECKO_OPTIN',
     docUrl: 'https://docs.coingecko.com/ai-integration/mcp-server',
@@ -418,6 +463,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       '基于 AkShare 的开源 A股数据 MCP（本地 stdio，免凭证免注册）：实时价格、历史 K线、公司信息、大盘概览、财务数据。生产镜像已内置 python3 venv（/opt/a-stock），点「启用」即可用；本地开发需自行 pip install a-stock-mcp-server。',
     authType: 'none',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["akshare", "a股", "k线", "实时行情"],
     optIn: true,
     tokenEnvVar: 'MCP_ASTOCK_OPTIN',
     docUrl: 'https://github.com/Llldmiao/a-stock-mcp-server',
@@ -440,6 +487,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'alphaXiv 官方 MCP：300 万+ arXiv 论文语义检索、PDF 全文问答、热门论文速览、研究者追踪与个人文献库管理（免费注册拿 API Key，检索分析计入免费额度）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["alphaxiv", "arxiv"],
     tokenEnvVar: 'MCP_ALPHAXIV_TOKEN',
     quickAuthUrl: 'https://www.alphaxiv.org/',
     authHint:
@@ -461,6 +510,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'Hugging Face 官方 MCP（免凭证远程直连）：搜索模型/数据集/Spaces/论文、官方文档语义检索、调用社区 Gradio 工具，AI 学习与科研提效利器。工具数量多，默认关闭，点「启用」后才为你的任务挂载。',
     authType: 'none',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["huggingface", "hugging face", "数据集", "模型库"],
     optIn: true,
     tokenEnvVar: 'MCP_HUGGINGFACE_OPTIN',
     docUrl: 'https://huggingface.co/docs/hub/en/agents-mcp',
@@ -474,6 +525,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'DeepL 官方远程 MCP（OAuth 一键授权，免费计划可用）：高质量文本/文档翻译、学术润色改写、语法纠错、术语表与写作风格规则管理，读外文文献与论文润色首选。',
     authType: 'oauth',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["deepl", "翻译", "润色"],
     docUrl: 'https://developers.deepl.com/docs/mcp',
     servers: [{ name: 'deepl', url: 'https://mcp.deepl.com/v1/mcp' }],
   },
@@ -487,6 +540,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       '飞书官方 lark-mcp：消息、云文档、多维表格、日历、任务、邮箱等全套办公能力（本地 stdio 运行，粘贴企业自建应用 AppID:AppSecret）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["飞书", "lark"],
     tokenEnvVar: 'MCP_LARK_APP_CRED',
     quickAuthUrl: 'https://open.feishu.cn/app',
     authHint:
@@ -512,6 +567,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       '钉钉官方 dingtalk-mcp：待办、日历、通讯录、群机器人消息、考勤、日志等能力（本地 stdio 运行，粘贴企业内部应用 ClientID:ClientSecret）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["钉钉", "dingtalk"],
     tokenEnvVar: 'MCP_DINGTALK_APP_CRED',
     quickAuthUrl: 'https://open-dev.dingtalk.com/fe/app',
     authHint:
@@ -544,6 +601,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       '语雀官方 yuque-mcp：知识库/文档读写、搜索、目录与小记管理（本地 stdio 运行，粘贴语雀 API Token）。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["语雀", "yuque"],
     tokenEnvVar: 'MCP_YUQUE_TOKEN',
     quickAuthUrl: 'https://www.yuque.com/settings/tokens',
     authHint:
@@ -570,6 +629,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'NewsNow 官方 MCP（本地 stdio，免凭证免注册）：一个连接器聚合 40+ 全网热榜——微博实时热搜、今日头条、知乎、百度热搜、抖音、哔哩哔哩、快手、腾讯新闻、澎湃、36氪、华尔街见闻、财联社、雪球热门股票、金十数据、Hacker News、GitHub Trending 等。默认走 NewsNow 公共实例；本地子进程默认关闭，点「启用」后才为你的任务挂载。',
     authType: 'none',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["热榜", "热搜", "newsnow", "trending"],
     optIn: true,
     tokenEnvVar: 'MCP_NEWSNOW_OPTIN',
     docUrl: 'https://github.com/newsnext/newsnow',
@@ -593,6 +654,8 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     description:
       'twitterapi.io 官方 MCP（本地 stdio）：12 个只读工具——推文搜索（支持 from:/since:/lang: 等高级语法）、用户资料与最新推文、粉丝/关注/提及列表、推文回复/引用/转推者、趋势话题。无需注册 X 开发者账号，twitterapi.io 注册即拿 API Key，按量计费（约 $0.15/千条推文），注册送免费试用额度。与「X / Twitter 客户端」连接器（仅唤起 App 发推）互补。',
     authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["twitter", "推特", "推文"],
     tokenEnvVar: 'MCP_TWITTERAPI_IO_KEY',
     quickAuthUrl: 'https://twitterapi.io/dashboard',
     authHint:
@@ -677,28 +740,68 @@ function serverConfigFromDef(
  * - oauth：已完成一键授权才连（挂 OAuthClientProvider，SDK 自动带 token + 401 刷新）。
  */
 export function buildUserMcpServers(userId: string): MCPServerConfig[] {
-  const { configs } = getUserConnectors(userId);
   const servers: MCPServerConfig[] = [];
-
-  for (const def of MCP_CONNECTOR_DEFS) {
+  for (const { def, servers: defs } of connectedServerDefs(userId)) {
     if (def.authType === 'token') {
-      const cred = (configs[def.tokenEnvVar!] || '').trim();
-      if (!cred) continue;
-      for (const s of def.servers) servers.push(serverConfigFromDef(s, cred));
+      const cred = (getUserConnectors(userId).configs[def.tokenEnvVar!] || '').trim();
+      for (const s of defs) servers.push(serverConfigFromDef(s, cred));
     } else if (def.authType === 'oauth') {
-      const record = getMcpAuth(userId, def.id);
-      if (!record?.tokens?.access_token) continue;
-      for (const s of def.servers) {
+      for (const s of defs) {
         const url = typeof s.url === 'function' ? s.url('') : s.url || '';
-        servers.push(
-          serverConfigFromDef(s, '', new UserMcpOAuthProvider(userId, def.id, url, def.scope))
-        );
+        servers.push(serverConfigFromDef(s, '', new UserMcpOAuthProvider(userId, def.id, url, def.scope)));
       }
     } else {
-      // none
-      if (def.optIn && def.tokenEnvVar && (configs[def.tokenEnvVar] || '').trim() !== '1') continue;
-      for (const s of def.servers) servers.push(serverConfigFromDef(s, ''));
+      for (const s of defs) servers.push(serverConfigFromDef(s, ''));
     }
   }
   return servers;
+}
+
+/** 该用户当前「应连接」的连接器（凭证判定与 buildUserMcpServers 完全一致） */
+function connectedServerDefs(userId: string): Array<{ def: McpConnectorDef; servers: McpServerDef[] }> {
+  const { configs } = getUserConnectors(userId);
+  const out: Array<{ def: McpConnectorDef; servers: McpServerDef[] }> = [];
+  for (const def of MCP_CONNECTOR_DEFS) {
+    if (def.authType === 'token') {
+      if (!(configs[def.tokenEnvVar!] || '').trim()) continue;
+    } else if (def.authType === 'oauth') {
+      const record = getMcpAuth(userId, def.id);
+      if (!record?.tokens?.access_token) continue;
+    } else {
+      // none
+      if (def.optIn && def.tokenEnvVar && (configs[def.tokenEnvVar] || '').trim() !== '1') continue;
+    }
+    out.push({ def, servers: def.servers });
+  }
+  return out;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 按服务器粒度注册的 MCP 工具路由：prompt 点名的数据源（"知乎热榜"、"全网热
+ * 榜"、"推特趋势"…）只挂对应服务器的 mcp_<server>_* 工具组。
+ *
+ * 替代旧版「MCP/连接器」一网打尽的路由：114 工具目录下，任务提示词顺带提到
+ * "MCP 工具（若已连接）"或"连接器页"就会把全部 MCP 服务器挂上（实测 88/114）。
+ * 触发词 = 连接器 routeWords + 服务器 label；同 id 幂等覆盖；用户撤授权后的
+ * 陈旧路由前缀匹配不到任务目录里的工具，天然失效（agent-backend 每次任务
+ * 开始都会重注册刷新）。
+ */
+export function buildUserMcpToolRoutes(userId: string): ToolRoute[] {
+  const routes: ToolRoute[] = [];
+  for (const { def, servers } of connectedServerDefs(userId)) {
+    for (const s of servers) {
+      const words = new Set<string>([...(def.routeWords || []), ...(s.label ? [s.label] : [])]);
+      if (words.size === 0) continue; // 无触发词则不注册：漏挂走全量兜底，不盲挂
+      routes.push({
+        id: `mcp_user_${s.name}`,
+        prefixes: [`mcp_${s.name}_`],
+        test: new RegExp(Array.from(words).map(escapeRegExp).join('|'), 'i'),
+      });
+    }
+  }
+  return routes;
 }

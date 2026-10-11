@@ -20,6 +20,60 @@ export interface SearchPluginConfig {
   tavilyApiKey?: string;
 }
 
+/** HTML 实体解码 + 去标签 + 压空白,产出可入上下文的纯文本摘要 */
+export function stripHtml(s: string): string {
+  return s
+    // 标签直接抹除不补空格:CJK 摘要里 <em>词</em> 两侧不该出现空格
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:#0?39|apos);/gi, "'")
+    .replace(/&#(\d+);/g, (_, d: string) => {
+      try {
+        return String.fromCodePoint(Number(d));
+      } catch {
+        return '';
+      }
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => {
+      try {
+        return String.fromCodePoint(parseInt(h, 16));
+      } catch {
+        return '';
+      }
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Bing 出链是 /ck/a?!&&p=...&u=a1<base64url> 重定向链,解码出真实出版权 URL */
+export function decodeBingUrl(href: string): string | null {
+  try {
+    const unescaped = href.replace(/&amp;/g, '&');
+    if (!/^https?:\/\/www\.bing\.com\/ck\//.test(unescaped)) {
+      return /^https?:\/\//.test(unescaped) ? unescaped : null;
+    }
+    const m = /[?&]u=a1([A-Za-z0-9_-]+)/.exec(unescaped);
+    if (!m) return null;
+    let b64 = m[1];
+    // JS 的 (-len) % 4 会保留负号(与 Python 不同),必须用 (4 - len%4) % 4
+    b64 += '='.repeat((4 - (b64.length % 4)) % 4);
+    const decoded = Buffer.from(b64, 'base64url').toString('utf-8');
+    return /^https?:\/\//.test(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+const BING_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
 export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   // 工具路由自注册：prompt 命中搜索/资讯类关键词时挂载本插件工具组
   ctx.agent.registerToolRoute({
@@ -28,97 +82,120 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     test: /(搜索|检索|查一下|查下|搜一下|查查|最新|新闻|资讯|search|news|look\s?up)/i,
   });
 
-  // 1. 免 API Key 实时多源聚合搜索 (Google News RSS + DuckDuckGo HTML + Wikipedia)
+  // 1. 免 API Key 实时多源聚合搜索 (Bing 国际区 + Google News RSS + Wikipedia)
   // 返回结果与各源的失败原因（全源失败时调用方据此给出真实报错，而非 count:0 假成功）
+  //
+  // 运行环境为境内服务器,2026-10 实测各免费源可用性:
+  //   - Bing 国际区(mkt=en-US): 英文查询返回真实标题+摘要+可解码出链;
+  //     中文查询会被折叠成推广垃圾 → 只作非中文主力/中文补充
+  //   - Google News RSS: 中英文均可用、时效强,但只有标题+来源+时间(无内容摘要);
+  //     链接是 news.google.com 跳转链,浏览器打开会自动跳到原文
+  //   - Wikipedia: 真实摘要,百科类查询兜底
+  //   - DuckDuckGo html / Baidu / Sogou / Mojeek: 境内 IP 全部反爬拦截(实测
+  //     DDG 返回 anomaly 挑战页、百度返回安全验证页),已弃用
+
+
+  /** Bing 国际区搜索:真实标题 + 摘要 + 解码后的真实 URL */
+  async function searchBing(query: string, maxResults: number): Promise<SearchResultItem[]> {
+    const items: SearchResultItem[] = [];
+    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&mkt=en-US&setlang=en-US&count=${Math.min(maxResults * 2, 30)}`;
+    const res = await fetch(url, {
+      headers: BING_HEADERS,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`bing: HTTP ${res.status}`);
+    const html = await res.text();
+    // 每个结果块 <li class="b_algo">…<h2><a href=…>标题</a></h2>…<p class="b_lineclamp…">摘要</p>…</li>
+    const blocks = html.split('<li class="b_algo"').slice(1);
+    for (const block of blocks) {
+      if (items.length >= maxResults) break;
+      const h2 = /<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/m.exec(block);
+      if (!h2) continue;
+      const realUrl = decodeBingUrl(h2[1]);
+      const title = stripHtml(h2[2]);
+      if (!realUrl || !title) continue;
+      // 摘要在结果块前部的 b_lineclamp 段落里;拿不到就留空,靠标题与 URL
+      const snip = /<p class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/.exec(block);
+      const snippet = snip ? stripHtml(snip[1]).slice(0, 300) : '';
+      if (!items.some((i) => i.url === realUrl)) {
+        items.push({ title, url: realUrl, snippet, engine: 'bing' });
+      }
+    }
+    if (items.length === 0) throw new Error('bing: 0 results parsed');
+    return items;
+  }
+
+  /** Google News RSS:标题自带信息量,摘要位放来源+时间;链接为跳转链(浏览器可开) */
+  async function searchGoogleNews(query: string, maxResults: number): Promise<SearchResultItem[]> {
+    const items: SearchResultItem[] = [];
+    const gUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans`;
+    const res = await fetch(gUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`google-news: HTTP ${res.status}`);
+    const xml = await res.text();
+    const blocks = xml.split('<item>').slice(1);
+    for (const block of blocks) {
+      if (items.length >= maxResults) break;
+      const title = /<title>([\s\S]*?)<\/title>/.exec(block)?.[1]?.replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1').trim();
+      const link = /<link>([\s\S]*?)<\/link>/.exec(block)?.[1]?.trim();
+      if (!title || !link) continue;
+      const pubDate = /<pubDate>([\s\S]*?)<\/pubDate>/.exec(block)?.[1]?.trim() || '';
+      // RSS <source url="…">来源名</source>:比"来自 Google News 实时资讯"占位文案有信息量
+      const source = /<source[^>]*>([\s\S]*?)<\/source>/.exec(block)?.[1]?.trim() || '';
+      const snippet = [source ? `来源: ${source}` : '', pubDate ? `发布时间: ${pubDate}` : '']
+        .filter(Boolean)
+        .join(' · ') || '来自 Google News 实时资讯';
+      items.push({ title, url: link, snippet, engine: 'google-news' });
+    }
+    if (items.length === 0) throw new Error('google-news: 0 items parsed');
+    return items;
+  }
+
   async function searchFreeSources(
     query: string,
     maxResults: number
   ): Promise<{ items: SearchResultItem[]; errors: string[] }> {
-    const items: SearchResultItem[] = [];
     const errors: string[] = [];
 
-    // 优先：Google News 实时权威资讯 RSS (对新闻、热点动态极佳，无验证码限制)
-    try {
-      const gUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans`;
-      const gRes = await fetch(gUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        },
-      });
-      if (gRes.ok) {
-        const xml = await gRes.text();
-        const itemRegex = /<item>[\s\S]*?<title>([\s\S]*?)<\/title>[\s\S]*?<link>([\s\S]*?)<\/link>[\s\S]*?(?:<pubDate>([\s\S]*?)<\/pubDate>)?[\s\S]*?<\/item>/g;
-        let match: RegExpExecArray | null;
-        while ((match = itemRegex.exec(xml)) !== null && items.length < maxResults) {
-          const rawTitle = match[1].replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1').trim();
-          const rawLink = match[2].trim();
-          const pubDate = match[3]?.trim() || '';
-          if (rawTitle && rawLink) {
-            items.push({
-              title: rawTitle,
-              url: rawLink,
-              snippet: pubDate ? `发布时间: ${pubDate}` : '来自 Google News 实时资讯',
-              engine: 'google-news',
-            });
-          }
-        }
-      } else {
-        errors.push(`google-news: HTTP ${gRes.status}`);
-      }
-    } catch (e: any) {
-      errors.push(`google-news: ${e.message}`);
+    // Bing 与 Google News 并行(互不拖慢);单源失败只降级不致命
+    const isCjk = /[一-龥]/.test(query);
+    const [bingR, gnewsR] = await Promise.allSettled([
+      searchBing(query, maxResults).catch((e: any) => {
+        errors.push(`bing: ${e?.message || e}`);
+        return [] as SearchResultItem[];
+      }),
+      searchGoogleNews(query, maxResults).catch((e: any) => {
+        errors.push(`google-news: ${e?.message || e}`);
+        return [] as SearchResultItem[];
+      }),
+    ]);
+    const bingItems = bingR.status === 'fulfilled' ? bingR.value : [];
+    const gnewsItems = gnewsR.status === 'fulfilled' ? gnewsR.value : [];
+
+    // 合流顺序按查询语种:中文主力是 Google News(中文覆盖+时效,Bing 中文查询是垃圾);
+    // 英文主力是 Bing(真实摘要);另一方补位,让模型同时拿到内容与时效两层
+    const primary = isCjk ? gnewsItems : bingItems;
+    const secondary = isCjk ? bingItems : gnewsItems;
+    const items: SearchResultItem[] = [];
+    const seen = new Set<string>();
+    for (const it of [...primary, ...secondary]) {
+      if (items.length >= maxResults) break;
+      if (seen.has(it.url)) continue;
+      seen.add(it.url);
+      items.push(it);
     }
 
     if (items.length >= maxResults) {
-      return { items: items.slice(0, maxResults), errors };
-    }
-
-    // 补充：DuckDuckGo HTML 端点（零 Key 通用网页搜索，覆盖非新闻类查询）
-    try {
-      const ddgRes = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        },
-      });
-      if (ddgRes.ok) {
-        const html = await ddgRes.text();
-        // 结果链接形如 href="//duckduckgo.com/l/?uddg=<urlencoded>"，需解出真实目标
-        const linkRegex = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-        let match: RegExpExecArray | null;
-        while ((match = linkRegex.exec(html)) !== null && items.length < maxResults) {
-          let realUrl = match[1];
-          try {
-            const parsed = new URL(realUrl.startsWith('//') ? `https:${realUrl}` : realUrl);
-            const target = parsed.searchParams.get('uddg');
-            if (target) realUrl = decodeURIComponent(target);
-            if (!/^https?:\/\//.test(realUrl)) continue;
-          } catch {
-            continue;
-          }
-          const title = match[2].replace(/<[^>]+>/g, '').trim();
-          if (title && !items.some((i) => i.url === realUrl)) {
-            items.push({
-              title,
-              url: realUrl,
-              snippet: '来自 DuckDuckGo 网页搜索',
-              engine: 'duckduckgo',
-            });
-          }
-        }
-      } else {
-        errors.push(`duckduckgo: HTTP ${ddgRes.status}`);
-      }
-    } catch (e: any) {
-      errors.push(`duckduckgo: ${e.message}`);
-    }
-
-    if (items.length >= maxResults) {
-      return { items: items.slice(0, maxResults), errors };
+      return { items, errors };
     }
 
     // 补充：Wikipedia 全球百科知识库 API（按查询语种选择分站）
     try {
-      const isCjk = /[一-龥]/.test(query);
       const lang = isCjk ? 'zh' : 'en';
       const wUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=${maxResults}`;
       const wRes = await fetch(wUrl, {
@@ -129,10 +206,13 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
         const searchList = wData?.query?.search || [];
         for (const entry of searchList) {
           if (items.length >= maxResults) break;
-          const cleanSnippet = (entry.snippet || '').replace(/<[^>]+>/g, '').trim();
+          const cleanSnippet = stripHtml(entry.snippet || '').slice(0, 300);
+          const wUrlItem = `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(entry.title)}`;
+          if (seen.has(wUrlItem)) continue;
+          seen.add(wUrlItem);
           items.push({
             title: entry.title,
-            url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(entry.title)}`,
+            url: wUrlItem,
             snippet: cleanSnippet,
             engine: 'wikipedia',
           });
@@ -185,7 +265,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   // 1. 统一多层级智能检索 (search_web)
   ctx.agent.registerTool({
     name: 'search_web',
-    description: '在互联网上搜索指定关键词或问题，自动在 Exa 神经语义搜索、Tavily Agent 搜索以及 DuckDuckGo 零 Key 引擎间进行多层级路由与容灾降级',
+    description: '在互联网上搜索指定关键词或问题，自动在 Exa 神经语义搜索、Tavily Agent 搜索以及零 Key 多源聚合(Bing 国际区真实摘要 + Google News RSS 时效新闻 + Wikipedia)间进行多层级路由与容灾降级。零 Key 层返回真实内容摘要,多数情况下无需再逐个打开网页',
     dangerLevel: 'low',
     parameters: {
       type: 'object',
@@ -230,7 +310,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
         }
       }
 
-      // 优先级 3: 零 Key 原生多源聚合搜索引擎 (Google News RSS + DuckDuckGo + Wikipedia)
+      // 优先级 3: 零 Key 原生多源聚合搜索引擎 (Bing 国际区 + Google News RSS + Wikipedia)
       try {
         const { items, errors: freeErrors } = await searchFreeSources(query, maxResults);
         if (items.length > 0) {
@@ -265,6 +345,9 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     name: 'search_exa',
     description: '使用 Exa.ai 原生神经网络语义搜索引擎，基于语义 Embedding 精准匹配网页与正文 Highlight',
     dangerLevel: 'low',
+    // P5:config 未带 Key 时声明 env 依赖 —— 用户个人空间(taskEnv)或
+    // process.env 有 Key 才挂载,否则不挂秒败的壳
+    requiredEnv: config.exaApiKey ? undefined : ['EXA_API_KEY'],
     parameters: {
       type: 'object',
       properties: {
@@ -296,6 +379,8 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     name: 'search_tavily',
     description: '使用 Tavily 官方 API 搜索针对大模型优化的结构化内容',
     dangerLevel: 'low',
+    // P5:同 search_exa,缺 Key 不挂载
+    requiredEnv: config.tavilyApiKey ? undefined : ['TAVILY_API_KEY'],
     parameters: {
       type: 'object',
       properties: {

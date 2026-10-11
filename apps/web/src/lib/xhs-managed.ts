@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { ToolDefinition } from '@agtpilot/core';
+import { classifyBrowserFailure } from '@agtpilot/core';
 import {
   getXhsManaged,
   getBrowserAudit,
@@ -146,6 +147,33 @@ export function validateImagePaths(
 
 const NOT_LOGGED_IN_HINT =
   '小红书网页版尚未登录或登录态已失效。请引导用户到「连接器页 → 小红书 → 网页版扫码登录」,用小红书 App 扫码完成登录后重试。';
+
+/**
+ * 存草稿失败的「下一步指引」型错误(loop 执行优化 P4):
+ * 页面改版/结构变化属环境级故障,模型换姿势重试救不了 —— 实测一次改版让
+ * agent 用 screenshot/wait/navigate 盲诊空转 8 轮。环境类失败时明确指示
+ * 转向「交付文本 + 引导用户接管浏览器」,而非自行调试页面。
+ */
+export function buildDraftFailurePayload(message: string): {
+  kind: string;
+  reason: string;
+  hint: string;
+  error: string;
+} {
+  const guide = classifyBrowserFailure(message);
+  const takeoverHint =
+    guide.kind === 'page-structure' || guide.kind === 'unknown'
+      ? `${guide.hint} 存草稿场景请改为:1) 把笔记标题与全文直接作为最终答复交付给用户;` +
+        `2) 引导用户到「连接器页 → 小红书 → 接管浏览器」,在发布页亲手粘贴完成(发布本来就规定由用户本人完成)。` +
+        `不要再尝试自行调试发布页。`
+      : guide.hint;
+  return {
+    kind: guide.kind,
+    reason: guide.reason,
+    hint: takeoverHint,
+    error: `存草稿失败(${guide.reason}): ${message}`,
+  };
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -515,7 +543,8 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
         } catch (err: any) {
           const message = err?.message || String(err);
           auditFailure(message, Array.isArray(args?.image_paths) ? args.image_paths.length : undefined);
-          return { success: false, error: `存草稿失败:${message}` };
+          // P4:指引型失败——环境级故障转向用户接管,不让模型盲诊页面
+          return { success: false, ...buildDraftFailurePayload(message) };
         }
       },
     });

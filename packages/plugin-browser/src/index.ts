@@ -1,5 +1,6 @@
 import { Context, Service } from '@deepseek-ai/cordis';
 import '@agtpilot/core';
+import { classifyBrowserFailure } from '@agtpilot/core';
 import { chromium, BrowserContext, Page } from 'playwright';
 import FirecrawlApp from '@mendable/firecrawl-js';
 import TurndownService from 'turndown';
@@ -313,10 +314,12 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           payload: { tool: 'browser_navigate', success: false, url, error: err.message },
           timestamp: Date.now(),
         });
+        // P4:失败分类 + 下一步指引(环境级故障别让模型盲诊空转)
         return {
           success: false,
           url,
           error: err.message,
+          ...classifyBrowserFailure(err.message),
         };
       }
     },
@@ -357,6 +360,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           success: false,
           selector,
           error: err.message,
+          ...classifyBrowserFailure(err.message),
         };
       }
     },
@@ -534,6 +538,8 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       '使用 Firecrawl 网页爬取引擎抓取目标网址，返回纯净的高可读性 Markdown 正文（每次最多 4000 字符）。' +
       '内容被截断时携带 offset 参数（返回值中的 nextOffset）可续读后续内容，无需换 URL 重抓。',
     dangerLevel: 'low',
+    // P5:缺 Key 不挂载(执行内的 Key 检查保留为兜底)
+    requiredEnv: ['FIRECRAWL_API_KEY'],
     parameters: {
       type: 'object',
       properties: {
@@ -591,6 +597,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           success: false,
           url,
           error: err.message,
+          ...classifyBrowserFailure(err.message),
         };
       }
     },
@@ -667,6 +674,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           selector,
           mode,
           error: err.message,
+          ...classifyBrowserFailure(err.message),
         };
       }
     },
@@ -721,6 +729,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
         return {
           success: false,
           error: err.message,
+          ...classifyBrowserFailure(err.message),
         };
       }
     },
@@ -792,6 +801,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
         return {
           success: false,
           error: err.message,
+          ...classifyBrowserFailure(err.message),
         };
       }
     },
@@ -802,7 +812,8 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     name: 'browser_wait',
     description:
       '在当前页面等待条件满足:load(整页加载完成)、selector(元素出现)、text(文本出现)、timeout(固定时长)。' +
-      '超时上限 30 秒。适合等待页面跳转、动态内容或自动保存指示出现。',
+      '条件等待上限 30 秒;固定等待(for=timeout)上限 10 秒。等待页面稳定优先用 2-3 秒短探测确认条件是否已满足,' +
+      '不要长盲等(实测曾因 30s 盲等白烧任务时长)。',
     dangerLevel: 'low',
     parameters: {
       type: 'object',
@@ -819,7 +830,10 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     },
     execute: async (params: any, session?: any) => {
       const waitKind = String(params?.for || 'timeout');
-      const timeoutMs = Math.min(30000, Math.max(1000, Number(params?.timeoutMs) || 10000));
+      // for=timeout 是盲等:上限收到 10s(实测 agent 曾用 30s 白等撑大任务时长);
+      // 条件等待(selector/text/load)保留 30s 上限
+      const requested = Number(params?.timeoutMs) || 10000;
+      const timeoutMs = Math.min(waitKind === 'timeout' ? 10000 : 30000, Math.max(1000, requested));
       try {
         const page = await getOrCreatePage(session?.userId);
         if (waitKind === 'selector') {
@@ -848,6 +862,8 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           success: false,
           waited: waitKind,
           error: `等待 ${waitKind} 失败(超时 ${timeoutMs}ms): ${err.message}`,
+          // P4:超时说明条件未出现——指引模型先看页面再决策,而不是加长等待盲试
+          ...classifyBrowserFailure(err.message),
         };
       }
     },

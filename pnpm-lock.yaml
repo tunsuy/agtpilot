@@ -48,6 +48,9 @@ importers:
       '@agtpilot/plugin-mcp':
         specifier: workspace:*
         version: link:../../packages/plugin-mcp
+      '@agtpilot/plugin-search':
+        specifier: workspace:*
+        version: link:../../packages/plugin-search
       '@agtpilot/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

@@ -13,6 +13,8 @@ import {
   resolveMission,
 } from './live-steps';
 import { resolveCronPrompt } from './cron-scenario';
+import { accumulateMissionUsage, buildEfficiencyStepTitle } from './mission-efficiency';
+import { buildTaskSystemPrompt } from './task-system-prompt';
 
 export interface AgentBackendState {
   missions: Mission[];
@@ -203,6 +205,14 @@ class AgentBackend {
   private bindEvents() {
     this.ctx.on('agtpilot/event', (event) => {
       this.handleEvent(event);
+    });
+    this.ctx.on('agtpilot/usage', ({ taskId, promptTokens, completionTokens }: any) => {
+      // token 用量落 mission（成本可观测，loop 执行优化 P3）：
+      // 事件在每次 runTask 收尾（含强制总结轮）发一次，这里按任务累计——
+      // 多轮追问续跑时 usage 是任务级总账，而效率摘要展示的是单次运行值
+      const mission = this.state.missions.find((m) => m.id === taskId);
+      if (!mission) return;
+      mission.usage = accumulateMissionUsage(mission.usage, { promptTokens, completionTokens });
     });
   }
 
@@ -628,11 +638,12 @@ class AgentBackend {
           }
 
             // 执行效率摘要：让"本该 2 步却空转了很多步"的任务一眼可见
+            // token 数来自内核 buildEfficiency（单次运行值），任务级累计在 mission.usage
             const eff = event.payload?.efficiency;
             if (eff && typeof eff === 'object' && eff.toolCalls > 0) {
               mission.steps.push({
                 id: `step_eff_${Date.now()}`,
-                title: `执行效率: ${eff.stepsCount} 步 · 工具调用 ${eff.toolCalls} 次 · 失败 ${eff.failedCalls} · 熔断跳过 ${eff.skippedCalls} · 有效率 ${Math.round((eff.effectiveRate ?? 1) * 100)}% · 挂载工具 ${eff.toolsMounted}/${eff.toolsTotal}${eff.routed ? ' (按需)' : ''}`,
+                title: buildEfficiencyStepTitle(eff),
                 status: eff.effectiveRate < 0.5 ? 'FAILED' : 'DONE',
               });
             }
@@ -1177,13 +1188,20 @@ class AgentBackend {
           }
 
           try {
-            const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
+            const { buildUserMcpServers, buildUserMcpToolRoutes } = await import('@/lib/mcp-connectors');
             const { buildConnectorBridgeTools } = await import('@/lib/connector-bridge');
             const mcpSvc = this.mcp;
             const injectedTools: any[] = [];
 
             if (mcpSvc?.syncUserServers) {
               const servers = buildUserMcpServers(uid);
+              // 按服务器粒度注册 MCP 工具路由：prompt 点名的数据源（"知乎热榜"、
+              // "热榜"、"推特"…）只挂对应服务器，替代旧版"多源检索"一网打尽
+              // （曾把全部 MCP 服务器挂到 88/114）。同 id 幂等覆盖；
+              // 用户撤授权后的陈旧路由前缀匹配不到任务目录里的工具，天然失效。
+              for (const route of buildUserMcpToolRoutes(uid)) {
+                this.ctx.agent.registerToolRoute(route);
+              }
               if (servers.length > 0) {
                 const sync = await mcpSvc.syncUserServers(uid, servers);
                 const userTools = await mcpSvc.getUserTools(uid);
@@ -1349,19 +1367,7 @@ class AgentBackend {
             taskSandbox,
             // 回退弧感知通道:每步 prepareStep 前取一条排队的治理提示注入
             getStepNotice: () => this.taskRuntimes.get(targetMission.id)?.notices.shift() ?? null,
-            system: `你是基于 Cordis 微内核架构驱动的个人全自主智能体驾驶舱 (AgtPilot)。
-你拥有强大的推理能力与丰富的原子工具生态（包括浏览器实时自动化 browser_navigate、沙箱隔离命令执行 sandbox_run_command 等）。
-${userMemoryPrompt ? `\n${userMemoryPrompt}\n` : ''}
-【核心行为准则 (Behavioral Steering)】：
-1. 【区分对话与执行】：如果用户的请求只是自我介绍、询问你能做什么、概念解释或一般性闲聊，请直接运用你渊博的知识用清晰、亲切、优雅的中文回复，【严禁】无缘无故调用外部搜索或终端工具！
-2. 【按需调用工具】：只有当用户的任务确实需要实时信息检索、网页交互抓取、执行代码或特定环境诊断时，才调用对应的原子工具。
-3. 【连接器工具优先】：mcp_ 前缀的工具来自用户已授权的外部服务连接器（如地图、文档、日程），涉及对应平台的能力时优先使用它们。
-4. 【中途授权】：当任务确实需要某平台专用能力（如读写 Notion、管理滴答清单日程）但对应连接器未授权时，调用 connector_authorize（action=request，附 connectorId 与一句话理由）向用户发起授权请求 —— 用户会看到授权卡片，工具会等待结果：授权成功则返回新工具清单，用 mcp_call 按名字调用；用户跳过或超时则立即改用 browser_ 系列工具在网页上直接完成操作作为兜底，不要空等或放弃任务。不确定有哪些连接器时先用 connector_authorize（action=list）查看。
-5. 【结构化交付】：在完成任务后，清晰总结执行结果并给出交付物。
-6. 【步数经济】：多个互相独立的工具调用，请在同一轮一次性并行发出，不要逐个串行等待结果后再发下一个；任务看板（planner）由系统随工具执行成功自动推进，【不要】调用 planner_update_task 汇报进度（仅在需要标记某步骤失败时才使用）；预计两步以内的简单任务直接执行，不要创建规划看板。
-7. 【安静执行】：在工具调用前后不要反复输出“收到”“我先搜索”“我再继续”等过程播报；直接调用工具，由系统活动卡展示进度。只有需要用户补充信息、审批授权、报告不可恢复的阻塞，或给出最终交付时，才向用户输出完整消息。
-8. 【小红书托管边界】：涉及用户小红书账号时 —— 读创作中心数据、热门话题与站内关键词搜索一律用 xhs_read_creator_data（只读，含 page=hot_topics 与 query 关键词搜索；每任务读取次数有上限，收到拒绝提示后基于已读取的资料继续，不要重试）；把笔记存成草稿一律用 xhs_save_note_draft（需用户审批，终点是草稿箱）；任何情况下不得点击「发布」按钮 —— 发布永远由用户本人在小红书 App 内完成，这是平台合规红线。
-9. 【公众号草稿箱边界】：涉及用户微信公众号时 —— 把文章写入公众号草稿箱一律用 wechat_mp_create_draft（调用前需用户审批，终点是草稿箱，每日有次数上限，被拒后告知用户明天再试，不要重试）；任何情况下不得调用群发/发布（freepublish）类接口 —— 发布永远由用户在公众平台后台人工完成。凭证在连接器页「微信公众号(草稿箱直连)」卡片配置。`,
+            system: buildTaskSystemPrompt(userMemoryPrompt),
           });
 
           if (result.success && result.messages) {

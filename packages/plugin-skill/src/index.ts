@@ -15,19 +15,34 @@
  *   扫描目录读 SKILL.md frontmatter 出统一元数据(名字/描述/路径/就绪面),
  *   新技能包放进目录即被发现;消费方(ppt-workshop)不再各自硬编码路径。
  *
- * 形态三 card(TRS 技能卡,用户级轨迹蒸馏经验):第二步迁入,本步不动。
+ * 形态三 card(TRS 技能卡,任务轨迹蒸馏的五字段结构化经验):
+ *   引擎在 cards.ts(解析归一化/trigger 去重合并/关键词检索注入/命中反馈/
+ *   任务末蒸馏),经 ctx.skills.buildCardsBlock / distillCards 暴露;卡片库
+ *   留在宿主存储,经 SkillCardStore 适配注入。
  *
  * 存储不下沉:技能卡的库、浏览器审计、托管 opt-in 记录都在宿主(web)的
- * 用户空间;插件只定义 SkillStoreAdapter 接口,宿主在装配时注入实现
- * (apps/web 见 lib/script-skills.ts 的 webSkillStore)。缺省无 store 时
- * 行为保守:带 gate 的技能不注入、审计只读为空(限频按 0 计但写入丢弃)。
+ * 用户空间;插件只定义 SkillStoreAdapter / SkillCardStore 接口,宿主在装配
+ * 时注入实现(apps/web 见 lib/script-skills.ts 的 webSkillStore 与
+ * lib/skill-cards.ts 的 webCardStore)。缺省无 store 时行为保守:带 gate 的
+ * 技能不注入、卡服务面返回空(注入空串/蒸馏空结果)。
  *
- * 开关:AGTPILOT_SCRIPT_SKILLS=0 关闭 flow 形态。
+ * 开关:AGTPILOT_SCRIPT_SKILLS=0 关闭 flow 形态;AGTPILOT_SKILL_CARDS=0 关闭 card 形态。
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { Context, Service } from '@deepseek-ai/cordis';
 import type { ToolDefinition } from '@agtpilot/core';
+import {
+  createSkillCardsEngine,
+  isSkillCardsEnabled,
+  type SkillCardModel,
+  type SkillCardStore,
+  type SkillCardsEngine,
+  type SkillDistillOutcome,
+  type TokenizeFn,
+} from './cards';
+
+export * from './cards';
 
 export const name = 'agtpilot-plugin-skill';
 
@@ -657,7 +672,7 @@ export interface BuildTaskToolsOptions {
 }
 
 export interface SkillService {
-  /** 统一清单:flow 技能文件 + pack 沙箱技能包(card 形态第二步接入) */
+  /** 统一清单:flow 技能文件 + pack 沙箱技能包 */
   listSkills(): SkillInventoryItem[];
   /** flow 形态 → 用户级任务工具(opt-in 门/限频/审计/围栏全在引擎内) */
   buildTaskTools(
@@ -670,15 +685,39 @@ export interface SkillService {
   /** pack 注册表(60s 缓存) */
   listPacks(): SkillPackInfo[];
   getPack(packName: string): SkillPackInfo | undefined;
+  /** card 形态 → system prompt 技能卡注入块(任务开始一次;无达标卡/无存储返回空串) */
+  buildCardsBlock(userId: string, goal: string): string;
+  /** card 形态 → 任务末蒸馏(旁路,失败静默;model 取 config.getModel,缺省 ctx.model) */
+  distillCards(opts: SkillDistillOptions): Promise<SkillDistillOutcome>;
+}
+
+/** distillCards 的入参(与引擎 distillCards 的 opts 同型) */
+export interface SkillDistillOptions {
+  userId: string;
+  goal: string;
+  taskSucceeded: boolean;
+  mission: {
+    id?: string;
+    steps?: Array<{ tool?: string; args?: any; output?: any; status?: string; duration?: string; role?: string; answer?: string }>;
+  };
+  efficiency?: { stepsCount?: number; toolCalls?: number; failedCalls?: number; skippedCalls?: number; effectiveRate?: number };
+  missionId?: string;
+  configOverride?: any;
 }
 
 export interface SkillPluginConfig {
-  /** 宿主存储适配(缺省无 store:带 gate 的技能保守不注入,审计写入丢弃) */
+  /** 宿主存储适配·flow(缺省无 store:带 gate 的技能保守不注入,审计写入丢弃) */
   store?: SkillStoreAdapter;
   /** flow 技能目录(缺省 scriptSkillsDir()) */
   skillDir?: string;
   /** pack 目录清单(缺省 skillPackDirs()) */
   packDirs?: string[];
+  /** 宿主存储适配·card(缺省无 store:卡服务面空转——注入空串、蒸馏空结果) */
+  cards?: SkillCardStore;
+  /** 分词器注入(缺省用插件自带 defaultTokenize,与 web memory-service 同型) */
+  tokenize?: TokenizeFn;
+  /** 蒸馏用模型来源(cordis 装配缺省取 ctx.model;工厂形态可显式注入) */
+  getModel?: () => SkillCardModel | undefined;
 }
 
 /** pack 清单缓存 TTL(目录扫描很便宜,但一次任务组装可能查多次) */
@@ -696,6 +735,12 @@ export function createSkillService(config: SkillPluginConfig = {}): SkillService
     packCache = { at: Date.now(), packs };
     return packs;
   };
+
+  // card 形态引擎:仅在宿主注入卡片存储时可用(无 store → 空转,绝不半吊子读写)
+  const cardsEngine: SkillCardsEngine | null = config.cards
+    ? createSkillCardsEngine({ store: config.cards, tokenize: config.tokenize })
+    : null;
+  const emptyDistill: SkillDistillOutcome = { added: [], updated: [] };
 
   return {
     listSkills() {
@@ -739,6 +784,14 @@ export function createSkillService(config: SkillPluginConfig = {}): SkillService
     getPack(packName: string) {
       return listPacks().find((p) => p.name === packName);
     },
+    buildCardsBlock(userId: string, goal: string) {
+      if (!cardsEngine || !isSkillCardsEnabled()) return '';
+      return cardsEngine.buildCardsBlock(userId, goal);
+    },
+    distillCards(opts: SkillDistillOptions) {
+      if (!cardsEngine || !isSkillCardsEnabled()) return Promise.resolve(emptyDistill);
+      return cardsEngine.distillCards(config.getModel?.(), opts);
+    },
   };
 }
 
@@ -747,7 +800,11 @@ class SkillServiceImpl extends Service implements SkillService {
 
   constructor(ctx: Context, config: SkillPluginConfig = {}) {
     super(ctx, 'skills');
-    this.inner = createSkillService(config);
+    // cordis 装配形态:蒸馏模型缺省取同一 ctx 上的 model 服务(懒取,装配顺序无关)
+    this.inner = createSkillService({
+      ...config,
+      getModel: config.getModel || (() => (this.ctx as any)?.model),
+    });
   }
 
   listSkills(): SkillInventoryItem[] {
@@ -768,6 +825,12 @@ class SkillServiceImpl extends Service implements SkillService {
   }
   getPack(packName: string): SkillPackInfo | undefined {
     return this.inner.getPack(packName);
+  }
+  buildCardsBlock(userId: string, goal: string): string {
+    return this.inner.buildCardsBlock(userId, goal);
+  }
+  distillCards(opts: SkillDistillOptions): Promise<SkillDistillOutcome> {
+    return this.inner.distillCards(opts);
   }
 }
 

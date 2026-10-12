@@ -120,10 +120,17 @@ class AgentBackend {
     if (this.runtimePromise) return this.runtimePromise;
     this.runtimePromise = (async () => {
       // composition root 统一装配：core 走插件形态，单插件失败只跳过并记录。
-      // plugin-skill 注入 web 存储适配器：托管 opt-in 记录与浏览器审计仍留在
-      // user-store（存储不下沉），插件只经 SkillStoreAdapter 接口读写。
-      const { webSkillStore } = await import('@/lib/script-skills');
-      const runtime = await createAgentRuntime({ skill: { store: webSkillStore() } });
+      // plugin-skill 注入 web 存储适配器（flow: 托管 opt-in 记录 + 浏览器审计；
+      // card: data.skillCards 卡片库 + 记忆审计）——存储不下沉，仍留在 user-store，
+      // 插件只经 SkillStoreAdapter / SkillCardStore 接口读写；分词器沿用 memory-service。
+      const [{ webSkillStore }, { webCardStore }, { tokenize }] = await Promise.all([
+        import('@/lib/script-skills'),
+        import('@/lib/skill-cards'),
+        import('@/lib/memory-service'),
+      ]);
+      const runtime = await createAgentRuntime({
+        skill: { store: webSkillStore(), cards: webCardStore(), tokenize },
+      });
       this.ctx = runtime.ctx;
       this.agentService = runtime.agent;
       this.orchestrator = runtime.orchestrator;
@@ -1078,10 +1085,13 @@ class AgentBackend {
           }
           // 1.5 TRS 技能卡注入:按任务目标关键词检索过往轨迹蒸馏的五字段卡片
           // (Trigger/Do/Avoid/Check/Risk),top-k + 预算封顶 + 「仅采用直接适用」
-          // 门控;任务开始时组装一次,任务内前缀稳定(不破自动前缀缓存)
+          // 门控;任务开始时组装一次,任务内前缀稳定(不破自动前缀缓存)。
+          // 经 ctx.skills(plugin-skill)构建;插件加载失败回落 lib/skill-cards 薄壳。
           try {
-            const { buildSkillCardsBlock } = await import('@/lib/skill-cards');
-            const skillBlock = buildSkillCardsBlock(options.userId, goal);
+            const skillsSvc = (this.ctx as any)?.skills;
+            const skillBlock = skillsSvc
+              ? skillsSvc.buildCardsBlock(options.userId, goal)
+              : (await import('@/lib/skill-cards')).buildSkillCardsBlock(options.userId, goal);
             if (skillBlock) {
               userMemoryPrompt = userMemoryPrompt
                 ? `${userMemoryPrompt}\n\n${skillBlock}`
@@ -1485,8 +1495,8 @@ class AgentBackend {
 
                 let skillOutcome: { added: any[]; updated: any[] } = { added: [], updated: [] };
                 try {
-                  const { distillSkillCards } = await import('@/lib/skill-cards');
-                  skillOutcome = await distillSkillCards(this.ctx, {
+                  // 经 ctx.skills(plugin-skill)蒸馏;插件加载失败回落 lib/skill-cards 薄壳
+                  const distillOpts = {
                     userId: uid,
                     goal,
                     taskSucceeded: taskOk,
@@ -1494,7 +1504,11 @@ class AgentBackend {
                     efficiency: result.efficiency,
                     missionId: targetMission.id,
                     configOverride: userConfigOverride,
-                  });
+                  };
+                  const skillsSvc = (this.ctx as any)?.skills;
+                  skillOutcome = skillsSvc
+                    ? await skillsSvc.distillCards(distillOpts)
+                    : await (await import('@/lib/skill-cards')).distillSkillCards(this.ctx, distillOpts);
                 } catch {
                   // 技能卡蒸馏失败静默
                 }

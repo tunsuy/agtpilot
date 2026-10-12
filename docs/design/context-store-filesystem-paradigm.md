@@ -1,6 +1,6 @@
 # 设计文档:用户上下文存储范式演进(单 JSON blob → 用户上下文目录)
 
-> 状态:**方案待评审**(2026-10-12,负责人指示「先写个方案,也可以先详细看下其他顶级产品怎么做的」)
+> 状态:**P1 已实现**(2026-10-12,实现记录与偏差见 §9;P2 进行中,P3 待议)
 > 灵感来源:ByteDance OpenViking 的「上下文文件系统」范式(viking:// + L0/L1/L2 分层),以及对 Claude memory tool、Manus、Letta/MemGPT、ChatGPT memory、mem0、Zep/Graphiti 的调研
 > 涉及模块:`apps/web/src/lib/user-store.ts`(主改造)、`memory-service.ts`、`skill-cards.ts` / `packages/plugin-skill`、`agent-backend.ts`(注入侧)
 > 关联文档:`docs/design/persistent-state-governance.md`(五条治理不变量在本方案中必须继续成立)
@@ -152,3 +152,30 @@
 - ChatGPT 记忆双层与 Dreaming:help.openai.com/articles/8590148、openai.com/index/chatgpt-memory-dreaming/
 - mem0:arXiv:2504.19413;Zep/Graphiti:arXiv:2501.13956(基准争议:getzep/zep-papers#5)
 - 本仓治理不变量:docs/design/persistent-state-governance.md
+
+## 9. 实现记录与偏差(P1,2026-10-12)
+
+落地:`apps/web/src/lib/user-store-v2.ts`(新,存储引擎)+ `user-store.ts`(门面路由)+
+`__tests__/user-store-v2.test.ts`(10 例)+ sandbox-control.spec.ts 布局断言更新。
+验证:web 35 文件 486 测试 / core 89 / plugin-skill 40 全绿,tsc 干净。
+
+与原方案的偏差(均为收敛,不改变对外行为):
+
+1. **脏检查基准 = 每对象「读取基线」而非进程级缓存**:readUserDataV2 把各域序列化快照
+   以不可枚举属性 `__v2Baseline` 挂在返回对象上;写路径只重写「相对该对象自己读取时刻
+   有变化」的域。跨 await 的陈旧对象不会回滚并发写入者在任何未触碰域的变更
+   (进程级缓存做不到这点——缓存总是最新态,陈旧副本会误判为脏)。
+   saveUserData 的浅拷贝经 carryBaseline 显式传递基线;默认空结构挂「空盘基线」
+   (attachFreshBaseline),防止多个默认对象互写全量覆盖。
+2. **JSONL 域整域重写而非记录级 append**:域已拆分 + 脏检查后,IO 放大消失
+   (memories/skillCards/goals 均为有界小集合:卡片≤40、审计≤200);真正的
+   append-only 保留在 audit/*.jsonl(记忆/沙箱/浏览器审计)。记录级追加留作量大后的优化。
+3. **missions 布局**:index.json = 有序 key 列表(非 index.jsonl),每任务
+   missions/<key>.json;索引外孤儿文件(崩溃残留)读取时按 updatedAt 附尾。
+4. **审计懒迁移**:auditFilePathV2 负责旧平铺文件挪位与父目录创建(appendFileSync
+   不建目录,纯审计首写场景必须兜底)。
+5. **getAllUsersData 枚举即迁移**:未迁移旧单文件在枚举时完成懒迁移(启动加载 cron
+   不漏人);`_vapid.json`、隐藏文件等非用户文件排除在迁移之外。
+6. 加密收口、原子写(tmp+rename)、开关回退(AGTPILOT_CONTEXT_STORE_V2=0)、
+   .bak 归档回滚路径均按原方案落地。
+

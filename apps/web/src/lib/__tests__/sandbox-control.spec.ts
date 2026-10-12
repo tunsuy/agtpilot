@@ -161,9 +161,11 @@ describe('sandbox 审计日志(jsonl 只增)', () => {
     expect(entries[1].url).toContain('169.254.169.254');
   });
 
-  it('审计文件与用户数据文件分离', () => {
-    const files = fs.readdirSync(tmpDir);
-    expect(files.some((f) => f.endsWith('.sandbox-audit.jsonl'))).toBe(true);
+  it('审计文件与用户数据文件分离(v2:落用户目录 audit/ 子树)', () => {
+    const auditFile = path.join(tmpDir, 'v2', 'sbx-user-audit', 'audit', 'sandbox.jsonl');
+    expect(fs.existsSync(auditFile)).toBe(true);
+    const profileFile = path.join(tmpDir, 'v2', 'sbx-user-audit', 'profile.json');
+    expect(auditFile).not.toBe(profileFile);
   });
 });
 

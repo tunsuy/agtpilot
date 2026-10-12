@@ -4,6 +4,17 @@ import { encryptSecret, decryptSecret, isEncrypted } from './secret-box';
 import { getGovernanceBus } from './governance-bus';
 import type { ScenarioProfile } from './scenario-profile';
 import { isPrivateOrReservedIp, DEFAULT_CREDENTIAL_BINDINGS } from '@agtpilot/core';
+import {
+  isV2Enabled,
+  safeName,
+  readUserDataV2,
+  writeUserDataV2,
+  migrateLegacyUser,
+  auditFilePathV2,
+  listUserIdsV2,
+  carryBaseline,
+  attachFreshBaseline,
+} from './user-store-v2';
 
 /**
  * 用户级别数据持久化隔离存储引擎 (User Scoped Data Store)
@@ -13,6 +24,12 @@ import { isPrivateOrReservedIp, DEFAULT_CREDENTIAL_BINDINGS } from '@agtpilot/co
  * - 个人长效记忆与画像 (memories)
  * - 主动巡航定时任务 (cron jobs)
  * - 执行会话历史任务 (missions)
+ *
+ * 存储布局 v2(docs/design/context-store-filesystem-paradigm.md P1):
+ * 默认落「用户上下文目录」<dataDir>/v2/<userId>/(profile.json + 域文件 +
+ * missions/ 每任务一文件 + audit/ 追加日志),按域脏检查只重写有变化的域;
+ * 旧单文件首次访问懒迁移(原文件改名 .bak 归档可回滚)。
+ * AGTPILOT_CONTEXT_STORE_V2=0 整体回退旧单文件路径。布局细节见 user-store-v2.ts。
  */
 
 export interface PushSubscriptionRecord {
@@ -228,46 +245,66 @@ function getUserFilePath(userId: string): string {
   return path.join(dataDir, `${safeFilename}.json`);
 }
 
-export function getUserData(userId: string): UserScopedData {
+/** 旧单文件读取(不存在/损坏返回 null;v2 关闭时的主路径、开启时的迁移源) */
+function readLegacyUserFile(dataDir: string, userId: string): UserScopedData | null {
   const filePath = getUserFilePath(userId);
   try {
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, 'utf-8');
       const data = JSON.parse(raw);
-      if (!data.goals) data.goals = [];
-      // 凭证解密 + 历史明文自动迁移加密（首次读取时用当前密钥补加密并回写）
-      const plaintextFound = new Map<string, string>();
-      if (data.connectors && typeof data.connectors === 'object') {
-        for (const [k, v] of Object.entries<string>(data.connectors)) {
-          if (typeof v !== 'string' || !v) continue;
-          if (isEncrypted(v)) {
-            data.connectors[k] = decryptSecret(v);
-          } else {
-            plaintextFound.set(k, v); // 内存里保持明文可直接用
-          }
-        }
-      }
-      if (plaintextFound.size > 0) {
-        try {
-          const toPersist = { ...data, connectors: { ...data.connectors }, updatedAt: Date.now() };
-          for (const [k, plain] of plaintextFound) {
-            toPersist.connectors[k] = encryptSecret(plain);
-          }
-          const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-          fs.writeFileSync(tmpPath, JSON.stringify(toPersist, null, 2), 'utf-8');
-          fs.renameSync(tmpPath, filePath);
-        } catch (e) {
-          console.error(`Failed to migrate plaintext connectors for ${userId}:`, e);
-        }
-      }
-      return data;
+      if (data && typeof data === 'object') return data as UserScopedData;
     }
   } catch (e) {
     console.error(`Failed to read user data for ${userId}:`, e);
   }
+  return null;
+}
 
-  // 默认空数据结构
-  return {
+export function getUserData(userId: string): UserScopedData {
+  const dataDir = getDataDir();
+  let data: UserScopedData | null = null;
+
+  if (isV2Enabled()) {
+    data = readUserDataV2(dataDir, userId);
+    if (!data) {
+      // 懒迁移:首次访问把旧单文件转成 v2 目录;旧文件改名 .bak 只读归档(可回滚)
+      const legacy = readLegacyUserFile(dataDir, userId);
+      if (legacy) {
+        migrateLegacyUser(dataDir, userId, legacy);
+        data = readUserDataV2(dataDir, userId);
+      }
+    }
+  } else {
+    data = readLegacyUserFile(dataDir, userId);
+  }
+
+  if (data) {
+    if (!data.goals) data.goals = [];
+    // 凭证解密 + 历史明文自动迁移加密（首次读取时用当前密钥补加密并回写）
+    const plaintextFound = new Map<string, string>();
+    if (data.connectors && typeof data.connectors === 'object') {
+      for (const [k, v] of Object.entries<string>(data.connectors)) {
+        if (typeof v !== 'string' || !v) continue;
+        if (isEncrypted(v)) {
+          data.connectors[k] = decryptSecret(v);
+        } else {
+          plaintextFound.set(k, v); // 内存里保持明文可直接用
+        }
+      }
+    }
+    if (plaintextFound.size > 0) {
+      try {
+        // 经 saveUserData 单一收口回写(自动补加密,并按开关路由 v2/旧路径)
+        saveUserData(data);
+      } catch (e) {
+        console.error(`Failed to migrate plaintext connectors for ${userId}:`, e);
+      }
+    }
+    return data;
+  }
+
+  // 默认空数据结构(v2 下挂空盘基线:多个默认空对象并发保存时互不全量覆盖)
+  const empty: UserScopedData = {
     userId,
     connectors: {},
     activeModelId: 'deepseek',
@@ -277,21 +314,30 @@ export function getUserData(userId: string): UserScopedData {
     goals: [],
     updatedAt: Date.now(),
   };
+  if (isV2Enabled()) attachFreshBaseline(empty);
+  return empty;
 }
 
 export function saveUserData(data: UserScopedData) {
-  const filePath = getUserFilePath(data.userId);
-  try {
-    data.updatedAt = Date.now();
-    // 凭证落盘前统一加密（单一收口：所有写路径都经过这里；内存对象不受影响）
-    const toWrite: UserScopedData = { ...data };
-    if (toWrite.connectors) {
-      const enc: Record<string, string> = {};
-      for (const [k, v] of Object.entries(toWrite.connectors)) {
-        enc[k] = typeof v === 'string' && v && !isEncrypted(v) ? encryptSecret(v) : v;
-      }
-      toWrite.connectors = enc;
+  data.updatedAt = Date.now();
+  // 凭证落盘前统一加密（单一收口：所有写路径都经过这里；内存对象不受影响）
+  const toWrite: UserScopedData = { ...data };
+  if (toWrite.connectors) {
+    const enc: Record<string, string> = {};
+    for (const [k, v] of Object.entries(toWrite.connectors)) {
+      enc[k] = typeof v === 'string' && v && !isEncrypted(v) ? encryptSecret(v) : v;
     }
+    toWrite.connectors = enc;
+  }
+  try {
+    if (isV2Enabled()) {
+      // v2:写用户上下文目录(相对读取基线的域级脏检查,只重写有变化的域)
+      carryBaseline(data, toWrite); // {...data} 浅拷贝丢不可枚举基线,显式带过去
+      writeUserDataV2(getDataDir(), toWrite);
+      carryBaseline(toWrite, data); // 写后的新基线带回原对象,重复 save 幂等
+      return;
+    }
+    const filePath = getUserFilePath(data.userId);
     // 原子写入：先写临时文件再 rename，避免写入中途崩溃/并发读导致 JSON 损坏
     const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(toWrite, null, 2), 'utf-8');
@@ -645,8 +691,10 @@ export function appendDeletionLedger(userId: string, entry: DeletionLedgerEntry)
 }
 
 function getAuditFilePath(userId: string): string {
-  const safeFilename = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return path.join(getDataDir(), `${safeFilename}.audit.jsonl`);
+  const dataDir = getDataDir();
+  // v2:audit 挪进用户目录(旧文件懒迁移);关闭开关回退旧平铺路径
+  if (isV2Enabled()) return auditFilePathV2(dataDir, userId, 'memory');
+  return path.join(dataDir, `${safeName(userId)}.audit.jsonl`);
 }
 
 /**
@@ -764,8 +812,9 @@ export function resolvePolicyProposal(
 }
 
 function getSandboxAuditFilePath(userId: string): string {
-  const safeFilename = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return path.join(getDataDir(), `${safeFilename}.sandbox-audit.jsonl`);
+  const dataDir = getDataDir();
+  if (isV2Enabled()) return auditFilePathV2(dataDir, userId, 'sandbox');
+  return path.join(dataDir, `${safeName(userId)}.sandbox-audit.jsonl`);
 }
 
 /** 追加沙箱拒绝审计(append-only jsonl,与用户数据/记忆审计文件分离) */
@@ -841,6 +890,27 @@ export function lintConnectorValue(envVar: string, value: string): string[] {
 export function getAllUsersData(): UserScopedData[] {
   const dataDir = getDataDir();
   try {
+    if (isV2Enabled()) {
+      // v2:枚举用户目录 + 就地懒迁移未迁移的旧单文件(启动路径不漏人)
+      const result: UserScopedData[] = [];
+      const seen = new Set<string>();
+      for (const userId of listUserIdsV2(dataDir)) {
+        if (seen.has(userId)) continue;
+        seen.add(userId);
+        const data = readUserDataV2(dataDir, userId);
+        if (!data) continue;
+        // 凭证解密（只读路径，不触发迁移写盘）
+        if (data.connectors && typeof data.connectors === 'object') {
+          for (const [k, v] of Object.entries<string>(data.connectors)) {
+            if (typeof v === 'string' && isEncrypted(v)) {
+              data.connectors[k] = decryptSecret(v);
+            }
+          }
+        }
+        result.push(data);
+      }
+      return result;
+    }
     if (!fs.existsSync(dataDir)) return [];
     const files = fs.readdirSync(dataDir);
     const result: UserScopedData[] = [];

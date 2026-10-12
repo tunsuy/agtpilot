@@ -1,11 +1,13 @@
 import {
   getUserMemories,
   getUserData,
+  getUserMissions,
   saveUserData,
   saveUserMemory,
   getAuthorityEpoch,
   appendDeletionLedger,
   appendMemoryAudit,
+  appendRetrievalTrace,
   type DeletionLedgerEntry,
 } from './user-store';
 import { getGovernanceBus } from './governance-bus';
@@ -123,6 +125,11 @@ export interface UserMemory {
   category: MemoryCategory;
   confidence: number;
   updatedAt: number;
+  /**
+   * 一行式摘要(L0 注入用,P2)。缺省时懒回退 title/首句截断 —— 不批量烧模型;
+   * 蒸馏/手动编辑可显式产出更准的摘要。
+   */
+  summary?: string;
   /** manual = 用户在记忆库页面手动添加;auto = 会话结束自动提炼 */
   source?: 'manual' | 'auto';
   /** 记忆主体:user = 用户事实记忆(画像/偏好);agent = Agent 经验记忆(环境/工具/流程) */
@@ -145,16 +152,22 @@ export interface DistillOutcome {
 }
 
 // ---- 可调参数 ----
-/** system prompt 注入的用户记忆条数上限 */
-const PROMPT_MAX_ITEMS = 12;
-/** system prompt 注入的用户记忆总字符预算 */
-const PROMPT_MAX_CHARS = 3600;
+/** system prompt 全文注入的用户记忆条数上限(P2 两级注入:高分项全文,其余走 L0 摘要) */
+const PROMPT_MAX_ITEMS = 6;
+/** system prompt 全文注入的用户记忆总字符预算 */
+const PROMPT_MAX_CHARS = 2400;
 /** 执行红线(rule)类记忆始终全量注入的条数上限 */
 const PROMPT_MAX_RULES = 10;
-/** system prompt 注入的 Agent 经验条数上限(独立分块、独立预算) */
-const AGENT_PROMPT_MAX_ITEMS = 6;
-/** system prompt 注入的 Agent 经验总字符预算 */
-const AGENT_PROMPT_MAX_CHARS = 1600;
+/** system prompt 全文注入的 Agent 经验条数上限(独立分块、独立预算) */
+const AGENT_PROMPT_MAX_ITEMS = 4;
+/** system prompt 全文注入的 Agent 经验总字符预算 */
+const AGENT_PROMPT_MAX_CHARS = 1200;
+/** L0 摘要清单条数上限(用户通道 / Agent 通道 / 任务清单) */
+const L0_MAX_USER = 20;
+const L0_MAX_AGENT = 8;
+const L0_MAX_MISSIONS = 6;
+/** L0 单行摘要长度上限(超出截断加省略号) */
+const L0_SUMMARY_CHARS = 40;
 /** 单次会话结束自动提炼的操作条数上限(含 add/update/delete,每通道独立) */
 const DISTILL_MAX_OPS = 5;
 /** 提炼 prompt 中列出的现有记忆条数上限(优先最近更新的) */
@@ -664,86 +677,193 @@ export function noteMemoryHits(userId: string, ids: string[]): void {
   }
 }
 
+// ---- L0 摘要(两级注入的摘要层) ----
+
+/** 截断到 n 字符(超出加省略号) */
+function capText(s: string, n: number): string {
+  const t = String(s ?? '').trim();
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+}
+
+/** 取首句(中英文句读/换行断句;无断句取前 40 字符) */
+function firstSentence(text: string): string {
+  const m = String(text || '').match(/^[^。！？!?；;\n]+/);
+  return (m ? m[0] : String(text || '')).trim();
+}
+
+/**
+ * 记忆的一行式 L0 摘要:显式 summary 字段优先;存量懒回退 title → content 首句
+ * (不批量烧模型 —— title 本就是蒸馏时产出的一行式概括)。
+ */
+export function memorySummary(m: UserMemory): string {
+  const s =
+    (typeof m.summary === 'string' && m.summary.trim()) ||
+    (typeof m.title === 'string' && m.title.trim()) ||
+    firstSentence(m.content);
+  return capText(s, L0_SUMMARY_CHARS);
+}
+
+/** 任务的一行式 L0 摘要:显式 summary 优先,懒回退 goal 首句截断(零模型成本) */
+export function missionSummary(m: any): string {
+  const s =
+    (typeof m?.summary === 'string' && m.summary.trim()) ||
+    firstSentence(m?.goal || '');
+  return capText(s, L0_SUMMARY_CHARS);
+}
+
+/** 得分保留 3 位小数(轨迹可读性) */
+function round3(n: number): number {
+  return Math.round((n || 0) * 1000) / 1000;
+}
+
 // ---- prompt 注入 ----
 
 /**
- * 构建 system prompt 记忆注入块(双通道分块):
- * - 用户事实记忆:rule(执行红线)始终全量注入,其余按与任务目标的 TF-IDF 相关性
- *   排序,超过条数/字符预算截断;
- * - Agent 经验记忆:独立分块【Agent 执行经验与教训】,按相关性独立预算注入;
- * - 无记忆时返回空串(不占 prompt)。
- * 副作用:被注入的记忆视为一次命中,累计 hitCount(每次任务一次写盘)。
+ * 构建 system prompt 记忆注入块(P2 两级注入,双通道分块):
+ * - L2 全文层:用户 rule(执行红线)始终全量注入;其余按与任务目标的 TF-IDF
+ *   相关性排序,头部高分项全文注入(条数/字符双预算);
+ * - L0 摘要层:未全文注入的活跃记忆按相关性排成一行式摘要清单(id + 摘要),
+ *   模型可用 read_memory(id) 按需取全文 —— 摘要清单成本远低于全文注入;
+ * - Agent 经验记忆:独立分块(全文 + L0),同一套两级结构;
+ * - 最近任务 L0 清单:id + 摘要 + 状态,read_mission(id) 按需取全轨迹;
+ * - 无任何可注入内容时返回空串(不占 prompt)。
+ * 副作用:全文注入的记忆视为一次命中(hitCount);每次注入把候选得分明细与
+ * 入选/落选原因追加进 audit/retrieval.jsonl(检索可观测,P-e)。
  */
 export function buildMemoryPromptBlock(userId: string, goal: string): string {
   // 治理过滤:软删/被取代/过期/授权纪元降级的记忆一律不注入(I1/I2/I3)
   const all = listActiveMemories(userId)
     .slice()
     .sort((a, b) => b.updatedAt - a.updatedAt);
-  if (all.length === 0) return '';
 
   // ---- 通道一:用户事实记忆(subject=user,缺省归此) ----
   const userMems = all.filter((m) => (m.subject || 'user') === 'user');
   const agentMems = all.filter((m) => m.subject === 'agent');
 
-  const userScores = computeRelevance(goal, userMems);
-  const rules = userMems.filter((m) => m.category === 'rule').slice(0, PROMPT_MAX_RULES);
-  const ruleIds = new Set(rules.map((m) => m.id));
-  const userOthers = userMems
-    .filter((m) => !ruleIds.has(m.id))
-    .sort((a, b) => (userScores.get(b.id) || 0) - (userScores.get(a.id) || 0) || b.updatedAt - a.updatedAt);
+  /** 单通道两级选择:全文头部 + L0 摘要余部;返回注入行与轨迹记录 */
+  const selectTwoLevel = (
+    mems: UserMemory[],
+    scores: Map<string, number>,
+    fullMaxItems: number,
+    fullMaxChars: number,
+    l0Max: number,
+    alwaysFull: (m: UserMemory) => boolean
+  ) => {
+    const full: UserMemory[] = [];
+    const l0: UserMemory[] = [];
+    const trace: Array<{ id: string; title: string; score: number; sel: 'full' | 'l0' | 'dropped'; reason: string }> = [];
+    let usedChars = 0;
+    // rule 等「必须全文」项先行(不占相关性名额,但占字符预算)
+    const forced = mems.filter(alwaysFull).slice(0, PROMPT_MAX_RULES);
+    const forcedIds = new Set(forced.map((m) => m.id));
+    for (const m of forced) {
+      full.push(m);
+      usedChars += m.title.length + m.content.length;
+      trace.push({ id: m.id, title: capText(m.title, 40), score: round3(scores.get(m.id) || 0), sel: 'full', reason: 'rule-always' });
+    }
+    const ranked = mems
+      .filter((m) => !forcedIds.has(m.id))
+      .sort((a, b) => (scores.get(b.id) || 0) - (scores.get(a.id) || 0) || b.updatedAt - a.updatedAt);
+    for (const m of ranked) {
+      const score = round3(scores.get(m.id) || 0);
+      const cost = m.title.length + m.content.length;
+      if (full.length < fullMaxItems && usedChars + cost <= fullMaxChars) {
+        full.push(m);
+        usedChars += cost;
+        trace.push({ id: m.id, title: capText(m.title, 40), score, sel: 'full', reason: 'top-score' });
+      } else if (l0.length < l0Max) {
+        l0.push(m);
+        trace.push({ id: m.id, title: capText(m.title, 40), score, sel: 'l0', reason: 'summary-only' });
+      } else {
+        trace.push({ id: m.id, title: capText(m.title, 40), score, sel: 'dropped', reason: 'l0-full' });
+      }
+    }
+    return { full, l0, trace };
+  };
 
-  const selectedUser: UserMemory[] = [...rules];
-  let usedChars = rules.reduce((acc, m) => acc + m.title.length + m.content.length, 0);
-  for (const m of userOthers) {
-    if (selectedUser.length >= PROMPT_MAX_ITEMS) break;
-    const cost = m.title.length + m.content.length;
-    if (usedChars + cost > PROMPT_MAX_CHARS) continue;
-    selectedUser.push(m);
-    usedChars += cost;
+  const userSel = selectTwoLevel(
+    userMems,
+    computeRelevance(goal, userMems),
+    PROMPT_MAX_ITEMS,
+    PROMPT_MAX_CHARS,
+    L0_MAX_USER,
+    (m) => m.category === 'rule'
+  );
+  const agentSel = selectTwoLevel(
+    agentMems,
+    computeRelevance(goal, agentMems),
+    AGENT_PROMPT_MAX_ITEMS,
+    AGENT_PROMPT_MAX_CHARS,
+    L0_MAX_AGENT,
+    () => false
+  );
+
+  // ---- 最近任务 L0 清单(read_mission 的寻址入口;失败静默) ----
+  let missionLines: string[] = [];
+  let missionIds: string[] = [];
+  try {
+    const missions = getUserMissions(userId)
+      .filter((m: any) => m && m.id)
+      .slice()
+      .sort((a: any, b: any) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
+      .slice(0, L0_MAX_MISSIONS);
+    missionIds = missions.map((m: any) => m.id);
+    missionLines = missions.map((m: any) => `- ${m.id} [${m.status || '?'}] ${missionSummary(m)}`);
+  } catch {
+    // 任务清单不可用不影响记忆注入
   }
 
-  // ---- 通道二:Agent 经验记忆(subject=agent,独立分块独立预算) ----
-  const agentScores = computeRelevance(goal, agentMems);
-  const selectedAgent: UserMemory[] = [];
-  let agentChars = 0;
-  for (const m of agentMems.sort(
-    (a, b) => (agentScores.get(b.id) || 0) - (agentScores.get(a.id) || 0) || b.updatedAt - a.updatedAt
-  )) {
-    if (selectedAgent.length >= AGENT_PROMPT_MAX_ITEMS) break;
-    const cost = m.title.length + m.content.length;
-    if (agentChars + cost > AGENT_PROMPT_MAX_CHARS) continue;
-    selectedAgent.push(m);
-    agentChars += cost;
-  }
+  const hasContent =
+    userSel.full.length > 0 || userSel.l0.length > 0 ||
+    agentSel.full.length > 0 || agentSel.l0.length > 0 ||
+    missionLines.length > 0;
+  if (!hasContent) return '';
 
-  if (selectedUser.length === 0 && selectedAgent.length === 0) return '';
+  // 全文注入 = 一次命中(供衰减统计;失败静默)
+  noteMemoryHits(userId, [...userSel.full, ...agentSel.full].map((m) => m.id));
 
-  // 注入 = 一次命中(供衰减统计;失败静默)
-  noteMemoryHits(userId, [...selectedUser, ...selectedAgent].map((m) => m.id));
+  // 检索轨迹:候选得分明细 + 入选/落选原因 → audit/retrieval.jsonl(失败静默)
+  appendRetrievalTrace(userId, {
+    kind: 'memory-inject',
+    goal: capText(goal, 120),
+    selected: [...userSel.trace, ...agentSel.trace].filter((t) => t.sel === 'full'),
+    omitted: [...userSel.trace, ...agentSel.trace].filter((t) => t.sel !== 'full'),
+    missions: missionIds,
+  });
 
+  const l0Lines = (list: UserMemory[]) => list.map((m) => `- ${m.id} ${memorySummary(m)}`);
   const sections: string[] = [];
-  if (selectedUser.length > 0) {
-    const omittedUser = userMems.length - selectedUser.length;
+  if (userSel.full.length > 0 || userSel.l0.length > 0) {
     sections.push(
       [
         '【当前用户的专属个性画像与长期记忆】:',
-        ...selectedUser.map(formatMemoryLine),
-        omittedUser > 0 ? `(另有 ${omittedUser} 条低相关记忆未注入,可用 memory_recall 按需检索)` : '',
-      ]
-        .filter(Boolean)
-        .join('\n')
+        ...userSel.full.map(formatMemoryLine),
+        ...(userSel.l0.length > 0
+          ? [
+              `(${userMems.length - userSel.full.length} 条未全文注入,摘要如下;需要全文用 read_memory(id),完整清单用 memory_list:)`,
+              ...l0Lines(userSel.l0),
+            ]
+          : []),
+      ].join('\n')
     );
   }
-  if (selectedAgent.length > 0) {
-    const omittedAgent = agentMems.length - selectedAgent.length;
+  if (agentSel.full.length > 0 || agentSel.l0.length > 0) {
     sections.push(
       [
         '【Agent 执行经验与教训(过往任务轨迹沉淀的环境/工具/流程经验,请主动规避已知坑、复用有效路径)】:',
-        ...selectedAgent.map(formatMemoryLine),
-        omittedAgent > 0 ? `(另有 ${omittedAgent} 条低相关经验未注入,可用 memory_recall 检索)` : '',
-      ]
-        .filter(Boolean)
-        .join('\n')
+        ...agentSel.full.map(formatMemoryLine),
+        ...(agentSel.l0.length > 0
+          ? [
+              `(${agentMems.length - agentSel.full.length} 条经验未全文注入,摘要如下;read_memory(id) 取全文:)`,
+              ...l0Lines(agentSel.l0),
+            ]
+          : []),
+      ].join('\n')
+    );
+  }
+  if (missionLines.length > 0) {
+    sections.push(
+      ['【最近任务清单(需要复盘相关历史任务时,用 read_mission(id) 取目标/步骤/交付全文)】:', ...missionLines].join('\n')
     );
   }
   sections.push('请严格遵守上述用户的个性偏好与安全规则,并善用 Agent 已沉淀的执行经验进行思考与输出。');
@@ -762,9 +882,10 @@ function formatMemoryLine(m: UserMemory): string {
 // ---- 用户级记忆工具(taskTools 同名覆盖 plugin-memory 全局版) ----
 
 /**
- * 构建绑定到指定用户的 memory_store/recall/list 工具。
+ * 构建绑定到指定用户的 memory_store/recall/list + read_memory/read_mission 工具。
  * 经 runTask 的 taskTools 注入(核心层同名任务级工具优先于全局注册),
  * 读写全部落在 user-store 的该用户空间 —— 多用户部署时互不可见。
+ * read_memory/read_mission = 两级注入的 L2 按需加载入口(P2)。
  */
 export function buildUserMemoryTools(userId: string): any[] {
   const store = (
@@ -895,6 +1016,12 @@ export function buildUserMemoryTools(userId: string): any[] {
         );
         // 被召回 = 一次命中(供衰减统计)
         noteMemoryHits(userId, results.map((r) => r.id));
+        // 检索轨迹:工具召回同样落盘(与注入轨迹同一文件,回答「召回了什么」)
+        appendRetrievalTrace(userId, {
+          kind: 'memory-recall',
+          query: capText(String(query || ''), 120),
+          selected: results.slice(0, 20).map((r) => ({ id: r.id, title: capText(r.title, 40) })),
+        });
         return {
           success: true,
           query,
@@ -905,6 +1032,96 @@ export function buildUserMemoryTools(userId: string): any[] {
             category: r.category,
             subject: r.subject || 'user',
           })),
+        };
+      },
+    },
+    {
+      name: 'read_memory',
+      description:
+        '按 id 读取一条长期记忆的全文(L2 按需加载)。注入的记忆清单里只有摘要时,用本工具取完整内容与治理信息(类型/主体/可执行性/来源任务)。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '记忆 id(来自注入的 L0 摘要清单或 memory_list/memory_recall 结果)' },
+        },
+        required: ['id'],
+      },
+      execute: async ({ id }: any) => {
+        const wanted = String(id || '');
+        const m = listActiveMemories(userId).find((x) => x.id === wanted);
+        appendRetrievalTrace(userId, {
+          kind: 'memory-read',
+          query: wanted,
+          selected: m ? [{ id: m.id, title: capText(m.title, 40) }] : [],
+          omitted: m ? [] : [{ id: wanted, reason: 'not-found-or-inactive' }],
+        });
+        if (!m) {
+          return { success: false, message: `记忆 ${wanted} 不存在或非活跃(已删除/被取代/授权降级)。` };
+        }
+        // 按需读取 = 一次命中
+        noteMemoryHits(userId, [m.id]);
+        return {
+          success: true,
+          memory: {
+            id: m.id,
+            title: m.title,
+            content: m.content,
+            category: m.category,
+            subject: m.subject || 'user',
+            actionability: m.governance?.actionability || 'fact',
+            source: m.source,
+            missionId: m.missionId || m.governance?.provenance?.originMissionId,
+            hitCount: m.hitCount || 0,
+            updatedAt: new Date(m.updatedAt).toISOString(),
+          },
+        };
+      },
+    },
+    {
+      name: 'read_mission',
+      description:
+        '按任务 id 读取一条历史任务的全文(目标/状态/最近步骤/最终交付/效率统计)。看到「最近任务清单」中相关任务后,用本工具复盘其执行轨迹与结论。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '任务 id(来自注入的最近任务清单)' },
+        },
+        required: ['id'],
+      },
+      execute: async ({ id }: any) => {
+        const wanted = String(id || '');
+        let m: any = null;
+        try {
+          m = getUserMissions(userId).find((x: any) => x && x.id === wanted) || null;
+        } catch {
+          m = null;
+        }
+        appendRetrievalTrace(userId, {
+          kind: 'mission-read',
+          query: wanted,
+          selected: m ? [{ id: m.id, goal: capText(m.goal || '', 40) }] : [],
+          omitted: m ? [] : [{ id: wanted, reason: 'not-found' }],
+        });
+        if (!m) return { success: false, message: `任务 ${wanted} 不存在。` };
+        const steps: any[] = Array.isArray(m.steps) ? m.steps : [];
+        return {
+          success: true,
+          mission: {
+            id: m.id,
+            goal: m.goal,
+            summary: missionSummary(m),
+            status: m.status,
+            createdAt: m.createdAt,
+            updatedAt: m.updatedAt,
+            stepsCount: steps.length,
+            recentSteps: steps.slice(-12).map((s: any) => ({
+              tool: s.tool,
+              status: s.status,
+              output: s.output != null ? capText(String(s.output), 200) : undefined,
+              answer: s.answer != null ? capText(String(s.answer), 400) : undefined,
+            })),
+            efficiency: m.efficiency,
+          },
         };
       },
     },

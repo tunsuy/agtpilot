@@ -76,6 +76,18 @@ export interface SkillCardStore {
   saveCards(userId: string, cards: SkillCard[]): void;
   /** 追加卡片审计(蒸馏入库 add/update) */
   appendCardAudit(userId: string, entry: SkillCardAuditEntry): void;
+  /**
+   * 可选:检索轨迹落盘(注入时的候选得分明细与入选/落选原因)。
+   * 宿主接到 user-store 的 audit/retrieval.jsonl;缺省不写(插件测试零宿主依赖)。
+   */
+  appendRetrievalTrace?(userId: string, entry: Record<string, unknown>): void;
+}
+
+/** 单卡匹配分明细(检索可观测:P2「为什么注入/漏掉这张卡」) */
+export interface CardScoreDetail {
+  score: number;
+  /** 命中描述符:kw:<关键词>(子串+2)/ kwTok:<关键词>(分词全中+1)/ trg:<token>(trigger 重叠+0.5) */
+  matched: string[];
 }
 
 /** 蒸馏用的模型最小面(ctx.model 的子集;测试可 mock) */
@@ -279,6 +291,8 @@ export interface SkillCardsEngine {
   ): SkillDistillOutcome;
   /** 卡片与任务目标的匹配分 */
   scoreCard(card: SkillCard, goal: string): number;
+  /** 匹配分明细(得分 + 命中描述符;检索轨迹用) */
+  scoreCardDetailed(card: SkillCard, goal: string): CardScoreDetail;
   /** 按任务目标选卡(门槛分 → 排序 → top-k + 预算) */
   selectCards(
     cards: SkillCard[],
@@ -442,31 +456,44 @@ export function createSkillCardsEngine(deps: {
   };
 
   /**
-   * 卡片与任务目标的匹配分:
+   * 卡片与任务目标的匹配分明细:
    * - keyword 作为子串直接命中目标文本 → +2(确定性信号);
    * - keyword 分词后全部 token 命中目标分词(CJK bigram 覆盖换说法)→ +1;
    * - trigger 分词与目标分词每重叠一个 → +0.5(弱信号,兜底)。
+   * matched 记录每个命中项,供检索轨迹回答「为什么是这张卡」。
    */
-  const scoreCard = (card: SkillCard, goal: string): number => {
+  const scoreCardDetailed = (card: SkillCard, goal: string): CardScoreDetail => {
     const gl = goal.toLowerCase();
     const goalTokens = new Set(tokenize(goal));
-    if (goalTokens.size === 0) return 0;
+    const matched: string[] = [];
+    if (goalTokens.size === 0) return { score: 0, matched };
     let score = 0;
     for (const kw of card.keywords || []) {
       const k = String(kw).trim().toLowerCase();
       if (!k) continue;
       if (gl.includes(k)) {
         score += 2;
+        matched.push(`kw:${k}`);
         continue;
       }
       const kTokens = tokenize(k);
-      if (kTokens.length > 0 && kTokens.every((t) => goalTokens.has(t))) score += 1;
+      if (kTokens.length > 0 && kTokens.every((t) => goalTokens.has(t))) {
+        score += 1;
+        matched.push(`kwTok:${k}`);
+      }
     }
     for (const t of new Set(tokenize(card.trigger))) {
-      if (goalTokens.has(t)) score += 0.5;
+      if (goalTokens.has(t)) {
+        score += 0.5;
+        matched.push(`trg:${t}`);
+      }
     }
-    return score;
+    return { score, matched };
   };
+
+  /** 卡片与任务目标的匹配分(明细版的分数投影) */
+  const scoreCard = (card: SkillCard, goal: string): number =>
+    scoreCardDetailed(card, goal).score;
 
   /**
    * 按任务目标选卡:达标分过滤(不直接适用的不注入)→ 分数排序 →
@@ -526,6 +553,37 @@ export function createSkillCardsEngine(deps: {
     const cards = listCards(userId);
     if (cards.length === 0) return '';
     const selected = selectCards(cards, goal);
+    // 检索轨迹:落选原因同样有价值(回答「为什么没注入这张卡」)。
+    // 明细版打分只对本次实际参与选择的卡算一次,避免与 selectCards 重复计分开销可控。
+    if (typeof store.appendRetrievalTrace === 'function') {
+      try {
+        const selIds = new Set(selected.map((c) => c.id));
+        const traceSelected = selected.map((c) => {
+          const d = scoreCardDetailed(c, goal);
+          return { id: c.id, trigger: c.trigger, score: d.score, matched: d.matched };
+        });
+        const traceOmitted = cards
+          .filter((c) => !selIds.has(c.id))
+          .map((c) => {
+            const d = scoreCardDetailed(c, goal);
+            return {
+              id: c.id,
+              trigger: c.trigger,
+              score: d.score,
+              reason: d.score < SKILL_MIN_MATCH_SCORE ? 'below-threshold' : 'budget-or-topk',
+            };
+          });
+        store.appendRetrievalTrace(userId, {
+          at: Date.now(),
+          kind: 'skill-card',
+          goal: goal.slice(0, 200),
+          selected: traceSelected,
+          omitted: traceOmitted,
+        });
+      } catch {
+        // 轨迹失败绝不影响注入
+      }
+    }
     if (selected.length === 0) return '';
     noteCardHits(userId, selected.map((c) => c.id));
     return [
@@ -610,6 +668,7 @@ export function createSkillCardsEngine(deps: {
     parseCards,
     upsertCards,
     scoreCard,
+    scoreCardDetailed,
     selectCards,
     noteCardHits,
     buildCardsBlock,

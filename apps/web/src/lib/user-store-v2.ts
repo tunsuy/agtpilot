@@ -17,6 +17,7 @@
  *   audit/browser.jsonl    浏览器写操作审计(≤200 条滚动)
  *   audit/memory.jsonl     记忆审计(原 <user>.audit.jsonl,懒迁移)
  *   audit/sandbox.jsonl    沙箱审计(原 <user>.sandbox-audit.jsonl,懒迁移)
+ *   audit/retrieval.jsonl  检索轨迹(P2:注入/召回的得分明细与入选/落选原因)
  *
  * 并发保护 = 每对象「读取基线」脏检查:readUserDataV2 把各域序列化快照以不可枚举
  * 属性挂在返回对象上,写路径只重写「相对该对象自己读取时刻有变化」的域 ——
@@ -328,16 +329,20 @@ export function migrateLegacyUser(dataDir: string, userId: string, legacyData: U
 
 /**
  * 审计文件路径(v2):懒迁移 —— 新路径不存在且旧路径存在时先挪再用。
- * kind: memory(原 <user>.audit.jsonl)/ sandbox(原 <user>.sandbox-audit.jsonl)。
+ * kind: memory(原 <user>.audit.jsonl)/ sandbox(原 <user>.sandbox-audit.jsonl)/
+ * retrieval(检索轨迹,P2 新增,无旧平铺对应,只负责建目录)。
  */
-export function auditFilePathV2(dataDir: string, userId: string, kind: 'memory' | 'sandbox'): string {
+export function auditFilePathV2(dataDir: string, userId: string, kind: 'memory' | 'sandbox' | 'retrieval'): string {
   const p = path.join(userDirV2(dataDir, userId), 'audit', `${kind}.jsonl`);
-  const legacy = path.join(
-    dataDir,
-    kind === 'memory' ? `${safeName(userId)}.audit.jsonl` : `${safeName(userId)}.sandbox-audit.jsonl`
-  );
+  const legacyName =
+    kind === 'memory'
+      ? `${safeName(userId)}.audit.jsonl`
+      : kind === 'sandbox'
+        ? `${safeName(userId)}.sandbox-audit.jsonl`
+        : null;
   try {
-    if (!fs.existsSync(p) && fs.existsSync(legacy)) {
+    const legacy = legacyName ? path.join(dataDir, legacyName) : null;
+    if (legacy && !fs.existsSync(p) && fs.existsSync(legacy)) {
       fs.mkdirSync(path.dirname(p), { recursive: true });
       fs.renameSync(legacy, p);
     } else {

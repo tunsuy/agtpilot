@@ -263,6 +263,43 @@ describe('getAllUsersData · 混合形态枚举', () => {
   });
 });
 
+describe('检索轨迹 · audit/retrieval.jsonl(P2)', () => {
+  it('appendRetrievalTrace 落 v2 audit/retrieval.jsonl;readRetrievalTrace 尾部最近在前', () => {
+    const uid = 'rt-trace';
+    us.appendRetrievalTrace(uid, {
+      kind: 'memory-inject',
+      goal: '部署到阿里云',
+      selected: [{ id: 'm1', score: 0.8, reason: 'top-score' }],
+      omitted: [{ id: 'm2', score: 0.1, reason: 'summary-only' }],
+    });
+    const file = path.join(udir(uid), 'audit', 'retrieval.jsonl');
+    expect(fs.existsSync(file)).toBe(true);
+    const rows = us.readRetrievalTrace(uid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe('memory-inject');
+    expect((rows[0].selected as any[])[0].id).toBe('m1');
+    expect(typeof rows[0].at).toBe('number');
+
+    // 追加第二条 → 最近在前
+    us.appendRetrievalTrace(uid, { kind: 'memory-recall', query: 'q2' });
+    const rows2 = us.readRetrievalTrace(uid);
+    expect(rows2).toHaveLength(2);
+    expect(rows2[0].kind).toBe('memory-recall');
+  });
+
+  it('开关回退时检索轨迹落旧平铺 <user>.retrieval.jsonl', () => {
+    process.env.AGTPILOT_CONTEXT_STORE_V2 = '0';
+    try {
+      const uid = 'rt-trace-off';
+      us.appendRetrievalTrace(uid, { kind: 'memory-inject', goal: 'g' });
+      expect(fs.existsSync(path.join(tmpDir, `${uid}.retrieval.jsonl`))).toBe(true);
+      expect(us.readRetrievalTrace(uid)).toHaveLength(1);
+    } finally {
+      delete process.env.AGTPILOT_CONTEXT_STORE_V2;
+    }
+  });
+});
+
 describe('v2 模块纯函数', () => {
   it('safeName 转义与旧单文件一致;isV2Enabled 跟随开关', () => {
     expect(v2.safeName('o9cq@im.wechat')).toBe('o9cq_im_wechat');

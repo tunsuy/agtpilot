@@ -849,6 +849,72 @@ export function readSandboxAudit(userId: string, limit = 100): SandboxAuditEntry
   }
 }
 
+// ---- 检索轨迹(P2,docs/design/context-store-filesystem-paradigm.md §5)----
+
+/**
+ * 检索轨迹条目:一次注入/召回的「候选 id + 得分明细 + 入选/落选原因」。
+ * kind: memory-inject(prompt 注入)/ memory-recall(工具检索)/ memory-read /
+ * mission-read / skill-card(技能卡注入,经 webCardStore 适配写入)。
+ * 回答「为什么注入了这条 / 漏了那条」—— 蒸馏与检索质量的观测面(P-e)。
+ */
+export interface RetrievalTraceEntry {
+  at: number;
+  kind: string;
+  /** 任务目标或检索词(截断) */
+  goal?: string;
+  query?: string;
+  /** 入选候选(带得分/命中明细) */
+  selected?: unknown[];
+  /** 落选候选(带得分与原因) */
+  omitted?: unknown[];
+  [key: string]: unknown;
+}
+
+function getRetrievalTracePath(userId: string): string {
+  const dataDir = getDataDir();
+  if (isV2Enabled()) return auditFilePathV2(dataDir, userId, 'retrieval');
+  // 开关回退:旧平铺形态(检索轨迹是 v2 引入的观测面,回退期保持同名平铺文件)
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+  } catch {}
+  return path.join(dataDir, `${safeName(userId)}.retrieval.jsonl`);
+}
+
+/** 追加检索轨迹(append-only jsonl;观测用途,失败静默绝不影响主流程) */
+export function appendRetrievalTrace(
+  userId: string,
+  entry: { kind: string; goal?: string; query?: string; selected?: unknown[]; omitted?: unknown[]; [key: string]: unknown }
+) {
+  try {
+    const full = { at: Date.now(), ...entry } as RetrievalTraceEntry;
+    fs.appendFileSync(getRetrievalTracePath(userId), `${JSON.stringify(full)}\n`, 'utf-8');
+  } catch {
+    // 轨迹丢失不阻断任务
+  }
+}
+
+/** 读取检索轨迹(尾部 limit 条,最近在前);文件缺失返回空 */
+export function readRetrievalTrace(userId: string, limit = 100): RetrievalTraceEntry[] {
+  try {
+    const file = getRetrievalTracePath(userId);
+    if (!fs.existsSync(file)) return [];
+    const lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean);
+    return lines
+      .slice(-limit)
+      .reverse()
+      .map((l) => {
+        try {
+          return JSON.parse(l) as RetrievalTraceEntry;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is RetrievalTraceEntry => e !== null);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * 连接器值策略 lint(非阻断警告,借鉴 OpenShell 策略风险预检的简化版):
  * - URL 形态值指向 localhost/字面量私网地址 → 警告;

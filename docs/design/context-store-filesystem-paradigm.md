@@ -1,6 +1,6 @@
 # 设计文档:用户上下文存储范式演进(单 JSON blob → 用户上下文目录)
 
-> 状态:**P1 已实现**(2026-10-12,实现记录与偏差见 §9;P2 进行中,P3 待议)
+> 状态:**P1+P2 已实现**(2026-10-12,实现记录与偏差见 §9/§10;P3 待议)
 > 灵感来源:ByteDance OpenViking 的「上下文文件系统」范式(viking:// + L0/L1/L2 分层),以及对 Claude memory tool、Manus、Letta/MemGPT、ChatGPT memory、mem0、Zep/Graphiti 的调研
 > 涉及模块:`apps/web/src/lib/user-store.ts`(主改造)、`memory-service.ts`、`skill-cards.ts` / `packages/plugin-skill`、`agent-backend.ts`(注入侧)
 > 关联文档:`docs/design/persistent-state-governance.md`(五条治理不变量在本方案中必须继续成立)
@@ -137,10 +137,10 @@
 
 ## 7. 验收标准
 
-- [ ] web 全量测试(现 476)绿 + core(89)绿 + plugin-skill(40)绿;
-- [ ] 新增 user-store v2 测试组:迁移往返、并发、压实、开关回退、加密值往返;
-- [ ] 手工验证:老用户目录懒迁移后 .bak 与 v2 内容逐字段一致;
-- [ ] P2 后:同一任务注入 token 数不升(摘要清单 ≤ 原全文注入),retrieval.jsonl 可回答「为何注入/漏掉某条」。
+- [x] web 全量测试绿 + core 绿 + plugin-skill 绿(P1:486/89/40;P2:496/89/44);
+- [x] 新增 user-store v2 测试组:迁移往返、并发、压实、开关回退、加密值往返;
+- [x] 手工验证:老用户目录懒迁移后 .bak 与 v2 内容逐字段一致(迁移测试逐字段断言);
+- [x] P2 后:同一任务注入 token 数不升(全文预算 12条/3600字 → 6条/2400字,余量转一行式摘要清单),retrieval.jsonl 可回答「为何注入/漏掉某条」。
 
 ## 8. 参考
 
@@ -178,4 +178,30 @@
    不漏人);`_vapid.json`、隐藏文件等非用户文件排除在迁移之外。
 6. 加密收口、原子写(tmp+rename)、开关回退(AGTPILOT_CONTEXT_STORE_V2=0)、
    .bak 归档回滚路径均按原方案落地。
+
+## 10. 实现记录与偏差(P2,2026-10-12)
+
+落地:memory-service 注入改两级 + 新增 read_memory/read_mission 工具;user-store
+新增 appendRetrievalTrace/readRetrievalTrace(audit/retrieval.jsonl);plugin-skill
+新增 scoreCardDetailed(得分明细)+ SkillCardStore.appendRetrievalTrace 可选适配;
+skill-cards 薄壳把卡片检索轨迹接到同一 retrieval.jsonl。
+验证:web 496 / core 89 / plugin-skill 44 全绿,tsc 干净。
+
+与原方案的偏差(均为收敛):
+
+1. **L0 摘要零模型成本**:memory 的 title 本就是蒸馏产出的一行式概括,mission 回退
+   goal 首句截断 —— summary 字段可显式覆盖,但存量与新条目都不额外烧模型;
+   memorySummary/missionSummary 为纯函数(显式 summary → title/goal 首句 → 40 字截断)。
+2. **两级注入预算**:全文层收紧(用户 12条/3600字 → 6条/2400字;Agent 6条/1600字 →
+   4条/1200字),腾出的空间给 L0 摘要清单(用户 ≤20 行、Agent ≤8 行、最近任务 ≤6 行,
+   每行 `- id 摘要`);rule 红线不受两级影响,始终全文(治理不弱化)。
+3. **检索轨迹统一走 user-store**:memory-inject / memory-recall / memory-read /
+   mission-read 直接落盘;skill-card 轨迹经 SkillCardStore.appendRetrievalTrace 可选
+   接口由宿主注入(插件零宿主依赖,缺省不写)。落选项一律带 reason
+   (summary-only / l0-full / below-threshold / budget-or-topk)与得分,回答「为何漏掉」。
+4. **轨迹 append-only**:retrieval.jsonl 只增不滚动(观测面,量大后按天分卷另议);
+   写失败静默,绝不阻断注入/召回主流程。
+5. read_memory 读取计入一次命中(hitCount),与全文注入同权重,供衰减统计;
+   read_mission 只读不改任务状态。
+
 

@@ -312,6 +312,67 @@ describe('distillCards · 任务末蒸馏(旁路,失败静默)', () => {
   });
 });
 
+describe('检索可观测 · scoreCardDetailed + 检索轨迹(P2)', () => {
+  beforeEach(() => delete process.env.AGTPILOT_SKILL_CARDS);
+
+  /** 带轨迹收集器的卡片存储 */
+  function tracingStore() {
+    const base = fakeCardStore();
+    const traces: Array<Record<string, unknown>> = [];
+    return {
+      ...base,
+      traces,
+      appendRetrievalTrace: (_uid: string, entry: Record<string, unknown>) => void traces.push(entry),
+    };
+  }
+
+  it('scoreCardDetailed 返回得分 + 命中描述符(子串 kw / 分词 kwTok / trigger 重叠 trg)', () => {
+    const e = engine();
+    const d = e.scoreCardDetailed(sampleCard(), '帮我在知乎发一篇草稿');
+    expect(d.score).toBeGreaterThanOrEqual(2);
+    expect(d.matched.some((m) => m.startsWith('kw:知乎'))).toBe(true);
+    expect(e.scoreCardDetailed(sampleCard(), '帮我修一下厨房水管漏水')).toEqual({ score: 0, matched: [] });
+  });
+
+  it('buildCardsBlock 落检索轨迹:入选带得分明细,落选带原因(below-threshold)', () => {
+    const store = tracingStore();
+    const e = createSkillCardsEngine({ store });
+    e.upsertCards('tr1', [
+      { trigger: '向知乎发布文章草稿', steps: 's', keywords: ['知乎', '草稿'] },
+      { trigger: '部署 k8s 服务', steps: 's', keywords: ['k8s', '部署'] },
+    ]);
+    const block = e.buildCardsBlock('tr1', '去知乎发草稿');
+    expect(block).toContain('知乎');
+    expect(store.traces).toHaveLength(1);
+    const t = store.traces[0] as any;
+    expect(t.kind).toBe('skill-card');
+    expect(t.goal).toContain('知乎');
+    expect(t.selected.length).toBeGreaterThanOrEqual(1);
+    expect(t.selected[0].score).toBeGreaterThanOrEqual(2);
+    expect(Array.isArray(t.selected[0].matched)).toBe(true);
+    const omitted = t.omitted.find((o: any) => o.trigger.includes('k8s'));
+    expect(omitted).toBeTruthy();
+    expect(omitted.reason).toBe('below-threshold');
+  });
+
+  it('全部落选也留轨迹(回答「为什么一张都没注入」);无卡用户不写', () => {
+    const store = tracingStore();
+    const e = createSkillCardsEngine({ store });
+    e.upsertCards('tr2', [{ trigger: '向知乎发布文章草稿', steps: 's', keywords: ['知乎'] }]);
+    expect(e.buildCardsBlock('tr2', '修水管')).toBe('');
+    expect(store.traces).toHaveLength(1);
+    expect((store.traces[0] as any).selected).toEqual([]);
+    expect(e.buildCardsBlock('tr-nobody', '去知乎发草稿')).toBe('');
+    expect(store.traces).toHaveLength(1); // 无卡 → 不新增轨迹
+  });
+
+  it('store 未实现轨迹接口(可选方法缺失)→ 注入照常,绝不抛出', () => {
+    const e = createSkillCardsEngine({ store: fakeCardStore() });
+    e.upsertCards('tr3', [{ trigger: '向知乎发布文章草稿', steps: 's', keywords: ['知乎'] }]);
+    expect(e.buildCardsBlock('tr3', '去知乎发草稿')).toContain('知乎');
+  });
+});
+
 describe('buildTrajectoryDigest · 轨迹摘录', () => {
   it('含目标/结果/轨迹/统计/交付节选,失败输出标注异常,总量封顶', () => {
     const digest = buildTrajectoryDigest({

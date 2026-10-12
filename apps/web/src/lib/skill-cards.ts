@@ -24,7 +24,7 @@ import {
   type SkillCardStore,
   type SkillDistillOutcome,
 } from '@agtpilot/plugin-skill';
-import { getUserData, saveUserData, appendMemoryAudit, type MemoryAuditEntry } from './user-store';
+import { getUserData, saveUserData, appendMemoryAudit, appendRetrievalTrace, type MemoryAuditEntry } from './user-store';
 import { tokenize } from './memory-service';
 
 // ---- 引擎再导出(既有导入路径不变) ----
@@ -56,6 +56,10 @@ export function webCardStore(): SkillCardStore {
     },
     appendCardAudit(userId: string, entry: SkillCardAuditEntry) {
       appendMemoryAudit(userId, entry as MemoryAuditEntry);
+    },
+    // 检索轨迹:卡片注入的得分明细/落选原因 → user-store audit/retrieval.jsonl(P2)
+    appendRetrievalTrace(userId: string, entry: Record<string, unknown>) {
+      appendRetrievalTrace(userId, entry as any);
     },
   };
 }

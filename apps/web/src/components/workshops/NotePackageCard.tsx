@@ -4,7 +4,8 @@
  * 小红书笔记包卡片(scenario-loop §3)
  *
  * 把 parseNotePackages 的结构化结果渲染成「字段级可复制」卡片:
- * 标题候选逐条复制+选中、封面/正文/标签独立复制、一键整卡复制(标题→正文→标签,
+ * 新格式交付物是成品——标题为 Agent 拍板的唯一终版(直接展示);历史记录的
+ * 多候选标题保留点选交互。封面/正文/标签独立复制、一键整卡复制(标题→正文→标签,
  * 对齐小红书发布页粘贴顺序)。复制走 nativeBridge.copyToClipboard(Capacitor → web 降级)。
  */
 import React, { useState } from 'react';
@@ -103,34 +104,46 @@ function NotePackageCard({
       </div>
 
       <div className="p-4 space-y-3">
-        {/* 标题候选:点击选中(整卡复制用),行尾独立复制 */}
-        {pkg.titles.length > 0 && (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide">标题候选</span>
+        {/* 标题:新格式为 Agent 拍板的唯一终版(直接展示);多标题仅见于历史记录,保留点选交互 */}
+        {pkg.titles.length === 1 ? (
+          <div className="group flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide">标题</span>
+              <p className="text-sm font-semibold text-zinc-900 mt-0.5 break-words">{pkg.titles[0]}</p>
             </div>
-            {pkg.titles.map((t, i) => (
-              <div
-                key={i}
-                className={`group flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition ${
-                  i === selectedTitle
-                    ? 'bg-violet-50 border border-violet-200'
-                    : 'hover:bg-zinc-50 border border-transparent'
-                }`}
-                onClick={() => setSelectedTitle(i)}
-                title="点击选为整篇复制/存草稿的标题"
-              >
-                <span
-                  className={`text-xs font-medium ${i === selectedTitle ? 'text-violet-700' : 'text-zinc-700'}`}
-                >
-                  {t}
-                </span>
-                <span className="opacity-0 group-hover:opacity-100 transition">
-                  <CopyButton text={t} />
-                </span>
-              </div>
-            ))}
+            <span className="opacity-0 group-hover:opacity-100 transition mt-3">
+              <CopyButton text={pkg.titles[0]} />
+            </span>
           </div>
+        ) : (
+          pkg.titles.length > 0 && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide">标题候选(历史记录,点击选中)</span>
+              </div>
+              {pkg.titles.map((t, i) => (
+                <div
+                  key={i}
+                  className={`group flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition ${
+                    i === selectedTitle
+                      ? 'bg-violet-50 border border-violet-200'
+                      : 'hover:bg-zinc-50 border border-transparent'
+                  }`}
+                  onClick={() => setSelectedTitle(i)}
+                  title="点击选为整篇复制/存草稿的标题"
+                >
+                  <span
+                    className={`text-xs font-medium ${i === selectedTitle ? 'text-violet-700' : 'text-zinc-700'}`}
+                  >
+                    {t}
+                  </span>
+                  <span className="opacity-0 group-hover:opacity-100 transition">
+                    <CopyButton text={t} />
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
         )}
 
         {/* 封面文案 */}

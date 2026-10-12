@@ -80,6 +80,51 @@ ${LONG_BODY}`;
   });
 });
 
+describe('parseArticlePackages · 新格式成品(唯一终版标题,无参谋字段)', () => {
+  /** 2026-10 成品化改版后的交付物形状:【标题】一行终版 + 摘要 + 正文 */
+  const finalPackage = `【标题】
+大模型落地:别再谈概念了
+【摘要】
+大模型落地的关键不在模型本身,而在工程化路径的选择。
+【正文】
+${LONG_BODY}`;
+
+  it('单标题成品成包:titles 仅一条,参谋字段缺省', () => {
+    const { packages, fallback } = parseArticlePackages(finalPackage);
+    expect(fallback).toBeNull();
+    expect(packages).toHaveLength(1);
+    const pkg = packages[0];
+    expect(pkg.titles).toEqual(['大模型落地:别再谈概念了']);
+    expect(pkg.digest).toBe('大模型落地的关键不在模型本身,而在工程化路径的选择。');
+    expect(pkg.body).toContain(LONG_BODY);
+    expect(pkg.coverIdea).toBeUndefined();
+    expect(pkg.publishAdvice).toBeUndefined();
+  });
+
+  it('有效性门槛:标题+摘要+正文恰好 3 个字段命中(hits>=3),不因缺参谋字段被拒', () => {
+    // 三字段成品是最小有效集——再少任何一个(如无摘要)就应整块进 fallback
+    const noDigest = `【标题】
+只有标题和正文
+【正文】
+${LONG_BODY}`;
+    const { packages, fallback } = parseArticlePackages(noDigest);
+    expect(packages).toHaveLength(0);
+    expect(fallback).not.toBeNull();
+  });
+
+  it('互斥:新格式文章包不会被 parseNotePackages 误判(无封面/标签/发布建议,hits<3)', () => {
+    const { packages: notePackages } = parseNotePackages(finalPackage);
+    expect(notePackages).toHaveLength(0);
+  });
+
+  it('整卡复制文本 = 终版标题+摘要+正文,移动端可直接粘贴发布', () => {
+    const pkg = parseArticlePackages(finalPackage).packages[0];
+    expect(buildArticlePackageCopyText(pkg)).toBe(
+      `大模型落地:别再谈概念了\n\n大模型落地的关键不在模型本身,而在工程化路径的选择。\n\n${LONG_BODY}`
+    );
+  });
+});
+
 describe('parseArticlePackages · 与笔记包互斥(渲染顺序锚)', () => {
   it('反证①:笔记包形状(无【摘要】)→ parseArticlePackages 不产出文章包', () => {
     // 笔记包字段头:标题候选/封面文案/正文/标签/发布建议,缺摘要键

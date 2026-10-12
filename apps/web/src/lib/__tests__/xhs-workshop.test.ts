@@ -41,10 +41,14 @@ describe('buildXhsWorkshopPrompt · 档案注入', () => {
 describe('buildXhsWorkshopPrompt · 笔记包格式契约', () => {
   it('字段头约定与 --- 分隔约定出现在 prompt 中', () => {
     const prompt = buildXhsWorkshopPrompt({ topic: '羽绒服', style: '种草推荐', count: 2 });
-    for (const header of ['【标题候选】', '【封面文案】', '【正文】', '【标签】', '【发布建议】']) {
+    for (const header of ['【标题】', '【封面文案】', '【正文】', '【标签】']) {
       expect(prompt).toContain(header);
     }
-    expect(prompt).toContain('5 个备选');
+    // 交付物 = 可直接发布的成品:唯一终版标题,参谋性字段移除
+    expect(prompt).toContain('只输出终版这一个');
+    expect(prompt).not.toContain('【标题候选】');
+    expect(prompt).not.toContain('5 个备选');
+    expect(prompt).not.toContain('【发布建议】');
     expect(prompt).toContain('单独一行的 ---');
     expect(prompt).toContain('不要输出寒暄');
   });

@@ -160,6 +160,29 @@ describe('parseTopicPicks · 健壮性', () => {
     expect(picks).toHaveLength(0);
   });
 
+  it('新格式成品笔记包/文章包不误判:【标题】命中 hooks 变体,但缺选题方向/依据 → 整体 fallback', () => {
+    const finalNote = `【标题】
+一行终版标题
+【封面文案】
+封面主文案
+【正文】
+正文内容……
+【标签】
+#穿搭 #通勤`;
+    const { picks, fallback } = parseTopicPicks(finalNote);
+    expect(picks).toHaveLength(0);
+    expect(fallback).toContain('一行终版标题');
+
+    const finalArticle = `【标题】
+终版文章标题
+【摘要】
+一句话摘要。
+【正文】
+文章正文……`;
+    const articleParsed = parseTopicPicks(finalArticle);
+    expect(articleParsed.picks).toHaveLength(0);
+  });
+
   it('空输入返回空结果', () => {
     expect(parseTopicPicks('')).toEqual({ picks: [], fallback: null });
     expect(parseTopicPicks('   \n  ')).toEqual({ picks: [], fallback: null });
@@ -204,9 +227,13 @@ describe('buildTopicPickReplyText', () => {
 
   it('内嵌笔记包字段规格(续答可被 parseNotePackages 渲染)+ --- 分隔', () => {
     const text = buildTopicPickReplyText([picks[0]]);
-    for (const header of ['【标题候选】', '【封面文案】', '【正文】', '【标签】', '【发布建议】']) {
+    for (const header of ['【标题】', '【封面文案】', '【正文】', '【标签】']) {
       expect(text).toContain(header);
     }
+    // 成稿交付物同样是成品:唯一终版标题,无参谋性字段
+    expect(text).toContain('只输出终版这一个');
+    expect(text).not.toContain('【标题候选】');
+    expect(text).not.toContain('【发布建议】');
     expect(text).toContain('单独一行的 --- 分隔');
   });
 

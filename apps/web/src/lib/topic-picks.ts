@@ -182,7 +182,7 @@ export function parseTopicPicks(text: string): TopicPickParseResult {
  * 勾选成稿的续聊回复文本(格式即契约,可被 parseNotePackages 渲染续答)。
  *
  * 关键设计:每周选题任务的会话历史里没有笔记包字段规格,所以这里把规格内嵌进回复,
- * 续答(同一 mission 的 assistant 消息)才能按【标题候选】… 字段头输出、被渲染成笔记卡。
+ * 续答(同一 mission 的 assistant 消息)才能按【标题】… 字段头输出、被渲染成笔记卡。
  * 同时逐字引用勾选原文(方向+钩子),即使上下文丢失也能独立成稿。
  */
 export function buildTopicPickReplyText(selected: TopicPick[]): string {
@@ -197,16 +197,14 @@ export function buildTopicPickReplyText(selected: TopicPick[]): string {
 
   return `请把我勾选的${numbers}选题写成完整笔记包(共 ${picks.length} 篇)。延续本任务的账号档案、创作红线与只读边界,不要调用任何写操作类工具。
 每篇严格按以下字段顺序与字段头输出(字段头用【】,必须独占一行;除以下字段外不要输出寒暄或多余段落):
-【标题候选】
-5 个备选,每行一个,口语化、有钩子、不超过 20 字
+【标题】
+仅一行:你拍板的最终标题(可参考我勾选选题里的标题钩子,内部自评后只输出终版这一个);口语化、有钩子、不超过 20 字
 【封面文案】
 封面主文案一句话(12 字以内优先)
 【正文】
 300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带互动提问
 【标签】
 8-10 个,以 # 开头,空格分隔,单行
-【发布建议】
-建议发布时段 + 一句理由
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 

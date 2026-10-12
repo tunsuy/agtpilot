@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseNotePackages, buildNotePackageCopyText, buildNotePackageDraftReplyText } from '../note-package';
+import { parseArticlePackages } from '../article-package';
 
 const LONG_BODY = '这篇正文要超过五十字才能被判定为有效笔记包,所以这里写得长一点。'.repeat(3);
 
@@ -51,6 +52,40 @@ describe('parseNotePackages · 标准格式', () => {
     const { packages, fallback } = parseNotePackages(text);
     expect(packages).toHaveLength(1);
     expect(fallback).toBe('好的,以下是为你准备的笔记:');
+  });
+});
+
+describe('parseNotePackages · 新格式成品(唯一终版标题,无发布建议)', () => {
+  /** 2026-10 成品化改版后的交付物形状:【标题】一行终版 + 封面文案 + 正文 + 标签 */
+  const finalNote = `【标题】
+平价通勤穿搭合集
+【封面文案】
+3 件单品穿一周
+【正文】
+${LONG_BODY}
+【标签】
+#通勤穿搭 #ootd`;
+
+  it('单标题成品成包:titles 仅一条,publishAdvice 缺省', () => {
+    const { packages, fallback } = parseNotePackages(finalNote);
+    expect(fallback).toBeNull();
+    expect(packages).toHaveLength(1);
+    const pkg = packages[0];
+    expect(pkg.titles).toEqual(['平价通勤穿搭合集']);
+    expect(pkg.coverCopy).toBe('3 件单品穿一周');
+    expect(pkg.body).toContain(LONG_BODY);
+    expect(pkg.tags).toEqual(['通勤穿搭', 'ootd']);
+    expect(pkg.publishAdvice).toBeUndefined();
+  });
+
+  it('整卡复制文本 = 终版标题+正文+标签,对齐小红书发布页粘贴顺序', () => {
+    const pkg = parseNotePackages(finalNote).packages[0];
+    expect(buildNotePackageCopyText(pkg)).toBe(`平价通勤穿搭合集\n\n${LONG_BODY}\n\n#通勤穿搭 #ootd`);
+  });
+
+  it('互斥:新格式笔记包(无【摘要】)不会被 parseArticlePackages 误判', () => {
+    const { packages } = parseArticlePackages(finalNote);
+    expect(packages).toHaveLength(0);
   });
 });
 

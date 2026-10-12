@@ -42,11 +42,17 @@ describe('buildZhihuWorkshopPrompt · 档案注入', () => {
 });
 
 describe('buildZhihuWorkshopPrompt · 文章包格式契约(与公众号工坊同构)', () => {
-  it('五字段头约定与 --- 分隔约定出现在 prompt 中', () => {
+  it('成品字段头约定与 --- 分隔约定出现在 prompt 中', () => {
     const prompt = buildZhihuWorkshopPrompt({ topic: '大模型科普', style: '深度分析', count: 2 });
-    for (const header of ['【标题候选】', '【摘要】', '【正文】', '【封面建议】', '【发布建议】']) {
+    for (const header of ['【标题】', '【摘要】', '【正文】']) {
       expect(prompt).toContain(header);
     }
+    // 交付物 = 成品:唯一终版标题,参谋性字段移除
+    expect(prompt).toContain('只输出终版这一个');
+    expect(prompt).not.toContain('【标题候选】');
+    expect(prompt).not.toContain('5 个备选');
+    expect(prompt).not.toContain('【封面建议】');
+    expect(prompt).not.toContain('【发布建议】');
     expect(prompt).toContain('单独一行的 ---');
     expect(prompt).toContain('不要输出寒暄');
     // 知乎侧限制写进契约(标题 40 字 / 摘要 120 字 / 正文 1500-3000 字)

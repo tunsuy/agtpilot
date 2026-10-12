@@ -89,6 +89,11 @@ COPY apps/web/public ./apps/web/public
 COPY --chown=nextjs:nodejs apps/web/.next/standalone ./
 COPY --chown=nextjs:nodejs apps/web/.next/static ./apps/web/.next/static
 
+# script-skill 注册表:声明式浏览器脚本技能的热加载目录(运行期 cwd=/app,
+# 缺省扫描 /app/skills;AGTPILOT_SCRIPT_SKILL_DIR 或 compose 卷可覆盖。
+# 目录缺失时注册表为空,同名内置工具兜底,不影响启动)
+COPY --chown=nextjs:nodejs apps/web/skills ./skills
+
 # 泄漏防护:standalone 产物里被追踪带进来的构建机 .cache 一并删除,运行期由
 # compose 卷提供。同层修复 npm 缓存属主:上方 npx 以 root 运行且 ENV HOME 已
 # 指向 /home/nextjs,root 写出的 ~/.npm 若原样烙进镜像,运行期 nextjs(1001)

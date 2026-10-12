@@ -1296,6 +1296,39 @@ class AgentBackend {
             } catch (e: any) {
               this.addTerminalLog('stderr', `[ZHIHU] 托管工具挂载异常: ${e?.message || e}`, uid);
             }
+
+            // script-skill 注册表:扫描技能目录热加载声明式浏览器脚本技能
+            // (apps/web/skills/*.skill.json,AGTPILOT_SCRIPT_SKILL_DIR 可覆盖)。
+            // 同名技能覆盖注入列表里更早的内置工具(与 taskTools 覆盖全局注册同语义)——
+            // 选择器漂移时放一个修正文件即可生效,不用发版;文件坏掉/被删则内置工具兜底。
+            // 安全件由框架统一提供:托管 opt-in 门、登录门、每日限频、审计、发布围栏、审批门。
+            try {
+              const { buildScriptSkillTools } = await import('@/lib/script-skills');
+              const browserSvc = (this.ctx as any)?.browser;
+              const reg = buildScriptSkillTools(uid, browserSvc);
+              for (const err of reg.errors) {
+                this.addTerminalLog('stderr', `[SKILLS] 技能文件被跳过: ${err}`, uid);
+              }
+              if (reg.tools.length > 0) {
+                const names = new Set(reg.tools.map((t: any) => t.name));
+                const overridden = injectedTools
+                  .filter((t: any) => names.has(t.name))
+                  .map((t: any) => t.name);
+                // 显式去重(注册表版胜出),避免同名工具重复进 taskTools 产生歧义
+                for (let i = injectedTools.length - 1; i >= 0; i--) {
+                  if (names.has(injectedTools[i].name)) injectedTools.splice(i, 1);
+                }
+                injectedTools.push(...reg.tools);
+                this.addTerminalLog(
+                  'system',
+                  `[SKILLS] 脚本技能挂载: ${reg.tools.map((t: any) => t.name).join(' / ')}` +
+                    (overridden.length > 0 ? `(同名覆盖内置: ${overridden.join(', ')})` : ''),
+                  uid
+                );
+              }
+            } catch (e: any) {
+              this.addTerminalLog('stderr', `[SKILLS] 脚本技能挂载异常: ${e?.message || e}`, uid);
+            }
             taskTools = [...(taskTools || []), ...injectedTools];
 
           } catch (e: any) {

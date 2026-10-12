@@ -119,8 +119,11 @@ class AgentBackend {
   private ensureRuntime(): Promise<void> {
     if (this.runtimePromise) return this.runtimePromise;
     this.runtimePromise = (async () => {
-      // composition root 统一装配：core 走插件形态，单插件失败只跳过并记录
-      const runtime = await createAgentRuntime();
+      // composition root 统一装配：core 走插件形态，单插件失败只跳过并记录。
+      // plugin-skill 注入 web 存储适配器：托管 opt-in 记录与浏览器审计仍留在
+      // user-store（存储不下沉），插件只经 SkillStoreAdapter 接口读写。
+      const { webSkillStore } = await import('@/lib/script-skills');
+      const runtime = await createAgentRuntime({ skill: { store: webSkillStore() } });
       this.ctx = runtime.ctx;
       this.agentService = runtime.agent;
       this.orchestrator = runtime.orchestrator;
@@ -1297,15 +1300,19 @@ class AgentBackend {
               this.addTerminalLog('stderr', `[ZHIHU] 托管工具挂载异常: ${e?.message || e}`, uid);
             }
 
-            // script-skill 注册表:扫描技能目录热加载声明式浏览器脚本技能
-            // (apps/web/skills/*.skill.json,AGTPILOT_SCRIPT_SKILL_DIR 可覆盖)。
+            // script-skill 注册表:经 ctx.skills 服务面(plugin-skill)热加载声明式
+            // 浏览器脚本技能(apps/web/skills/*.skill.json,AGTPILOT_SCRIPT_SKILL_DIR
+            // 可覆盖);插件加载失败时回落 lib/script-skills 本地构建(同一引擎+同一
+            // web 存储适配器,行为一致)。
             // 同名技能覆盖注入列表里更早的内置工具(与 taskTools 覆盖全局注册同语义)——
             // 选择器漂移时放一个修正文件即可生效,不用发版;文件坏掉/被删则内置工具兜底。
             // 安全件由框架统一提供:托管 opt-in 门、登录门、每日限频、审计、发布围栏、审批门。
             try {
-              const { buildScriptSkillTools } = await import('@/lib/script-skills');
               const browserSvc = (this.ctx as any)?.browser;
-              const reg = buildScriptSkillTools(uid, browserSvc);
+              const skillsSvc = (this.ctx as any)?.skills;
+              const reg = skillsSvc
+                ? skillsSvc.buildTaskTools(uid, browserSvc)
+                : (await import('@/lib/script-skills')).buildScriptSkillTools(uid, browserSvc);
               for (const err of reg.errors) {
                 this.addTerminalLog('stderr', `[SKILLS] 技能文件被跳过: ${err}`, uid);
               }

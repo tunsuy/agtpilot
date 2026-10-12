@@ -13,12 +13,35 @@
  *
  * 红线:数据不编造、图表注来源、大纲先行再排版、无外链媒体(离线单文件承诺)。
  */
+import { createSkillService } from '@agtpilot/plugin-skill';
 
-/** 镜像内 bento skill 固定安装路径(Dockerfile 层 tarball 固定 commit 解包于此) */
+/** 镜像内 bento skill 固定安装路径(Dockerfile 层 tarball 固定 commit 解包于此);pack 注册表查不到时兜底 */
 export const BENTO_SKILL_DIR = '/opt/skills/qiaomu-bento-ppt';
 
-/** 镜像内 ppt-master skill 固定安装路径(SKILL_DIR 契约:命令一律用此绝对路径展开) */
+/** 镜像内 ppt-master skill 固定安装路径(SKILL_DIR 契约:命令一律用此绝对路径展开);pack 注册表查不到时兜底 */
 export const PPT_MASTER_SKILL_DIR = '/opt/skills/ppt-master';
+
+// 沙箱技能包统一经 plugin-skill 的 pack 注册表发现(扫 AGTPILOT_SKILL_PACK_DIRS,
+// 缺省 /opt/skills,读 SKILL.md frontmatter 元数据;60s 缓存)。注册表查不到
+// (如 dev 机没有 /opt/skills)时回落上面的镜像固定路径 —— 生产镜像上两者同值。
+const skillPacks = createSkillService();
+
+/** 按目录名(优先)或 frontmatter name 查 pack 实际路径;查不到用 fallback */
+function resolvePackDir(folder: string, fallback: string): string {
+  const packs = skillPacks.listPacks();
+  const hit = packs.find((p) => p.dir.endsWith(`/${folder}`)) || skillPacks.getPack(folder);
+  return hit?.dir || fallback;
+}
+
+/** bento skill 目录(注册表解析,ppt-deck/环境自检/工坊 prompt 共用) */
+export function bentoSkillDir(): string {
+  return resolvePackDir('qiaomu-bento-ppt', BENTO_SKILL_DIR);
+}
+
+/** ppt-master skill 目录(注册表解析) */
+export function pptMasterSkillDir(): string {
+  return resolvePackDir('ppt-master', PPT_MASTER_SKILL_DIR);
+}
 
 /**
  * ppt-master 专用 venv 解释器(装有 python-pptx/skia-pathops/uharfbuzz 等)。
@@ -109,13 +132,14 @@ const CONTENT_RED_LINES = `内容红线:
 
 /** bento 网页演示页路线(qiaomu-bento-ppt,纯标准库) */
 function buildBentoRoute(): string {
-  return `制作流程(qiaomu-bento-ppt skill 已预装在 ${BENTO_SKILL_DIR},纯 Python 标准库脚本,构建全程无需联网):
+  const SK = bentoSkillDir();
+  return `制作流程(qiaomu-bento-ppt skill 已预装在 ${SK},纯 Python 标准库脚本,构建全程无需联网):
 
 1. **环境自检**:调用 ppt_check_env 工具。ready=true 走下面正式路线;skill 缺失(本地开发环境)直接跳到末尾「降级路线」。
 2. **读规范(严禁凭记忆发明字段)**:用 sandbox_run_command 阅读 skill 内置资料——
-   - cat ${BENTO_SKILL_DIR}/SKILL.md
-   - cat ${BENTO_SKILL_DIR}/references/upstream/bento-format.md(重点:BentoDoc 顶层结构、Elements、Format invariants、Minimal valid document)
-   - cat ${BENTO_SKILL_DIR}/examples/qiaomu-bento-ppt-intro.json(成品 deck.json 范例)
+   - cat ${SK}/SKILL.md
+   - cat ${SK}/references/upstream/bento-format.md(重点:BentoDoc 顶层结构、Elements、Format invariants、Minimal valid document)
+   - cat ${SK}/examples/qiaomu-bento-ppt-intro.json(成品 deck.json 范例)
 3. **大纲先行**:先把逐页大纲(每页:任务/核心信息/视觉主语/notes 要点)简短输出到对话,再落 ppt/deck-plan.md(sandbox_write_file);工坊表单已收集我的意图,无需停下等我确认大纲,直接继续。
 4. **起草 deck.json**(sandbox_write_file 写入 ppt/deck.json):
    - format "bento/slides"、size 1280×720;新建文档不带 collab/template/readonly 字段,不手写 docId(构建时 --new-document 生成);
@@ -124,7 +148,7 @@ function buildBentoRoute(): string {
    - 每页一个视觉主语,画面与正文不复读同一句话;每页写 speaker notes;
    - 离线承诺:严禁外链图片/字体/媒体,插图用 shape/svg 自绘或纯文字排版。
 5. **构建与验证**(sandbox_run_command,在任务输出目录下):
-   python3 ${BENTO_SKILL_DIR}/scripts/bento_deck.py build ppt/deck.json --output ppt/deck.bento.html --new-document --report ppt/reports/deck-validation.json
+   python3 ${SK}/scripts/bento_deck.py build ppt/deck.json --output ppt/deck.bento.html --new-document --report ppt/reports/deck-validation.json
    再读 ppt/reports/deck-validation.json:有 error 必须修复后重新 build;有 warning(文字越界/关键文字过小/空 notes 等)逐项修复,确实无法消除的在交付说明中解释。
 6. **发布产物**:调用 ppt_publish_deck 工具(path 传 ppt/deck.bento.html,title 传演示稿标题)。严禁把 .bento.html 内容粘贴进 artifact_render —— 文件约 600KB+,必须走 ppt_publish_deck 由服务端读文件挂画布。
 7. **交付说明**:页数、风格、验证结果(errors/warnings 处置)、放映方式(中央画布直接放映;可下载 .bento.html 双击离线打开,浏览器内即可继续编辑与演示)、missing evidence(未做真实浏览器人工核验时如实标注,不得写成「已验证」)。
@@ -144,7 +168,7 @@ ${CONTENT_RED_LINES}
  * - 产物走 ppt_publish_pptx,严禁回显二进制。
  */
 function buildPptxRoute(): string {
-  const SK = PPT_MASTER_SKILL_DIR;
+  const SK = pptMasterSkillDir();
   const PY = PPT_MASTER_PYTHON;
   return `制作流程(ppt-master skill 已预装在 ${SK},依赖装在独立 venv ${PY};命令中 \${SKILL_DIR} 一律展开为 ${SK} 绝对路径,严禁 cd 进 skill 目录):
 
@@ -187,7 +211,7 @@ pptx 路线附加红线:
 - 不调用生图/搜图/联网接口,不生成音频视频;
 - 中途上下文丢失就从头重跑 Quick,不做跨运行拼接。
 
-降级路线(仅当第 1 步环境自检失败时):改走网页演示页(bento)路线 —— 调用 ppt_check_env,按其结果执行 bento 构建(规范与命令见 ${BENTO_SKILL_DIR},流程同「网页演示页」形态的制作流程 2~7 步,发布用 ppt_publish_deck),并在交付说明中注明「ppt-master 环境缺失,本次降级为网页演示页」。若 bento 也缺失,自行编写自包含 HTML 演示页用 artifact_render(type=html)发布。`;
+降级路线(仅当第 1 步环境自检失败时):改走网页演示页(bento)路线 —— 调用 ppt_check_env,按其结果执行 bento 构建(规范与命令见 ${bentoSkillDir()},流程同「网页演示页」形态的制作流程 2~7 步,发布用 ppt_publish_deck),并在交付说明中注明「ppt-master 环境缺失,本次降级为网页演示页」。若 bento 也缺失,自行编写自包含 HTML 演示页用 artifact_render(type=html)发布。`;
 }
 
 export function buildPptWorkshopPrompt({

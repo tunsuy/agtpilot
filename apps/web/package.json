@@ -18,6 +18,7 @@
     "@agtpilot/core": "workspace:*",
     "@agtpilot/plugin-mcp": "workspace:*",
     "@agtpilot/plugin-search": "workspace:*",
+    "@agtpilot/plugin-skill": "workspace:*",
     "@agtpilot/protocol": "workspace:*",
     "@capacitor/android": "^8.5.2",
     "@capacitor/app": "^8.1.2",

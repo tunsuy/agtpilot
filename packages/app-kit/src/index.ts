@@ -2,6 +2,8 @@ import { Context } from '@deepseek-ai/cordis';
 import type { AgentService, OrchestratorService, ModelGateway } from '@agtpilot/core';
 import * as Core from '@agtpilot/core';
 import * as BrowserPlugin from '@agtpilot/plugin-browser';
+import * as SkillPlugin from '@agtpilot/plugin-skill';
+import type { SkillPluginConfig } from '@agtpilot/plugin-skill';
 import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
 import * as SearchPlugin from '@agtpilot/plugin-search';
 import * as MCPPlugin from '@agtpilot/plugin-mcp';
@@ -44,6 +46,8 @@ export interface AgentRuntime {
 export interface CreateAgentOptions {
   /** 浏览器插件配置（默认 headless: true） */
   browser?: { headless?: boolean };
+  /** 技能插件配置（存储适配器注入等；缺省无 store → 带 gate 的技能保守不注入） */
+  skill?: SkillPluginConfig;
   /** 跳过指定插件（按插件名，如 'plugin-browser'）——最小化部署用 */
   exclude?: string[];
 }
@@ -80,6 +84,7 @@ export async function createAgentRuntime(options: CreateAgentOptions = {}): Prom
   await mount('plugin-memory', MemoryPlugin);
   await mount('plugin-artifact', ArtifactPlugin);
   await mount('plugin-browser', BrowserPlugin, { headless: options.browser?.headless ?? true });
+  await mount('plugin-skill', SkillPlugin, options.skill);
   await mount('plugin-sandbox', SandboxPlugin);
   await mount('plugin-search', SearchPlugin);
   await mount('plugin-git', GitPlugin);

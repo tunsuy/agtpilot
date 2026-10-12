@@ -49,6 +49,8 @@ export interface UserScopedData {
   zhihuManaged?: ZhihuManagedRecord;
   /** 写操作审计(浏览器存草稿/公众号官方 API 投草稿等;上限 200 条滚动,最近在前) */
   browserAudit?: BrowserAuditEntry[];
+  /** TRS 技能卡(skill-cards.ts):任务轨迹蒸馏的五字段结构化经验;旧文件未知字段透传,零迁移 */
+  skillCards?: any[];
   updatedAt: number;
 }
 

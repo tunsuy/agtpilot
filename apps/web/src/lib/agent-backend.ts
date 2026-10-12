@@ -1073,6 +1073,20 @@ class AgentBackend {
           } catch (e) {
             // fallback
           }
+          // 1.5 TRS 技能卡注入:按任务目标关键词检索过往轨迹蒸馏的五字段卡片
+          // (Trigger/Do/Avoid/Check/Risk),top-k + 预算封顶 + 「仅采用直接适用」
+          // 门控;任务开始时组装一次,任务内前缀稳定(不破自动前缀缓存)
+          try {
+            const { buildSkillCardsBlock } = await import('@/lib/skill-cards');
+            const skillBlock = buildSkillCardsBlock(options.userId, goal);
+            if (skillBlock) {
+              userMemoryPrompt = userMemoryPrompt
+                ? `${userMemoryPrompt}\n\n${skillBlock}`
+                : skillBlock;
+            }
+          } catch (e) {
+            // 技能卡检索失败不影响任务
+          }
         }
 
         // 2. 获取当前登录用户自定义的连接器密钥与默认模型覆盖
@@ -1385,9 +1399,13 @@ class AgentBackend {
           // - Agent 经验通道:从执行轨迹(工具调用/失败/熔断/效率)提炼环境事实、
           //   工具教训与流程策略 —— Agent 不再每个会话重踩同一个坑;
           // 用户手动固化的执行红线受保护不可改删。异步旁路执行,失败静默,
-          // 不阻塞任务交付
-          if (result.success && options.userId) {
+          // 不阻塞任务交付。
+          // 3.5 TRS 技能卡蒸馏:成败都跑(失败轨迹正是 Avoid/Check 字段的最好
+          // 素材),从轨迹蒸馏五字段结构化卡片按 trigger 去重入库,未来同类
+          // 任务开始时按关键词检索注入(见上方 1.5)
+          if (options.userId) {
             const uid = options.userId;
+            const taskOk = result.success;
             void (async () => {
               try {
                 const {
@@ -1397,22 +1415,49 @@ class AgentBackend {
                 } = await import('@/lib/memory-service');
                 if (!isAutoMemoryEnabled()) return;
 
-                const userOutcome = await distillMissionMemories(this.ctx, {
-                  userId: uid,
-                  goal,
-                  messages: targetMission.conversationMessages || [],
-                  missionId: targetMission.id,
-                  configOverride: userConfigOverride,
-                });
-                // Agent 通道自带信息量门槛(纯闲聊任务不跑,省一次模型调用)
-                const agentOutcome = await distillAgentExperience(this.ctx, {
-                  userId: uid,
-                  goal,
-                  mission: targetMission,
-                  efficiency: result.efficiency,
-                  missionId: targetMission.id,
-                  configOverride: userConfigOverride,
-                });
+                const emptyOutcome: { added: any[]; updated: any[]; deletedIds: string[] } = {
+                  added: [],
+                  updated: [],
+                  deletedIds: [],
+                };
+                let userOutcome = emptyOutcome;
+                let agentOutcome = emptyOutcome;
+                // 用户画像与 Agent 经验通道:仅任务成功时维护(失败任务的对话
+                // 不宜改写用户画像);技能卡通道成败都蒸
+                if (taskOk) {
+                  userOutcome = await distillMissionMemories(this.ctx, {
+                    userId: uid,
+                    goal,
+                    messages: targetMission.conversationMessages || [],
+                    missionId: targetMission.id,
+                    configOverride: userConfigOverride,
+                  });
+                  // Agent 通道自带信息量门槛(纯闲聊任务不跑,省一次模型调用)
+                  agentOutcome = await distillAgentExperience(this.ctx, {
+                    userId: uid,
+                    goal,
+                    mission: targetMission,
+                    efficiency: result.efficiency,
+                    missionId: targetMission.id,
+                    configOverride: userConfigOverride,
+                  });
+                }
+
+                let skillOutcome: { added: any[]; updated: any[] } = { added: [], updated: [] };
+                try {
+                  const { distillSkillCards } = await import('@/lib/skill-cards');
+                  skillOutcome = await distillSkillCards(this.ctx, {
+                    userId: uid,
+                    goal,
+                    taskSucceeded: taskOk,
+                    mission: targetMission,
+                    efficiency: result.efficiency,
+                    missionId: targetMission.id,
+                    configOverride: userConfigOverride,
+                  });
+                } catch {
+                  // 技能卡蒸馏失败静默
+                }
 
                 const fmt = (o: { added: any[]; updated: any[]; deletedIds: string[] }) =>
                   [
@@ -1425,6 +1470,14 @@ class AgentBackend {
                 const lines = [
                   fmt(userOutcome) ? `用户画像: ${fmt(userOutcome)}` : '',
                   fmt(agentOutcome) ? `Agent 经验: ${fmt(agentOutcome)}` : '',
+                  skillOutcome.added.length + skillOutcome.updated.length > 0
+                    ? `技能卡: 新增 ${skillOutcome.added.length} / 合并更新 ${skillOutcome.updated.length}(${[
+                        ...skillOutcome.added,
+                        ...skillOutcome.updated,
+                      ]
+                        .map((c) => c.trigger)
+                        .join('、')})`
+                    : '',
                 ].filter(Boolean);
                 if (lines.length > 0) {
                   this.addTerminalLog('system', `[Memory] 会话结束记忆维护: ${lines.join('；')}`, uid);
@@ -1438,6 +1491,8 @@ class AgentBackend {
                       agentAdded: agentOutcome.added.length,
                       agentUpdated: agentOutcome.updated.length,
                       agentDeleted: agentOutcome.deletedIds.length,
+                      skillAdded: skillOutcome.added.length,
+                      skillUpdated: skillOutcome.updated.length,
                     },
                   });
                 }

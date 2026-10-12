@@ -8,6 +8,13 @@ import {
   appendDeletionLedger,
   appendMemoryAudit,
   appendRetrievalTrace,
+  isAgentNotesEnabled,
+  listAgentNotes,
+  readAgentNote,
+  writeAgentNote,
+  deleteAgentNote,
+  AGENT_NOTES_TOTAL_BYTES,
+  AGENT_NOTES_FILE_BYTES,
   type DeletionLedgerEntry,
 } from './user-store';
 import { getGovernanceBus } from './governance-bus';
@@ -166,6 +173,8 @@ const AGENT_PROMPT_MAX_CHARS = 1200;
 const L0_MAX_USER = 20;
 const L0_MAX_AGENT = 8;
 const L0_MAX_MISSIONS = 6;
+/** Agent 笔记区清单条数上限(P3:跨任务发现 context_file 外部化产物) */
+const L0_MAX_NOTES = 8;
 /** L0 单行摘要长度上限(超出截断加省略号) */
 const L0_SUMMARY_CHARS = 40;
 /** 单次会话结束自动提炼的操作条数上限(含 add/update/delete,每通道独立) */
@@ -813,10 +822,23 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
     // 任务清单不可用不影响记忆注入
   }
 
+  // ---- Agent 笔记区清单(P3:跨任务发现历史外部化产物;失败静默) ----
+  let noteLines: string[] = [];
+  let notePaths: string[] = [];
+  try {
+    if (isAgentNotesEnabled()) {
+      const notes = listAgentNotes(userId).slice(0, L0_MAX_NOTES);
+      notePaths = notes.map((n) => n.path);
+      noteLines = notes.map((n) => `- ${n.path} (${n.size}B)`);
+    }
+  } catch {
+    // 笔记清单不可用不影响记忆注入
+  }
+
   const hasContent =
     userSel.full.length > 0 || userSel.l0.length > 0 ||
     agentSel.full.length > 0 || agentSel.l0.length > 0 ||
-    missionLines.length > 0;
+    missionLines.length > 0 || noteLines.length > 0;
   if (!hasContent) return '';
 
   // 全文注入 = 一次命中(供衰减统计;失败静默)
@@ -829,6 +851,7 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
     selected: [...userSel.trace, ...agentSel.trace].filter((t) => t.sel === 'full'),
     omitted: [...userSel.trace, ...agentSel.trace].filter((t) => t.sel !== 'full'),
     missions: missionIds,
+    notes: notePaths,
   });
 
   const l0Lines = (list: UserMemory[]) => list.map((m) => `- ${m.id} ${memorySummary(m)}`);
@@ -866,6 +889,14 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
       ['【最近任务清单(需要复盘相关历史任务时,用 read_mission(id) 取目标/步骤/交付全文)】:', ...missionLines].join('\n')
     );
   }
+  if (noteLines.length > 0) {
+    sections.push(
+      [
+        '【Agent 笔记区(历史任务外部化的中间产物,用 context_file view(path) 读回;新产物也应写入而非堆在对话里)】:',
+        ...noteLines,
+      ].join('\n')
+    );
+  }
   sections.push('请严格遵守上述用户的个性偏好与安全规则,并善用 Agent 已沉淀的执行经验进行思考与输出。');
   return sections.join('\n\n');
 }
@@ -882,10 +913,11 @@ function formatMemoryLine(m: UserMemory): string {
 // ---- 用户级记忆工具(taskTools 同名覆盖 plugin-memory 全局版) ----
 
 /**
- * 构建绑定到指定用户的 memory_store/recall/list + read_memory/read_mission 工具。
- * 经 runTask 的 taskTools 注入(核心层同名任务级工具优先于全局注册),
- * 读写全部落在 user-store 的该用户空间 —— 多用户部署时互不可见。
- * read_memory/read_mission = 两级注入的 L2 按需加载入口(P2)。
+ * 构建绑定到指定用户的 memory_store/recall/list + read_memory/read_mission +
+ * context_file 工具。经 runTask 的 taskTools 注入(核心层同名任务级工具优先于
+ * 全局注册),读写全部落在 user-store 的该用户空间 —— 多用户部署时互不可见。
+ * read_memory/read_mission = 两级注入的 L2 按需加载入口(P2);
+ * context_file = Agent 笔记区(P3,AGTPILOT_AGENT_NOTES=0 时不暴露)。
  */
 export function buildUserMemoryTools(userId: string): any[] {
   const store = (
@@ -1146,6 +1178,87 @@ export function buildUserMemoryTools(userId: string): any[] {
         };
       },
     },
+    // ---- Agent 笔记区(P3):中间产物外部化,上下文只留路径引用 ----
+    ...(isAgentNotesEnabled()
+      ? [
+          {
+            name: 'context_file',
+            description:
+              'Agent 自管笔记文件(长任务中间产物外部化)。何时该写文件而不是留在对话里:①大体积工具输出(网页抓取/长命令输出)→ 存文件,上下文只留摘要+路径;②后续步骤还要引用的中间结论(调研清单/对比结果);③需要反复迭代的草稿(文章/代码/方案);④进度待办清单。笔记跨任务持久,历史笔记会出现在注入的「Agent 笔记区」清单里,用 view 读回。约束:根目录锁定你的笔记区;总预算 ' +
+              `${AGENT_NOTES_TOTAL_BYTES >> 10}KB、单文件 ${AGENT_NOTES_FILE_BYTES >> 10}KB;预算满时先 delete 不再需要的笔记。所有操作均留审计。`,
+            parameters: {
+              type: 'object',
+              properties: {
+                action: {
+                  type: 'string',
+                  enum: ['list', 'view', 'create', 'str_replace', 'delete'],
+                  description:
+                    'list = 列出全部笔记与预算占用;view = 读全文;create = 写入/覆盖整文件;str_replace = 唯一匹配替换(old_str 必须在文件中恰好出现一次);delete = 删除',
+                },
+                path: {
+                  type: 'string',
+                  description: '笔记相对路径(如 "deploy-research.md",可带一层子目录;list 外必填)',
+                },
+                content: { type: 'string', description: 'create 时写入的全文' },
+                old_str: { type: 'string', description: 'str_replace:被替换的原文(须唯一)' },
+                new_str: { type: 'string', description: 'str_replace:替换后的新文' },
+              },
+              required: ['action'],
+            },
+            execute: async ({ action, path: relPath, content, old_str, new_str }: any) => {
+              const act = String(action || '');
+              const rel = String(relPath || '');
+              if (act === 'list') {
+                const notes = listAgentNotes(userId);
+                const total = notes.reduce((s, n) => s + n.size, 0);
+                return {
+                  success: true,
+                  notes: notes.map((n) => ({ path: n.path, size: n.size, updatedAt: new Date(n.updatedAt).toISOString() })),
+                  totalBytes: total,
+                  budgetBytes: AGENT_NOTES_TOTAL_BYTES,
+                };
+              }
+              if (!rel) return { success: false, message: '缺少 path 参数。' };
+              if (act === 'view') {
+                const text = readAgentNote(userId, rel);
+                if (text == null) return { success: false, message: `笔记 ${rel} 不存在或路径非法。` };
+                return { success: true, path: rel, content: text };
+              }
+              if (act === 'create') {
+                const res = writeAgentNote(userId, rel, String(content ?? ''));
+                if (!res.ok) return { success: false, reason: res.reason, message: res.message };
+                return {
+                  success: true,
+                  path: res.path,
+                  size: res.size,
+                  totalBytes: res.total,
+                  budgetBytes: AGENT_NOTES_TOTAL_BYTES,
+                  message: '已写入。后续对话中只保留该路径引用即可,需要时用 view 读回。',
+                };
+              }
+              if (act === 'str_replace') {
+                const text = readAgentNote(userId, rel);
+                if (text == null) return { success: false, message: `笔记 ${rel} 不存在或路径非法。` };
+                const oldS = String(old_str ?? '');
+                if (!oldS) return { success: false, message: 'old_str 不能为空。' };
+                const count = text.split(oldS).length - 1;
+                if (count === 0) return { success: false, message: 'old_str 未在文件中找到。' };
+                if (count > 1) return { success: false, message: `old_str 在文件中出现 ${count} 次,不唯一;请带上更多上下文使其唯一。` };
+                const res = writeAgentNote(userId, rel, text.replace(oldS, String(new_str ?? '')));
+                if (!res.ok) return { success: false, reason: res.reason, message: res.message };
+                return { success: true, path: res.path, size: res.size };
+              }
+              if (act === 'delete') {
+                const ok = deleteAgentNote(userId, rel);
+                return ok
+                  ? { success: true, path: rel, message: '已删除。' }
+                  : { success: false, message: `笔记 ${rel} 不存在或路径非法。` };
+              }
+              return { success: false, message: `未知 action:${act}(可用 list/view/create/str_replace/delete)` };
+            },
+          },
+        ]
+      : []),
   ];
 }
 

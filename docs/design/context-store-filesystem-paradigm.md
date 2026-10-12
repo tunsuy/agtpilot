@@ -1,6 +1,6 @@
 # 设计文档:用户上下文存储范式演进(单 JSON blob → 用户上下文目录)
 
-> 状态:**P1+P2 已实现**(2026-10-12,实现记录与偏差见 §9/§10;P3 待议)
+> 状态:**P1+P2+P3 已实现**(2026-10-12,实现记录与偏差见 §9/§10/§11)
 > 灵感来源:ByteDance OpenViking 的「上下文文件系统」范式(viking:// + L0/L1/L2 分层),以及对 Claude memory tool、Manus、Letta/MemGPT、ChatGPT memory、mem0、Zep/Graphiti 的调研
 > 涉及模块:`apps/web/src/lib/user-store.ts`(主改造)、`memory-service.ts`、`skill-cards.ts` / `packages/plugin-skill`、`agent-backend.ts`(注入侧)
 > 关联文档:`docs/design/persistent-state-governance.md`(五条治理不变量在本方案中必须继续成立)
@@ -137,10 +137,11 @@
 
 ## 7. 验收标准
 
-- [x] web 全量测试绿 + core 绿 + plugin-skill 绿(P1:486/89/40;P2:496/89/44);
+- [x] web 全量测试绿 + core 绿 + plugin-skill 绿(P1:486/89/40;P2:496/89/44;P3:507/89/44);
 - [x] 新增 user-store v2 测试组:迁移往返、并发、压实、开关回退、加密值往返;
 - [x] 手工验证:老用户目录懒迁移后 .bak 与 v2 内容逐字段一致(迁移测试逐字段断言);
-- [x] P2 后:同一任务注入 token 数不升(全文预算 12条/3600字 → 6条/2400字,余量转一行式摘要清单),retrieval.jsonl 可回答「为何注入/漏掉某条」。
+- [x] P2 后:同一任务注入 token 数不升(全文预算 12条/3600字 → 6条/2400字,余量转一行式摘要清单),retrieval.jsonl 可回答「为何注入/漏掉某条」;
+- [x] P3 后:agent-notes 路径穿越/预算超限全拒绝且留审计,context_file 五 action 往返,存量笔记进注入清单(跨任务可发现)。
 
 ## 8. 参考
 
@@ -203,5 +204,36 @@ skill-cards 薄壳把卡片检索轨迹接到同一 retrieval.jsonl。
    写失败静默,绝不阻断注入/召回主流程。
 5. read_memory 读取计入一次命中(hitCount),与全文注入同权重,供衰减统计;
    read_mission 只读不改任务状态。
+
+## 11. 实现记录与偏差(P3,2026-10-12)
+
+落地:user-store 新增 agent-notes 存储 API(writeAgentNote/readAgentNote/
+deleteAgentNote/listAgentNotes/resolveAgentNotePath,预算与路径约束在存储层强制);
+memory-service 新增 context_file 工具(list/view/create/str_replace/delete,
+经 buildUserMemoryTools 挂载 → taskTools,零 agent-backend 改动)+ 注入块新增
+「Agent 笔记区」L0 清单(≤8 行 path+大小,跨任务可发现)。
+测试:apps/web/src/lib/__tests__/agent-notes.test.ts(11 例)。
+验证:web 507 / core 89 / plugin-skill 44 全绿,tsc 干净。
+
+与原方案的偏差(均为收敛):
+
+1. **工具动作集**:view/create/str_replace/delete + list(方案未列 list,但预算
+   占用与存量笔记需要对 Agent 可见才能自主腾挪;insert/rename 不提供——rename
+   可用 create+delete 组合,少一个动作面就少一类审计形态)。
+2. **预算满拒绝而非自动淘汰**:超限写入返回 total-budget 拒绝并回显当前占用与
+   指引(delete/精简),由 Agent 自己决定删谁——自动淘汰可能删掉后续步骤还要用
+   的产物,判断信息只有 Agent 有。
+3. **审计复用 retrieval.jsonl**(kind='agent-note'):create/update/view/delete
+   与每次拒绝(op+path+size+reason)都留痕,不新开审计文件——笔记操作本质是
+   上下文管理观测面,与检索轨迹同通道便于关联分析「存了什么/读回了什么」。
+4. **判断启发式写在工具描述里**(大输出/待复用结论/迭代草稿/进度清单四种情形
+   + 成本不对称:写文件廉价、上下文膨胀昂贵),不做代码侧「有用性」判定——
+   与 Claude memory tool 同法,判断交给模型,数据(读写轨迹)反过来调提示词。
+5. **开关 AGTPILOT_AGENT_NOTES=0**:工具不暴露、注入清单不显示,存储函数保留
+   (数据不删,回滚只收口);路径规范化白名单 + resolve 后越界二次校验,
+   深度 ≤2、文件名 64 字符、禁隐藏文件,根目录锁死该用户笔记子树(I2)。
+6. 蒸馏侧「agent-notes 当轨迹素材」暂不接线:笔记已跨任务持久且注入清单可发现,
+   任务末蒸馏读轨迹时模型可自行 view;等实际使用中出现「笔记从未被蒸馏引用」
+   的数据再决定是否显式接线。
 
 

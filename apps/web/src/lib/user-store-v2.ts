@@ -17,7 +17,10 @@
  *   audit/browser.jsonl    浏览器写操作审计(≤200 条滚动)
  *   audit/memory.jsonl     记忆审计(原 <user>.audit.jsonl,懒迁移)
  *   audit/sandbox.jsonl    沙箱审计(原 <user>.sandbox-audit.jsonl,懒迁移)
- *   audit/retrieval.jsonl  检索轨迹(P2:注入/召回的得分明细与入选/落选原因)
+ *   audit/retrieval.jsonl  检索轨迹(P2:注入/召回的得分明细与入选/落选原因;
+ *                          P3 起 Agent 笔记区操作也经此通道审计 kind='agent-note')
+ *   agent-notes/           Agent 自管笔记文件区(P3:context_file 工具外部化中间产物,
+ *                          总预算/单文件上限/路径锁死由 user-store 笔记 API 强制)
  *
  * 并发保护 = 每对象「读取基线」脏检查:readUserDataV2 把各域序列化快照以不可枚举
  * 属性挂在返回对象上,写路径只重写「相对该对象自己读取时刻有变化」的域 ——

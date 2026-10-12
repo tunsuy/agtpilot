@@ -7,6 +7,7 @@ import { isPrivateOrReservedIp, DEFAULT_CREDENTIAL_BINDINGS } from '@agtpilot/co
 import {
   isV2Enabled,
   safeName,
+  userDirV2,
   readUserDataV2,
   writeUserDataV2,
   migrateLegacyUser,
@@ -912,6 +913,208 @@ export function readRetrievalTrace(userId: string, limit = 100): RetrievalTraceE
       .filter((e): e is RetrievalTraceEntry => e !== null);
   } catch {
     return [];
+  }
+}
+
+// ---- Agent 笔记区(P3,docs/design/context-store-filesystem-paradigm.md §5 P3)----
+
+/**
+ * Agent 自管上下文文件(对标 Claude memory tool / Manus 文件系统范式):
+ * 长任务把中间产物外部化到 `<用户目录>/agent-notes/`,会话上下文只留路径引用。
+ *
+ * 治理约束(I2 范围不扩大 + 预算封顶):
+ * - 根目录锁死在该用户的笔记子树,路径规范化后二次校验不越界;
+ * - 总预算 64KB / 单文件 16KB / 深度 ≤2 / 文件名白名单字符;
+ * - 预算满不自动淘汰(避免误删他步还要用的产物)→ 拒绝写入并回显当前占用,
+ *   由 Agent 自己 delete 腾挪;
+ * - 全部操作(view/create/update/delete 与每次拒绝)进 audit/retrieval.jsonl
+ *   (kind='agent-note'),失败静默不阻断主流程。
+ *
+ * 开关:AGTPILOT_AGENT_NOTES=0 → 工具不暴露、注入清单不显示(存储函数保留)。
+ */
+export const AGENT_NOTES_TOTAL_BYTES = 64 * 1024;
+export const AGENT_NOTES_FILE_BYTES = 16 * 1024;
+const AGENT_NOTES_MAX_DEPTH = 2;
+/** 文件名段白名单:字母/数字/下划线/连字符/中文,内部允许点(扩展名);禁隐藏文件 */
+const AGENT_NOTES_SEGMENT_RE = /^[A-Za-z0-9_\-一-鿿][A-Za-z0-9_\-一-鿿.]*$/;
+
+export interface AgentNoteInfo {
+  /** 笔记区内相对路径(posix 分隔) */
+  path: string;
+  size: number;
+  updatedAt: number;
+}
+
+export type AgentNoteWriteResult =
+  | { ok: true; path: string; size: number; total: number }
+  | {
+      ok: false;
+      reason: 'invalid-path' | 'file-too-large' | 'total-budget' | 'io-error';
+      message: string;
+      total?: number;
+      limit?: number;
+    };
+
+export function isAgentNotesEnabled(): boolean {
+  return process.env.AGTPILOT_AGENT_NOTES !== '0';
+}
+
+/** 笔记区根目录:v2 → <userDir>/agent-notes/;存储开关回退 → 旧平铺 <safe>.notes/ */
+export function agentNotesDir(userId: string): string {
+  const dataDir = getDataDir();
+  if (isV2Enabled()) return path.join(userDirV2(dataDir, userId), 'agent-notes');
+  return path.join(dataDir, `${safeName(userId)}.notes`);
+}
+
+/** 相对路径规范化(白名单段 + 深度限制);非法返回 null */
+function normalizeNoteRel(relPath: string): string[] | null {
+  const raw = String(relPath || '').trim().replace(/\\/g, '/');
+  if (!raw || raw.startsWith('/')) return null;
+  const segs = raw.split('/').filter(Boolean);
+  if (segs.length === 0 || segs.length > AGENT_NOTES_MAX_DEPTH) return null;
+  for (const s of segs) {
+    if (s.startsWith('.') || s.length > 64 || !AGENT_NOTES_SEGMENT_RE.test(s)) return null;
+  }
+  return segs;
+}
+
+/**
+ * 相对路径 → { 绝对路径, 规范化相对路径 }。
+ * 双保险:白名单段校验 + resolve 后必须仍在笔记区根目录内(防穿越)。
+ */
+export function resolveAgentNotePath(userId: string, relPath: string): { abs: string; rel: string } | null {
+  const segs = normalizeNoteRel(relPath);
+  if (!segs) return null;
+  const root = path.resolve(agentNotesDir(userId));
+  const abs = path.resolve(root, ...segs);
+  if (!abs.startsWith(root + path.sep)) return null;
+  return { abs, rel: segs.join('/') };
+}
+
+/** 笔记操作全量进审计(复用检索轨迹通道;失败静默) */
+function traceNoteOp(userId: string, entry: Record<string, unknown>): void {
+  appendRetrievalTrace(userId, { kind: 'agent-note', ...entry });
+}
+
+const clip = (v: unknown, n = 120) => String(v ?? '').slice(0, n);
+
+/** 枚举笔记(相对路径 + 大小 + 修改时间,最近在前;目录缺失/失败返回空) */
+export function listAgentNotes(userId: string): AgentNoteInfo[] {
+  const out: AgentNoteInfo[] = [];
+  const walk = (dir: string, prefix: string, depth: number) => {
+    if (depth > AGENT_NOTES_MAX_DEPTH) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.name.endsWith('.tmp')) continue;
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        walk(abs, rel, depth + 1);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      try {
+        const st = fs.statSync(abs);
+        out.push({ path: rel, size: st.size, updatedAt: st.mtimeMs });
+      } catch {
+        // 单文件 stat 失败跳过
+      }
+    }
+  };
+  walk(agentNotesDir(userId), '', 1);
+  return out.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** 读笔记全文;路径非法/不存在/IO 失败返回 null(均留审计) */
+export function readAgentNote(userId: string, relPath: string): string | null {
+  const target = resolveAgentNotePath(userId, relPath);
+  if (!target) {
+    traceNoteOp(userId, { op: 'view', path: clip(relPath), reason: 'invalid-path' });
+    return null;
+  }
+  try {
+    if (!fs.existsSync(target.abs)) {
+      traceNoteOp(userId, { op: 'view', path: target.rel, reason: 'not-found' });
+      return null;
+    }
+    const content = fs.readFileSync(target.abs, 'utf-8');
+    traceNoteOp(userId, { op: 'view', path: target.rel, size: Buffer.byteLength(content, 'utf-8') });
+    return content;
+  } catch {
+    traceNoteOp(userId, { op: 'view', path: target.rel, reason: 'io-error' });
+    return null;
+  }
+}
+
+/**
+ * 写笔记(create/overwrite,原子 tmp+rename)。
+ * 硬约束:单文件 ≤16KB;总预算 ≤64KB(覆盖时扣除旧版本占用)。
+ * 超限一律拒绝并回显占用,不做自动淘汰。
+ */
+export function writeAgentNote(userId: string, relPath: string, content: string): AgentNoteWriteResult {
+  const target = resolveAgentNotePath(userId, relPath);
+  if (!target) {
+    const message = `路径非法:${clip(relPath, 60)}(仅允许相对路径、${AGENT_NOTES_MAX_DEPTH} 层内、字母/数字/中文/._- 命名,禁隐藏文件)`;
+    traceNoteOp(userId, { op: 'create', path: clip(relPath), reason: 'invalid-path' });
+    return { ok: false, reason: 'invalid-path', message };
+  }
+  const buf = Buffer.from(String(content ?? ''), 'utf-8');
+  if (buf.byteLength > AGENT_NOTES_FILE_BYTES) {
+    const message = `单文件超限:${buf.byteLength}B > ${AGENT_NOTES_FILE_BYTES}B,请拆分或精简后再写。`;
+    traceNoteOp(userId, { op: 'create', path: target.rel, reason: 'file-too-large', size: buf.byteLength });
+    return { ok: false, reason: 'file-too-large', message, limit: AGENT_NOTES_FILE_BYTES };
+  }
+  const others = listAgentNotes(userId)
+    .filter((n) => n.path !== target.rel)
+    .reduce((s, n) => s + n.size, 0);
+  if (others + buf.byteLength > AGENT_NOTES_TOTAL_BYTES) {
+    const message = `笔记区总预算超限:现有 ${others}B + 本次 ${buf.byteLength}B > ${AGENT_NOTES_TOTAL_BYTES}B。请先 delete 不再需要的笔记,或精简内容。`;
+    traceNoteOp(userId, { op: 'create', path: target.rel, reason: 'total-budget', size: buf.byteLength, total: others });
+    return { ok: false, reason: 'total-budget', message, total: others, limit: AGENT_NOTES_TOTAL_BYTES };
+  }
+  try {
+    const existed = fs.existsSync(target.abs);
+    fs.mkdirSync(path.dirname(target.abs), { recursive: true });
+    const tmp = `${target.abs}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, target.abs);
+    traceNoteOp(userId, {
+      op: existed ? 'update' : 'create',
+      path: target.rel,
+      size: buf.byteLength,
+      total: others + buf.byteLength,
+    });
+    return { ok: true, path: target.rel, size: buf.byteLength, total: others + buf.byteLength };
+  } catch {
+    traceNoteOp(userId, { op: 'create', path: target.rel, reason: 'io-error' });
+    return { ok: false, reason: 'io-error', message: '写入失败(磁盘 IO 异常)。' };
+  }
+}
+
+/** 删笔记;成功 true,路径非法/不存在 false(均留审计) */
+export function deleteAgentNote(userId: string, relPath: string): boolean {
+  const target = resolveAgentNotePath(userId, relPath);
+  if (!target) {
+    traceNoteOp(userId, { op: 'delete', path: clip(relPath), reason: 'invalid-path' });
+    return false;
+  }
+  try {
+    if (!fs.existsSync(target.abs)) {
+      traceNoteOp(userId, { op: 'delete', path: target.rel, reason: 'not-found' });
+      return false;
+    }
+    const size = fs.statSync(target.abs).size;
+    fs.unlinkSync(target.abs);
+    traceNoteOp(userId, { op: 'delete', path: target.rel, size });
+    return true;
+  } catch {
+    traceNoteOp(userId, { op: 'delete', path: target.rel, reason: 'io-error' });
+    return false;
   }
 }
 

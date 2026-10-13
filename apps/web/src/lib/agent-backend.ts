@@ -145,6 +145,11 @@ class AgentBackend {
       this.bindEvents();
       this.bindCheckpoint();
       this.sweepInterruptedMissions();
+      // MCP 连接预热(异步旁路,不阻塞就绪):容器重启后所有用户连接器
+      // 都掉线,首个任务要现场建连 —— 生产实测 10 个连接器冷建连吃掉 40s
+      // (期间 UI 只有「正在思考」,看起来像卡死)。启动即全量复连,首个
+      // 任务派发时连接已在池里(复用,毫秒级)
+      void this.prewarmMcpConnections();
 
       const failed = runtime.loaded.filter((l) => !l.ok);
       this.addTerminalLog(
@@ -189,6 +194,42 @@ class AgentBackend {
       }
     } catch {
       // 清扫失败不影响启动
+    }
+  }
+
+  /**
+   * MCP 连接预热：重启后为所有配置过连接器的用户重建连接池。
+   * 连接器建连是网络往返(实测 10 个要 40s),放这里而不是首个任务里,
+   * 任务派发时 syncUserServers 走「复用」分支(毫秒级)。失败静默 ——
+   * 任务执行时仍会重试建连,预热只是提速手段。
+   */
+  private async prewarmMcpConnections() {
+    try {
+      const { getAllUsersData } = require('@/lib/user-store');
+      const { buildUserMcpServers } = require('@/lib/mcp-connectors');
+      const mcpSvc = this.mcp;
+      if (!mcpSvc?.syncUserServers) return;
+      let ready = 0;
+      let failed = 0;
+      for (const user of getAllUsersData()) {
+        const servers = buildUserMcpServers(user.userId);
+        if (servers.length === 0) continue;
+        try {
+          const sync = await mcpSvc.syncUserServers(user.userId, servers);
+          ready += sync.connected.length + sync.reused.length;
+          failed += sync.failed.length;
+        } catch {
+          // 单用户预热失败跳过,不影响其他用户
+        }
+      }
+      if (ready + failed > 0) {
+        this.addTerminalLog(
+          'system',
+          `[MCP] 重启预热完成: ${ready} 个连接器就绪${failed > 0 ? `,${failed} 个连不上(任务执行时会重试)` : ''}(首个任务不再等建连)。`
+        );
+      }
+    } catch {
+      // 预热失败不影响主流程,任务执行时会重试
     }
   }
 
@@ -1480,13 +1521,26 @@ class AgentBackend {
         this.taskRuntimes.set(targetMission.id, ownRuntime);
 
         if (hasLlm) {
+          // 续聊兜底:上一轮中途被打断且尚未写回任何消息时(准备阶段就被
+          // 追问的典型场景),conversationMessages 为空 → 追问本身(如
+          // 「卡住了吗」)不含路由关键词,按需挂载退化为保守全量(实测
+          // 25.2k 输入 tokens);模型上下文也丢掉任务意图。从 mission 的
+          // 用户步骤合成 user 消息补位:路由能命中原始目标,上下文不丢
+          let historyMessages = targetMission.conversationMessages;
+          if (!historyMessages || historyMessages.length === 0) {
+            historyMessages = (targetMission.steps || [])
+              .filter((st: any) => st.role === 'user' && st.userPrompt)
+              .slice(-6)
+              .map((st: any) => ({ role: 'user' as const, content: st.userPrompt as string }));
+          }
+
           // 调用真正的大模型 + 工具链编排 (Vercel AI SDK + Cordis 工具集)
           const result = await this.ctx.orchestrator.runTask({
             taskId: targetMission.id,
             userId: options.userId,
             abortSignal: abortController.signal,
             configOverride: userConfigOverride,
-            historyMessages: targetMission.conversationMessages,
+            historyMessages,
             prompt: goal,
             taskTools,
             taskEnv,

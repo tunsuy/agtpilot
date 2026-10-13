@@ -576,7 +576,7 @@ export function CockpitView({
         <div className="flex-1 relative min-h-0">
         <div className="absolute inset-0 overflow-y-auto p-4 md:p-6 space-y-6" ref={flowScrollRef} onScroll={handleFlowScroll}>
           {currentMission && currentMission.steps && currentMission.steps.length > 0 ? (
-            <div className="space-y-6 max-w-2xl mx-auto w-full">
+            <div className="space-y-5 max-w-2xl mx-auto w-full">
               {(() => {
                 // 分块逻辑抽为纯函数(lib/cockpit-blocks):用户气泡 / 工具链聚合块 /
                 // 正式回复卡。叙述模式默认在会话流(工具步骤翻译成人话动作);
@@ -626,7 +626,10 @@ export function CockpitView({
                     );
                   }
 
-                  // ======== 2. Agent 作答轮(整轮包进一张回复卡:一轮一头像) ========
+                  // ======== 2. Agent 作答轮(Claude Code 式平铺流) ========
+                  // 不再把整轮包进一张回复卡:轮首小标记 + 左竖线 rail 锚定
+                  // 归属,工具活动/思考/正文作为流内一级块按时间平铺 —— 多轮
+                  // 任务的每轮回复各自成段,不再堆进越撑越长的大框
                   // 空壳块(无文本也无流式)过滤后为空则整轮不渲染,不出白卡
                   const renderable = turn.items.filter(
                     (b) =>
@@ -639,17 +642,27 @@ export function CockpitView({
                     (b) => b.type === 'assistant' && b.step.status === 'RUNNING'
                   );
                   return (
-                    <div key={turn.key} className="flex items-start gap-3.5">
-                      <div className="h-7 w-7 rounded-xl bg-zinc-900 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
-                        <Bot className="h-4 w-4" />
+                    <div key={turn.key} className="space-y-2.5">
+                      {/* 轮首标记:轻量「谁在说话」锚(流式时蓝点亮起) */}
+                      <div className="flex items-center gap-1.5 pl-0.5">
+                        <div className="h-5 w-5 rounded-lg bg-zinc-900 text-white flex items-center justify-center shadow-2xs">
+                          <Bot className="h-3 w-3" />
+                        </div>
+                        {turnStreaming && (
+                          <span className="relative flex h-1.5 w-1.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-600" />
+                          </span>
+                        )}
                       </div>
+                      {/* 左竖线 rail:同轮块视觉连续(替代原卡片边框),流式时变蓝 */}
                       <div
-                        className={`flex-1 min-w-0 rounded-2xl bg-white border shadow-2xs p-4 md:p-5 space-y-3 transition-colors duration-300 ${
-                          turnStreaming ? 'border-blue-200/80' : 'border-zinc-200/80'
+                        className={`ml-2.5 pl-4 border-l space-y-2.5 transition-colors duration-300 ${
+                          turnStreaming ? 'border-blue-300/70' : 'border-zinc-200/80'
                         }`}
                       >
                         {renderable.map((block) => {
-                  // ================= 2a. 工具调用链聚合块 (回复卡内嵌手风琴) =================
+                  // ================= 2a. 工具调用链聚合块 (流内一级活动手风琴) =================
                   if (block.type === 'tools') {
                     const groupSteps = block.steps;
                     const groupKey = block.key;
@@ -824,7 +837,7 @@ export function CockpitView({
                     );
                   }
 
-                  // ================= 3. 智能体正式回复卡片 (精致沉浸式 Markdown) =================
+                  // ================= 3. 智能体回复块 (流内裸排 Markdown,思考可折叠) =================
                   if (block.type === 'assistant') {
                     const st = block.step;
                     // 流式中的 live step（打字机卡片）：shimmer 占位 / 打字光标 / 思考过程块
@@ -1024,7 +1037,7 @@ export function CockpitView({
                   项活动」,看起来像卡死。补一行持续跳动的衔接指示 + 间隙已耗时 */}
               {currentMission.status === 'ACTIVE' &&
                 !currentMission.steps.some((s) => s.status === 'RUNNING') && (
-                  <div className="flex items-center gap-2 text-zinc-400 py-0.5 pl-[42px]">
+                  <div className="flex items-center gap-2 text-zinc-400 py-0.5 pl-[26px]">
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600" />

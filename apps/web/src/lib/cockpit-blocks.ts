@@ -119,10 +119,10 @@ export function findRetryPrompt(steps: MissionStep[], failedStepId: string): str
 }
 
 /**
- * 轮次分组(主流 agent 产品的「一次作答一张卡」形态):
+ * 轮次分组(Claude Code 式平铺流的轻量轮锚):
  * 用户气泡独立成轮;两条用户消息之间的连续 agent 块(活动链/思考流/正式回复)
- * 合并为同一个 agent 轮 —— 渲染时整轮包进一张回复卡、只出现一个头像,
- * 不会"一个问、两个 agent 头像答"。
+ * 归为同一个 agent 轮 —— 渲染时轮首一个小标记 + 左竖线 rail 串起同轮块,
+ * 块本身平铺在流里(不再包进整轮大卡),多轮任务每轮回复各自成段。
  */
 export type CockpitTurn =
   | { type: 'user'; step: MissionStep }

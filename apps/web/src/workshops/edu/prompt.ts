@@ -1,7 +1,7 @@
 /**
  * 教研工坊 · 文献综述 / 论文精读 / 智能备课 / 学习卡片(教育场景:老师/学生/研究者)
  *
- * 与办公工坊(office-workshops.ts)、投研工坊(invest-workshops.ts)同一模式:
+ * 与办公工坊(weekly/email_triage 包)、投研工坊(invest 包)同一模式:
  * UI 收集结构化选项 → 生成 Prompt → onRunPrompt 作为新任务交给 Agent 执行。
  * 学术数据全部来自用户已连接的 MCP 连接器:
  * - OpenAlex(2.5 亿+ 文献元数据检索)、alphaXiv(arXiv 论文全文/PDF 问答/语义检索)、

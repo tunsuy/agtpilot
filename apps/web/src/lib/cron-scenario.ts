@@ -5,8 +5,8 @@
  * 用户改档案后,下一次触发自动用最新档案重建 —— 避免订阅里的 prompt 快照过期。
  * 普通任务(用户手输 prompt)不受影响,原样返回。
  */
-import { buildXhsWeeklyTopicsPrompt } from './xhs-workshop';
-import { buildOssRadarPrompt } from './oss-radar-workshop';
+import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/prompt';
+import { buildOssRadarPrompt } from '@/workshops/oss_radar/prompt';
 import type { ScenarioProfile } from './scenario-profile';
 
 /** cron 任务上的场景标记;key 白名单内才有效 */

@@ -4,11 +4,11 @@
  * 分工:Agent 只做选题调研与内容生产;发布动作始终由用户在手机 App 内人工完成
  * (平台 2026-03 起严打「AI 托管代发」账号,辅助创作+人工发布是明确允许的形态)。
  * 选题数据源(scenario-loop P1):已登录时优先 xhs_read_creator_data 读真实热门话题/站内搜索,
- * 其余情况按 workshop-sources.ts 的检索梯度(NewsNow 全网热榜/知乎/X/网页搜索)降级取材。
+ * 其余情况按 shared/sources.ts 的检索梯度(NewsNow 全网热榜/知乎/X/网页搜索)降级取材。
  * 场景档案(ScenarioProfile)注入:长期人设优先级高于单次风格选择(scenario-loop §2)。
  */
-import { buildProfileSection, type ScenarioProfile } from './scenario-profile';
-import { TOPIC_RESEARCH_SOURCES } from './workshop-sources';
+import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
+import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
 
 export const XHS_WORKSHOP_STYLES = ['种草推荐', '干货教程', '测评对比', '生活分享'] as const;
 

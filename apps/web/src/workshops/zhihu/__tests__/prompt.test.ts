@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '../zhihu-workshop';
-import { normalizeScenarioProfile } from '../scenario-profile';
+import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '../prompt';
+import { normalizeScenarioProfile } from '@/lib/scenario-profile';
 
 const profileInput = {
   niche: 'AI 工程实践',

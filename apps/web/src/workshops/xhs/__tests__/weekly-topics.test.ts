@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildXhsWeeklyTopicsPrompt } from '../xhs-workshop';
-import type { ScenarioProfile } from '../scenario-profile';
+import { buildXhsWeeklyTopicsPrompt } from '../prompt';
+import type { ScenarioProfile } from '@/lib/scenario-profile';
 
 const profile: ScenarioProfile = {
   scenarioKey: 'xhs',

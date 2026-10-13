@@ -8,8 +8,8 @@
  * 在知乎草稿箱人工完成,代码层面不存在发布调用。
  * 场景档案(ScenarioProfile)注入:长期人设优先级高于单次风格选择(scenario-loop §2)。
  */
-import { buildProfileSection, type ScenarioProfile } from './scenario-profile';
-import { TOPIC_RESEARCH_SOURCES } from './workshop-sources';
+import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
+import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
 
 export const ZHIHU_ARTICLE_STYLES = ['专业干货', '深度分析', '热点解读', '经验分享'] as const;
 

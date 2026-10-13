@@ -1,7 +1,7 @@
 /**
  * 投研工坊 · 个股/基金体检 · 持仓组合体检 · 每日盘后复盘(投资理财场景)
  *
- * 与办公工坊(office-workshops.ts)同一模式:UI 收集结构化选项 → 生成 Prompt →
+ * 与办公工坊(weekly/email_triage 包)同一模式:UI 收集结构化选项 → 生成 Prompt →
  * onRunPrompt 作为新任务交给 Agent 执行。行情数据全部来自用户已连接的 MCP 连接器:
  * - Tushare(A股/基金/财务/宏观)、Alpha Vantage(美股/外汇/大宗商品/加密货币)、
  *   CoinGecko(加密货币)、A股实时行情 AkShare(本地 stdio);

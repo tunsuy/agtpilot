@@ -6,9 +6,9 @@
  * —— 代码层面不存在 freepublish 调用,群发/发布接口是合规红线。
  * 场景档案(ScenarioProfile)注入:长期人设优先级高于单次风格选择(scenario-loop §2)。
  */
-import { buildProfileSection, type ScenarioProfile } from './scenario-profile';
-import { WECHAT_MD_THEMES, DEFAULT_WECHAT_MD_THEME_ID } from './wechat-md-themes';
-import { TOPIC_RESEARCH_SOURCES } from './workshop-sources';
+import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
+import { WECHAT_MD_THEMES, DEFAULT_WECHAT_MD_THEME_ID } from '@/lib/wechat-md-themes';
+import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
 
 export const WECHAT_MP_ARTICLE_STYLES = ['深度长文', '干货教程', '热点解读', '观点评论'] as const;
 

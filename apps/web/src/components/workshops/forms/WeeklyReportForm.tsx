@@ -6,7 +6,7 @@ import {
   WEEKLY_REPORT_PERIODS,
   WEEKLY_REPORT_AUDIENCES,
   WEEKLY_REPORT_DELIVERIES,
-} from '../../../lib/office-workshops';
+} from '@/workshops/weekly/prompt';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
 import { recordRun, lastRunOf } from '../history';

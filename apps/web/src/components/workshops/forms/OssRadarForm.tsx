@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { CalendarClock } from 'lucide-react';
-import { OSS_INTERESTS, OSS_CONTRIB_KINDS, buildOssRadarPrompt } from '../../../lib/oss-radar-workshop';
+import { OSS_INTERESTS, OSS_CONTRIB_KINDS, buildOssRadarPrompt } from '@/workshops/oss_radar/prompt';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { CronJobItem } from '../../../types/agent';
 import type { WorkshopDef } from '../registry';

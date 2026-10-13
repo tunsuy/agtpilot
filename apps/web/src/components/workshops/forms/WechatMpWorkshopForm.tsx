@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
-import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS, WECHAT_MP_THEME_OPTIONS } from '../../../lib/wechat-mp-workshop';
+import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS, WECHAT_MP_THEME_OPTIONS } from '@/workshops/wechat_mp/prompt';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';

@@ -7,7 +7,7 @@ import {
   REVIEW_MARKETS,
   RISK_PROFILES,
   INVEST_DELIVERIES,
-} from '../../../lib/invest-workshops';
+} from '@/workshops/invest/prompt';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
 import { recordRun, lastRunOf } from '../history';

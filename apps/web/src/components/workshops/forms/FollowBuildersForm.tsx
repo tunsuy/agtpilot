@@ -8,7 +8,7 @@ import {
   FB_LANGUAGES,
   FB_RANGES,
   FB_CATEGORIES,
-} from '../../../lib/follow-builders-workshop';
+} from '@/workshops/follow_builders/prompt';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
 import { recordRun, lastRunOf } from '../history';

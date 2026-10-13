@@ -10,7 +10,7 @@
  * 清单末尾注明检索时间与数据源 —— 与内容工坊「发布永远人工」同一套三层围栏思路。
  * 交付物格式与 oss-opportunities.ts 解析器互为契约(【机会 N】+ 八字段头 + --- 分隔)。
  */
-import type { ScenarioProfile } from './scenario-profile';
+import type { ScenarioProfile } from '@/lib/scenario-profile';
 
 /** 关注方向(chip 多选;id 进参数、name 进 prompt) */
 export const OSS_INTERESTS = [

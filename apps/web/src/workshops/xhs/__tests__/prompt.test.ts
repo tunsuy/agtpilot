@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildXhsWorkshopPrompt } from '../xhs-workshop';
-import { normalizeScenarioProfile } from '../scenario-profile';
+import { buildXhsWorkshopPrompt } from '../prompt';
+import { normalizeScenarioProfile } from '@/lib/scenario-profile';
 
 const profileInput = {
   niche: '秋冬通勤穿搭',

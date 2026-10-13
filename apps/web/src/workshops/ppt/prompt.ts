@@ -1,7 +1,7 @@
 /**
  * PPT 演示稿工坊 · Prompt 构建器(格式即契约)
  *
- * 与办公工坊(office-workshops.ts)同一模式:UI 收集结构化选项 → 生成 Prompt →
+ * 与办公工坊(weekly/email_triage 包)同一模式:UI 收集结构化选项 → 生成 Prompt →
  * 作为新任务交给 Agent 执行。产出双路线(方案见 docs/design/univer-office-integration-plan.md §4):
  * - bento(网页演示页):镜像预装 qiaomu-bento-ppt skill(MIT,纯 Python 标准库),
  *   Agent 经 sandbox_run_command/sandbox_write_file 构建单文件 .bento.html,
@@ -13,41 +13,15 @@
  *
  * 红线:数据不编造、图表注来源、大纲先行再排版、无外链媒体(离线单文件承诺)。
  */
-import { createSkillService } from '@agtpilot/plugin-skill';
+import {
+  bentoSkillDir,
+  pptMasterSkillDir,
+  PPT_MASTER_PYTHON,
+  BENTO_SKILL_DIR,
+  PPT_MASTER_SKILL_DIR,
+} from './paths';
 
-/** 镜像内 bento skill 固定安装路径(Dockerfile 层 tarball 固定 commit 解包于此);pack 注册表查不到时兜底 */
-export const BENTO_SKILL_DIR = '/opt/skills/qiaomu-bento-ppt';
-
-/** 镜像内 ppt-master skill 固定安装路径(SKILL_DIR 契约:命令一律用此绝对路径展开);pack 注册表查不到时兜底 */
-export const PPT_MASTER_SKILL_DIR = '/opt/skills/ppt-master';
-
-// 沙箱技能包统一经 plugin-skill 的 pack 注册表发现(扫 AGTPILOT_SKILL_PACK_DIRS,
-// 缺省 /opt/skills,读 SKILL.md frontmatter 元数据;60s 缓存)。注册表查不到
-// (如 dev 机没有 /opt/skills)时回落上面的镜像固定路径 —— 生产镜像上两者同值。
-const skillPacks = createSkillService();
-
-/** 按目录名(优先)或 frontmatter name 查 pack 实际路径;查不到用 fallback */
-function resolvePackDir(folder: string, fallback: string): string {
-  const packs = skillPacks.listPacks();
-  const hit = packs.find((p) => p.dir.endsWith(`/${folder}`)) || skillPacks.getPack(folder);
-  return hit?.dir || fallback;
-}
-
-/** bento skill 目录(注册表解析,ppt-deck/环境自检/工坊 prompt 共用) */
-export function bentoSkillDir(): string {
-  return resolvePackDir('qiaomu-bento-ppt', BENTO_SKILL_DIR);
-}
-
-/** ppt-master skill 目录(注册表解析) */
-export function pptMasterSkillDir(): string {
-  return resolvePackDir('ppt-master', PPT_MASTER_SKILL_DIR);
-}
-
-/**
- * ppt-master 专用 venv 解释器(装有 python-pptx/skia-pathops/uharfbuzz 等)。
- * 不进 PATH(PATH 首位是 A股 venv),契约里全部命令显式用该绝对路径。
- */
-export const PPT_MASTER_PYTHON = '/opt/ppt-master/bin/python3';
+export { bentoSkillDir, pptMasterSkillDir, PPT_MASTER_PYTHON, BENTO_SKILL_DIR, PPT_MASTER_SKILL_DIR };
 
 export const PPT_PURPOSES = [
   { id: 'report', name: '汇报提案' },

@@ -18,7 +18,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolDefinition } from '@agtpilot/core';
-import { BENTO_SKILL_DIR } from './ppt-workshop';
+import { BENTO_SKILL_DIR } from '@/workshops/ppt/paths';
 
 const execFileAsync = promisify(execFile);
 

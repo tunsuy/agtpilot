@@ -176,12 +176,12 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
  */
 const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'models', label: '模型推理', ids: ['deepseek', 'openai', 'custom_llm'] },
-  { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'zhihu', 'newsnow', 'twitterapi_io', 'deepwiki', 'openalex', 'qcc'] },
+  { key: 'search', label: '搜索与数据', ids: ['exa', 'tavily', 'firecrawl', 'newsnow', 'twitterapi_io', 'deepwiki', 'openalex', 'qcc'] },
   { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock'] },
   { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
-  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu'] },
+  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'zhihu'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },
 ];
 const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));
@@ -449,6 +449,11 @@ export function ConnectorsView({
 
   const filteredMcp = mcpConnectors.filter((c) => inTab(c.id) && matchSearch(c.id, c.name, c.description, c.category));
 
+  // 平台账号型 MCP 卡片上提:知乎(网页版扫码登录 + 托管存草稿)与微信/小红书同类,
+  // 渲染进上方原生连接器区;其余 MCP 连接器留在下方「官方托管直连」区
+  const promotedMcp = filteredMcp.filter((c) => c.id === 'zhihu');
+  const regularMcp = filteredMcp.filter((c) => c.id !== 'zhihu');
+
   const filtered = connectors.filter((c) => inTab(c.id) && matchSearch(c.id, c.name, c.description, c.category));
 
   const tabCount = (key: string) => {
@@ -488,6 +493,235 @@ export function ConnectorsView({
     connectors.filter((c) => c.status === 'connected').length +
     mcpConnectors.filter((c) => c.status === 'connected').length;
   const totalConnectors = connectors.length + mcpConnectors.length;
+
+  // MCP 卡片渲染函数:知乎(平台账号型:网页版扫码登录 + 托管存草稿)上提到原生连接器区
+  // 与微信/小红书同网格,其余 MCP 连接器仍在下方「官方托管直连」区 —— 同一份卡片 JSX 两处复用
+  const renderMcpCard = (app: McpConnectorInfo) => (
+          <div
+            key={app.id}
+            className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between"
+          >
+            <div>
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-zinc-50 border border-zinc-200/80 flex items-center justify-center shadow-2xs">
+                    {renderMcpIcon(app.id, 'h-5 w-5')}
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-zinc-900">{app.name}</h3>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-zinc-400 uppercase font-mono">
+                        {app.category}
+                      </span>
+                      <span
+                        className={`text-[9px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5 whitespace-nowrap ${
+                          app.authType === 'oauth'
+                            ? 'bg-violet-50 text-violet-600 border border-violet-200'
+                            : app.authType === 'none'
+                            ? 'bg-sky-50 text-sky-600 border border-sky-200'
+                            : 'bg-amber-50 text-amber-600 border border-amber-200'
+                        }`}
+                      >
+                        {app.authType === 'oauth' ? '一键授权' : app.optIn ? '手动启用' : app.authType === 'none' ? '免凭证直连' : '粘贴凭证'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
+                    app.status === 'connected'
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      : 'bg-zinc-100 text-zinc-500'
+                  }`}
+                >
+                  {app.status === 'connected'
+                    ? app.toolCount
+                      ? `已挂载 ${app.toolCount} 工具`
+                      : app.optIn
+                      ? '已启用'
+                      : '已连接'
+                    : app.optIn
+                    ? '未启用'
+                    : '未配置'}
+                </span>
+              </div>
+
+              <p className="text-xs text-zinc-500 leading-relaxed mb-2">{app.description}</p>
+              {app.lastError && (
+                <p className="text-[10px] text-red-500 leading-relaxed mb-2 break-all">
+                  连接异常: {app.lastError}
+                </p>
+              )}
+
+              {/* 知乎专属:网页版登录徽标 + 托管模式状态(浏览器托管存草稿,与 MCP 凭证互不依赖) */}
+              {app.id === 'zhihu' && (
+                <div className="space-y-1.5 mb-2">
+                  {(() => {
+                    const badge = loginBadgeInfo(zhihuStatus?.record || undefined);
+                    return badge.loggedIn ? (
+                      <p className={`text-[10px] leading-relaxed ${badge.maybeStale ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {badge.maybeStale
+                          ? `网页版登录可能已过期(${daysAgoText(badge.lastLoginAt!)}登录),建议重新扫码`
+                          : `网页版已登录 · ${daysAgoText(badge.lastLoginAt!)}`}
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-zinc-400 leading-relaxed">
+                        网页版未登录 —— 扫码后 Agent 可把专栏文章存进知乎草稿箱(跨端可见)
+                      </p>
+                    );
+                  })()}
+                  {zhihuStatus?.record?.enabled && (
+                    <p className="text-[10px] text-zinc-500 leading-relaxed">
+                      托管模式已开启:存草稿每日上限 {zhihuStatus.dailyLimit} 次,今日已用 {zhihuStatus.todayCount} 次,全部操作落审计
+                    </p>
+                  )}
+                  {zhihuNotice && <p className="text-[10px] text-red-500 leading-relaxed">{zhihuNotice}</p>}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-zinc-100 flex flex-wrap items-center justify-between gap-y-2">
+              <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
+                {app.authType === 'oauth' ? 'OAuth 2.1 + PKCE' : app.optIn ? '本地 stdio 子进程' : app.authType === 'none' ? 'MCP Streamable HTTP' : app.keyMasked || 'MCP Streamable HTTP'}
+              </span>
+
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                {/* 知乎专属:网页版扫码登录 + 托管模式开关(浏览器托管,与 MCP token 互不依赖) */}
+                {app.id === 'zhihu' && (
+                  <>
+                    <button
+                      onClick={() => setShowZhihuLogin(true)}
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition shadow-2xs"
+                      title="打开服务器浏览器的知乎登录页,用手机 App 扫码;登录态只落本服务"
+                    >
+                      <QrCode className="h-3 w-3" />
+                      <span>网页版扫码登录</span>
+                    </button>
+                    {/* 接管浏览器:投射服务器的已登录浏览器,用户亲自核对/点发布 ——
+                        知乎草稿存服务端跨端可见,发布权归人是唯一闭环 */}
+                    <button
+                      onClick={() =>
+                        window.open(
+                          '/takeover?url=https%3A%2F%2Fwww.zhihu.com%2Fcreator',
+                          '_blank',
+                          'noopener,width=1180,height=860'
+                        )
+                      }
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition shadow-2xs"
+                      title="接管服务器上已登录的浏览器:直达知乎创作中心草稿箱,画面实时投射,鼠标键盘由你操控(适合人工点发布)"
+                    >
+                      <MonitorPlay className="h-3 w-3" />
+                      <span>接管浏览器</span>
+                    </button>
+                    {zhihuStatus?.record?.enabled ? (
+                      <button
+                        onClick={() => void zhihuPost({ action: 'disable' })}
+                        disabled={zhihuBusy}
+                        className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-50"
+                        title="关闭托管:Agent 不再执行存草稿(登录态保留)"
+                      >
+                        关闭托管
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setZhihuRiskAck(false);
+                          setZhihuNotice('');
+                          setShowZhihuRisk(true);
+                        }}
+                        disabled={zhihuBusy || !zhihuStatus?.record?.lastLoginAt}
+                        className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-40"
+                        title={
+                          zhihuStatus?.record?.lastLoginAt
+                            ? '开启后 Agent 可把文章填进知乎专栏编辑器并停在草稿箱(需审批,有限频,落审计)'
+                            : '先完成网页版扫码登录,才能开启托管模式'
+                        }
+                      >
+                        托管模式·存草稿
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {app.authType === 'oauth' && (
+                  <a
+                    href={`/api/connectors/mcp/start?connector=${app.id}`}
+                    className={`flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium transition shadow-2xs ${
+                      app.status === 'connected'
+                        ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                        : 'bg-zinc-900 hover:bg-zinc-800 text-white'
+                    }`}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    <span>{app.status === 'connected' ? '重新授权' : '一键授权'}</span>
+                  </a>
+                )}
+
+                {app.authType === 'token' && (
+                  <button
+                    onClick={() => {
+                      setMcpConfiguring(app);
+                      setMcpTokenInput('');
+                      setMcpNotice('');
+                    }}
+                    className="shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                  >
+                    {app.status === 'connected' ? '更新凭证' : '打开授权页'}
+                  </button>
+                )}
+
+                {app.authType === 'none' && !app.optIn && (
+                  <button
+                    onClick={() => mcpPost({ action: 'connect', connectorId: app.id })}
+                    disabled={mcpSaving}
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
+                    title="立即重连并刷新工具列表"
+                  >
+                    <RotateCw className={`h-3 w-3 ${mcpSaving ? 'animate-spin' : ''}`} />
+                    <span>重连</span>
+                  </button>
+                )}
+
+                {app.optIn && app.status !== 'connected' && (
+                  <button
+                    onClick={() => mcpPost({ action: 'saveToken', connectorId: app.id, token: '1' })}
+                    disabled={mcpSaving}
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                    title="启用后为你的任务挂载本地浏览器子进程(需服务器已装 Chrome/Chromium)"
+                  >
+                    {mcpSaving ? <RotateCw className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                    <span>启用</span>
+                  </button>
+                )}
+
+                {app.optIn && app.status === 'connected' && (
+                  <button
+                    onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
+                    disabled={mcpSaving}
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-red-600 hover:bg-red-50 transition"
+                    title="停用并断开本地子进程"
+                  >
+                    <Unplug className="h-3 w-3" />
+                    <span>停用</span>
+                  </button>
+                )}
+
+                {app.status === 'connected' && app.authType !== 'none' && (
+                  <button
+                    onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
+                    disabled={mcpSaving}
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-red-600 hover:bg-red-50 transition"
+                    title="清除凭证并断开连接"
+                  >
+                    <Unplug className="h-3 w-3" />
+                    <span>断开</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+  );
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-6 md:py-12 pb-24 md:pb-8 space-y-8 animate-fadeIn">
@@ -767,6 +1001,8 @@ export function ConnectorsView({
             </div>
           </div>
         ))}
+        {/* 知乎:平台账号型 MCP 卡片上提,与微信/小红书同区渲染(卡片 JSX 复用 MCP 渲染函数) */}
+        {promotedMcp.map(renderMcpCard)}
       </div>
 
       {/* 空分组/无搜索结果占位 */}
@@ -777,7 +1013,7 @@ export function ConnectorsView({
       )}
 
       {/* MCP 连接器区（官方托管直连：一键授权 / 粘贴凭证 / 免凭证） */}
-      {filteredMcp.length > 0 && (
+      {regularMcp.length > 0 && (
         <div className="space-y-4">
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 rounded-xl bg-violet-50 text-violet-600 border border-violet-200/60 shadow-2xs">
@@ -798,232 +1034,7 @@ export function ConnectorsView({
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredMcp.map((app) => (
-              <div
-                key={app.id}
-                className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-xl bg-zinc-50 border border-zinc-200/80 flex items-center justify-center shadow-2xs">
-                        {renderMcpIcon(app.id, 'h-5 w-5')}
-                      </div>
-                      <div>
-                        <h3 className="text-xs font-semibold text-zinc-900">{app.name}</h3>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[10px] text-zinc-400 uppercase font-mono">
-                            {app.category}
-                          </span>
-                          <span
-                            className={`text-[9px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5 whitespace-nowrap ${
-                              app.authType === 'oauth'
-                                ? 'bg-violet-50 text-violet-600 border border-violet-200'
-                                : app.authType === 'none'
-                                ? 'bg-sky-50 text-sky-600 border border-sky-200'
-                                : 'bg-amber-50 text-amber-600 border border-amber-200'
-                            }`}
-                          >
-                            {app.authType === 'oauth' ? '一键授权' : app.optIn ? '手动启用' : app.authType === 'none' ? '免凭证直连' : '粘贴凭证'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <span
-                      className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
-                        app.status === 'connected'
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : 'bg-zinc-100 text-zinc-500'
-                      }`}
-                    >
-                      {app.status === 'connected'
-                        ? app.toolCount
-                          ? `已挂载 ${app.toolCount} 工具`
-                          : app.optIn
-                          ? '已启用'
-                          : '已连接'
-                        : app.optIn
-                        ? '未启用'
-                        : '未配置'}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-zinc-500 leading-relaxed mb-2">{app.description}</p>
-                  {app.lastError && (
-                    <p className="text-[10px] text-red-500 leading-relaxed mb-2 break-all">
-                      连接异常: {app.lastError}
-                    </p>
-                  )}
-
-                  {/* 知乎专属:网页版登录徽标 + 托管模式状态(浏览器托管存草稿,与 MCP 凭证互不依赖) */}
-                  {app.id === 'zhihu' && (
-                    <div className="space-y-1.5 mb-2">
-                      {(() => {
-                        const badge = loginBadgeInfo(zhihuStatus?.record || undefined);
-                        return badge.loggedIn ? (
-                          <p className={`text-[10px] leading-relaxed ${badge.maybeStale ? 'text-amber-600' : 'text-emerald-600'}`}>
-                            {badge.maybeStale
-                              ? `网页版登录可能已过期(${daysAgoText(badge.lastLoginAt!)}登录),建议重新扫码`
-                              : `网页版已登录 · ${daysAgoText(badge.lastLoginAt!)}`}
-                          </p>
-                        ) : (
-                          <p className="text-[10px] text-zinc-400 leading-relaxed">
-                            网页版未登录 —— 扫码后 Agent 可把专栏文章存进知乎草稿箱(跨端可见)
-                          </p>
-                        );
-                      })()}
-                      {zhihuStatus?.record?.enabled && (
-                        <p className="text-[10px] text-zinc-500 leading-relaxed">
-                          托管模式已开启:存草稿每日上限 {zhihuStatus.dailyLimit} 次,今日已用 {zhihuStatus.todayCount} 次,全部操作落审计
-                        </p>
-                      )}
-                      {zhihuNotice && <p className="text-[10px] text-red-500 leading-relaxed">{zhihuNotice}</p>}
-                    </div>
-                  )}
-                </div>
-
-                <div className="pt-3 border-t border-zinc-100 flex flex-wrap items-center justify-between gap-y-2">
-                  <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
-                    {app.authType === 'oauth' ? 'OAuth 2.1 + PKCE' : app.optIn ? '本地 stdio 子进程' : app.authType === 'none' ? 'MCP Streamable HTTP' : app.keyMasked || 'MCP Streamable HTTP'}
-                  </span>
-
-                  <div className="flex flex-wrap items-center justify-end gap-1.5">
-                    {/* 知乎专属:网页版扫码登录 + 托管模式开关(浏览器托管,与 MCP token 互不依赖) */}
-                    {app.id === 'zhihu' && (
-                      <>
-                        <button
-                          onClick={() => setShowZhihuLogin(true)}
-                          className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition shadow-2xs"
-                          title="打开服务器浏览器的知乎登录页,用手机 App 扫码;登录态只落本服务"
-                        >
-                          <QrCode className="h-3 w-3" />
-                          <span>网页版扫码登录</span>
-                        </button>
-                        {/* 接管浏览器:投射服务器的已登录浏览器,用户亲自核对/点发布 ——
-                            知乎草稿存服务端跨端可见,发布权归人是唯一闭环 */}
-                        <button
-                          onClick={() =>
-                            window.open(
-                              '/takeover?url=https%3A%2F%2Fwww.zhihu.com%2Fcreator',
-                              '_blank',
-                              'noopener,width=1180,height=860'
-                            )
-                          }
-                          className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition shadow-2xs"
-                          title="接管服务器上已登录的浏览器:直达知乎创作中心草稿箱,画面实时投射,鼠标键盘由你操控(适合人工点发布)"
-                        >
-                          <MonitorPlay className="h-3 w-3" />
-                          <span>接管浏览器</span>
-                        </button>
-                        {zhihuStatus?.record?.enabled ? (
-                          <button
-                            onClick={() => void zhihuPost({ action: 'disable' })}
-                            disabled={zhihuBusy}
-                            className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-50"
-                            title="关闭托管:Agent 不再执行存草稿(登录态保留)"
-                          >
-                            关闭托管
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              setZhihuRiskAck(false);
-                              setZhihuNotice('');
-                              setShowZhihuRisk(true);
-                            }}
-                            disabled={zhihuBusy || !zhihuStatus?.record?.lastLoginAt}
-                            className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 transition disabled:opacity-40"
-                            title={
-                              zhihuStatus?.record?.lastLoginAt
-                                ? '开启后 Agent 可把文章填进知乎专栏编辑器并停在草稿箱(需审批,有限频,落审计)'
-                                : '先完成网页版扫码登录,才能开启托管模式'
-                            }
-                          >
-                            托管模式·存草稿
-                          </button>
-                        )}
-                      </>
-                    )}
-
-                    {app.authType === 'oauth' && (
-                      <a
-                        href={`/api/connectors/mcp/start?connector=${app.id}`}
-                        className={`flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium transition shadow-2xs ${
-                          app.status === 'connected'
-                            ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
-                            : 'bg-zinc-900 hover:bg-zinc-800 text-white'
-                        }`}
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        <span>{app.status === 'connected' ? '重新授权' : '一键授权'}</span>
-                      </a>
-                    )}
-
-                    {app.authType === 'token' && (
-                      <button
-                        onClick={() => {
-                          setMcpConfiguring(app);
-                          setMcpTokenInput('');
-                          setMcpNotice('');
-                        }}
-                        className="shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
-                      >
-                        {app.status === 'connected' ? '更新凭证' : '打开授权页'}
-                      </button>
-                    )}
-
-                    {app.authType === 'none' && !app.optIn && (
-                      <button
-                        onClick={() => mcpPost({ action: 'connect', connectorId: app.id })}
-                        disabled={mcpSaving}
-                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
-                        title="立即重连并刷新工具列表"
-                      >
-                        <RotateCw className={`h-3 w-3 ${mcpSaving ? 'animate-spin' : ''}`} />
-                        <span>重连</span>
-                      </button>
-                    )}
-
-                    {app.optIn && app.status !== 'connected' && (
-                      <button
-                        onClick={() => mcpPost({ action: 'saveToken', connectorId: app.id, token: '1' })}
-                        disabled={mcpSaving}
-                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
-                        title="启用后为你的任务挂载本地浏览器子进程(需服务器已装 Chrome/Chromium)"
-                      >
-                        {mcpSaving ? <RotateCw className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
-                        <span>启用</span>
-                      </button>
-                    )}
-
-                    {app.optIn && app.status === 'connected' && (
-                      <button
-                        onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
-                        disabled={mcpSaving}
-                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-red-600 hover:bg-red-50 transition"
-                        title="停用并断开本地子进程"
-                      >
-                        <Unplug className="h-3 w-3" />
-                        <span>停用</span>
-                      </button>
-                    )}
-
-                    {app.status === 'connected' && app.authType !== 'none' && (
-                      <button
-                        onClick={() => mcpPost({ action: 'disconnect', connectorId: app.id })}
-                        disabled={mcpSaving}
-                        className="flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-red-600 hover:bg-red-50 transition"
-                        title="清除凭证并断开连接"
-                      >
-                        <Unplug className="h-3 w-3" />
-                        <span>断开</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
+            {regularMcp.map(renderMcpCard)}
           </div>
         </div>
       )}

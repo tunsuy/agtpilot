@@ -49,11 +49,18 @@ export function splitStepsIntoBlocks(steps: MissionStep[]): CockpitBlocks {
   let currentTools: MissionStep[] = [];
   const flushTools = () => {
     if (currentTools.length > 0) {
-      blocks.push({
-        type: 'tools',
-        steps: currentTools,
-        key: `tools_group_${blocks.length}_${currentTools[0].id}`,
-      });
+      // 空壳组过滤：组内既无真实工具步骤、也无失败步骤（失败提示有信息量，保留）
+      // —— 只剩元步骤（已完成一轮推理/看板占位）时整组不产出，否则渲染出
+      // 「已完成 0 项任务活动」的空壳条。历史落盘数据里旧版「整体覆盖 steps」
+      // bug 会把工具步骤抹掉只留看板步骤，靠这层兜底吃掉残骸。
+      const hasRealAction = currentTools.some((s) => s.tool || s.status === 'FAILED');
+      if (hasRealAction) {
+        blocks.push({
+          type: 'tools',
+          steps: currentTools,
+          key: `tools_group_${blocks.length}_${currentTools[0].id}`,
+        });
+      }
       currentTools = [];
     }
   };

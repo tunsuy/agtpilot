@@ -56,8 +56,9 @@ describe('splitStepsIntoBlocks · 基础分块', () => {
     const legacyMid = step({ id: 'm1', role: 'assistant', answer: '中间分析', status: 'DONE' });
     const legacyFinal = step({ id: 'm2', role: 'assistant', answer: '最终结论', status: 'DONE' });
     const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), legacyMid, legacyFinal]);
-    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant']);
-    expect((blocks[2] as { step: MissionStep }).step.id).toBe('m2');
+    // m2 升级为最终答复卡;m1 不再产出活动块(空壳组过滤,过程内容由活动流叙述)
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'assistant']);
+    expect((blocks[1] as { step: MissionStep }).step.id).toBe('m2');
   });
 });
 
@@ -132,11 +133,13 @@ describe('splitStepsIntoBlocks · 执行期思考过程可见性', () => {
     expect((blocks[2] as { step: MissionStep }).step.id).toBe('step_live_m1_1');
   });
 
-  it('DONE 的中间推理仍归入活动块(避免过程叙述刷屏)', () => {
+  it('DONE 的中间推理不再产出活动块(空壳组过滤:组内无工具步骤时整组吞掉)', () => {
+    // 旧断言是产出 tools 块 —— 但组内只有元步骤时会渲染「已完成 0 项任务活动」
+    // 空壳条(done 收尾顺序 bug 曾让每轮都留下这种 progress 形态的 live step)。
+    // 元步骤内容不升级为平级回复卡(原意图不变),活动流 tab 仍会叙述它。
     const mid = step({ id: 'm1', role: 'assistant', messageKind: 'progress', status: 'DONE', answer: '阶段小结' });
     const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), mid, finalAnswer('a1', '答')]);
-    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant']);
-    expect((blocks[1] as { steps: MissionStep[] }).steps[0].id).toBe('m1');
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'assistant']);
   });
 
   it('FAILED 且已有部分文本 → 回复卡(中断标记+重新生成入口);空壳 FAILED 留在活动块', () => {
@@ -175,6 +178,64 @@ describe('splitStepsIntoBlocks · 执行期思考过程可见性', () => {
       toolStep('t2', 'sandbox_run'),
     ]);
     expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant', 'tools']);
+  });
+});
+
+describe('splitStepsIntoBlocks · 「已完成 0 项任务活动」空壳组修复', () => {
+  /**
+   * 生产实测(usr 落盘数据)三类 0 项组:
+   * 1) 纯对话轮的 DONE progress live step(done 收尾顺序 bug 曾让它停留
+   *    progress 形态,旁边还落着一条内容重复的独立 final 卡);
+   * 2) 旧版「整体覆盖 steps」bug 抹掉工具步骤后只剩看板占位步骤;
+   * 3) 两者混合。修复:组内无真实工具步骤且无 FAILED(错误提示有信息量)
+   *    时整组不产出。
+   */
+  it('纯对话轮:DONE progress live step 单独成组时不再产出活动块', () => {
+    const progress = step({
+      id: 'step_live_m1_x_1',
+      role: 'assistant',
+      messageKind: 'progress',
+      status: 'DONE',
+      answer: '你好!我是 AgtPilot',
+      title: '智能体回复',
+    });
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '你是谁'),
+      progress,
+      finalAnswer('a1', '你好!我是 AgtPilot'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'assistant']);
+  });
+
+  it('看板占位步骤(无 role/tool)整组不产出 —— 旧数据残骸不再显示 0 项活动', () => {
+    const kanban = (id: string, title: string): MissionStep =>
+      step({ id, title, status: 'DONE' } as MissionStep);
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '调研多模态智能体'),
+      kanban('step_1', '检索最新多模态智能体架构'),
+      kanban('step_2', '调研工具调用协议'),
+      kanban('step_3', '汇总输出报告'),
+      finalAnswer('a1', '分析报告…'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'assistant']);
+  });
+
+  it('元步骤与工具步骤混组时块保留(工具行可见,元步骤仍是隐藏行)', () => {
+    const meta = step({ id: 'm1', role: 'assistant', messageKind: 'progress', status: 'DONE', title: '已完成一轮推理' });
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '问题'),
+      meta,
+      toolStep('t1', 'search_web'),
+      finalAnswer('a1', '答'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant']);
+    expect((blocks[1] as { steps: MissionStep[] }).steps.map((s) => s.id)).toEqual(['m1', 't1']);
+  });
+
+  it('FAILED 空壳步骤仍留在活动块(错误提示不被吞掉)', () => {
+    const failedEmpty = step({ id: 'step_live_f1', role: 'assistant', messageKind: 'progress', status: 'FAILED', title: '回复中断' });
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), failedEmpty]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools']);
   });
 });
 

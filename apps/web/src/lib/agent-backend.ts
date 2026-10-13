@@ -679,20 +679,15 @@ class AgentBackend {
         if (mission) {
           // 先 flush 增量缓冲（SSE 顺序：全部 delta → 边界 mission_updated）
           this.flushDeltas(mission.id);
-          // 只有真正执行过的 RUNNING 步骤标记完成；PENDING（未执行的看板步骤）
-          // 保持原状态 —— 旧实现把所有 PENDING 强标 DONE、进度强设 100，
-          // 未完成的计划步骤在 UI 上显示为"已完成"，效率面板系统性偏乐观
-          mission.steps.forEach((st) => {
-            if (st.status === 'RUNNING') {
-              st.status = 'DONE';
-              const elapsed = Date.now() - (st.startedAt || Date.now());
-              st.duration = st.duration || `${elapsed < 0 ? 0 : elapsed}ms`;
-            }
-          });
 
           // 终稿合并去重：流式 live step 存在时原地升级为最终回复（权威全文
           // 覆盖累积部分，稳定 id 让 React 复用同一卡片，不产生重复回复块）；
-          // 无 live step（纯工具任务/收尾总结路径）才追加独立回复步骤
+          // 无 live step（纯工具任务/收尾总结路径）才追加独立回复步骤。
+          // 【必须在下方 RUNNING→DONE 清扫之前调用】—— findLiveStep 只认
+          // RUNNING 的 live step，先清扫会把 live step 标成 DONE 导致合并
+          // 永远扑空、每轮追加一条内容重复的独立 final 卡，而原 live step
+          // 停留在 progress 形态落入工具聚合块：无工具调用的纯对话轮就会
+          // 渲染出「已完成 0 项任务活动」的空壳条（生产数据实测复现）
           const merged = finalizeWithAnswer(mission, finalAnswer);
           if (!merged) {
             mission.steps.push({
@@ -704,6 +699,18 @@ class AgentBackend {
               answer: finalAnswer,
             });
           }
+
+          // 只有真正执行过的 RUNNING 步骤标记完成；PENDING（未执行的看板步骤）
+          // 保持原状态 —— 旧实现把所有 PENDING 强标 DONE、进度强设 100，
+          // 未完成的计划步骤在 UI 上显示为"已完成"，效率面板系统性偏乐观
+          // （live step 已在上面原地升级为 final/DONE，不会被这里二次触碰）
+          mission.steps.forEach((st) => {
+            if (st.status === 'RUNNING') {
+              st.status = 'DONE';
+              const elapsed = Date.now() - (st.startedAt || Date.now());
+              st.duration = st.duration || `${elapsed < 0 ? 0 : elapsed}ms`;
+            }
+          });
 
             // 执行效率摘要：让"本该 2 步却空转了很多步"的任务一眼可见
             // token 数来自内核 buildEfficiency（单次运行值），任务级累计在 mission.usage

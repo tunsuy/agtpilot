@@ -141,6 +141,38 @@ describe('finalizeWithAnswer（done 合并去重）', () => {
     const m = makeMission();
     expect(finalizeWithAnswer(m, '答案')).toBe(false);
   });
+
+  /**
+   * done 收尾顺序契约（「已完成 0 项任务活动」回归）：
+   * agent-backend 的 done 处理器必须【先 finalizeWithAnswer 再 RUNNING→DONE 清扫】。
+   * 旧顺序（先清扫）会把 live step 标成 DONE，findLiveStep 只认 RUNNING →
+   * 合并永远扑空 → 每轮追加一条内容重复的独立 final 卡，原 live step 停留在
+   * progress 形态落入工具聚合块 —— 无工具调用的纯对话轮就渲染出
+   * 「已完成 0 项任务活动」空壳条（生产落盘数据实测复现）。
+   */
+  it('done 收尾：先合并后清扫 → 单张 final 卡、live step 不残留 progress 形态', () => {
+    const m = makeMission();
+    ensureLiveStep(m, 1);
+    applyDelta(m, '你好!我是 Agt', 'text');
+    m.steps.push({ id: 'step_tool_1', role: 'tool', tool: 'search_web', status: 'RUNNING', title: '执行工具' } as any);
+
+    // ① 先合并（live step 仍 RUNNING，原地升级）
+    expect(finalizeWithAnswer(m, '你好!我是 AgtPilot')).toBe(true);
+    // ② 后清扫（剩余 RUNNING 工具步骤收尾，不触碰已升级的 final 卡）
+    m.steps.forEach((st) => { if (st.status === 'RUNNING') st.status = 'DONE'; });
+
+    const assistants = m.steps.filter((s) => s.role === 'assistant');
+    expect(assistants).toHaveLength(1); // 不追加重复 final 卡
+    expect(assistants[0].messageKind).toBe('final');
+    expect(assistants[0].answer).toBe('你好!我是 AgtPilot');
+    expect(m.steps.find((s) => s.tool === 'search_web')?.status).toBe('DONE');
+    // 反证旧顺序：先清扫后合并必然扑空、留下 progress 残骸
+    const old = makeMission();
+    ensureLiveStep(old, 1);
+    old.steps.forEach((st) => { if (st.status === 'RUNNING') st.status = 'DONE'; });
+    expect(finalizeWithAnswer(old, '答案')).toBe(false);
+    expect(old.steps.filter((s) => s.messageKind === 'progress')).toHaveLength(1);
+  });
 });
 
 describe('resolveMission（事件归属，串台修复）', () => {

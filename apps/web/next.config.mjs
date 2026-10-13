@@ -2,6 +2,14 @@
 const nextConfig = {
   output: 'standalone',
   webpack: (config, { isServer }) => {
+    // 工坊提示词模板:src/workshops 下的 .md 原样内联为字符串
+    // (表单实时预览在客户端同步渲染,模板必须进客户端 bundle;
+    //  vitest 侧有对应的 load 插件,两处 include 范围保持一致)
+    config.module.rules.push({
+      test: /\.md$/,
+      include: /[\\/]src[\\/]workshops[\\/]/,
+      type: 'asset/source',
+    });
     if (isServer) {
       config.externals = [
         ...(Array.isArray(config.externals) ? config.externals : [config.externals]),

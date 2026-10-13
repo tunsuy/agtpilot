@@ -2,7 +2,7 @@
  * 微博图文工坊 · skill 包清单(平移自 components/workshops/{registry,run}.ts)。
  */
 import { MessagesSquare } from 'lucide-react';
-import { buildWeiboWorkshopPrompt } from './prompt';
+import { buildWeiboWorkshopPrompt } from './context';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

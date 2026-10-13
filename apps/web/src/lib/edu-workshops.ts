@@ -87,6 +87,7 @@ const ACADEMIC_SOURCE_RULES = `数据源使用规则(只用已连接的,缺失�
 - AI/机器学习方向的模型、数据集、论文:Hugging Face 工具(huggingface 开头)
 - 开源代码库理解(论文配套实现等):DeepWiki 工具(deepwiki 开头)
 - 中文资料、教材、课程、政策、最新动态:网络搜索工具
+- 广度网页调研(课题背景与最新动态扫描、多路资料交叉比对等需要翻大量网页的任务):派 research_subagent 工具(只读检索子 agent)完成,相互独立的调研路(不同关键词组/角度)可在一轮内并行派发多个调用,子 agent 只回传提炼后的结论与来源,原始网页内容不占主上下文。注意:学术连接器检索(OpenAlex / alphaXiv / Hugging Face / DeepWiki 等)不对子 agent 开放,必须由你直接执行;单点查询直接用网络搜索,不要派子 agent。
 - 外文文献翻译、术语润色:DeepL 工具(deepl 开头,若已授权)
 若以上学术连接器一个都没配置,用网络搜索尽力完成,并在报告开头注明「未配置学术连接器,检索范围受限;建议到连接器页配置 OpenAlex / alphaXiv 以获得全面文献数据」。`;
 

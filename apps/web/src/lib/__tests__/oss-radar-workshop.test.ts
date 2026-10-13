@@ -63,6 +63,13 @@ describe('buildOssRadarPrompt · 格式契约(与 oss-opportunities.ts 解析器
     expect(prompt).toContain('good first issue');
   });
 
+  it('广域网页调研引导派只读检索子 agent(并行派发 + 连接器检索留主循环)', () => {
+    expect(prompt).toContain('research_subagent');
+    expect(prompt).toContain('只读检索子 agent');
+    expect(prompt).toContain('并行派发');
+    expect(prompt).toContain('连接器检索不对子 agent 开放');
+  });
+
   it('收尾提醒:链接直达 Issue、起草文本发送前逐条审批、写代码由用户本地完成', () => {
     expect(prompt).toContain('直达 Issue');
     expect(prompt).toContain('发送前逐条经我审批');

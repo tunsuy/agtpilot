@@ -72,6 +72,9 @@ importers:
       '@agtpilot/plugin-skill':
         specifier: workspace:*
         version: link:../../packages/plugin-skill
+      '@agtpilot/plugin-subagent':
+        specifier: workspace:*
+        version: link:../../packages/plugin-subagent
       '@agtpilot/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

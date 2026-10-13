@@ -1,7 +1,7 @@
 # plugin-subagent 功能职责与接口规范
 
 - 日期: 2026-10-13
-- 状态: **已过审**(2026-10-13 负责人批准开发);**M1 已实施**:`packages/plugin-subagent`(骨架+SubagentEngine+双层白名单+三重预算闸+单测 29 例)+ app-kit 接线 + `.env.example`/`ARCHITECTURE.md` 变量表。M2/M3 按 §10 分期
+- 状态: **已过审**(2026-10-13 负责人批准开发);**M1 已实施**:`packages/plugin-subagent`(骨架+SubagentEngine+双层白名单+三重预算闸+单测 29 例)+ app-kit 接线 + `.env.example`/`ARCHITECTURE.md` 变量表。**M2 已实施**(2026-10-14):web transcript JSONL 落盘适配器(`apps/web/src/lib/subagent-transcript.ts`,经 `CreateAgentOptions.subagent` 注入)+ oss_radar/invest/edu 三工坊 Prompt 接入(广度网页调研派 research_subagent,连接器检索留主循环)+ 单测 14 例;子步骤 UI 转发(可选项)未做。§9 集成验收(token 降幅 ≥30%)待真实 run 数据。M3 按 §10 分期
 - 前置阅读: `docs/design/multi-agent-landscape-insights.md` §2(Claude Code 边界设计)/§6.1(本插件的原始裁定)、`docs/design/decision-plugin-spec.md`(格式模板)、`ARCHITECTURE.md` §分层铁律 + 新增插件检查单
 - 代码(规划): `packages/plugin-subagent/src/{index.ts, runner.ts, whitelist.ts}`;装配点: `packages/app-kit/src/index.ts`
 

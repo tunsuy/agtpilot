@@ -138,13 +138,18 @@ class AgentBackend {
       // plugin-skill 注入 web 存储适配器（flow: 托管 opt-in 记录 + 浏览器审计；
       // card: data.skillCards 卡片库 + 记忆审计）——存储不下沉，仍留在 user-store，
       // 插件只经 SkillStoreAdapter / SkillCardStore 接口读写；分词器沿用 memory-service。
-      const [{ webSkillStore }, { webCardStore }, { tokenize }] = await Promise.all([
-        import('@/lib/script-skills'),
-        import('@/lib/skill-cards'),
-        import('@/lib/memory-service'),
-      ]);
+      // plugin-subagent 注入 transcript 落盘适配器（JSONL → getDataDir()/subagents/，
+      // 只增不改；写失败静默降级，仅供审计，永不回灌主上下文）。
+      const [{ webSkillStore }, { webCardStore }, { tokenize }, { appendSubagentTranscript }] =
+        await Promise.all([
+          import('@/lib/script-skills'),
+          import('@/lib/skill-cards'),
+          import('@/lib/memory-service'),
+          import('@/lib/subagent-transcript'),
+        ]);
       const runtime = await createAgentRuntime({
         skill: { store: webSkillStore(), cards: webCardStore(), tokenize },
+        subagent: { appendTranscript: appendSubagentTranscript },
       });
       this.ctx = runtime.ctx;
       this.agentService = runtime.agent;

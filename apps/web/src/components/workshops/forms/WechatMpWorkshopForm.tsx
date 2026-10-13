@@ -23,7 +23,7 @@ interface Props {
   /** 点击摘要条「查看/编辑」打开档案向导 */
   onEditProfile?: () => void;
   /** 未配置凭证时跳连接器页配置(公众号凭证卡片) */
-  onOpenConnectors?: () => void;
+  onOpenConnectors?: (depId?: string) => void;
 }
 
 interface CredState {
@@ -236,7 +236,7 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
             {onOpenConnectors && (
               <button
                 type="button"
-                onClick={onOpenConnectors}
+                onClick={() => onOpenConnectors?.('wechat_mp')}
                 className="px-3 py-1 rounded-lg text-[11px] font-medium text-violet-600 hover:text-violet-800 transition"
               >
                 {cred?.configured ? '管理凭证' : '去连接器页配置'}

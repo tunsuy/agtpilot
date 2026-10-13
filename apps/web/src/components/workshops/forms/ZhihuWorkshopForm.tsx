@@ -22,7 +22,7 @@ interface Props {
   /** 点击摘要条「查看/编辑」打开档案向导 */
   onEditProfile?: () => void;
   /** 未登录/未托管时跳连接器页配置(知乎卡片) */
-  onOpenConnectors?: () => void;
+  onOpenConnectors?: (depId?: string) => void;
 }
 
 interface ManagedState {
@@ -186,7 +186,7 @@ export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
           {onOpenConnectors && (
             <button
               type="button"
-              onClick={onOpenConnectors}
+              onClick={() => onOpenConnectors?.('zhihu')}
               className="shrink-0 px-3 py-1 rounded-lg text-[11px] font-medium text-violet-600 hover:text-violet-800 transition"
             >
               {managed?.managed ? '管理托管' : '去连接器页登录'}

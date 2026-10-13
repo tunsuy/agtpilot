@@ -195,7 +195,7 @@ export function XhsWebLoginModal({ onClose, onLoggedIn, platform = 'xhs' }: XhsW
         {/* 实时画面:服务器上无头浏览器的截图流 */}
         <div className="rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden">
           {frame ? (
-            <img src={frame} alt="登录页面实时画面" className="w-full aspect-[16/10] object-cover object-top" />
+            <img src={frame} alt="登录页面实时画面" className="w-full aspect-[16/10] object-contain" />
           ) : (
             <div className="w-full aspect-[16/10] flex items-center justify-center">
               <span className="text-xs text-zinc-400 animate-pulse">

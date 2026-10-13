@@ -53,8 +53,8 @@ export interface BrowserSessionService {
     offset?: number,
     opts?: { renderWaitMs?: number }
   ): Promise<DistillResult>;
-  /** 截取当前帧(不导航;登录轮询用) */
-  captureFrame(userId?: string): Promise<FrameCapture>;
+  /** 截取当前帧(不导航;登录轮询用)。opts.selector:只截该元素(二维码太小扫不动时元素级截图) */
+  captureFrame(userId?: string, opts?: { selector?: string }): Promise<FrameCapture>;
   /** 登录态判定:domain 下存在 names 中任一 cookie 即 true */
   hasCookies(userId: string | undefined, domain: string, names: string[]): Promise<boolean>;
   /** 当前页面 URL(浏览器未启动返回 null,不触发启动) */
@@ -179,9 +179,23 @@ class BrowserServiceImpl extends Service implements BrowserSessionService {
     };
   }
 
-  async captureFrame(userId?: string): Promise<FrameCapture> {
+  async captureFrame(userId?: string, opts?: { selector?: string }): Promise<FrameCapture> {
     const page = await this.acquirePage(userId);
-    const buffer = await page.screenshot({ type: 'jpeg', quality: 65 });
+    let buffer: Buffer;
+    if (opts?.selector) {
+      try {
+        // 元素级截图:登录页二维码在整帧里只占 ~10% 宽,压进弹窗后手机扫不动;
+        // 质量给到 85(模块点锐利度优先)。元素缺失/跳转瞬间失败 → 回落整页
+        buffer = await page
+          .locator(opts.selector)
+          .first()
+          .screenshot({ type: 'jpeg', quality: 85, timeout: 5000 });
+      } catch {
+        buffer = await page.screenshot({ type: 'jpeg', quality: 65 });
+      }
+    } else {
+      buffer = await page.screenshot({ type: 'jpeg', quality: 65 });
+    }
     return { screenshotBase64: buffer.toString('base64'), url: page.url() };
   }
 

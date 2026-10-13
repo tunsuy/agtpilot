@@ -73,6 +73,8 @@ export interface LoginPlatformConfig {
   smsInputSelector?: string;
   /** 切到扫码态的点击目标 */
   qrSwitchSelector?: string;
+  /** 二维码元素选择器:配置后推帧改截该元素(整页截图里二维码太小、手机扫不动) */
+  qrCaptureSelector?: string;
 }
 
 export const LOGIN_PLATFORMS: Record<LoginPlatform, LoginPlatformConfig> = {
@@ -90,7 +92,14 @@ export const LOGIN_PLATFORMS: Record<LoginPlatform, LoginPlatformConfig> = {
   },
   zhihu: {
     appName: '知乎',
-    /** ⚠️ 待真实账号实测:登录起始页 / cookie / 扫码切换选择器,实测后只改这里 */
+    /**
+     * 2026-10-13 无头实测修正(负责人报「二维码扫不出来」):
+     * - 登录页**默认即扫码视图**(左二维码 canvas + 右短信表单并列),无需切换,
+     *   原先猜的切换入口 text=扫码登录 不存在,已删;
+     * - 整页 1280×800 截图里二维码只占 ~138px,压进弹窗后约 38px、模块点 ~1.5px,
+     *   手机根本扫不动 —— 改走 qrCaptureSelector 元素级截图(二维码撑满弹窗);
+     * - ⚠️ 仍待真实账号实测:z_c0 cookie 与「URL 离开 signin」的登录判定。
+     */
     startUrl: 'https://www.zhihu.com/signin',
     cookieDomain: 'https://www.zhihu.com/',
     /** z_c0 是知乎主登录态 cookie(登录后跨 zhihu.com 域下发) */
@@ -101,7 +110,8 @@ export const LOGIN_PLATFORMS: Record<LoginPlatform, LoginPlatformConfig> = {
     /** 知乎登录页默认常为扫码视图(「打开知乎App扫码」),文本命中即短路 */
     qrModeText: '扫码',
     smsInputSelector: 'input[placeholder*="手机号"]',
-    qrSwitchSelector: 'text=扫码登录',
+    /** 元素级截图目标(语义 class,非 emotion 哈希;页面唯一二维码容器):整帧里二维码太小扫不动 */
+    qrCaptureSelector: '.Qrcode-container',
   },
 };
 
@@ -133,7 +143,11 @@ export type LoginEvent = LoginStatusEvent | LoginFrameEvent | LoginDoneEvent;
 /** 结构化的浏览器服务依赖(与 plugin-browser 的 ctx.browser 同构;测试可 mock) */
 export interface LoginBrowserDeps {
   acquirePage(userId?: string): Promise<PageLike>;
-  captureFrame(userId?: string): Promise<{ screenshotBase64: string; url: string }>;
+  /** opts.selector:只截该元素(二维码元素级截图);缺省/元素缺失整页截图 */
+  captureFrame(
+    userId?: string,
+    opts?: { selector?: string }
+  ): Promise<{ screenshotBase64: string; url: string }>;
   hasCookies(userId: string | undefined, domain: string, names: string[]): Promise<boolean>;
   pageUrl(userId?: string): string | null;
 }
@@ -237,7 +251,7 @@ export async function ensureQrLoginMode(
 ): Promise<boolean> {
   if (!page.isVisible || !page.click) return false;
   const cfg = opts?.cfg || LOGIN_PLATFORMS.xhs;
-  if (!cfg.qrModeText || !cfg.smsInputSelector || !cfg.qrSwitchSelector) return false;
+  if (!cfg.qrModeText || !cfg.smsInputSelector) return false;
   const tick = opts?.tickMs ?? 500;
   const visible = async (sel: string) => {
     try {
@@ -259,6 +273,8 @@ export async function ensureQrLoginMode(
     await sleep(tick);
   }
   if (!smsVisible) return false;
+  // 站方默认表单登录但没配切换入口:不干预,帧流原样展示(人工可自救)
+  if (!cfg.qrSwitchSelector) return false;
 
   try {
     await page.click(cfg.qrSwitchSelector, { timeout: 5000 });
@@ -386,7 +402,10 @@ async function drive(session: LoginSession, deps: LoginDeps, platform: LoginPlat
 
       let frame: { screenshotBase64: string; url: string };
       try {
-        frame = await deps.browser.captureFrame(session.userId);
+        frame = await deps.browser.captureFrame(
+          session.userId,
+          cfg.qrCaptureSelector ? { selector: cfg.qrCaptureSelector } : undefined
+        );
       } catch (err: any) {
         // 截图偶发失败不终止等待(页面跳转瞬间等),下一轮重试
         await sleep(pollMs);

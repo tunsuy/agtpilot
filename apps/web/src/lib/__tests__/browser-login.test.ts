@@ -371,3 +371,67 @@ describe('知乎平台(LOGIN_PLATFORMS.zhihu)', () => {
     expect(names).toEqual(XHS_LOGIN_COOKIE_NAMES);
   });
 });
+
+describe('知乎可扫性:二维码元素级截图(qrCaptureSelector)', () => {
+  it('配置回归:知乎配 qrCaptureSelector、无切换选择器(2026-10-13 实测站点默认扫码视图、切换入口不存在)', () => {
+    expect(LOGIN_PLATFORMS.zhihu.qrCaptureSelector).toBe('.Qrcode-container');
+    expect(LOGIN_PLATFORMS.zhihu.qrSwitchSelector).toBeUndefined();
+  });
+
+  it('知乎推帧走元素级:drive 把 cfg.qrCaptureSelector 传给 captureFrame', async () => {
+    const calls: Array<{ selector?: string } | undefined> = [];
+    const page = makeMockPage(LOGIN_PLATFORMS.zhihu.startUrl, 'qr');
+    const browser: LoginBrowserDeps = {
+      acquirePage: async () => page,
+      captureFrame: vi.fn(async (_u?: string, opts?: { selector?: string }) => {
+        calls.push(opts);
+        return { screenshotBase64: 'qr-shot', url: page.url() };
+      }),
+      hasCookies: async () => false,
+      pageUrl: () => null,
+    };
+    const { sessionId } = startBrowserLogin('u-zh-qr', baseDeps(browser), 'zhihu');
+    await waitUntil(() => calls.length >= 2);
+    cancelBrowserLogin(sessionId);
+    expect(calls[0]).toEqual({ selector: '.Qrcode-container' });
+  });
+
+  it('小红书不变:未配 qrCaptureSelector → captureFrame 收 undefined(整帧)', async () => {
+    const calls: Array<{ selector?: string } | undefined> = [];
+    const page = makeMockPage(XHS_CREATOR_HOME, 'qr');
+    const browser: LoginBrowserDeps = {
+      acquirePage: async () => page,
+      captureFrame: async (_u?: string, opts?: { selector?: string }) => {
+        calls.push(opts);
+        return { screenshotBase64: 'shot', url: page.url() };
+      },
+      hasCookies: async () => false,
+      pageUrl: () => null,
+    };
+    const { sessionId } = startBrowserLogin('u-xhs-full', baseDeps(browser));
+    await waitUntil(() => calls.length >= 1);
+    cancelBrowserLogin(sessionId);
+    expect(calls[0]).toBeUndefined();
+  });
+
+  it('ensureQrLoginMode:站方默认表单登录且未配切换入口 → false 且不点击(帧流原样展示,人工可自救)', async () => {
+    const clickCalls: string[] = [];
+    const page: PageLike = {
+      goto: async () => {},
+      url: () => LOGIN_PLATFORMS.zhihu.startUrl,
+      // 短信表单可见、扫码文案不可见 = 站方停在表单态
+      isVisible: async (sel: string) => sel === LOGIN_PLATFORMS.zhihu.smsInputSelector,
+      click: async (sel: string) => {
+        clickCalls.push(sel);
+      },
+    };
+    const ok = await ensureQrLoginMode(page, async () => {}, {
+      mountWaitMs: 10,
+      switchWaitMs: 10,
+      tickMs: 1,
+      cfg: LOGIN_PLATFORMS.zhihu,
+    });
+    expect(ok).toBe(false);
+    expect(clickCalls).toEqual([]);
+  });
+});

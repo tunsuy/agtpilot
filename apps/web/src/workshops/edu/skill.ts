@@ -2,7 +2,7 @@
  * 教研工坊 · skill 包清单(平移自 components/workshops/{registry,run}.ts)。
  */
 import { GraduationCap } from 'lucide-react';
-import { buildEduPrompt, EDU_MODES } from './prompt';
+import { buildEduPrompt, EDU_MODES } from './context';
 import { str } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

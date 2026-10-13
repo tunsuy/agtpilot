@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { buildInvestPrompt, INVEST_MODES } from '@/lib/invest-workshops';
-import { buildEduPrompt } from '@/lib/edu-workshops';
+import { buildInvestPrompt, INVEST_MODES } from '@/workshops/invest/context';
+import { buildEduPrompt } from '@/workshops/edu/context';
 
 /**
  * 调研类工坊 Prompt 的 research_subagent 接入断言(spec §10 M2):
  * 广度网页调研显式引导派只读检索子 agent;连接器检索与行情数字留在主循环。
+ * (工坊重构后提示词正文迁 src/workshops/<id>/*.md,断言经 context 构建器走同一渲染管线)
  */
 
 describe('投研工坊:子 agent 引导注入', () => {

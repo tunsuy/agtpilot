@@ -7,7 +7,7 @@
  * 主题与材料都留空时不拦提交——Prompt 契约要求 Agent 先询问再动工。
  */
 import { useState } from 'react';
-import { PPT_PURPOSES, PPT_STYLES, PPT_PAGE_OPTIONS, PPT_OUTPUTS } from '@/workshops/ppt/prompt';
+import { PPT_PURPOSES, PPT_STYLES, PPT_PAGE_OPTIONS, PPT_OUTPUTS } from '@/workshops/ppt/context';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
 import { recordRun, lastRunOf } from '../history';

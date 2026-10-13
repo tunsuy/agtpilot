@@ -8,7 +8,7 @@ import {
   PPT_STYLES,
   PPT_PAGE_OPTIONS,
   PPT_OUTPUTS,
-} from '../prompt';
+} from '../context';
 
 describe('buildPptWorkshopPrompt · skill 工作流契约', () => {
   it('固定 skill 路径、构建命令与关键参数写进 prompt', () => {

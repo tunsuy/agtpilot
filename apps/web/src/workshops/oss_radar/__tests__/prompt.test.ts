@@ -4,7 +4,7 @@ import {
   buildContributorProfileSection,
   OSS_INTERESTS,
   OSS_CONTRIB_KINDS,
-} from '../prompt';
+} from '../context';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
 
 /** 贡献者档案固定样例(niche=主力技术栈,audience=关注方向,differentiation=加分经验,taboos=排除项) */

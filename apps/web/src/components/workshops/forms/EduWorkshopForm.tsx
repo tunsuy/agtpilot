@@ -7,7 +7,7 @@ import {
   FLASHCARD_TYPES,
   FLASHCARD_FORMATS,
   EDU_DELIVERIES,
-} from '@/workshops/edu/prompt';
+} from '@/workshops/edu/context';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
 import { recordRun, lastRunOf } from '../history';

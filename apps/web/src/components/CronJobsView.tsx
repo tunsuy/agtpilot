@@ -20,7 +20,7 @@ import {
 import { CronJobItem } from '../types/agent';
 import { formatCronNextRun, isValidCronPattern } from '@/lib/cron-utils';
 import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
-import { buildOssRadarPrompt } from '@/workshops/oss_radar/prompt';
+import { buildOssRadarPrompt } from '@/workshops/oss_radar/context';
 import type { CronScenario } from '@/lib/cron-scenario';
 
 interface CronJobsViewProps {

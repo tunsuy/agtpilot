@@ -3,7 +3,7 @@
  * skill 目录常量(BENTO_SKILL_DIR 等)也在此导出,ppt-deck 工具模块引用。
  */
 import { Presentation } from 'lucide-react';
-import { buildPptWorkshopPrompt, PPT_PURPOSES } from './prompt';
+import { buildPptWorkshopPrompt, PPT_PURPOSES } from './context';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

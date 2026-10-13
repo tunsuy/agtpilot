@@ -7,7 +7,7 @@ import {
   buildOssRadarPrompt,
   OSS_INTERESTS,
   OSS_CONTRIB_KINDS,
-} from './prompt';
+} from './context';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

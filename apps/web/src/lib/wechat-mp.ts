@@ -716,3 +716,11 @@ export function buildWechatMpTools(
 
   return [checkSetup, createDraft];
 }
+
+/** 工具提供方注册表条目(tool-providers.ts);build 签名与上面导出保持一对一 */
+export const TOOL_PROVIDER: import('./tool-providers').ToolProvider = {
+  id: 'wechat_mp',
+  deps: ['uid', 'browser'],
+  build: ({ uid, browser }) =>
+    buildWechatMpTools(uid, browser as WechatCoverBrowserService | undefined),
+};

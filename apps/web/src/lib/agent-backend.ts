@@ -1398,37 +1398,19 @@ class AgentBackend {
             this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`, uid);
           }
 
-          // 2.46 PPT 工坊 · bento 演示稿交付工具(ppt_check_env / ppt_publish_deck):
-          // publish 工具在服务端直接读沙箱工作区构建好的 .bento.html 并经
-          // ArtifactService 挂上中央画布 —— 单文件演示页 600KB+,严禁让模型经
-          // artifact_render 回显内容(撑爆上下文)。围栏根与 plugin-sandbox 无
-          // config 挂载时一致(process.cwd()),两侧读写语义对齐。
-          try {
-            const { buildPptDeckTools } = await import('@/lib/ppt-deck');
-            const { saveArtifactFile } = await import('@/lib/artifact-files');
-            taskTools = [
-              ...(taskTools || []),
-              ...buildPptDeckTools({
-                createArtifact: (data, taskId) => {
-                  const svc = (this.ctx as any)?.artifact;
-                  if (!svc) throw new Error('ArtifactService 未挂载,无法发布演示页');
-                  return svc.createOrUpdateArtifact(data, taskId);
-                },
-                // S2:ppt-master 真 .pptx 交付 —— 二进制收进用户级文件库
-                // (getDataDir()/artifact_files/<uid>/),产物只带 fileId 元数据,
-                // 前端凭 /api/artifacts/file?fileId= 下载(鉴权 = 登录用户本人分区)。
-                storeFile: (input) => saveArtifactFile({ userId: uid, ...input }),
-              }),
-            ];
-          } catch (e: any) {
-            this.addTerminalLog('stderr', `[PPT] 演示稿工具挂载异常: ${e?.message || e}`, uid);
-          }
+          // 2.46 PPT 工坊等 8 个工具模块已并入下方「工具提供方注册表」统一装载
+          // (Phase 1 重构:模块自带 TOOL_PROVIDER 描述符,主流程不再逐个硬编码)
+
+          // 2.5 用户级工具装载区:MCP 连接器 → 工具提供方注册表 → script-skill
+          // 覆盖(同名注册表文件胜出)→ 合入 taskTools。injectedTools 提到各块
+          // try 之外声明 —— 任何一块失败都不拖垮其余工具(原实现把 wechat/email
+          // 等全挤在 MCP 的 try 里,连接器一抛就全部丢失,本次顺带修复)。
+          const injectedTools: any[] = [];
 
           try {
             const { buildUserMcpServers, buildUserMcpToolRoutes } = await import('@/lib/mcp-connectors');
             const { buildConnectorBridgeTools } = await import('@/lib/connector-bridge');
             const mcpSvc = this.mcp;
-            const injectedTools: any[] = [];
 
             if (mcpSvc?.syncUserServers) {
               const servers = buildUserMcpServers(uid);
@@ -1464,108 +1446,81 @@ class AgentBackend {
               })
             );
 
-            // 微信公众号草稿箱直连:wechat_mp_check_setup / wechat_mp_create_draft
-            // 始终注入(未配置时返回引导文案),凭证在 execute 时才从 user-store 按用户读取。
-            // 浏览器服务传入用于"内容排版封面"渲染(临时标签页,失败自动回退渐变)
-            const { buildWechatMpTools } = await import('@/lib/wechat-mp');
-            injectedTools.push(...buildWechatMpTools(uid, (this.ctx as any)?.browser));
-
-            // 电子邮件 SMTP 直发:email_send(同样始终注入,凭证 execute 时按用户读取)
-            const { buildEmailTools } = await import('@/lib/email-smtp');
-            injectedTools.push(...buildEmailTools(uid));
-
-            // 电子邮件 IMAP 收件:email_list / email_read(始终注入,凭证 execute 时按用户读取,未配置回退复用 SMTP 凭证)
-            const { buildEmailImapTools } = await import('@/lib/email-imap');
-            injectedTools.push(...buildEmailImapTools(uid));
-
-            // AI Builders 日报:follow_builders_fetch_feed(只读公共 feed,无需凭证,
-            // 服务端 30 分钟缓存;始终注入,非日报任务用不到时 LLM 自然忽略)
-            const { buildFollowBuildersTools } = await import('@/lib/follow-builders');
-            injectedTools.push(...buildFollowBuildersTools());
-
-            // 开源贡献雷达:github_scan(只读公共 GitHub REST,无需凭证,服务端
-            // 15 分钟缓存;始终注入,非调研任务用不到时 LLM 自然忽略)
-            const { buildGithubScanTools } = await import('@/lib/github-scan');
-            injectedTools.push(...buildGithubScanTools());
-
-            // 小红书托管模式(scenario-loop P2):读工具登录过即注入;
-            // 存草稿工具仅在显式 opt-in + 风险已读时注入(dangerLevel high → 审批门)。
-            // 浏览器服务来自 plugin-browser 的 ctx.browser,与登录通道共享同一 Page
-            try {
-              const { buildXhsManagedTools } = await import('@/lib/xhs-managed');
-              const browserSvc = (this.ctx as any)?.browser;
-              const xhsTools = buildXhsManagedTools(uid, browserSvc);
-              if (xhsTools.length > 0) {
-                injectedTools.push(...xhsTools);
-                this.addTerminalLog(
-                  'system',
-                  `[XHS] 托管工具挂载: ${xhsTools.map((t: any) => t.name).join(' / ')}`,
-                  uid
-                );
-              }
-            } catch (e: any) {
-              this.addTerminalLog('stderr', `[XHS] 托管工具挂载异常: ${e?.message || e}`, uid);
-            }
-
-            // 知乎托管模式(与小红书同规则):存草稿工具仅在显式 opt-in + 风险已读时注入
-            // (dangerLevel high → 审批门)。浏览器服务共享同一 per-user Page
-            try {
-              const { buildZhihuManagedTools } = await import('@/lib/zhihu-managed');
-              const browserSvc = (this.ctx as any)?.browser;
-              const zhihuTools = buildZhihuManagedTools(uid, browserSvc);
-              if (zhihuTools.length > 0) {
-                injectedTools.push(...zhihuTools);
-                this.addTerminalLog(
-                  'system',
-                  `[ZHIHU] 托管工具挂载: ${zhihuTools.map((t: any) => t.name).join(' / ')}`,
-                  uid
-                );
-              }
-            } catch (e: any) {
-              this.addTerminalLog('stderr', `[ZHIHU] 托管工具挂载异常: ${e?.message || e}`, uid);
-            }
-
-            // script-skill 注册表:经 ctx.skills 服务面(plugin-skill)热加载声明式
-            // 浏览器脚本技能(apps/web/skills/*.skill.json,AGTPILOT_SCRIPT_SKILL_DIR
-            // 可覆盖);插件加载失败时回落 lib/script-skills 本地构建(同一引擎+同一
-            // web 存储适配器,行为一致)。
-            // 同名技能覆盖注入列表里更早的内置工具(与 taskTools 覆盖全局注册同语义)——
-            // 选择器漂移时放一个修正文件即可生效,不用发版;文件坏掉/被删则内置工具兜底。
-            // 安全件由框架统一提供:托管 opt-in 门、登录门、每日限频、审计、发布围栏、审批门。
-            try {
-              const browserSvc = (this.ctx as any)?.browser;
-              const skillsSvc = (this.ctx as any)?.skills;
-              const reg = skillsSvc
-                ? skillsSvc.buildTaskTools(uid, browserSvc)
-                : (await import('@/lib/script-skills')).buildScriptSkillTools(uid, browserSvc);
-              for (const err of reg.errors) {
-                this.addTerminalLog('stderr', `[SKILLS] 技能文件被跳过: ${err}`, uid);
-              }
-              if (reg.tools.length > 0) {
-                const names = new Set(reg.tools.map((t: any) => t.name));
-                const overridden = injectedTools
-                  .filter((t: any) => names.has(t.name))
-                  .map((t: any) => t.name);
-                // 显式去重(注册表版胜出),避免同名工具重复进 taskTools 产生歧义
-                for (let i = injectedTools.length - 1; i >= 0; i--) {
-                  if (names.has(injectedTools[i].name)) injectedTools.splice(i, 1);
-                }
-                injectedTools.push(...reg.tools);
-                this.addTerminalLog(
-                  'system',
-                  `[SKILLS] 脚本技能挂载: ${reg.tools.map((t: any) => t.name).join(' / ')}` +
-                    (overridden.length > 0 ? `(同名覆盖内置: ${overridden.join(', ')})` : ''),
-                  uid
-                );
-              }
-            } catch (e: any) {
-              this.addTerminalLog('stderr', `[SKILLS] 脚本技能挂载异常: ${e?.message || e}`, uid);
-            }
-            taskTools = [...(taskTools || []), ...injectedTools];
-
           } catch (e: any) {
             this.addTerminalLog('stderr', `[MCP] 连接器挂载异常: ${e?.message || e}`, uid);
           }
+
+          // 2.47 工具提供方注册表(skill 包重构 Phase 1):
+          // ppt / wechat_mp / email_smtp / email_imap / follow_builders /
+          // github_scan / xhs / zhihu 八个模块自带 TOOL_PROVIDER 描述符
+          // (id + 依赖声明 + build),此处一次循环装载;单个 provider 失败只记
+          // [REG] 日志、不中断其余(原 per-block try/catch 的同语义平移)。
+          // ppt 的 artifact 闭包在此接线:publish 工具在服务端直接读沙箱工作区
+          // 构建好的 .bento.html 并经 ArtifactService 挂上中央画布(单文件演示页
+          // 600KB+,严禁让模型经 artifact_render 回显内容撑爆上下文);.pptx 二进制
+          // 收进用户级文件库,前端凭 /api/artifacts/file?fileId= 下载(鉴权 =
+          // 登录用户本人分区)。围栏根与 plugin-sandbox 无 config 挂载时一致
+          // (process.cwd()),两侧读写语义对齐。
+          try {
+            const { resolveProviderTools } = await import('@/lib/tool-providers');
+            const { saveArtifactFile } = await import('@/lib/artifact-files');
+            injectedTools.push(
+              ...(await resolveProviderTools(
+                {
+                  uid,
+                  browser: (this.ctx as any)?.browser,
+                  createArtifact: (data: any, taskId?: string) => {
+                    const svc = (this.ctx as any)?.artifact;
+                    if (!svc) throw new Error('ArtifactService 未挂载,无法发布演示页');
+                    return svc.createOrUpdateArtifact(data, taskId);
+                  },
+                  storeFile: (input: any) => saveArtifactFile({ userId: uid, ...input }),
+                },
+                (level: 'system' | 'stderr', message: string) =>
+                  this.addTerminalLog(level, message, uid)
+              ))
+            );
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[REG] 工具注册表装载异常: ${e?.message || e}`, uid);
+          }
+
+          // script-skill 注册表:经 ctx.skills 服务面(plugin-skill)热加载声明式
+          // 浏览器脚本技能(apps/web/skills/*.skill.json,AGTPILOT_SCRIPT_SKILL_DIR
+          // 可覆盖);插件加载失败时回落 lib/script-skills 本地构建(同一引擎+同一
+          // web 存储适配器,行为一致)。
+          // 同名技能覆盖注入列表里更早的内置工具(与 taskTools 覆盖全局注册同语义)——
+          // 选择器漂移时放一个修正文件即可生效,不用发版;文件坏掉/被删则内置工具兜底。
+          // 安全件由框架统一提供:托管 opt-in 门、登录门、每日限频、审计、发布围栏、审批门。
+          try {
+            const browserSvc = (this.ctx as any)?.browser;
+            const skillsSvc = (this.ctx as any)?.skills;
+            const reg = skillsSvc
+              ? skillsSvc.buildTaskTools(uid, browserSvc)
+              : (await import('@/lib/script-skills')).buildScriptSkillTools(uid, browserSvc);
+            for (const err of reg.errors) {
+              this.addTerminalLog('stderr', `[SKILLS] 技能文件被跳过: ${err}`, uid);
+            }
+            if (reg.tools.length > 0) {
+              const names = new Set(reg.tools.map((t: any) => t.name));
+              const overridden = injectedTools
+                .filter((t: any) => names.has(t.name))
+                .map((t: any) => t.name);
+              // 显式去重(注册表版胜出),避免同名工具重复进 taskTools 产生歧义
+              for (let i = injectedTools.length - 1; i >= 0; i--) {
+                if (names.has(injectedTools[i].name)) injectedTools.splice(i, 1);
+              }
+              injectedTools.push(...reg.tools);
+              this.addTerminalLog(
+                'system',
+                `[SKILLS] 脚本技能挂载: ${reg.tools.map((t: any) => t.name).join(' / ')}` +
+                  (overridden.length > 0 ? `(同名覆盖内置: ${overridden.join(', ')})` : ''),
+                uid
+              );
+            }
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[SKILLS] 脚本技能挂载异常: ${e?.message || e}`, uid);
+          }
+          taskTools = [...(taskTools || []), ...injectedTools];
 
           // 用户级非 LLM 服务 Key（搜索/爬取/云端沙箱）：经 runTask taskEnv → session.env
           // 透传给插件，绝不写 process.env（多用户隔离）

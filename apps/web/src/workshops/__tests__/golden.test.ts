@@ -259,7 +259,7 @@ describe('工坊 golden 快照 · cron 场景重建', () => {
 
   it('非场景任务原样透传(不受重构影响)', () => {
     expect(
-      resolveCronPrompt({ prompt: '手输 prompt 原文', scenario: { key: 'bogus' } }, getProfile)
+      resolveCronPrompt({ prompt: '手输 prompt 原文', scenario: { key: 'bogus' } as any }, getProfile)
     ).toBe('手输 prompt 原文');
   });
 });

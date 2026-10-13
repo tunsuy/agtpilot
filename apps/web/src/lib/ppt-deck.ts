@@ -283,3 +283,12 @@ export function buildPptDeckTools(deps: PptDeckToolDeps): ToolDefinition[] {
 
   return [checkEnv, publishDeck, publishPptx];
 }
+
+/** 工具提供方注册表条目(tool-providers.ts);artifact 闭包由 agent-backend 接线 */
+export const TOOL_PROVIDER: import('./tool-providers').ToolProvider = {
+  id: 'ppt',
+  deps: ['artifact'], // uid 绑定在 agent-backend 的 storeFile 闭包里,provider 本身不消费
+  // 闭包类型收窄:注册表上下文里为可选,agent-backend 唯一调用点必然接线
+  build: ({ createArtifact, storeFile }) =>
+    buildPptDeckTools({ createArtifact: createArtifact as any, storeFile: storeFile as any }),
+};

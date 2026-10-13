@@ -41,6 +41,20 @@ describe('pollTick', () => {
     expect((await pollTick(flakyClient, (l) => logs.push(l))).outcome).toBe('ok');
     expect(logs.at(-1)).toContain('将重试');
   });
+
+  it('M3 审批指令下行:actions 原样透出;缺省/畸形 → []', async () => {
+    const logs: string[] = [];
+    const action = { taskId: 'rtask_1', approvalId: 'rappr_1', kind: 'publish' };
+    const withActions = fakeClient({ serverTime: 1, claimed: null, queue: [], actions: [action] });
+    const r = await pollTick(withActions, (l) => logs.push(l));
+    expect(r.actions).toEqual([action]);
+    expect(logs.some((l) => l.includes('收到 1 条审批指令'))).toBe(true);
+
+    const legacy = fakeClient({ serverTime: 1, claimed: null, queue: [] }); // 旧版云端无 actions 字段
+    expect((await pollTick(legacy, () => {})).actions).toEqual([]);
+    const malformed = fakeClient({ serverTime: 1, claimed: null, queue: [], actions: 'nope' });
+    expect((await pollTick(malformed, () => {})).actions).toEqual([]);
+  });
 });
 
 describe('runHeartbeatLoop', () => {

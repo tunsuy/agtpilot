@@ -32,6 +32,8 @@ export interface PollResult {
   serverTime: number;
   claimed: { taskId: string; pack: unknown } | null;
   queue: Array<{ taskId: string; state: string }>;
+  /** M3:审批结果动作下行(publish 固化命令集 / cancel 拒绝确认;旧版云端可能缺省) */
+  actions?: unknown[];
 }
 
 /**

@@ -10,6 +10,8 @@
  * - runner 在配对与每次心跳上报自身版本与协议版本,云端对不兼容版本拒绝派发。
  */
 
+import type { RunnerApproval } from './runner-publish';
+
 /** 协议版本(v1:字段只增不改) */
 export const RUNNER_PROTOCOL_VERSION = 1;
 
@@ -102,8 +104,10 @@ export interface RunnerTaskRecord {
   expiresAt: number;
   /** Phase 2 成功后回流的 PR 链接 */
   prUrl?: string;
-  /** awaiting_approval 对应的云端审批单 */
+  /** awaiting_approval 对应的云端审批单 id(= approval.approvalId,冗余便于检索) */
   approvalId?: string;
+  /** Phase 2 审批单(M3,§6.2):展示快照 + 批准时刻固化的命令集 */
+  approval?: RunnerApproval;
   error?: string;
   /** 上行事件(幂等去重后保留最近 N 条,cap 由 runner-bridge 控制) */
   events?: RunnerEvent[];

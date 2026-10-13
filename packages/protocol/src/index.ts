@@ -124,3 +124,6 @@ export * from './runner';
 
 /** 任务包渲染器(执行指令 / T0 交接包 / PR 终稿提取,web 与 runner 同源) */
 export * from './runner-taskpack';
+
+/** Phase 2 发布命令集(固化/白名单校验/PR 链接提取,web 与 runner 同源) */
+export * from './runner-publish';

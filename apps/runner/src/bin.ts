@@ -5,13 +5,16 @@ import { clearCredentials, loadCredentials, saveCredentials, credentialsFile } f
 import { pollTick, runHeartbeatLoop } from './heartbeat';
 import { ClaudeCodeAdapter } from './executor';
 import { runTask } from './task-run';
+import { handleDeviceActions } from './publish';
 import { workspaceRoot } from './config';
 
 /**
  * agtpilot-runner —— AgtPilot 本地薄 runner(docs/design/local-runner-bridge.md)
  *
- * M2:pair(配对)/ start(心跳轮询 + FIFO 领取任务 + ClaudeCodeAdapter 本地执行
- * + 事件回流)/ status。push/PR 永远走云端审批门(M3),runner 侧无任何对外发布路径。
+ * M3:pair(配对)/ start(心跳轮询 + FIFO 领取任务 + ClaudeCodeAdapter 本地执行
+ * + 事件回流 + 审批结果动作执行:批准后逐字执行固化命令集 git push/gh pr create/
+ * gh issue comment,拒绝后上报取消确认)/ status。
+ * push/PR 只有云端审批固化的命令集能触发,runner 侧白名单复核,别无对外发布路径。
  *
  * 分发注记:bin 目前直指 TS 源(tsx 运行,仓内开发者路径);
  * 发 npm 前补 tsc 构建产物指向(§9,待 npmjs org 注册后与占位发布一起做)。
@@ -72,6 +75,20 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
     shouldStop: () => stopped,
     tick: async () => {
       const r = await pollTick(client, log, { claim: true });
+      if (r.outcome === 'ok' && r.actions.length > 0) {
+        // 审批结果动作(M3):先于新任务处理(发布是分钟级动作,不阻塞心跳太久);
+        // 单任务串行哲学下,若此刻正在执行 Phase 1,动作等本 tick 结束后自然串行
+        try {
+          await handleDeviceActions(r.actions, {
+            deviceId: creds.deviceId,
+            postEvents: (events) => client.postEvents(events),
+            workspaceRoot: workspaceRoot(),
+            log,
+          });
+        } catch (e) {
+          log(`审批指令处理异常(心跳继续,云端将幂等重发指令):${(e as Error)?.message || e}`);
+        }
+      }
       if (r.outcome === 'ok' && r.claimed) {
         // 任务执行期间主循环被占用:另起保活轮询,维持 lastSeenAt(设备不被判离线)
         const keepAlive = setInterval(() => {

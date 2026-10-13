@@ -11,6 +11,8 @@ export type TickOutcome = 'ok' | 'auth' | 'upgrade';
 export interface TickResult {
   outcome: TickOutcome;
   claimed: { taskId: string; pack: unknown } | null;
+  /** M3:审批结果动作(publish/cancel),由 bin 交 handleDeviceActions 处理 */
+  actions: unknown[];
 }
 
 /** 单次轮询:成功打印队列概览并返回领取结果;401/426 返回专属结果由调用方处置 */
@@ -24,20 +26,22 @@ export async function pollTick(
     const queued = result.queue.filter((t) => t.state === 'queued').length;
     const active = result.queue.filter((t) => !['done', 'failed', 'cancelled', 'expired'].includes(t.state)).length;
     log(`心跳 ok · 队列 ${result.queue.length}(待领 ${queued} / 在飞 ${active})`);
+    const actions = Array.isArray(result.actions) ? result.actions : [];
+    if (actions.length > 0) log(`收到 ${actions.length} 条审批指令`);
     if (result.claimed) log(`领取任务 ${result.claimed.taskId},开始本地执行…`);
-    return { outcome: 'ok', claimed: result.claimed ?? null };
+    return { outcome: 'ok', claimed: result.claimed ?? null, actions };
   } catch (e) {
     if (e instanceof RunnerAuthError) {
       log(`认证失败:${e.message} —— 本地凭据已不可用,请重新配对`);
-      return { outcome: 'auth', claimed: null };
+      return { outcome: 'auth', claimed: null, actions: [] };
     }
     if (e instanceof RunnerUpgradeError) {
       log(`版本不兼容:${e.message}`);
-      return { outcome: 'upgrade', claimed: null };
+      return { outcome: 'upgrade', claimed: null, actions: [] };
     }
     // 网络抖动/云端 5xx:不退出,下个周期重试(断网本地缓冲在 M4 事件队列做)
     log(`心跳失败(将重试):${(e as Error)?.message || e}`);
-    return { outcome: 'ok', claimed: null };
+    return { outcome: 'ok', claimed: null, actions: [] };
   }
 }
 

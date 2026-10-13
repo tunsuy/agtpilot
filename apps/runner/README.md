@@ -26,8 +26,12 @@ pnpm --filter @agtpilot/runner exec tsx src/bin.ts status  # 查看配对状态
 `start` 领取任务后:仓库 clone/fetch 到工作区(默认 `~/agtpilot-workspace`,
 `AGTPILOT_WORKSPACE_ROOT` 可覆写)→ 调起本地 `claude -p`(headless + stream-json,
 工具白名单固化:禁 git push / gh / 联网,永不使用 --dangerously-skip-permissions)→
-独立复跑验收命令 → 校验本地 commit → 事件回流,任务停在 awaiting_approval,
-push/PR 等云端审批(M3 交付前产出只留本地分支)。
+独立复跑验收命令 → 校验本地 commit → 事件回流,任务停在 awaiting_approval。
+
+云端批准后,runner 随轮询收到**审批时刻固化的命令集**(`git push` / `gh pr create` /
+可选 `gh issue comment` 认领留言),逐条再过白名单校验后**逐字执行**——不重新规划、
+不追加命令,任何一条失败即停并上报;PR 链接自动回流任务卡。拒绝则任务取消,
+本地分支保留(可自行处置)。
 
 正式分发渠道为 `npm i -g @agtpilot/runner`(npmjs org 注册后启用;当前为仓内开发者路径)。
 
@@ -36,8 +40,8 @@ push/PR 等云端审批(M3 交付前产出只留本地分支)。
 | 阶段 | 能力 |
 |---|---|
 | M1 | 协议(packages/protocol/runner.ts)+ 配对/设备/任务/事件 API + runner 骨架(pair/start 心跳/status) |
-| **M2(当前)** | 任务包渲染(packages/protocol/runner-taskpack.ts)+ 机会卡「派发到本地」+ ClaudeCodeAdapter(spawn + stream-json 解析,假 claude 二进制测试)+ 事件回流/状态徽章 |
-| M3 | 审批闭环(awaiting_approval → 审批卡 + Web Push → 固化命令集执行 → PR 回流) |
+| M2 | 任务包渲染(packages/protocol/runner-taskpack.ts)+ 机会卡「派发到本地」+ ClaudeCodeAdapter(spawn + stream-json 解析,假 claude 二进制测试)+ 事件回流/状态徽章 |
+| **M3(当前)** | 审批闭环:awaiting_approval → 高危审批卡(runner_publish)+ Web Push → 批准时刻固化命令集下行 → runner 白名单复核后逐字执行 → PR 链接回流 done;拒绝 → cancel 下行、本地分支保留 |
 | M4 | 硬化(离线队列/TTL/redaction/审计视图/stop·logs 子命令/按需 diff) |
 
 ## 测试

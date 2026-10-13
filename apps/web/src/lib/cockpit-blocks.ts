@@ -3,11 +3,13 @@
  *
  * 把 mission.steps 切成渲染块:
  * - user:用户提问气泡;
- * - assistant:正式回复卡(messageKind==='final',或旧任务的每轮最后一条已完成文本回复);
- * - tools:连续的过程步骤(工具调用 + 中间推理)聚合为一个折叠条;
- * - 执行效率摘要步骤(step_eff_ 前缀)不进任何块 —— 它不是任务活动,
- *   过去被错归入工具块导致每轮结尾多一个「已完成 1 项任务活动」空壳条;
- *   现单独收集为 effNotes,仅在「查看执行详情」开启时以小字呈现。
+ * - assistant:流式/最终回复与思考块(messageKind==='final',或旧任务的
+ *   每轮最后一条已完成文本回复);
+ * - tools:过程步骤聚合块 —— 渲染为时间线活动行(逐行叙述,无统计汇总头、
+ *   无入参出参详情;行内叙述与右侧「动态」tab 同源 narrateStep)。组内无
+ *   真实动作(带工具)且无失败步骤时不产出,不出空壳;
+ * - 执行效率摘要步骤(step_eff_ 前缀)不进任何块 —— 单独收集为 effNotes,
+ *   仅在动态区以小字呈现。
  */
 import type { MissionStep } from '../types/agent';
 
@@ -77,14 +79,19 @@ export function splitStepsIntoBlocks(steps: MissionStep[]): CockpitBlocks {
     const isAssistant = (st.role === 'assistant' || Boolean(st.answer)) && !isUser;
     const isFinalAssistant =
       isAssistant && (st.messageKind === 'final' || (!st.messageKind && legacyFinalAssistantIds.has(st.id)));
-    // 正在流式输出的 live step(打字机卡)与中断但已有文本的步骤,走正式回复卡呈现
-    // —— 执行期的思考过程对用户实时可见,不再被收进工具活动块只露一行摘要;
-    // 已完成(DONE)的中间推理轮次仍归入活动块,避免时间线被过程叙述刷屏。
+    // 流式块(打字机卡):正在输出的 live step、中断但已有文本的步骤、以及
+    // 【已收尾但带思考内容的轮次】都走流内独立块 —— 思考卡在工具调用把轮次
+    // 收拢后原地变为可折叠的「思考过程」行,不折叠进活动块突然消失(生产实测:
+    // 思考中 → 跳变「已完成 N 项活动」→ 又跳回思考中,观感即来源于此)。
+    // 仅带正文(answer)的收尾轮仍归活动块:正文属过程叙述,且历史落盘数据里
+    // 它与最终答复卡内容重复(done 收尾顺序 bug 的残骸),不再重复展示。
     const isLiveAssistant =
       isAssistant &&
       st.role === 'assistant' &&
       st.messageKind !== 'final' &&
-      (st.status === 'RUNNING' || (st.status === 'FAILED' && Boolean(st.answer || st.reasoning)));
+      (st.status === 'RUNNING' ||
+        Boolean(st.reasoning && st.messageKind === 'progress') ||
+        (st.status === 'FAILED' && Boolean(st.answer || st.reasoning)));
     // 中间模型轮次是执行过程,不再作为平级大回复;与工具调用一起归入活动块。
     const isTool = !isUser && (!isAssistant || (!isFinalAssistant && !isLiveAssistant));
 

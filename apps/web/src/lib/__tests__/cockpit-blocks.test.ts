@@ -239,6 +239,65 @@ describe('splitStepsIntoBlocks · 「已完成 0 项任务活动」空壳组修�
   });
 });
 
+describe('splitStepsIntoBlocks · 思考轮收尾不消失(思考中→已完成→思考中 跳变修复)', () => {
+  /**
+   * 轮次边界跳变根因:live 思考卡在 tool_call 收拢时被折叠进活动块瞬间消失,
+   * 组头翻成「已完成 N 项活动」,下一轮 step_started 又新建思考卡。修复:
+   * 带思考内容(reasoning)的收尾轮留在流内原地收拢为可折叠思考行 ——
+   * 时间线只增不减,块位置不回缩(Claude Code 的思考块形态)。
+   */
+  it('DONE progress 带 reasoning:留在流内独立块,不再折叠进活动块消失', () => {
+    const think = step({
+      id: 'step_live_m1_1',
+      role: 'assistant',
+      messageKind: 'progress',
+      status: 'DONE',
+      reasoning: '拆解问题:先检索再汇总…',
+      title: '已完成一轮推理',
+    });
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '问题'),
+      think,
+      toolStep('t1', 'search_web'),
+      finalAnswer('a1', '答'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'assistant', 'tools', 'assistant']);
+    expect((blocks[1] as { step: MissionStep }).step.id).toBe('step_live_m1_1');
+  });
+
+  it('连续两轮思考 → 工具 → 再思考:块按时间追加,时间线不回缩', () => {
+    const think1 = step({ id: 'th1', role: 'assistant', messageKind: 'progress', status: 'DONE', reasoning: '第一轮思考' });
+    const think2 = step({ id: 'th2', role: 'assistant', messageKind: 'progress', status: 'DONE', reasoning: '第二轮思考' });
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '问题'),
+      think1,
+      toolStep('t1', 'search_web'),
+      think2,
+      toolStep('t2', 'browser_open'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'assistant', 'tools', 'assistant', 'tools']);
+    expect((blocks[3] as { step: MissionStep }).step.id).toBe('th2');
+  });
+
+  it('DONE progress 仅带正文(无 reasoning)仍归活动块:过程叙述不刷屏、历史残骸不与最终答复重复', () => {
+    const textOnly = step({ id: 'm1', role: 'assistant', messageKind: 'progress', status: 'DONE', answer: '阶段播报' });
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '问题'),
+      textOnly,
+      toolStep('t1', 'search_web'),
+      finalAnswer('a1', '答'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant']);
+    expect((blocks[1] as { steps: MissionStep[] }).steps.map((s) => s.id)).toEqual(['m1', 't1']);
+  });
+
+  it('空思考轮(无 reasoning 无正文)仍归活动块为隐藏行', () => {
+    const emptyThink = step({ id: 'th1', role: 'assistant', messageKind: 'progress', status: 'DONE', title: '已完成一轮推理' });
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), emptyThink, toolStep('t1', 'search_web')]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools']);
+  });
+});
+
 describe('groupBlocksIntoTurns · 一轮作答一张卡(单头像)', () => {
   it('用户块独立成轮;活动链与回复卡并入同一 agent 轮', () => {
     const { blocks } = splitStepsIntoBlocks([

@@ -61,4 +61,13 @@ describe('buildTaskSystemPrompt', () => {
     // 两次无记忆调用输出恒定(提示前缀稳定 = provider 缓存可命中)
     expect(without).toBe(buildTaskSystemPrompt());
   });
+
+  it('思考经济规则锚定(推理模型不预演执行细节,生产实测 7.5 分钟过度思考修复)', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('【思考经济】');
+    expect(s).toContain('脑内模拟不产生任何核验价值');
+    expect(s).toContain('够决定下一步动作');
+    // 规则编号连续:排在时效基准(11)之后
+    expect(s.indexOf('【思考经济】')).toBeGreaterThan(s.indexOf('【时效基准】'));
+  });
 });

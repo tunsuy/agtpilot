@@ -87,10 +87,12 @@ ${profileSection ? `\n${profileSection}\n` : ''}
 产出数量:${n} 条机会
 
 调研路径(已连接哪个用哪个,按顺序降级,发生降级须在清单末尾注明):
-1. GitHub(若已连接 mcp_github_mcp_* 工具):仓库搜索按话题(topic:ai / llm / agent / rag 等)+ 最近推送时间筛活跃项目;Issue 搜索用 state:open 加 "good first issue" / "help wanted" 标签,或找明确无人认领、维护者欢迎新人的 Issue
+1. GitHub 首选固定工具 github_scan:topics 传关注方向对应话题(如 agent / llm / rag / devtool),一次调用即可拿到按 star 排序的活跃候选仓库与未认领的 good first issue(star 数/最近推送/Issue 链接都已核验,直接用于筛选);返回里的 degraded 说明与 searchRateRemaining 额度要尊重,额度不足就到此为止。已连接 mcp_github_mcp_* 工具时可用 MCP 补充检索(help wanted 标签、特定仓库深入查询),不要自己写代码调 GitHub API
 2. DeepWiki(若已连接 mcp_deepwiki_* 工具):对候选仓库提问,快速理解架构、贡献流程与测试方式,判断上手成本
 3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
+
+规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
 广域网页调研派子 agent:需要翻大量网页才能得出结论的调研(多个候选项目的社区动态扫描、口碑交叉验证等),用 research_subagent 工具(只读检索子 agent)完成——相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用,子 agent 只回传提炼后的结论与来源,原始网页内容不占主上下文,把主线留给机会筛选与清单输出。注意:GitHub / DeepWiki 连接器检索能否交给子 agent,取决于负责人是否已将其加入子 agent 白名单——已开放的工具会自动出现在子 agent 工具集里,未开放时子 agent 自动退回网页搜索;无论走哪条路,关键 Issue 链接与项目状态在写入报告前仍需由你直接复核。单点查询(查一个链接、搜一个项目名)直接用 search_web,不要派子 agent。
 

@@ -410,6 +410,25 @@ export default function Workspace() {
   };
 
   const handleStopMission = async (missionId: string) => {
+    // 乐观收尾:点击即本地置 DONE(镜像 stopMission 的口径:RUNNING/PENDING
+    // → FAILED + abort 尾巴步)。SSE 万一静默死亡(连接被掐但 EventSource
+    // 还没察觉),用户至少立刻看到执行态停止,权威 mission_updated 到达后
+    // 整包覆盖 —— 修复生产实测「点停止没反应,刷新才见已停止」
+    setMissions((prev) =>
+      prev.map((m) => {
+        if (m.id !== missionId || m.status === 'DONE') return m;
+        const steps = m.steps.map((st) =>
+          st.status === 'RUNNING' || st.status === 'PENDING' ? { ...st, status: 'FAILED' as const } : st
+        );
+        steps.push({
+          id: `step_abort_fe_${Date.now()}`,
+          title: '任务已被用户主动终止 (Aborted)',
+          status: 'FAILED' as const,
+          duration: '0ms',
+        });
+        return { ...m, status: 'DONE' as const, steps };
+      })
+    );
     try {
       await fetch('/api/agent/stop', {
         method: 'POST',
@@ -418,6 +437,36 @@ export default function Workspace() {
       });
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  /**
+   * 删除历史会话:持久化库 + 内存态由后端一并清掉,前端同步摘除列表项。
+   * 删掉的是当前选中会话时切到剩余列表头(没有剩余则回到空白就绪态);
+   * ACTIVE/等待中的任务后端会拒绝(409),组件层已先行隐藏删除入口。
+   */
+  const handleDeleteMission = async (missionId: string) => {
+    try {
+      const res = await fetch('/api/agent/mission/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ missionId }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        alert(data?.error || '删除失败,请稍后重试');
+        return;
+      }
+      setMissions((prev) => {
+        const next = prev.filter((m) => m.id !== missionId);
+        if (activeMissionId === missionId) {
+          setActiveMissionId(next[0]?.id ?? null);
+        }
+        return next;
+      });
+    } catch (err) {
+      console.error(err);
+      alert('删除失败,请稍后重试');
     }
   };
 
@@ -1144,6 +1193,7 @@ export default function Workspace() {
               onRightTabChange={setRightTab}
               onRunMission={handleRun}
               onStopMission={handleStopMission}
+              onDeleteMission={handleDeleteMission}
               onNewSession={() => setActiveMissionId(null)}
               isSubmitting={isSubmitting}
               connectors={connectors}

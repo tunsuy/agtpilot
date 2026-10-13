@@ -46,6 +46,7 @@ import {
   Smartphone,
   Plug,
   FileDown,
+  Trash2,
 } from 'lucide-react';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { ActivityFeedView } from './ActivityFeedView';
@@ -59,6 +60,7 @@ import { OssOpportunityList } from './workshops/OssOpportunityCard';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../lib/oss-opportunities';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
+import { sourcesForAnswer } from '../lib/search-sources';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
 import {
   Mission,
@@ -107,6 +109,8 @@ interface CockpitViewProps {
   onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact' | 'activity') => void;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
   onStopMission?: (missionId: string) => Promise<void> | void;
+  /** 删除历史会话(仅已完成/已中断可删;执行中任务先停止再删) */
+  onDeleteMission?: (missionId: string) => Promise<void> | void;
   onNewSession?: () => void;
   isSubmitting: boolean;
   connectors?: ConnectorApp[];
@@ -129,6 +133,7 @@ export function CockpitView({
   onRightTabChange,
   onRunMission,
   onStopMission,
+  onDeleteMission,
   onNewSession,
   isSubmitting,
   connectors,
@@ -174,6 +179,14 @@ export function CockpitView({
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(true);
   const [isWorkbenchExpanded, setIsWorkbenchExpanded] = useState(false);
+  // 侧栏会话删除的二次确认态:第一次点垃圾桶只亮红(防误删),3s 内再点才真删
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const confirmDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+    };
+  }, []);
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const stepsEndRef = useRef<HTMLDivElement>(null);
   /** 对话流滚动容器:智能跟随(贴底才自动滚动),上翻时出「回到底部」按钮 */
@@ -343,16 +356,35 @@ export function CockpitView({
             ) : (
               missions.map((m) => {
                 const isActive = activeMissionId === m.id || (!activeMissionId && m.id === currentMission?.id);
+                // 执行中/等待中的任务不能删(执行回路还在写盘);完成后与中断的可删
+                const deletable = m.status === 'DONE' || m.status === 'INTERRUPTED';
+                const confirmingDelete = confirmDeleteId === m.id;
+                const handleDeleteClick = (e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  if (!onDeleteMission) return;
+                  if (!confirmingDelete) {
+                    // 第一次点击:亮红进入待确认态,3s 无操作自动退回
+                    setConfirmDeleteId(m.id);
+                    if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+                    confirmDeleteTimerRef.current = setTimeout(() => {
+                      setConfirmDeleteId((cur) => (cur === m.id ? null : cur));
+                    }, 3000);
+                    return;
+                  }
+                  if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+                  setConfirmDeleteId(null);
+                  onDeleteMission(m.id);
+                };
                 return (
-                  <button
-                    key={m.id}
-                    onClick={() => onSelectMission(m.id)}
-                    className={`w-full text-left p-2.5 rounded-xl border text-xs transition flex flex-col gap-1.5 ${
-                      isActive
-                        ? 'border-zinc-300 bg-zinc-100/90 text-zinc-900 shadow-2xs font-medium'
-                        : 'border-transparent hover:bg-zinc-50 text-zinc-600 hover:text-zinc-900'
-                    }`}
-                  >
+                  <div key={m.id} className="relative group/mission">
+                    <button
+                      onClick={() => onSelectMission(m.id)}
+                      className={`w-full text-left p-2.5 rounded-xl border text-xs transition flex flex-col gap-1.5 ${
+                        isActive
+                          ? 'border-zinc-300 bg-zinc-100/90 text-zinc-900 shadow-2xs font-medium'
+                          : 'border-transparent hover:bg-zinc-50 text-zinc-600 hover:text-zinc-900'
+                      } ${deletable ? 'pr-8' : ''}`}
+                    >
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate leading-snug flex-1 font-medium">
                         {m.title}
@@ -384,7 +416,24 @@ export function CockpitView({
                         {new Date(m.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
-                  </button>
+                    </button>
+
+                    {/* 删除会话:悬停浮现;两步确认(首点亮红,3s 内再点真删) */}
+                    {deletable && (
+                      <button
+                        type="button"
+                        onClick={handleDeleteClick}
+                        className={`absolute top-2 right-2 p-1 rounded-md transition ${
+                          confirmingDelete
+                            ? 'opacity-100 bg-red-50 text-red-600 border border-red-200'
+                            : 'opacity-0 group-hover/mission:opacity-100 text-zinc-400 hover:text-red-600 hover:bg-red-50'
+                        }`}
+                        title={confirmingDelete ? '再点一次确认删除(会话记录不可恢复)' : '删除会话'}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
                 );
               })
             )}
@@ -664,177 +713,61 @@ export function CockpitView({
                         }`}
                       >
                         {renderable.map((block) => {
-                  // ================= 2a. 工具调用链聚合块 (流内一级活动手风琴) =================
+                  // ================= 2a. 工具活动时间线(逐行叙述,无统计头/入参出参) =================
+                  // Claude Code 式:每个动作一行,行内是用户可读的行动语言(与右侧
+                  // 「动态」tab 同源 narrateStep)。聚合统计头(「已完成 N 项任务
+                  // 活动」)与入参出参 JSON 详情不再进会话流 —— 统计条在轮次边界
+                  // 跳变观感割裂,原始详情的唯一展示位是动态区;失败行红显,
+                  // 执行异常在对话上下文里可见,不只沉在右侧
                   if (block.type === 'tools') {
-                    const groupSteps = block.steps;
-                    const groupKey = block.key;
-                    const isAnyRunning = groupSteps.some((s) => s.status === 'RUNNING');
-                    const hasFailed = groupSteps.some((s) => s.status === 'FAILED');
-                    // 执行中的活动链默认展开:思考过程(阶段分析)与工具调用实时可见,
-                    // 完成后自动收拢为摘要条;用户手动点过头部则以手动状态为准
-                    const isGroupExpanded = expandedTools[groupKey] ?? isAnyRunning;
-
-                    // 提取概览信息
-                    const lastAction = groupSteps[groupSteps.length - 1];
-                    // 会话流只渲染真实动作(带工具)的步骤,头部计数与摘要同步只数
-                    // 这些——否则元步骤(已完成一轮推理等)会让「N 项活动」多于可见行
-                    const toolSteps = groupSteps.filter((s) => s.tool);
-                    const completedCount = toolSteps.filter((s) => s.status === 'DONE').length;
-                    const lastProgressText = [...groupSteps].reverse().find((s) => s.role === 'assistant' && s.answer)?.answer;
-                    const summaryLabel = isAnyRunning
-                      ? lastAction.role === 'assistant'
-                        ? '正在分析并规划下一步…'
-                        : `正在${lastAction.tool?.includes('search') ? '搜索资料' : lastAction.tool?.includes('browser') ? '浏览网页' : lastAction.tool?.includes('sandbox') ? '运行分析' : '执行任务'}…`
-                      : hasFailed
-                      ? `执行过程中有步骤需要注意`
-                      : `已完成 ${completedCount} 项任务活动`;
-
+                    const rows = block.steps.filter((s) => s.tool || s.status === 'FAILED');
                     return (
-                      <div key={groupKey} className="animate-fadeIn">
-                        <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/70 hover:bg-zinc-50 transition overflow-hidden">
-                          {/* 聚合条目头部 */}
-                          <div
-                            onClick={() => {
-                              setExpandedTools((prev) => ({
-                                ...prev,
-                                [groupKey]: !isGroupExpanded,
-                              }));
-                            }}
-                            className="px-3.5 py-2.5 flex items-center justify-between cursor-pointer select-none"
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <div className="h-5 w-5 rounded-md bg-white border border-zinc-200/80 flex items-center justify-center flex-shrink-0 shadow-2xs">
-                                {isAnyRunning ? (
-                                  <RotateCw className="h-3 w-3 text-blue-600 animate-spin" />
-                                ) : hasFailed ? (
-                                  <AlertCircle className="h-3 w-3 text-red-500" />
-                                ) : (
-                                  <Sparkles className="h-3 w-3 text-zinc-600" />
-                                )}
+                      <div key={block.key} className="space-y-1">
+                        {rows.map((st) => {
+                          const narrated = narrateStep(st);
+                          if (!narrated) return null;
+                          const isRunning = st.status === 'RUNNING';
+                          const isFailed = st.status === 'FAILED';
+                          const getActivityIcon = () => {
+                            if (isFailed) return <AlertCircle className="h-3 w-3 text-red-500" />;
+                            if (isRunning) return <RotateCw className="h-3 w-3 text-blue-600 animate-spin" />;
+                            if (narrated.kind === 'search') return <Search className="h-3 w-3 text-blue-500" />;
+                            if (narrated.kind === 'browser') return <Globe className="h-3 w-3 text-indigo-500" />;
+                            if (narrated.kind === 'sandbox') return <Code className="h-3 w-3 text-amber-500" />;
+                            return <Wrench className="h-3 w-3 text-zinc-400" />;
+                          };
+                          return (
+                            <div key={st.id} className="flex items-center gap-2 min-w-0 animate-fadeIn">
+                              <div className="h-4.5 w-4.5 rounded bg-zinc-50 border border-zinc-100 flex items-center justify-center flex-shrink-0">
+                                {getActivityIcon()}
                               </div>
-
-                              <div className="min-w-0">
-                                <span className="text-[11px] font-medium text-zinc-700 truncate block">
-                                  {summaryLabel}
-                                </span>
-                                {lastProgressText && (
-                                  <span className="text-[10px] text-zinc-400 truncate block max-w-sm mt-0.5">
-                                    {lastProgressText}
+                              <span
+                                className={`text-[11px] font-medium truncate flex-shrink-0 ${
+                                  isFailed ? 'text-red-600' : 'text-zinc-700'
+                                }`}
+                              >
+                                {isRunning ? `正在${narrated.label}` : narrated.label}
+                              </span>
+                              {narrated.detail && (
+                                <span className="text-[10px] text-zinc-400 truncate">{narrated.detail}</span>
+                              )}
+                              <span className="ml-auto flex-shrink-0">
+                                {isRunning ? (
+                                  <span className="text-[9px] text-blue-600 font-mono flex items-center gap-1">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
+                                    执行中
+                                  </span>
+                                ) : isFailed ? (
+                                  <span className="text-[9px] text-red-600 font-mono">失败</span>
+                                ) : (
+                                  <span className="text-[9px] text-zinc-400 font-mono">
+                                    {formatActivityDuration(st.duration) ?? '完成'}
                                   </span>
                                 )}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              <span className="text-[10px] text-zinc-400">
-                                {toolSteps.length} 项活动
                               </span>
-                              <ChevronDown
-                                className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
-                                  isGroupExpanded ? 'rotate-180' : ''
-                                }`}
-                              />
                             </div>
-                          </div>
-
-                          {/* 展开后的各子步骤列表(点头部即可展开,不再被全局开关挡住) */}
-                          {isGroupExpanded && (
-                            <div className="px-3 pb-3 pt-1 border-t border-zinc-200/50 space-y-1.5 bg-white/50">
-                              {/* 叙述模式只列真实动作(带工具名的步骤):「阶段分析」「已完成
-                                  一轮推理」这类元步骤不进会话流——中间推理由收拢头部的
-                                  摘要行与回复卡的思考过程承载,避免叙述流被占位提示刷屏 */}
-                              {toolSteps
-                                .map((st) => {
-                                const isSubExpanded = Boolean(expandedTools[st.id]);
-                                const getIcon = () => {
-                                  if (st.tool?.includes('search')) return <Search className="h-3 w-3 text-blue-500" />;
-                                  if (st.tool?.includes('browser')) return <Globe className="h-3 w-3 text-indigo-500" />;
-                                  if (st.tool?.includes('sandbox')) return <Code className="h-3 w-3 text-amber-500" />;
-                                  return <Wrench className="h-3 w-3 text-zinc-500" />;
-                                };
-
-                                // 工具步骤翻译成用户可读的行动语言(正在…/✓ 完成态由
-                                // status 组装);原始工具名与 JSON 入参收进展开区点开核对
-                                const narrated = narrateStep(st);
-                                const narratedLabel = narrated?.label ?? st.tool ?? '执行任务';
-                                const narratedDetail = narrated?.detail;
-
-                                return (
-                                  <div
-                                    key={st.id}
-                                    className="rounded-lg border border-zinc-200/70 bg-white p-2 text-xs shadow-2xs"
-                                  >
-                                    <div
-                                      onClick={() => {
-                                        setExpandedTools((prev) => ({
-                                          ...prev,
-                                          [st.id]: !isSubExpanded,
-                                        }));
-                                      }}
-                                      className="flex items-center justify-between gap-2 cursor-pointer select-none"
-                                    >
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        <div className="h-4.5 w-4.5 rounded bg-zinc-50 border border-zinc-100 flex items-center justify-center flex-shrink-0">
-                                          {getIcon()}
-                                        </div>
-                                        <span className="text-[11px] font-medium text-zinc-800 truncate">
-                                          {st.status === 'RUNNING' ? `正在${narratedLabel}` : narratedLabel}
-                                        </span>
-                                        {narratedDetail && (
-                                          <span className="text-[10px] text-zinc-400 truncate">
-                                            {narratedDetail}
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                                        {st.status === 'RUNNING' ? (
-                                          <span className="text-[9px] text-blue-600 font-mono flex items-center gap-1">
-                                            <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
-                                            执行中
-                                          </span>
-                                        ) : st.status === 'FAILED' ? (
-                                          <span className="text-[9px] text-red-600 font-mono">失败</span>
-                                        ) : (
-                                          <span className="text-[9px] text-zinc-400 font-mono">
-                                            {formatActivityDuration(st.duration) ?? '完成'}
-                                          </span>
-                                        )}
-                                        <ChevronDown
-                                          className={`h-3 w-3 text-zinc-300 transition-transform ${
-                                            isSubExpanded ? 'rotate-180' : ''
-                                          }`}
-                                        />
-                                      </div>
-                                    </div>
-
-                                    {/* 子步骤详细入参与出参 */}
-                                    {isSubExpanded && (
-                                      <div className="mt-2 pt-2 border-t border-zinc-100 space-y-1.5 text-[10px] font-mono animate-fadeIn">
-                                        {st.args && (
-                                          <div>
-                                            <span className="text-zinc-400 uppercase text-[9px]">输入参数 (Args):</span>
-                                            <pre className="mt-0.5 p-1.5 rounded bg-zinc-900 text-zinc-200 overflow-x-auto max-h-36">
-                                              {JSON.stringify(st.args, null, 2)}
-                                            </pre>
-                                          </div>
-                                        )}
-                                        {st.output && (
-                                          <div>
-                                            <span className="text-zinc-400 uppercase text-[9px]">返回结果 (Output):</span>
-                                            <pre className="mt-0.5 p-1.5 rounded bg-zinc-900 text-emerald-400 overflow-x-auto max-h-36 whitespace-pre-wrap">
-                                              {typeof st.output === 'string' ? st.output : JSON.stringify(st.output, null, 2)}
-                                            </pre>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
+                          );
+                        })}
                       </div>
                     );
                   }
@@ -865,6 +798,13 @@ export function CockpitView({
                     const parsedOss = st.answer && !isStreaming ? parseOssOpportunities(st.answer) : null;
                     const ossResult =
                       parsedOss && parsedOss.opportunities.length > 0 ? parsedOss : null;
+                    // 搜索来源引用(ChatGPT 式):最终答复收尾后,取本轮(上一条
+                    // 最终答复之后)检索步骤的结构化结果,渲染可跳转的来源卡
+                    const answerIndex = currentMission.steps.findIndex((s) => s.id === st.id);
+                    const searchSources =
+                      st.messageKind === 'final' && st.answer && !isStreaming && answerIndex >= 0
+                        ? sourcesForAnswer(currentMission.steps, answerIndex)
+                        : [];
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
@@ -963,6 +903,35 @@ export function CockpitView({
                                   </div>
                                 )
                               )
+                            )}
+
+                            {/* 搜索来源卡(ChatGPT 式):编号药丸 + favicon + 域名,
+                                新标签直达原始网页;无搜索结果或流式中不渲染 */}
+                            {searchSources.length > 0 && (
+                              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                                {searchSources.map((src, idx) => (
+                                  <a
+                                    key={src.url}
+                                    href={src.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={src.title}
+                                    className="flex items-center gap-1.5 max-w-[180px] px-2 py-0.5 rounded-full border border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50 text-[11px] text-zinc-600 hover:text-zinc-800 transition shadow-2xs"
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element -- 站点 favicon 走外部域名,无需 next/image 优化 */}
+                                    <img
+                                      src={`https://www.google.com/s2/favicons?domain=${src.host}&sz=32`}
+                                      alt=""
+                                      className="h-3.5 w-3.5 rounded-sm flex-shrink-0"
+                                      onError={(e) => {
+                                        e.currentTarget.style.display = 'none';
+                                      }}
+                                    />
+                                    <span className="text-zinc-400 font-mono text-[9px] flex-shrink-0">{idx + 1}</span>
+                                    <span className="truncate">{src.host}</span>
+                                  </a>
+                                ))}
+                              </div>
                             )}
 
                             {/* 中断标记:live step 失败时明确失败态(保留已流出的部分文本)+ 重新生成入口 */}

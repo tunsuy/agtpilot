@@ -767,6 +767,19 @@ class AgentBackend {
         // （保留已流出的部分文本，用户能看到"进行到哪"）
         const mission = this.resolveMissionFromEvent(event);
         if (mission) {
+          // 停止回声护栏:stopMission 已按自己的口径收尾(状态/步骤/广播),
+          // orchestrator 被中止后回抛的 Cancelled 错误事件是同一动作的回声
+          // —— 不再补 step_err,否则停止后落两条失败尾巴(abort + err),
+          // 会话流渲染出重复的失败组(生产实测:终止后出现两个失败活动组)
+          const lastStep = mission.steps[mission.steps.length - 1];
+          const isAbortEcho =
+            /(主动终止|Aborted|Cancelled)/i.test(String(errorMsg)) &&
+            mission.status === 'DONE' &&
+            Boolean(lastStep?.id?.startsWith('step_abort_'));
+          if (isAbortEcho) {
+            this.addTerminalLog('system', `[Agent] 任务已由用户终止，已忽略中止回声错误事件`, mission.userId);
+            break;
+          }
           this.flushDeltas(mission.id);
           closeLiveStep(mission, { status: 'FAILED' });
           mission.status = 'DONE';
@@ -1469,6 +1482,11 @@ class AgentBackend {
             // 服务端 30 分钟缓存;始终注入,非日报任务用不到时 LLM 自然忽略)
             const { buildFollowBuildersTools } = await import('@/lib/follow-builders');
             injectedTools.push(...buildFollowBuildersTools());
+
+            // 开源贡献雷达:github_scan(只读公共 GitHub REST,无需凭证,服务端
+            // 15 分钟缓存;始终注入,非调研任务用不到时 LLM 自然忽略)
+            const { buildGithubScanTools } = await import('@/lib/github-scan');
+            injectedTools.push(...buildGithubScanTools());
 
             // 小红书托管模式(scenario-loop P2):读工具登录过即注入;
             // 存草稿工具仅在显式 opt-in + 风险已读时注入(dangerLevel high → 审批门)。

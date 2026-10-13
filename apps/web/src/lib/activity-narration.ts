@@ -136,6 +136,25 @@ export function narrateStep(step: MissionStep): NarratedActivity | null {
     if (step.messageKind === 'final') {
       return { kind: 'reply', label: '交付最终答复' };
     }
+    // 失败步骤(执行异常/中断/终止):失败要在时间线显式可见,不能被叙述成
+    // 「完成一轮推理」(此前无内容的失败步骤正落进那个兜底分支)
+    if (step.status === 'FAILED') {
+      // 用户主动终止的标记行:终止是用户自己的动作,不叙述成「执行失败」
+      if (step.id?.startsWith('step_abort_') || /(主动终止|\(Aborted\)|\(Session Reset\))/.test(step.title || '')) {
+        return { kind: 'generic', label: '已手动终止' };
+      }
+      // 无 role/无 tool/无 startedAt 的 FAILED 是终止清扫掉的「计划内未启动」
+      // 步骤(看板任务),从未执行过 —— 叙述为未启动,不再三条红色「执行失败」刷屏;
+      // 有 role 的失败(assistant 中断/tool 出错)保持显式失败叙述
+      if (!step.role && !step.tool && !step.startedAt) {
+        return { kind: 'generic', label: '未启动', detail: clip(step.title, 80) };
+      }
+      return {
+        kind: 'generic',
+        label: step.role === 'assistant' ? '回复中断' : '执行失败',
+        detail: clip(step.title, 80),
+      };
+    }
     if (step.status === 'RUNNING') {
       if (step.answer) return { kind: 'reply', label: '撰写回复' };
       if (step.reasoning) return { kind: 'think', label: '深度思考' };

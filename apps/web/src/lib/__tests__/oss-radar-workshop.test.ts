@@ -78,6 +78,19 @@ describe('buildOssRadarPrompt · 格式契约(与 oss-opportunities.ts 解析器
     expect(prompt).toContain('发送前逐条经我审批');
     expect(prompt).toContain('写代码由我在本地完成');
   });
+
+  it('思考经济锚点:核验留给执行阶段的真实检索,不预先推演(生产实测 7.5 分钟过度思考修复)', () => {
+    expect(prompt).toContain('规划阶段只确定步骤顺序与检索关键词');
+    expect(prompt).toContain('不要在思考中预先推演');
+  });
+
+  it('github_scan 固定工具优先(工坊脚本化:机械取数固化,不再让模型现写代码调 GitHub API)', () => {
+    // 仓库搜索降级链首选项是 github_scan,MCP 退为补充
+    expect(prompt.indexOf('github_scan')).toBeGreaterThan(0);
+    expect(prompt.indexOf('github_scan')).toBeLessThan(prompt.indexOf('mcp_github_mcp_'));
+    expect(prompt).toContain('不要自己写代码调 GitHub API');
+    expect(prompt).toContain('searchRateRemaining');
+  });
 });
 
 describe('buildOssRadarPrompt · 参数', () => {

@@ -134,3 +134,52 @@ describe('narrateStep 用户步骤与 formatActivityDuration', () => {
     expect(formatActivityDuration('abc')).toBeUndefined();
   });
 });
+
+describe('narrateStep 失败步骤显式可见(时间线不再误述为完成推理)', () => {
+  // 修复背景:无内容的 FAILED assistant 步骤此前落进「完成一轮推理」兜底,
+  // 中断/异常在动态流里被叙述成正常完成 —— 失败必须在时间线显式可见
+  it('FAILED assistant(无 tool)→ 回复中断,带标题细节', () => {
+    const n = narrateStep(step({ role: 'assistant', messageKind: 'progress', status: 'FAILED', title: '模型连接超时' }));
+    expect(n?.label).toBe('回复中断');
+    expect(n?.detail).toBe('模型连接超时');
+  });
+
+  it('FAILED 非 assistant 角色步骤 → 执行失败', () => {
+    const n = narrateStep(step({ role: 'tool', status: 'FAILED', title: '沙盒启动失败' }));
+    expect(n?.label).toBe('执行失败');
+    expect(n?.detail).toBe('沙盒启动失败');
+  });
+
+  it('final 形态的 FAILED 仍优先叙述为交付(失败标记由会话流卡承担)', () => {
+    const n = narrateStep(step({ role: 'assistant', messageKind: 'final', status: 'FAILED', answer: '部分答复' }));
+    expect(n?.label).toBe('交付最终答复');
+  });
+});
+
+describe('narrateStep 停止收尾口径(终止不误述为失败,未启动不刷屏)', () => {
+  // 生产实测:用户点停止后,abort 标记行 + 被清扫的看板步骤全部叙述成
+  // 红色「执行失败」—— 终止是用户自己的动作,计划步骤从未跑过
+  it('step_abort_ 标记行 → 已手动终止(不红显失败)', () => {
+    const n = narrateStep(step({ id: 'step_abort_1791880287701', title: '任务已被用户主动终止 (Aborted)', status: 'FAILED', duration: '0ms' }));
+    expect(n?.label).toBe('已手动终止');
+    expect(n?.detail).toBeUndefined();
+  });
+
+  it('标题含「主动终止」的会话重置行同样按终止叙述', () => {
+    const n = narrateStep(step({ title: '会话已重置，任务已终止 (Session Reset)', status: 'FAILED' }));
+    expect(n?.label).toBe('已手动终止');
+  });
+
+  it('无 startedAt 的看板步骤 FAILED → 未启动(终止清扫,从未执行)', () => {
+    const n = narrateStep(step({ id: 'step_1', title: '只读拉取 GitHub 实时数据', status: 'FAILED' }));
+    expect(n?.label).toBe('未启动');
+    expect(n?.detail).toBe('只读拉取 GitHub 实时数据');
+  });
+
+  it('有 startedAt 的失败步骤仍按执行中断叙述(跑过才叫失败)', () => {
+    const n = narrateStep(step({ role: 'tool', status: 'FAILED', title: '沙盒启动失败', startedAt: 1791880000000 }));
+    expect(n?.label).toBe('执行失败');
+    const a = narrateStep(step({ role: 'assistant', messageKind: 'progress', status: 'FAILED', title: '模型连接超时', startedAt: 1791880000000 }));
+    expect(a?.label).toBe('回复中断');
+  });
+});

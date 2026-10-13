@@ -19,6 +19,7 @@ import {
 } from '../../lib/follow-builders-workshop';
 import { buildInvestPrompt, INVEST_MODES } from '../../lib/invest-workshops';
 import { buildEduPrompt, EDU_MODES } from '../../lib/edu-workshops';
+import { buildOssRadarPrompt, OSS_INTERESTS, OSS_CONTRIB_KINDS } from '../../lib/oss-radar-workshop';
 import { EMAIL_TRIAGE_SCOPES, WEEKLY_REPORT_PERIODS } from '../../lib/office-workshops';
 import type { WorkshopId } from './registry';
 import type { ScenarioProfile } from '../../lib/scenario-profile';
@@ -194,6 +195,23 @@ export function buildWorkshopRun(
           delivery: str(params.delivery, 'chat'),
         }),
         title: `教研 · ${EDU_MODES.find((m) => m.id === mode)?.name || '教研'}`,
+      };
+    }
+    case 'oss_radar': {
+      const count = num(params.count, 5);
+      const validIds = (v: unknown, allowed: readonly string[]) =>
+        Array.isArray(v)
+          ? (v as unknown[]).filter((x): x is string => typeof x === 'string' && allowed.includes(x))
+          : [];
+      return {
+        prompt: buildOssRadarPrompt({
+          stack: str(params.stack),
+          interests: validIds(params.interests, OSS_INTERESTS.map((i) => i.id)),
+          kinds: validIds(params.kinds, OSS_CONTRIB_KINDS.map((k) => k.id)),
+          count,
+          ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
+        }),
+        title: `开源贡献雷达 · ${Math.min(7, Math.max(3, count))} 条机会`,
       };
     }
   }

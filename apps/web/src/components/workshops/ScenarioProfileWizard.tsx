@@ -24,18 +24,71 @@ interface ScenarioProfileWizardProps {
   onClose: () => void;
 }
 
-const STEPS = [
-  { title: '账号定位', hint: '让 Agent 知道你在做哪个赛道、写给谁看' },
-  { title: '语气人设', hint: '写两句你最自然的口吻,产出会和你的账号一个声音' },
-  { title: '发布节奏', hint: '让选题建议匹配你的更新频率' },
-] as const;
-
 const CADENCE_OPTIONS = [
   { id: 0, name: '不固定' },
   { id: 3, name: '每周 3 篇' },
   { id: 5, name: '每周 5 篇' },
   { id: 7, name: '每天 1 篇' },
 ];
+
+/**
+ * 按场景键的向导文案:同一份 ScenarioProfile 结构,不同场景按自己的语义措辞。
+ * 内容场景 = 账号定位/语气人设/发布节奏;开源贡献雷达 = 技术定位/贡献偏好
+ * (niche→主力技术栈,audience→关注方向,differentiation→加分经验,taboos→排除项;
+ * 无语气与节奏步,prompt 侧由 buildContributorProfileSection 按同一映射注入)。
+ */
+interface ScenarioCopy {
+  noun: string;
+  steps: Array<{ title: string; hint: string }>;
+  fields: {
+    niche: { label: string; placeholder: string };
+    audience: { label: string; placeholder: string };
+    differentiation: { label: string; placeholder: string };
+    toneSamples: { placeholder: string };
+    taboos: { label: string; placeholder: string };
+  };
+  showTone: boolean;
+  showCadence: boolean;
+}
+
+const CONTENT_COPY: ScenarioCopy = {
+  noun: '账号档案',
+  steps: [
+    { title: '账号定位', hint: '让 Agent 知道你在做哪个赛道、写给谁看' },
+    { title: '语气人设', hint: '写两句你最自然的口吻,产出会和你的账号一个声音' },
+    { title: '发布节奏', hint: '让选题建议匹配你的更新频率' },
+  ],
+  fields: {
+    niche: { label: '赛道', placeholder: '如:秋冬通勤穿搭 / 职场干货 / 宝妈好物' },
+    audience: { label: '目标人群', placeholder: '如:30+ 通勤女性 / 入职 1-3 年的年轻人' },
+    differentiation: { label: '差异点', placeholder: '如:只写平价可复制的组合,不追奢侈品' },
+    toneSamples: { placeholder: '写两句你平时发笔记的口吻,每行一句,如:\n姐妹们这套真的绝\n打工人早八也能三分钟出门' },
+    taboos: { label: '禁忌', placeholder: '用顿号或逗号分隔,如:不要感叹号、不提价格、不喊宝子' },
+  },
+  showTone: true,
+  showCadence: true,
+};
+
+const OSS_RADAR_COPY: ScenarioCopy = {
+  noun: '贡献者档案',
+  steps: [
+    { title: '技术定位', hint: '让 Agent 知道你的主力技术栈与想贡献的开源方向' },
+    { title: '贡献偏好', hint: '加分经验让匹配更准,排除项一票否决' },
+  ],
+  fields: {
+    niche: { label: '主力技术栈', placeholder: '如:Go / TypeScript / Rust,或 Python + PyTorch' },
+    audience: { label: '关注方向', placeholder: '如:LLM 基础设施、Agent 框架、RAG 与检索' },
+    differentiation: { label: '加分经验', placeholder: '如:维护过 k8s operator / 给推理引擎提过 PR / 熟悉 MCP 协议' },
+    toneSamples: { placeholder: '' },
+    taboos: { label: '排除项', placeholder: '用顿号或逗号分隔,如:不碰前端样式、不碰加密货币项目' },
+  },
+  showTone: false,
+  showCadence: false,
+};
+
+const SCENARIO_COPIES: Record<string, ScenarioCopy> = {
+  oss_radar: OSS_RADAR_COPY,
+};
 
 export function ScenarioProfileWizard({
   scenarioKey,
@@ -53,6 +106,9 @@ export function ScenarioProfileWizard({
   const [cadence, setCadence] = useState<number>(initial?.cadence.postsPerWeek || 0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 场景文案:内容场景(缺省)或贡献者场景(oss_radar);步骤数与字段措辞随之切换
+  const copy = SCENARIO_COPIES[scenarioKey] || CONTENT_COPY;
 
   const isEdit = Boolean(initial);
   const stepValid = step === 0 ? niche.trim().length > 0 && audience.trim().length > 0 : true;
@@ -97,10 +153,10 @@ export function ScenarioProfileWizard({
         <div className="flex items-start justify-between">
           <div>
             <h3 className="text-sm font-semibold text-zinc-900">
-              {isEdit ? '编辑账号档案' : '建立账号档案'}
+              {isEdit ? `编辑${copy.noun}` : `建立${copy.noun}`}
             </h3>
             <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">
-              {STEPS[step].title} · {STEPS[step].hint}
+              {copy.steps[step].title} · {copy.steps[step].hint}
             </p>
           </div>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md">
@@ -109,46 +165,46 @@ export function ScenarioProfileWizard({
         </div>
 
         <div className="flex items-center gap-1.5">
-          {STEPS.map((_, i) => (
+          {copy.steps.map((_, i) => (
             <span
               key={i}
               className={`h-1 flex-1 rounded-full transition ${i <= step ? 'bg-violet-500' : 'bg-zinc-200'}`}
             />
           ))}
           <span className="text-[10px] font-mono text-zinc-400 ml-1.5">
-            {step + 1}/{STEPS.length}
+            {step + 1}/{copy.steps.length}
           </span>
         </div>
 
-        {/* 步骤体 */}
+        {/* 步骤体(措辞随场景文案切换;贡献者场景无语气步与节奏步) */}
         {step === 0 && (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <FieldLabel>赛道</FieldLabel>
+              <FieldLabel>{copy.fields.niche.label}</FieldLabel>
               <input
                 type="text"
                 value={niche}
                 onChange={(e) => setNiche(e.target.value)}
-                placeholder="如:秋冬通勤穿搭 / 职场干货 / 宝妈好物"
+                placeholder={copy.fields.niche.placeholder}
                 className={inputClass}
               />
             </div>
             <div className="space-y-1.5">
-              <FieldLabel>目标人群</FieldLabel>
+              <FieldLabel>{copy.fields.audience.label}</FieldLabel>
               <input
                 type="text"
                 value={audience}
                 onChange={(e) => setAudience(e.target.value)}
-                placeholder="如:30+ 通勤女性 / 入职 1-3 年的年轻人"
+                placeholder={copy.fields.audience.placeholder}
                 className={inputClass}
               />
             </div>
             <div className="space-y-1.5">
-              <FieldLabel optional>差异点</FieldLabel>
+              <FieldLabel optional>{copy.fields.differentiation.label}</FieldLabel>
               <textarea
                 value={differentiation}
                 onChange={(e) => setDifferentiation(e.target.value)}
-                placeholder="如:只写平价可复制的组合,不追奢侈品"
+                placeholder={copy.fields.differentiation.placeholder}
                 rows={2}
                 className={textareaClass}
               />
@@ -158,22 +214,24 @@ export function ScenarioProfileWizard({
 
         {step === 1 && (
           <div className="space-y-4">
+            {copy.showTone && (
+              <div className="space-y-1.5">
+                <FieldLabel optional>语气样例</FieldLabel>
+                <textarea
+                  value={toneSamples}
+                  onChange={(e) => setToneSamples(e.target.value)}
+                  placeholder={copy.fields.toneSamples.placeholder}
+                  rows={3}
+                  className={textareaClass}
+                />
+              </div>
+            )}
             <div className="space-y-1.5">
-              <FieldLabel optional>语气样例</FieldLabel>
-              <textarea
-                value={toneSamples}
-                onChange={(e) => setToneSamples(e.target.value)}
-                placeholder={'写两句你平时发笔记的口吻,每行一句,如:\n姐妹们这套真的绝\n打工人早八也能三分钟出门'}
-                rows={3}
-                className={textareaClass}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <FieldLabel optional>禁忌</FieldLabel>
+              <FieldLabel optional>{copy.fields.taboos.label}</FieldLabel>
               <textarea
                 value={taboos}
                 onChange={(e) => setTaboos(e.target.value)}
-                placeholder="用顿号或逗号分隔,如:不要感叹号、不提价格、不喊宝子"
+                placeholder={copy.fields.taboos.placeholder}
                 rows={2}
                 className={textareaClass}
               />
@@ -181,7 +239,7 @@ export function ScenarioProfileWizard({
           </div>
         )}
 
-        {step === 2 && (
+        {step === 2 && copy.showCadence && (
           <div className="space-y-4">
             <div className="space-y-1.5">
               <FieldLabel>更新频率</FieldLabel>
@@ -217,7 +275,7 @@ export function ScenarioProfileWizard({
                 <span>上一步</span>
               </button>
             )}
-            {step < STEPS.length - 1 ? (
+            {step < copy.steps.length - 1 ? (
               <button
                 type="button"
                 disabled={!stepValid}

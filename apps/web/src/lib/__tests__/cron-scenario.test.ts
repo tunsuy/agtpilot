@@ -13,6 +13,18 @@ const profile: ScenarioProfile = {
   updatedAt: Date.now(),
 };
 
+/** 贡献者档案(scenarioKey='oss_radar'):niche=主力技术栈,taboos=排除项 */
+const ossProfile: ScenarioProfile = {
+  scenarioKey: 'oss_radar',
+  version: 1,
+  positioning: { niche: 'Go / TypeScript', audience: 'LLM 基础设施、Agent 框架' },
+  persona: { toneSamples: [], taboos: ['不碰加密货币项目'] },
+  cadence: {},
+  insights: [],
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+};
+
 describe('normalizeCronScenario', () => {
   it('白名单 key + 合法 count 保留', () => {
     expect(normalizeCronScenario({ key: 'xhs_weekly_topics', count: 5 })).toEqual({
@@ -42,6 +54,17 @@ describe('normalizeCronScenario', () => {
       count: undefined,
     });
   });
+
+  it('oss_radar_weekly 在白名单内,合法 count 保留', () => {
+    expect(normalizeCronScenario({ key: 'oss_radar_weekly', count: 5 })).toEqual({
+      key: 'oss_radar_weekly',
+      count: 5,
+    });
+    expect(normalizeCronScenario({ key: 'oss_radar_weekly' })).toEqual({
+      key: 'oss_radar_weekly',
+      count: undefined,
+    });
+  });
 });
 
 describe('resolveCronPrompt', () => {
@@ -58,6 +81,25 @@ describe('resolveCronPrompt', () => {
     const prompt = resolveCronPrompt(job, () => undefined);
     expect(prompt).toContain('无档案时选通用高共鸣方向');
     expect(prompt).toContain('产出 7 条选题');
+  });
+
+  it('oss_radar_weekly:用贡献者档案(oss_radar 槽位)重建扫描 prompt', () => {
+    const job = { prompt: '旧快照', scenario: { key: 'oss_radar_weekly' as const, count: 5 } };
+    const prompt = resolveCronPrompt(job, (k) => (k === 'oss_radar' ? ossProfile : undefined));
+    expect(prompt).toContain('【开源贡献雷达 · 只读调研】');
+    expect(prompt).toContain('【贡献者档案】');
+    expect(prompt).toContain('主力技术栈:Go / TypeScript');
+    expect(prompt).toContain('排除项(一票否决,不要推荐):不碰加密货币项目');
+    expect(prompt).toContain('产出数量:5 条机会');
+    expect(prompt).not.toContain('旧快照');
+  });
+
+  it('oss_radar_weekly 无档案/无 count:仍重建,缺省 5 条、技术栈未指定', () => {
+    const job = { scenario: { key: 'oss_radar_weekly' as const } };
+    const prompt = resolveCronPrompt(job, () => undefined);
+    expect(prompt).toContain('产出数量:5 条机会');
+    expect(prompt).toContain('我的技术栈:未指定');
+    expect(prompt).not.toContain('贡献者档案');
   });
 
   it('普通任务:原样返回 job.prompt', () => {

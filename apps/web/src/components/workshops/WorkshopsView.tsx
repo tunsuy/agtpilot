@@ -27,6 +27,7 @@ import { PptWorkshopForm } from './forms/PptWorkshopForm';
 import { FollowBuildersForm } from './forms/FollowBuildersForm';
 import { InvestWorkshopForm } from './forms/InvestWorkshopForm';
 import { EduWorkshopForm } from './forms/EduWorkshopForm';
+import { OssRadarForm } from './forms/OssRadarForm';
 
 interface WorkshopsViewProps {
   connectors: ConnectorApp[];
@@ -63,6 +64,7 @@ const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
   follow_builders: FollowBuildersForm,
   invest: InvestWorkshopForm,
   edu: EduWorkshopForm,
+  oss_radar: OssRadarForm,
 };
 
 export function WorkshopsView({

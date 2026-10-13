@@ -20,6 +20,7 @@ import {
 import { CronJobItem } from '../types/agent';
 import { formatCronNextRun, isValidCronPattern } from '@/lib/cron-utils';
 import { buildXhsWeeklyTopicsPrompt } from '@/lib/xhs-workshop';
+import { buildOssRadarPrompt } from '@/lib/oss-radar-workshop';
 import type { CronScenario } from '@/lib/cron-scenario';
 
 interface CronJobsViewProps {
@@ -75,6 +76,13 @@ export function CronJobsView({
       pattern: '0 9 * * 1',
       prompt: buildXhsWeeklyTopicsPrompt({ count: 7 }),
       scenario: { key: 'xhs_weekly_topics', count: 7 },
+    },
+    {
+      // 场景订阅预设:触发时按「贡献者」档案重建扫描 prompt(只读调研,不建 Issue/不评论)
+      title: '开源贡献雷达周扫 (周一 9:30)',
+      pattern: '30 9 * * 1',
+      prompt: buildOssRadarPrompt({ count: 5 }),
+      scenario: { key: 'oss_radar_weekly', count: 5 },
     },
   ];
 

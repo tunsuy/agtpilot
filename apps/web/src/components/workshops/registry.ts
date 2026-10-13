@@ -19,6 +19,7 @@ import {
   Newspaper,
   PenLine,
   Rss,
+  Radar,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -34,7 +35,8 @@ export type WorkshopId =
   | 'ppt'
   | 'follow_builders'
   | 'invest'
-  | 'edu';
+  | 'edu'
+  | 'oss_radar';
 
 export type WorkshopAccent = 'violet' | 'sky' | 'emerald' | 'indigo';
 
@@ -72,6 +74,7 @@ export interface WorkshopDef {
 export const WORKSHOP_CATEGORIES: Array<{ key: string; label: string; accent: WorkshopAccent }> = [
   { key: 'content', label: '内容运营', accent: 'violet' },
   { key: 'office', label: '办公提效', accent: 'sky' },
+  { key: 'dev', label: '开发协作', accent: 'sky' },
   { key: 'invest', label: '投研辅助', accent: 'emerald' },
   { key: 'edu', label: '教研学习', accent: 'indigo' },
 ];
@@ -221,6 +224,21 @@ export const WORKSHOPS: WorkshopDef[] = [
       { id: 'exa', name: '网络搜索' },
     ],
     note: '数据来自 follow-builders 开源项目(MIT)的公共中央 feed,上游每日用 X 官方 API + 播客转写 + 博客抓取更新,读取无需任何凭证。Agent 用只读工具拉取素材后按你选的语言/时间范围/类别改写成日报:同一人多条动态合并、每条带原文链接、结尾注明数据时间;上游超 48 小时未更新会在日报开头明示数据可能过期,并可降级到已连接的 X 连接器/网页搜索自取(注明降级)。全程只读、无任何发布动作。',
+  },
+  {
+    id: 'oss_radar',
+    name: '开源贡献雷达',
+    category: 'dev',
+    desc: 'Agent 扫描 AI 领域活跃开源项目,按你的技术栈筛出可上手贡献机会,每条带 Issue 直达链接',
+    icon: Radar,
+    accent: 'sky',
+    deps: [
+      { id: 'github_mcp', name: 'GitHub' },
+      { id: 'deepwiki', name: 'DeepWiki' },
+      { id: 'exa', name: '网络搜索' },
+    ],
+    note: '生成后跳转任务页,Agent 用 GitHub MCP 搜活跃仓库与 good first issue、DeepWiki 理解代码库、网页搜索补充社区动态(缺哪个自动降级并注明),产出结构化「贡献机会」卡片:项目/机会类型/Issue 直达链接/为什么适合你/建议第一步/难度。全程只读:不 fork、不建 Issue、不评论;链接必须来自真实检索并在清单末尾注明检索时间与数据源。想贡献哪条:链接直达 Issue 人工核对,或让 Agent 起草认领留言/PR 描述——对外发送前逐条经你审批,代码由你本地动手。',
+    profileSlot: 'oss_radar',
   },
   {
     id: 'invest',

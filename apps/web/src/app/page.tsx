@@ -35,6 +35,7 @@ import {
   GoalItem,
   GoalMilestone,
 } from '../types/agent';
+import type { CronScenario } from '../lib/cron-scenario';
 
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
@@ -140,7 +141,7 @@ export default function Workspace() {
     name: string;
     pattern: string;
     prompt: string;
-    scenario?: { key: 'xhs_weekly_topics'; count?: number };
+    scenario?: CronScenario;
   }) => {
     try {
       const res = await fetch('/api/cron/jobs', {

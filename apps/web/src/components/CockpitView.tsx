@@ -54,6 +54,8 @@ import { ArticlePackageList } from './workshops/ArticlePackageCard';
 import { parseArticlePackages } from '../lib/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../lib/topic-picks';
+import { OssOpportunityList } from './workshops/OssOpportunityCard';
+import { parseOssOpportunities } from '../lib/oss-opportunities';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
 import {
@@ -822,6 +824,11 @@ export function CockpitView({
                     const parsedArticle = st.answer && !isStreaming ? parseArticlePackages(st.answer) : null;
                     const articleResult =
                       parsedArticle && parsedArticle.packages.length > 0 ? parsedArticle : null;
+                    // 开源贡献机会(开源贡献雷达):有效性要求【项目】+ 至少一条链接,
+                    // 与选题/文章包/笔记包三种格式的字段头互不相交(解析器测试双向锚定),顺序不敏感
+                    const parsedOss = st.answer && !isStreaming ? parseOssOpportunities(st.answer) : null;
+                    const ossResult =
+                      parsedOss && parsedOss.opportunities.length > 0 ? parsedOss : null;
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
@@ -885,6 +892,9 @@ export function CockpitView({
                                   missionId={activeMissionId || currentMission?.id}
                                   onRunMission={onRunMission}
                                 />
+                              ) : st.answer && ossResult ? (
+                                /* 开源贡献机会:只读卡片(Issue 直达链接/复制整条),无任何写操作入口 */
+                                <OssOpportunityList result={ossResult} />
                               ) : st.answer && articleResult ? (
                                 /* 文章包:先于笔记包判定(【摘要】互斥锚);投草稿走续聊 + 审批门。
                                    投递目标按任务标题判定(知乎专栏工坊 → zhihu,其余 → 公众号) */

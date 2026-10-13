@@ -36,8 +36,15 @@ export function writePid(file: string, pid: number): void {
   fs.writeFileSync(file, String(pid), { encoding: 'utf-8', mode: 0o600 });
 }
 
-export function clearPid(file: string): void {
+/**
+ * 删 pidfile。带 expectedPid 时做归属检查:文件内容不是自己的 pid
+ * 就不删——防「旧实例慢退出,把新实例刚写的 pidfile 删了」的交接竞态
+ * (真机 systemd 接管时实际发生:stop 后立刻 start,旧进程 5s 睡眠
+ * 走完才退,finally 无条件 clearPid 删掉了新 pid)。
+ */
+export function clearPid(file: string, expectedPid?: number): void {
   try {
+    if (expectedPid !== undefined && readPid(file) !== expectedPid) return;
     fs.rmSync(file, { force: true });
   } catch {
     /* 已不存在等同成功 */
@@ -72,7 +79,7 @@ export async function stopByPidfile(deps: StopDeps = {}): Promise<StopOutcome> {
   const pid = readPid(file);
   if (pid === null) return { ok: false, error: 'not_running' };
   if (!alive(pid)) {
-    clearPid(file);
+    clearPid(file, pid);
     return { ok: false, error: 'stale', detail: String(pid) };
   }
   try {
@@ -83,6 +90,10 @@ export async function stopByPidfile(deps: StopDeps = {}): Promise<StopOutcome> {
   for (let i = 0; i < tries && alive(pid); i++) {
     await sleep(100);
   }
-  clearPid(file);
+  // 窗口内没退出 → 如实报失败,且不删 pidfile(进程还活着,文件是它的)
+  if (alive(pid)) {
+    return { ok: false, error: 'kill_failed', detail: `pid ${pid} 在 ${tries * 100}ms 内未退出` };
+  }
+  clearPid(file, pid);
   return { ok: true, stopped: pid };
 }

@@ -74,6 +74,17 @@ describe('pidfile + stopByPidfile', () => {
     expect(isPidAlive(2 ** 31 - 2)).toBe(false);
   });
 
+  it('clearPid 归属检查:只删自己 pid 的文件,别人(新实例)的不删', () => {
+    writePid(pf(), 111);
+    clearPid(pf(), 222); // 不是自己的 pid → 不动
+    expect(readPid(pf())).toBe(111);
+    clearPid(pf(), 111); // 是自己的 → 删
+    expect(readPid(pf())).toBeNull();
+    writePid(pf(), 333);
+    clearPid(pf()); // 不带 expectedPid → 无条件删(兼容旧语义)
+    expect(readPid(pf())).toBeNull();
+  });
+
   it('stop:存活 pid → SIGTERM,退出后清 pidfile', async () => {
     writePid(pf(), 999);
     const kills: Array<[number, string]> = [];
@@ -92,7 +103,7 @@ describe('pidfile + stopByPidfile', () => {
     expect(readPid(pf())).toBeNull(); // pidfile 已清理
   });
 
-  it('stop:进程不退 → 轮询有限次后仍清 pidfile(不无限等)', async () => {
+  it('stop:进程不退 → 有限轮询后报 kill_failed,且不删 pidfile(进程还活着)', async () => {
     writePid(pf(), 999);
     let sleeps = 0;
     const r = await stopByPidfile({
@@ -104,8 +115,10 @@ describe('pidfile + stopByPidfile', () => {
       },
       tries: 5,
     });
-    expect(r.ok).toBe(true);
-    expect(sleeps).toBe(5); // 有界等待
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('kill_failed');
+    expect(sleeps).toBe(5); // 有界等待,不无限轮询
+    expect(readPid(pf())).toBe(999); // 进程没退,pidfile 是它的,不能删
   });
 
   it('stop:无 pidfile → not_running;死 pid → stale 且清理;kill 抛错 → kill_failed', async () => {

@@ -83,8 +83,10 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
   audit({ kind: 'start', serverUrl: creds.serverUrl, intervalMs, workspaceRoot: workspaceRoot() });
 
   let stopped = false;
+  let wake: (() => void) | null = null; // 唤醒进行中的心跳 sleep(见下)
   const onSigint = () => {
     stopped = true;
+    wake?.(); // 打断睡眠立即退出,不等满 interval(stop/systemd 接管秒级完成)
     log('收到退出信号,停止轮询…');
   };
   process.on('SIGINT', onSigint);
@@ -97,7 +99,18 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
     const outcome = await runHeartbeatLoop({
       intervalMs,
       shouldStop: () => stopped,
-      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      sleep: (ms: number) =>
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            wake = null;
+            resolve();
+          }, ms);
+          wake = () => {
+            clearTimeout(timer);
+            wake = null;
+            resolve();
+          };
+        }),
       tick: async () => {
         const r = await pollTick(client, log, { claim: true });
         if (r.outcome === 'ok' && r.actions.length > 0) {
@@ -150,7 +163,7 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
   } finally {
     process.removeListener('SIGINT', onSigint);
     process.removeListener('SIGTERM', onSigint);
-    clearPid(pf);
+    clearPid(pf, process.pid); // 归属检查:只删自己写的 pidfile(防慢退出误删新实例的)
   }
   return exitCode;
 }

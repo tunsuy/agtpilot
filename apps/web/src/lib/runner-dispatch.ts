@@ -47,6 +47,8 @@ export interface DispatchDraftOptions {
   taskId?: string;
   workBranch?: string;
   dispatchNote?: string;
+  /** 经 fork 派发(弹窗检测到无推送权限时默认勾选;runner 自动 fork 后克隆副本干活) */
+  viaFork?: boolean;
   now?: number;
 }
 
@@ -94,6 +96,7 @@ export function buildTaskPackFromOpportunity(
     },
     executor: { name: 'claude-code', maxTurns: 60, timeoutMinutes: 30 },
     dispatchNote: (opts.dispatchNote || '').trim() || undefined,
+    viaFork: opts.viaFork === true ? true : undefined,
   });
 }
 

@@ -162,6 +162,7 @@ export function redeemPairCode(
     platform: meta.platform,
     runnerVersion: meta.runnerVersion,
     protocolVersion: meta.protocolVersion,
+    ...(meta.ghLogin !== undefined ? { ghLogin: meta.ghLogin } : {}),
     createdAt: now,
     lastSeenAt: now,
     secretEnc: encryptSecret(deviceSecret),
@@ -217,6 +218,8 @@ export interface RunnerDeviceView {
   platform: string;
   runnerVersion: string;
   protocolVersion: number;
+  /** gh 公开登录名:undefined = 未上报(旧版 runner),null = 已上报未登录 */
+  ghLogin?: string | null;
   createdAt: number;
   lastSeenAt: number;
   online: boolean;
@@ -231,6 +234,7 @@ export function listDevices(userId: string, now: number = Date.now()): RunnerDev
     platform: d.platform,
     runnerVersion: d.runnerVersion,
     protocolVersion: d.protocolVersion,
+    ...(d.ghLogin !== undefined ? { ghLogin: d.ghLogin } : {}),
     createdAt: d.createdAt,
     lastSeenAt: d.lastSeenAt,
     online: !d.revoked && now - d.lastSeenAt < ONLINE_WINDOW_MS,
@@ -264,6 +268,8 @@ export function updateDeviceMeta(userId: string, deviceId: string, meta: RunnerD
   device.platform = meta.platform;
   device.runnerVersion = meta.runnerVersion;
   device.protocolVersion = meta.protocolVersion;
+  // ghLogin 未上报(undefined,旧版 runner)时不覆盖存量值;null = 明确未登录,要覆盖
+  if (meta.ghLogin !== undefined) device.ghLogin = meta.ghLogin;
   writeDevices(userId, devices);
   return true;
 }
@@ -433,6 +439,26 @@ function snapshotStr(p1: Record<string, unknown> | null, key: string, max: numbe
   return typeof v === 'string' && v ? v.slice(0, max) : undefined;
 }
 
+const REPO_FULL_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
+
+/**
+ * 经 fork 派发(viaFork)任务的实际 fork 全名(ghLogin/repo):
+ * 首选 runner 在 phase1_result 里回流的 forkRepo(runner 实探的 gh 账号是唯一
+ * 事实源);缺省回退「绑定设备的 ghLogin + 上游仓库名」推算。直连派发 / 无法
+ * 确定 → undefined(固化命令的 PR head 退回裸分支名,gh 在 fork 克隆内也能
+ * 从 origin 推断 head 仓库,只是不如显式 owner:branch 确定)。
+ */
+function taskForkRepo(userId: string, task: RunnerTaskRecord): string | undefined {
+  if (!task.pack.viaFork) return undefined;
+  const fromEvent = snapshotStr(latestPhase1Payload(task), 'forkRepo', 201);
+  if (fromEvent && REPO_FULL_RE.test(fromEvent) && !fromEvent.split('/').some((s) => s === '.' || s === '..')) {
+    return fromEvent;
+  }
+  const device = task.deviceId ? readDevices(userId).find((d) => d.deviceId === task.deviceId) : undefined;
+  const name = task.pack.repo.split('/')[1];
+  return device?.ghLogin && name ? `${device.ghLogin}/${name}` : undefined;
+}
+
 /**
  * 任务进入 awaiting_approval 时创建审批单(幂等:已有 pending 单直接复用)。
  * 非 awaiting_approval / 任务不存在 → null。
@@ -477,16 +503,20 @@ export function createPublishApproval(
 export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string): ApprovalRequest | null {
   const a = task.approval;
   if (!a || a.status !== 'pending') return null;
+  const forkRepo = taskForkRepo(userId, task);
   const preview = buildPublishCommands({
     workBranch: task.pack.workBranch,
     baseBranch: task.pack.baseBranch,
     prTitle: a.prTitle,
     prBody: a.prBody,
+    forkHead: forkRepo?.split('/')[0],
   });
   return {
     id: a.approvalId,
     action: 'runner_publish',
-    description: `发布本地贡献成果:${task.pack.repo} · 推送 ${task.pack.workBranch} 并创建 PR`,
+    description: forkRepo
+      ? `发布本地贡献成果:${task.pack.repo}(经 fork ${forkRepo})· 推送 ${task.pack.workBranch} 并向上游创建 PR`
+      : `发布本地贡献成果:${task.pack.repo} · 推送 ${task.pack.workBranch} 并创建 PR`,
     dangerLevel: 'high',
     params: {
       taskId: task.taskId,
@@ -494,6 +524,8 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
       workBranch: task.pack.workBranch,
       baseBranch: task.pack.baseBranch ?? 'main',
       issueUrl: task.pack.issueUrl,
+      // 经 fork 派发:审批卡展示 fork 全名(PR 将从它指向上游)
+      forkRepo,
       prTitle: a.prTitle,
       prBody: a.prBody,
       commitHash: a.commitHash,
@@ -537,6 +569,8 @@ export function resolvePublishApproval(
 
   if (approved) {
     const includeClaim = Boolean(opts?.includeClaim && task.pack.claimDraft);
+    // 经 fork 派发:PR head 固化为 `ghLogin:branch` 跨仓形式(base 仍是上游 baseBranch)
+    const forkRepo = taskForkRepo(userId, task);
     const commands = buildPublishCommands({
       workBranch: task.pack.workBranch,
       baseBranch: task.pack.baseBranch,
@@ -545,6 +579,7 @@ export function resolvePublishApproval(
       issueUrl: task.pack.issueUrl,
       claimDraft: task.pack.claimDraft,
       includeClaim,
+      forkHead: forkRepo?.split('/')[0],
     });
     if (!commands) return { ok: false, error: 'invalid_commands' };
     a.status = 'approved';
@@ -574,12 +609,15 @@ export function getDeviceActions(userId: string, deviceId: string): RunnerDevice
     const a = t.approval;
     if (!a) continue;
     if (t.state === 'finishing' && a.status === 'approved' && a.commands && a.commands.length > 0) {
+      const forkRepo = taskForkRepo(userId, t);
       actions.push({
         taskId: t.taskId,
         approvalId: a.approvalId,
         kind: 'publish',
         repo: t.pack.repo,
         workBranch: t.pack.workBranch,
+        // 经 fork 派发:runner 须在 fork 克隆目录执行发布命令(origin 指向 fork)
+        ...(forkRepo ? { forkRepo } : {}),
         commands: a.commands,
       });
     } else if (t.state === 'awaiting_approval' && a.status === 'rejected') {

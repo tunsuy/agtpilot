@@ -53,6 +53,22 @@ describe('buildPublishCommands(批准时刻固化)', () => {
     expect(buildPublishCommands({ ...BASE_INPUT, prTitle: 'x'.repeat(301) })).toBeNull();
     expect(buildPublishCommands({ ...BASE_INPUT, prBody: 'y'.repeat(20001) })).toBeNull();
   });
+
+  it('forkHead(经 fork 派发)→ PR head 固化为 owner:branch 跨仓形式;push 形状不变', () => {
+    const cmds = buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy' });
+    expect(cmds).not.toBeNull();
+    expect(cmds![0]).toEqual({ cmd: 'git', args: ['push', '-u', 'origin', 'contrib/oss-radar-123'] });
+    const headIdx = cmds![1].args.indexOf('--head');
+    expect(cmds![1].args[headIdx + 1]).toBe('tunsuy:contrib/oss-radar-123');
+    // base 仍是上游 baseBranch(不带 owner 前缀)
+    expect(cmds![1].args[cmds![1].args.indexOf('--base') + 1]).toBe('main');
+  });
+
+  it('畸形 forkHead(带冒号/空格/以 - 开头)→ 整体 null,拒绝固化', () => {
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'a:b' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'a b' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: '-x' })).toBeNull();
+  });
 });
 
 describe('validatePublishCommand(白名单:三种完整形状,其余全拒)', () => {
@@ -106,6 +122,28 @@ describe('validatePublishCommand(白名单:三种完整形状,其余全拒)', ()
       expect(validatePublishCommand(m), JSON.stringify(m)).toBeNull();
     }
   });
+
+  it('--head 允许 owner:branch 跨仓形式(经 fork 派发 → PR 指向上游)', () => {
+    const v = validatePublishCommand({
+      cmd: 'gh',
+      args: ['pr', 'create', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'tunsuy:contrib/x'],
+    });
+    expect(v).not.toBeNull();
+  });
+
+  it('--head 跨仓形式的畸形全拒:多冒号/空段/owner 带 - 或 ../分支段是 flag/穿越/控制字符', () => {
+    const badHeads = ['a:b:c', ':x', 'x:', '-own:x', 'ow..ner:x', 'owner:-x', 'owner:../x', 'owner:a\nb', 'owner:x'.repeat(1) + '/' + 'y'.repeat(201)];
+    for (const head of badHeads) {
+      expect(
+        validatePublishCommand({ cmd: 'gh', args: ['pr', 'create', '--title', 't', '--body', 'b', '--base', 'main', '--head', head] }),
+        head
+      ).toBeNull();
+    }
+    // base 位不接受跨仓形式(base 永远是上游分支名)
+    expect(
+      validatePublishCommand({ cmd: 'gh', args: ['pr', 'create', '--title', 't', '--body', 'b', '--base', 'own:main', '--head', 'h'] })
+    ).toBeNull();
+  });
 });
 
 describe('extractPrUrl(PR 链接回流)', () => {
@@ -147,5 +185,17 @@ describe('normalizeDeviceAction(下行动作清洗)', () => {
     expect(normalizeDeviceAction({ ...publish, commands: undefined })).toBeNull();
     expect(normalizeDeviceAction({ ...publish, commands: [{ cmd: 'git' }] })).toBeNull();
     expect(normalizeDeviceAction({ ...publish, commands: [validCmd(), validCmd(), validCmd(), validCmd()] })).toBeNull();
+  });
+
+  it('forkRepo(经 fork 派发)合法透传;畸形拒绝;cancel 不携带', () => {
+    const withFork = normalizeDeviceAction({ ...publish, forkRepo: 'tunsuy/repo' });
+    expect(withFork!.forkRepo).toBe('tunsuy/repo');
+    expect(normalizeDeviceAction({ ...publish, forkRepo: 42 })).toBeNull();
+    expect(normalizeDeviceAction({ ...publish, forkRepo: 'just-name' })).toBeNull();
+    expect(normalizeDeviceAction({ ...publish, forkRepo: '../evil' })).toBeNull(); // 段为 '..'
+    expect(normalizeDeviceAction({ ...publish, forkRepo: 'a/../../b' })).toBeNull(); // 多段穿越
+    const cancel = normalizeDeviceAction({ ...publish, kind: 'cancel', forkRepo: 'tunsuy/repo', commands: undefined });
+    expect(cancel!.kind).toBe('cancel');
+    expect('forkRepo' in cancel!).toBe(false);
   });
 });

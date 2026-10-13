@@ -287,3 +287,89 @@ describe('listPendingRunnerApprovalRequests(服务重启后卡片重灌)', () =>
     expect(listPendingRunnerApprovalRequests(USER)).toHaveLength(0);
   });
 });
+
+describe('经 fork 派发(viaFork):head 固化为 owner:branch + forkRepo 下行', () => {
+  /** 配对(可带 ghLogin)→ 入队 viaFork 任务 → 领取 → 推进到 awaiting_approval(可带 phase1 forkRepo) */
+  function setupForkTask(opts: { phase1ForkRepo?: string; deviceGhLogin?: string | null } = {}) {
+    const devMeta: RunnerDeviceMeta = {
+      ...meta,
+      ...(opts.deviceGhLogin !== undefined ? { ghLogin: opts.deviceGhLogin } : {}),
+    };
+    const { code } = createPairCode(USER, T0);
+    const r = redeemPairCode(code, devMeta, T0);
+    if (!r.ok) throw new Error(`pair failed: ${r.error}`);
+    const dev = r.deviceId;
+    enqueueTask(USER, { ...validPack, viaFork: true }, T0);
+    claimNextTask(USER, dev, T0 + 1);
+    const ev = (n: number, type: string, payload?: Record<string, unknown>) => ({
+      eventId: `ev_${n}`,
+      taskId: validPack.taskId,
+      deviceId: dev,
+      at: T0 + 10 + n,
+      type,
+      payload,
+    });
+    recordRunnerEvents(
+      USER,
+      dev,
+      [
+        ev(1, 'state', { state: 'running' }),
+        ev(2, 'phase1_result', {
+          commitHash: 'abc123def456',
+          prFinal: { title: 'fix: agent 终稿标题', body: '正文' },
+          ...(opts.phase1ForkRepo !== undefined ? { forkRepo: opts.phase1ForkRepo } : {}),
+        }),
+        ev(3, 'state', { state: 'awaiting_approval' }),
+      ],
+      T0 + 20
+    );
+    return dev;
+  }
+
+  it('phase1_result 的 forkRepo 是事实源:审批卡带 fork 语境,批准后 push 形状不变、head=owner:branch,动作携 forkRepo', () => {
+    const dev = setupForkTask({ phase1ForkRepo: 'tunsuy/repo' });
+    const { approval, task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    const req = runnerApprovalToRequest(task, USER)!;
+    const p = req.params as Record<string, any>;
+    expect(p.forkRepo).toBe('tunsuy/repo');
+    expect(req.description).toContain('经 fork tunsuy/repo');
+    const previewPr = p.commands.find((c: any) => c.cmd === 'gh' && c.args[0] === 'pr');
+    expect(previewPr.args[previewPr.args.indexOf('--head') + 1]).toBe('tunsuy:contrib/fix-9');
+
+    const r = resolvePublishApproval(USER, approval.approvalId, true, {}, T0 + 200);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const cmds = r.task.approval!.commands!;
+    expect(cmds[0]).toEqual({ cmd: 'git', args: ['push', '-u', 'origin', 'contrib/fix-9'] }); // origin=fork 克隆,形状不变
+    const prCmd = cmds.find((c) => c.cmd === 'gh' && c.args[0] === 'pr')!;
+    expect(prCmd.args[prCmd.args.indexOf('--head') + 1]).toBe('tunsuy:contrib/fix-9');
+    expect(prCmd.args[prCmd.args.indexOf('--base') + 1]).toBe('main'); // base 仍是上游分支
+    const actions = getDeviceActions(USER, dev);
+    expect(actions[0].kind).toBe('publish');
+    expect(actions[0].forkRepo).toBe('tunsuy/repo');
+  });
+
+  it('phase1 缺 forkRepo → 回退绑定设备 ghLogin 推算 fork 全名', () => {
+    const dev = setupForkTask({ deviceGhLogin: 'tunsuy' });
+    const { approval } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    const r = resolvePublishApproval(USER, approval.approvalId, true, {}, T0 + 200);
+    expect(r.ok).toBe(true);
+    const cmds = (r as any).task.approval.commands as Array<{ cmd: string; args: string[] }>;
+    const prCmd = cmds.find((c) => c.cmd === 'gh' && c.args[0] === 'pr')!;
+    expect(prCmd.args[prCmd.args.indexOf('--head') + 1]).toBe('tunsuy:contrib/fix-9');
+    expect(getDeviceActions(USER, dev)[0].forkRepo).toBe('tunsuy/repo');
+  });
+
+  it('两头都拿不到 fork 名 → head 退回裸分支、动作不带 forkRepo(gh 仍可从 fork 克隆的 origin 推断)', () => {
+    const dev = setupForkTask({});
+    const { approval, task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    const p = runnerApprovalToRequest(task, USER)!.params as Record<string, any>;
+    expect(p.forkRepo).toBeUndefined();
+    const r = resolvePublishApproval(USER, approval.approvalId, true, {}, T0 + 200);
+    expect(r.ok).toBe(true);
+    const cmds = (r as any).task.approval.commands as Array<{ cmd: string; args: string[] }>;
+    const prCmd = cmds.find((c) => c.cmd === 'gh' && c.args[0] === 'pr')!;
+    expect(prCmd.args[prCmd.args.indexOf('--head') + 1]).toBe('contrib/fix-9');
+    expect(getDeviceActions(USER, dev)[0].forkRepo).toBeUndefined();
+  });
+});

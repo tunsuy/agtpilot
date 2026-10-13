@@ -12,8 +12,8 @@ import {
  * `X-Runner-Id` + `Authorization: Bearer <deviceSecret>` → 归属用户与设备。
  *
  * 顺带两件事:
- * - 心跳元信息:query 携带 hostname/platform/runnerVersion/protocolVersion 时
- *   清洗后更新设备记录(runner 升级后版本自新);
+ * - 心跳元信息:query 携带 hostname/platform/runnerVersion/protocolVersion/ghLogin
+ *   时清洗后更新设备记录(runner 升级后版本自新;ghLogin = gh 公开登录名);
  * - 版本兼容治理(§9):存量设备协议版本不再受支持 → 426 + 升级提示,拒绝派发。
  */
 export type RunnerAuthResult =
@@ -36,18 +36,23 @@ export function authenticateRunnerRequest(req: NextRequest): RunnerAuthResult {
     };
   }
 
-  // 心跳携带的元信息更新(可选)
+  // 心跳携带的元信息更新(可选)。ghLogin 参数:缺省 = 沿用存量值;
+  // 空串 = runner 明确上报「gh 未登录」(normalizeDeviceMeta 归一为 null)
   const url = new URL(req.url);
+  const ghLoginParam = url.searchParams.get('ghLogin');
   const metaInput = {
     hostname: url.searchParams.get('hostname') ?? authed.device.hostname,
     platform: url.searchParams.get('platform') ?? authed.device.platform,
     runnerVersion: url.searchParams.get('runnerVersion') ?? authed.device.runnerVersion,
     protocolVersion: Number(url.searchParams.get('protocolVersion') ?? authed.device.protocolVersion),
+    ghLogin: ghLoginParam !== null ? ghLoginParam : authed.device.ghLogin,
   };
   const meta = normalizeDeviceMeta(metaInput);
   if (
     meta &&
-    (meta.runnerVersion !== authed.device.runnerVersion || meta.protocolVersion !== authed.device.protocolVersion)
+    (meta.runnerVersion !== authed.device.runnerVersion ||
+      meta.protocolVersion !== authed.device.protocolVersion ||
+      meta.ghLogin !== authed.device.ghLogin)
   ) {
     updateDeviceMeta(authed.userId, authed.device.deviceId, meta);
     authed.device = { ...authed.device, ...meta };

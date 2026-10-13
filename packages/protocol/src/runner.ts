@@ -89,6 +89,13 @@ export interface RunnerTaskPack {
   executor: { name: 'claude-code'; maxTurns: number; timeoutMinutes: number };
   /** 用户在派发弹窗里的补充说明(自由文本,进 prompt) */
   dispatchNote?: string;
+  /**
+   * 经 fork 派发(派发弹窗显式勾选):runner 领取后先 `gh repo fork`(幂等)
+   * 确保 gh 账号名下存在上游 fork,克隆**fork 副本**干活;Phase 2 固化命令的
+   * push 目标是 fork(origin),PR 以 `owner:branch` head 指向上游。
+   * 解决第三方开源仓无推送权限时 push 必败的问题(§6.2)。
+   */
+  viaFork?: boolean;
 }
 
 /** 云端任务记录(TaskPack + 状态机字段;user-store 侧持久化) */
@@ -132,6 +139,13 @@ export interface RunnerDeviceMeta {
   platform: string;
   runnerVersion: string;
   protocolVersion: number;
+  /**
+   * 本机 gh CLI 登录账号名(公开用户名,非凭据;runner 用 `gh api user` 查询)。
+   * undefined = 未上报(旧版 runner),null = 已上报但未登录 gh。
+   * 云端用途:派发弹窗比对「仓库属主 vs 设备 gh 账号」提示推送权限;经 fork 派发时
+   * 计算 fork 全名。凭据零上行红线不变:只报用户名,token 永不出本机。
+   */
+  ghLogin?: string | null;
 }
 
 /** 云端设备注册表条目(secretEnc 为 secret-box 密文,listDevices 出口剥离) */
@@ -249,6 +263,8 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
       timeoutMinutes: intOr(ex.timeoutMinutes, 1, 240, 30),
     },
     dispatchNote: optStr(o.dispatchNote, 5000),
+    // 只认真正的 true(缺省/false/脏值一律视为未经 fork,派发保持直连语义)
+    viaFork: o.viaFork === true ? true : undefined,
   };
 }
 
@@ -287,7 +303,11 @@ export function normalizeRunnerEvent(
   return { eventId, taskId, deviceId, at, type, payload };
 }
 
-/** 设备元信息清洗(配对与心跳共用) */
+/** GitHub 登录名形状(1-39 位字母数字与连字符,不以连字符开头/结尾) */
+const GH_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
+/** 设备元信息清洗(配对与心跳共用)。ghLogin:null/'' = 明确未登录;
+ *  合法字符串 = 登录名;缺省或畸形 = undefined(未知,路由侧回退存量值) */
 export function normalizeDeviceMeta(input: unknown): RunnerDeviceMeta | null {
   if (!input || typeof input !== 'object') return null;
   const o = input as Record<string, unknown>;
@@ -297,11 +317,15 @@ export function normalizeDeviceMeta(input: unknown): RunnerDeviceMeta | null {
   if (!/^[\w.+\-]{1,40}$/.test(runnerVersion)) return null;
   const protocolVersion = typeof o.protocolVersion === 'number' ? Math.trunc(o.protocolVersion) : NaN;
   if (!Number.isFinite(protocolVersion)) return null;
+  let ghLogin: string | null | undefined;
+  if (o.ghLogin === null || o.ghLogin === '') ghLogin = null;
+  else if (typeof o.ghLogin === 'string' && GH_LOGIN_RE.test(o.ghLogin)) ghLogin = o.ghLogin;
   return {
     hostname: hostname.replace(/[\u0000-\u001f\u007f]/g, ''),
     platform: optStr(o.platform, 30) ?? 'unknown',
     runnerVersion,
     protocolVersion,
+    ...(ghLogin !== undefined ? { ghLogin } : {}),
   };
 }
 

@@ -78,6 +78,14 @@ describe('normalizeTaskPack · 合法输入', () => {
     expect(p.constraints).toHaveLength(20);
     expect(p.constraints.every((c) => typeof c === 'string')).toBe(true);
   });
+
+  it('viaFork(经 fork 派发):只认真正 true;false/脏值/缺省 → undefined(直连语义)', () => {
+    expect(normalizeTaskPack({ ...validPack, viaFork: true })!.viaFork).toBe(true);
+    expect(normalizeTaskPack({ ...validPack, viaFork: false })!.viaFork).toBeUndefined();
+    expect(normalizeTaskPack({ ...validPack, viaFork: 'yes' })!.viaFork).toBeUndefined();
+    expect(normalizeTaskPack({ ...validPack, viaFork: 1 })!.viaFork).toBeUndefined();
+    expect(normalizeTaskPack(validPack)!.viaFork).toBeUndefined();
+  });
 });
 
 describe('normalizeTaskPack · 拒绝畸形输入(→ null)', () => {
@@ -162,6 +170,20 @@ describe('normalizeDeviceMeta', () => {
     expect(normalizeDeviceMeta({ runnerVersion: '0.0.1', protocolVersion: 1 })).toBeNull();
     expect(normalizeDeviceMeta({ hostname: 'h', runnerVersion: 'a b!', protocolVersion: 1 })).toBeNull();
     expect(normalizeDeviceMeta({ hostname: 'h', runnerVersion: '0.0.1', protocolVersion: 'one' })).toBeNull();
+  });
+
+  it('ghLogin:合法登录名保留;null/空串 → null(明确未登录);畸形/缺省 → 省略字段', () => {
+    const base = { hostname: 'h', runnerVersion: '0.0.3', protocolVersion: 1 };
+    expect(normalizeDeviceMeta({ ...base, ghLogin: 'tunsuy' })!.ghLogin).toBe('tunsuy');
+    expect(normalizeDeviceMeta({ ...base, ghLogin: 'a-b-9' })!.ghLogin).toBe('a-b-9');
+    expect(normalizeDeviceMeta({ ...base, ghLogin: null })!.ghLogin).toBeNull();
+    expect(normalizeDeviceMeta({ ...base, ghLogin: '' })!.ghLogin).toBeNull();
+    // 畸形(空格/连字符开头结尾/超 39 位)与缺省 → undefined(路由侧沿用存量值)
+    expect(normalizeDeviceMeta({ ...base, ghLogin: 'a b' })!.ghLogin).toBeUndefined();
+    expect(normalizeDeviceMeta({ ...base, ghLogin: '-lead' })!.ghLogin).toBeUndefined();
+    expect(normalizeDeviceMeta({ ...base, ghLogin: 'trail-' })!.ghLogin).toBeUndefined();
+    expect(normalizeDeviceMeta({ ...base, ghLogin: 'x'.repeat(40) })!.ghLogin).toBeUndefined();
+    expect('ghLogin' in normalizeDeviceMeta(base)!).toBe(false);
   });
 });
 

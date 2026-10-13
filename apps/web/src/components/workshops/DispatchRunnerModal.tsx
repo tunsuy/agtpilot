@@ -10,7 +10,7 @@
  * - push/PR 不在本弹窗发生 —— Phase 1 产出停在本地 commit,发布走 M3 审批门。
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, MonitorSmartphone, Send, Copy, Check, ChevronDown, TriangleAlert } from 'lucide-react';
+import { X, MonitorSmartphone, Send, Copy, Check, ChevronDown, TriangleAlert, GitFork } from 'lucide-react';
 import { renderHandoffPack } from '@agtpilot/protocol';
 import { copyToClipboard } from '../../utils/nativeBridge';
 import type { OssOpportunity } from '../../lib/oss-opportunities';
@@ -23,6 +23,8 @@ interface DeviceRow {
   runnerVersion: string;
   online: boolean;
   revoked?: boolean;
+  /** gh 公开登录名:undefined = 未上报(旧版 runner),null = 已上报未登录 */
+  ghLogin?: string | null;
 }
 
 export function DispatchRunnerModal({
@@ -44,10 +46,26 @@ export function DispatchRunnerModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  /** null = 跟随自动检测;用户手动勾选/取消后以手动为准 */
+  const [viaForkOverride, setViaForkOverride] = useState<boolean | null>(null);
+
+  // 推送权限自动检测:仓库属主 vs 各设备 gh 登录名(runner 实探上报的公开用户名)。
+  // 属主不一致 = 大概率无推送权限(第三方仓/非本人 org),默认改经 fork 派发;
+  // org 成员等有权限的特例可手动取消勾选直连派发(push 失败会如实上报,不静默)。
+  const repoOwner = (opp.project || '').trim().split('/')[0] ?? '';
+  const liveDevices = (devices ?? []).filter((d) => !d.revoked);
+  const anyGhLogin = liveDevices
+    .map((d) => d.ghLogin)
+    .find((l): l is string => typeof l === 'string' && l !== '');
+  const ownerMatch =
+    Boolean(anyGhLogin) &&
+    liveDevices.some((d) => typeof d.ghLogin === 'string' && d.ghLogin.toLowerCase() === repoOwner.toLowerCase());
+  const forkNeeded = devices !== null && liveDevices.length > 0 && Boolean(anyGhLogin) && !ownerMatch;
+  const viaFork = viaForkOverride ?? forkNeeded;
 
   const pack = useMemo(
-    () => buildTaskPackFromOpportunity(opp, { workBranch, dispatchNote: note }),
-    [opp, workBranch, note]
+    () => buildTaskPackFromOpportunity(opp, { workBranch, dispatchNote: note, viaFork }),
+    [opp, workBranch, note, viaFork]
   );
   const handoff = useMemo(() => (pack ? renderHandoffPack(pack) : null), [pack]);
 
@@ -149,6 +167,7 @@ export function DispatchRunnerModal({
                         <span className="truncate">{d.hostname}</span>
                         <span className="text-[10px] text-zinc-400 shrink-0">
                           {d.revoked ? '已吊销' : d.online ? '在线' : '离线'} · v{d.runnerVersion}
+                          {typeof d.ghLogin === 'string' ? ` · gh:${d.ghLogin}` : d.ghLogin === null ? ' · gh未登录' : ''}
                         </span>
                       </div>
                     ))}
@@ -160,6 +179,41 @@ export function DispatchRunnerModal({
                   </div>
                 )}
               </div>
+
+              {/* 推送权限自动检测 → 经 fork 派发(仓库属主 ≠ 设备 gh 账号时默认勾选) */}
+              {pack && devices !== null && liveDevices.length > 0 && !ownerMatch && (
+                forkNeeded ? (
+                  <div className="px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 space-y-2">
+                    <div className="flex items-start gap-2 text-xs text-amber-800 leading-relaxed">
+                      <GitFork className="h-4 w-4 shrink-0 mt-0.5" />
+                      <span>
+                        仓库属主 <code className="font-mono text-[11px]">{repoOwner}</code> 不是该设备的 gh 账号(
+                        <code className="font-mono text-[11px]">{anyGhLogin}</code>
+                        ):直连派发大概率在 push 阶段因无写权限失败。若你是该组织成员且有推送权限,可取消勾选直连派发。
+                      </span>
+                    </div>
+                    <label className="flex items-start gap-2 text-xs text-amber-900 cursor-pointer leading-relaxed">
+                      <input
+                        type="checkbox"
+                        checked={viaFork}
+                        onChange={(e) => setViaForkOverride(e.target.checked)}
+                        className="mt-0.5 shrink-0"
+                      />
+                      <span>
+                        自动 fork 后派发:runner 先把 <code className="font-mono text-[11px]">{pack.repo}</code> fork 到{' '}
+                        <code className="font-mono text-[11px]">{anyGhLogin}</code> 名下(已存在则复用),克隆 fork 副本干活,
+                        PR 从 fork 指向上游。fork 只是公开仓副本;推代码/PR 仍逐条过审批卡。
+                      </span>
+                    </label>
+                  </div>
+                ) : (
+                  <div className="px-3 py-2 rounded-lg bg-zinc-50 border border-zinc-200 text-[11px] text-zinc-500 leading-relaxed">
+                    {liveDevices.every((d) => d.ghLogin === null)
+                      ? '设备 gh 未登录:自动 fork 不可用,发布阶段的 gh 命令也会失败。先在 runner 机器上执行 gh auth login。'
+                      : '设备未上报 gh 登录名(runner 版本过旧):无法检测推送权限与自动 fork。升级:npm i -g @agtpilot/runner@latest。'}
+                  </div>
+                )
+              )}
 
               {/* 工作分支 */}
               <div>
@@ -205,7 +259,7 @@ export function DispatchRunnerModal({
 
               <p className="text-[10px] text-zinc-400 leading-relaxed">
                 红线:本地 agent 只修这个 Issue、禁 push/禁网(工具白名单固化);产出停在本地 commit,
-                push/PR 需在云端审批后由 runner 执行(审批门 M3 交付,当前 Phase 1 产出先留本地)。
+                push/PR 经审批卡(含手机 Web Push)批准后由 runner 逐字执行固化命令,别无对外发布路径。
               </p>
 
               {error && (
@@ -234,7 +288,7 @@ export function DispatchRunnerModal({
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium transition shadow-xs"
           >
             <Send className="h-3.5 w-3.5" />
-            {busy ? '派发中…' : '派发(本地不发布)'}
+            {busy ? '派发中…' : pack?.viaFork ? '派发(经 fork,不发布)' : '派发(本地不发布)'}
           </button>
         </div>
       </div>

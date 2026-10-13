@@ -24,6 +24,9 @@ export function renderTaskPrompt(pack: RunnerTaskPack): string {
   lines.push('- 一切产出留在本地:commit 到指定分支即止,发布由用户在云端审批后另行执行。');
   lines.push('');
   lines.push(`仓库:${pack.repo}(已检出分支 ${pack.workBranch},基于 ${pack.baseBranch ?? 'main'})`);
+  if (pack.viaFork) {
+    lines.push(`说明:本地克隆是你对 ${pack.repo} 的 fork 副本(origin 指向 fork);改动最终以 PR 从 fork 提交给上游,与你的工作方式无关——照常改码、commit 即可。`);
+  }
   lines.push(`Issue:${pack.issueUrl}`);
   if (pack.issueContext) {
     lines.push('');
@@ -71,6 +74,7 @@ export function renderHandoffPack(pack: RunnerTaskPack): string {
   lines.push('');
   lines.push(`- Issue:${pack.issueUrl}`);
   lines.push(`- 基线分支:${pack.baseBranch ?? 'main'}(工作分支建议 \`${pack.workBranch}\`)`);
+  if (pack.viaFork) lines.push(`- 派发方式:经 fork —— 先 fork 上游 ${pack.repo} 到你的账号,在 fork 里改,PR 从 fork 指向上游`);
   if (pack.constraints.length > 0) lines.push(`- 约束:${pack.constraints.join(';')}`);
   if (pack.acceptance.testCommand) lines.push(`- 验收:\`${pack.acceptance.testCommand}\`${pack.acceptance.note ? `(${pack.acceptance.note})` : ''}`);
   if (pack.issueContext) lines.push('');

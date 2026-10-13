@@ -147,3 +147,19 @@ describe('runTask(领取任务 → 本地执行 → 事件回流编排)', () => 
     expect(String(last.message)).toContain('claude');
   });
 });
+
+describe('runTask · 经 fork 派发(viaFork)', () => {
+  it('phase1_result 携带 forkRepo(runner 实探账号 = 云端固化 head 的唯一事实源)', async () => {
+    const { deps, flat } = makeDeps({
+      prepare: async () => ({ repoDir: '/ws/tunsuy/vllm', mode: 'cloned', forkRepo: 'tunsuy/vllm' }),
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: { ...validPack, viaFork: true } }, deps)).toBe('awaiting_approval');
+    expect(flat()[1].payload).toMatchObject({ forkRepo: 'tunsuy/vllm', commitHash: 'abc123' });
+  });
+
+  it('直连派发:phase1_result 不带 forkRepo(缺省即直连语义)', async () => {
+    const { deps, flat } = makeDeps();
+    await runTask({ taskId: 'rtask_1', pack: validPack }, deps);
+    expect((flat()[1].payload as any).forkRepo).toBeUndefined();
+  });
+});

@@ -6,9 +6,10 @@ import {
   type RunnerEvent,
 } from '@agtpilot/protocol';
 import { redactEvent } from './redaction';
+import { getCachedGhLogin } from './gh';
 
 /** runner 自身版本(与 package.json 同步维护;心跳/配对上报,云端做版本治理 §9) */
-export const RUNNER_VERSION = '0.0.1';
+export const RUNNER_VERSION = '0.0.3';
 
 /** 401(密钥不符/已吊销)→ 调用方应自毁本地凭据并提示重新配对 */
 export class RunnerAuthError extends Error {}
@@ -16,11 +17,15 @@ export class RunnerAuthError extends Error {}
 export class RunnerUpgradeError extends Error {}
 
 export function deviceMeta(): RunnerDeviceMeta {
+  // ghLogin:bin 启动时 ensureGhLogin() 探测一次后缓存(公开用户名,非凭据);
+  // 未探测过(旧调用路径)则省略字段,云端回退存量值
+  const ghLogin = getCachedGhLogin();
   return {
     hostname: os.hostname().slice(0, 100),
     platform: process.platform,
     runnerVersion: RUNNER_VERSION,
     protocolVersion: RUNNER_PROTOCOL_VERSION,
+    ...(ghLogin !== undefined ? { ghLogin } : {}),
   };
 }
 
@@ -90,7 +95,8 @@ export class RunnerClient {
   }
 
   /** 轮询(≈5s 一次):缺省纯心跳;claim=true 时 FIFO 领取任务(M2 起启用)。
-   *  心跳顺带上报元信息(runner 升级后版本自新)。 */
+   *  心跳顺带上报元信息(runner 升级后版本自新)。ghLogin:null 以空串编码
+   *  (query 参数天然是字符串;云端 '' → 明确未登录,缺省参数 → 沿用存量值)。 */
   async poll(opts: { claim?: boolean; meta?: RunnerDeviceMeta } = {}): Promise<PollResult> {
     const meta = opts.meta ?? deviceMeta();
     return this.request<PollResult>(
@@ -100,6 +106,7 @@ export class RunnerClient {
         platform: meta.platform,
         runnerVersion: meta.runnerVersion,
         protocolVersion: String(meta.protocolVersion),
+        ...(meta.ghLogin !== undefined ? { ghLogin: meta.ghLogin ?? '' } : {}),
       })
     , { headers: this.headers() });
   }

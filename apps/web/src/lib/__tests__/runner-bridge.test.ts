@@ -265,3 +265,28 @@ describe('上行事件记录', () => {
     expect(t.events!.at(-1)!.eventId).toBe('ev_249');
   });
 });
+
+describe('设备 ghLogin(公开登录名:配对/心跳上报,列表透出)', () => {
+  it('配对携带 ghLogin → 列表透出;缺省 → 视图不含字段(旧版 runner 语义)', () => {
+    const { code } = createPairCode(USER_A, T0);
+    const r = redeemPairCode(code, { ...meta, ghLogin: 'tunsuy' }, T0);
+    expect(r.ok).toBe(true);
+    expect(listDevices(USER_A, T0)[0].ghLogin).toBe('tunsuy');
+
+    const r2 = pairDevice(USER_A);
+    const d2 = listDevices(USER_A, T0).find((d) => d.deviceId === r2.deviceId)!;
+    expect('ghLogin' in d2).toBe(false);
+  });
+
+  it('心跳更新:字符串与 null(明确未登录)覆盖存量;undefined 不覆盖(沿用存量值)', () => {
+    const { code } = createPairCode(USER_A, T0);
+    const r = redeemPairCode(code, { ...meta, ghLogin: 'tunsuy' }, T0);
+    if (!r.ok) throw new Error('pair failed');
+    expect(updateDeviceMeta(USER_A, r.deviceId, { ...meta, ghLogin: null })).toBe(true);
+    expect(listDevices(USER_A, T0)[0].ghLogin).toBeNull();
+    expect(updateDeviceMeta(USER_A, r.deviceId, { ...meta, ghLogin: 'other-acct' })).toBe(true);
+    expect(listDevices(USER_A, T0)[0].ghLogin).toBe('other-acct');
+    expect(updateDeviceMeta(USER_A, r.deviceId, meta)).toBe(true); // 无 ghLogin 字段
+    expect(listDevices(USER_A, T0)[0].ghLogin).toBe('other-acct');
+  });
+});

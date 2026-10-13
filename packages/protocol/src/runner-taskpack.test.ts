@@ -113,4 +113,20 @@ describe('协议增补字段(additive:只增不改)', () => {
     expect(normalizeTaskPack({ ...basePack, repo: './owner' })).toBeNull();
     expect(normalizeTaskPack({ ...basePack, baseBranch: 'a/../b' })).toBeNull();
   });
+
+  it('viaFork:清洗只认真正 true;prompt/交接包给出 fork 语境说明', () => {
+    expect(normalizeTaskPack({ ...basePack, viaFork: true })!.viaFork).toBe(true);
+    expect(normalizeTaskPack({ ...basePack, viaFork: false })!.viaFork).toBeUndefined();
+    expect(normalizeTaskPack({ ...basePack, viaFork: 'yes' })!.viaFork).toBeUndefined();
+    expect(normalizeTaskPack(basePack)!.viaFork).toBeUndefined();
+
+    const forkPrompt = renderTaskPrompt({ ...basePack, viaFork: true });
+    expect(forkPrompt).toContain('fork 副本');
+    expect(forkPrompt).toContain('vllm-project/vllm');
+    expect(renderTaskPrompt(basePack)).not.toContain('fork 副本');
+
+    const forkHandoff = renderHandoffPack({ ...basePack, viaFork: true });
+    expect(forkHandoff).toContain('经 fork');
+    expect(renderHandoffPack(basePack)).not.toContain('经 fork');
+  });
 });

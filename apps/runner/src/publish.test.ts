@@ -225,3 +225,28 @@ describe('handleDeviceActions(审批动作 → 事件编排)', () => {
     expect(cancelDeps.audited[0]).toMatchObject({ kind: 'action_cancel', taskId: 'rtask_1', workBranch: 'contrib/x' });
   });
 });
+
+describe('executePublishAction · 经 fork 派发(forkRepo 目录解析)', () => {
+  it('action 带 forkRepo → 固化命令在 fork 克隆目录执行;push 形状不变、head 为 owner:branch', async () => {
+    const forkDir = path.join(wsRoot, 'tunsuy', 'repo');
+    fs.mkdirSync(path.join(forkDir, '.git'), { recursive: true });
+    const forkPr: FrozenCommand = {
+      cmd: 'gh',
+      args: ['pr', 'create', '--title', 'fix: t', '--body', 'b', '--base', 'main', '--head', 'tunsuy:contrib/x'],
+    };
+    const { calls, exec } = fakeExec();
+    const deps = makeDeps(exec);
+    const r = await executePublishAction(makeAction({ forkRepo: 'tunsuy/repo', commands: [pushCmd, forkPr] }), deps);
+    expect(r.ok).toBe(true);
+    expect(calls[0]).toEqual({ cmd: 'git', args: pushCmd.args, cwd: forkDir }); // origin = fork 克隆
+    expect(calls[1]).toEqual({ cmd: 'gh', args: forkPr.args, cwd: forkDir });
+  });
+
+  it('forkRepo 目录不存在(无 .git)→ 拒绝执行,路径围栏语义与直连一致', async () => {
+    const { calls, exec } = fakeExec();
+    const deps = makeDeps(exec);
+    const r = await executePublishAction(makeAction({ forkRepo: 'tunsuy/other' }), deps);
+    expect(r.ok).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+});

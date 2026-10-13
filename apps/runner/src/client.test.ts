@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RunnerClient, RunnerAuthError, RunnerUpgradeError, RUNNER_VERSION } from './client';
+import { RunnerClient, RunnerAuthError, RunnerUpgradeError, RUNNER_VERSION, deviceMeta } from './client';
 import { RUNNER_PROTOCOL_VERSION } from '@agtpilot/protocol';
 
 /** 假 fetch:按序返回预置应答,记录调用(URL/方法/头/体) */
@@ -118,5 +118,27 @@ describe('RunnerClient.postEvents', () => {
     const body = JSON.parse(raw);
     expect(body.events[0].eventId).toBe('ev_1');
     expect(body.events[0].payload.summary).toContain('auth');
+  });
+});
+
+describe('RunnerClient.poll · ghLogin 心跳编码(公开登录名,凭据零上行)', () => {
+  const base = { hostname: 'h', platform: 'linux', runnerVersion: RUNNER_VERSION, protocolVersion: RUNNER_PROTOCOL_VERSION } as const;
+
+  async function pollMeta(meta: typeof base & { ghLogin?: string | null }): Promise<URL> {
+    const { impl, calls } = fakeFetch([{ status: 200, body: { success: true, serverTime: 1, claimed: null, queue: [] } }]);
+    await new RunnerClient('https://s', creds, impl).poll({ meta: meta as any });
+    return new URL(calls[0].url);
+  }
+
+  it('字符串 → 原样上报;null → 空串(明确未登录);undefined → 省略参数(云端沿用存量值)', async () => {
+    expect((await pollMeta({ ...base, ghLogin: 'tunsuy' })).searchParams.get('ghLogin')).toBe('tunsuy');
+    expect((await pollMeta({ ...base, ghLogin: null })).searchParams.get('ghLogin')).toBe('');
+    expect((await pollMeta(base)).searchParams.has('ghLogin')).toBe(false);
+  });
+
+  it('deviceMeta() 未探测过缓存 → 不含 ghLogin 字段(省略而非 null)', () => {
+    const m = deviceMeta();
+    expect(m.runnerVersion).toBe(RUNNER_VERSION);
+    expect('ghLogin' in m).toBe(false);
   });
 });

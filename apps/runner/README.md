@@ -55,6 +55,16 @@ package.json 的 bin/files/publishConfig 已按发布形态配置,`prepublishOnl
 不追加命令,任何一条失败即停并上报;PR 链接自动回流任务卡。拒绝则任务取消,
 本地分支保留(可自行处置)。
 
+### 经 fork 派发(对上游无 push 权限时)
+
+心跳会顺带上报本机 gh 的**公开登录名**(`gh api user --jq .login`,只查用户名,
+不读取任何凭据)。云端派发弹窗据此比对「仓库 owner vs 你的 gh 账号」,不匹配时
+可勾选**「自动 fork 后派发」**:runner 领取任务时幂等 `gh repo fork`(已存在等同
+成功),克隆你名下的 fork 副本干活;批准后 `git push` 推 fork,PR 以
+`owner:branch` 跨仓形式指向上游。fork 只发生在派发时显式勾选之后,内容 = 上游
+公开仓副本(零本地数据);推代码/PR 仍逐条过审批门。gh 未登录时经 fork 任务会
+如实报错终止——先 `gh auth login`,或重新以直连方式派发。
+
 ## 里程碑
 
 | 阶段 | 能力 |

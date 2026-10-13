@@ -10,6 +10,7 @@ import { workspaceRoot } from './config';
 import { ReliableEventPoster, outboxFile } from './event-queue';
 import { appendAudit, readAudit, rotateAuditIfNeeded, auditFile } from './audit';
 import { pidFile, writePid, clearPid, readPid, isPidAlive, stopByPidfile } from './pidfile';
+import { ensureGhLogin } from './gh';
 
 /**
  * agtpilot-runner —— AgtPilot 本地薄 runner(docs/design/local-runner-bridge.md)
@@ -41,6 +42,10 @@ async function cmdPair(flags: Record<string, string>): Promise<number> {
   }
   const client = new RunnerClient(server, null);
   try {
+    // 探测本机 gh 登录名(公开用户名,非凭据)随配对上报:云端派发弹窗据此
+    // 比对仓库属主提示推送权限;未登录不阻塞配对(直连派发自家仓不需要 gh)
+    const ghLogin = await ensureGhLogin();
+    log(`gh 账号:${ghLogin ?? '未登录(经 fork 派发不可用)'} · claude/gh 凭据均留在本机,永不上传`);
     const { deviceId, deviceSecret } = await client.pair(code, deviceMeta());
     saveCredentials({
       serverUrl: server.replace(/\/+$/, ''),
@@ -92,7 +97,10 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
   process.on('SIGINT', onSigint);
   process.on('SIGTERM', onSigint);
 
-  log(`开始心跳轮询 ${creds.serverUrl}(间隔 ${intervalMs}ms,Ctrl+C 退出;工作区 ${workspaceRoot()})`);
+  // 探测 gh 登录名(公开用户名,非凭据)缓存后随心跳元信息上报,云端派发弹窗比对用
+  const ghLogin = await ensureGhLogin();
+
+  log(`开始心跳轮询 ${creds.serverUrl}(间隔 ${intervalMs}ms,Ctrl+C 退出;工作区 ${workspaceRoot()};gh 账号 ${ghLogin ?? '未登录'})`);
   const adapter = new ClaudeCodeAdapter();
   let exitCode = 0;
   try {

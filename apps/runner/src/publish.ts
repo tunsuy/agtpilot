@@ -48,7 +48,9 @@ export async function executePublishAction(action: RunnerDeviceAction, deps: Pub
 
   let repoDir: string;
   try {
-    repoDir = repoDirFor(deps.workspaceRoot, action.repo);
+    // 经 fork 派发的任务:Phase 1 克隆的是 fork 目录(forkRepo),发布命令必须在
+    // 那里执行(origin 指向 fork);normalizeDeviceAction 已清洗形状,再过路径围栏
+    repoDir = repoDirFor(deps.workspaceRoot, action.forkRepo ?? action.repo);
   } catch (e) {
     return { ok: false, error: `仓库路径被围栏拒绝:${(e as Error)?.message || e}` };
   }

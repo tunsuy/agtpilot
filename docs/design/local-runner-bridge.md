@@ -8,6 +8,7 @@
 - 进度: **M4 已落地**(2026-10-13):硬化 —— runner `redaction.ts`(§5.3:已知密钥形态正则库 GitHub/AWS/Slack/OpenAI/Anthropic/Google/npm/Stripe/JWT/Bearer 头/URL 内嵌凭据/key=value + PEM 私钥块 + 本机 deviceSecret 值黑名单 + 深度递归 payload,接线在事件出本机唯一出口 client.postEvents;21 测含正常任务文本不误伤用例)+ `event-queue.ts`(§3.1 离线队列:outbox.json 0600 原子写、TTL 7 天与云端任务过期对齐、容量 2000 保最新、eventId 去重、损坏自愈;ReliableEventPoster 包装 postEvents 保持签名/抛错语义,task-run/publish 零改动接入;11 测)+ `audit.ts`(§7 本地 append-only JSONL:paired/start/exit/stop/task_claimed/task_result/publish_cmd 逐条留痕(argv 截断)/publish_result/action_cancel,写失败静默、超 5MB 轮转保后半;logs 子命令 --tail/--json)+ `pidfile.ts`(start 单实例检查 + stop 子命令 SIGTERM→有界等待→清理,死 pid 陈旧自愈;9 测)+ bin 全接线(pair/start/status/stop/logs/config 六子命令齐)+ executor tree-kill(claude 以 detached 进程组起,超时按组 SIGTERM→5s→SIGKILL,§7 资源围栏补齐)+ 安装脚本 `scripts/install.sh`(仓内开发者路径:Node≥20/tsx/claude 检测,生成 ~/.local/bin/agtpilot-runner 包装命令;npm 正式渠道待 org 注册)+ README 全量使用说明。**修复潜在运行时断裂**:packages/protocol 补 `"type": "module"`(此前 tsx 直跑 bin 时 barrel `export *` 被按 CJS 处理,ESM 具名导入解析失败;vitest 自有转换层掩盖了该问题,M4 冒烟 bin 全子命令时暴露)+ bin 全子命令冒烟通过。runner 套件 63→**109 测**;§10 M4 门禁(redaction 用例库/事件幂等去重——云端 eventId 去重 M1 已测,本地 outbox 去重 M4 补测)达成;决策项 7 按需 diff **暂缓**(依拍板「视真实使用情况再建」,v1 未上线无使用数据)
 - 进度: **npm 占位发布完成**(2026-10-13):org 最终确认 `@agtpilot`(账号 marshalts),`@agtpilot/runner@0.0.1` 经 npm staged publishing 上线为 `latest`,真机 `npm install -g` + bin 冒烟通过,发布 token 即用即清;发布构建/后续发版注意事项详见 §9
 - 进度: **首次真机配对运行**(2026-10-13):web 部署于 `http://agent.tunsuy.cn`(负责人侧),本机 runner `npm i -g` 安装 → pair 成功(设备 dev_af51ee6c5a762154)→ **systemd 系统服务常驻**(`/etc/systemd/system/agtpilot-runner.service`:开机自启、崩溃 5s 重启、600s 内连续失败 5 次熔断、日志进 journal;心跳 sleep 改信号可唤醒,停止毫秒级)。**真机暴露并修复 3 个 bug(全部并入 0.0.2)**:① bin.ts 心跳循环 deps 漏传 sleep,第一拍后崩溃(540682c;M4 冒烟在未配对态跑 start 未进循环,漏网);② task-run.ts onProgress 对 result 事件误取不存在的 summary(tsc 门禁抓到,改报 isError 标志,合数据最小化,540682c);③ pidfile 交接竞态——旧实例慢退出 finally 无条件 clearPid 误删新实例 pidfile、stopByPidfile 等待超时仍谎报 ok,clearPid 加归属检查 + 超时如实报 kill_failed(49390e5)。**防复发:runner 新增 tsc --noEmit 类型门禁(tsconfig.json,纳入 prepublishOnly),runner 套件 110 测**。**本机运行 0.0.2(本地 tarball 安装);npm registry 上仍是带 bug 的 0.0.1,0.0.2 重发待新 token**。注:agent.tunsuy.cn 暂无 TLS(https 不通),deviceSecret 走明文 http——建议配证书后以 https 重新配对(凭据固化 server URL)
+- 进度: **经 fork 派发(无推送权限自动检测)**(2026-10-13,并入 0.0.3):对上游无 push 权限是开源贡献常态 —— ① runner 心跳携带本机 gh **公开登录名**(`gh api user --jq .login`,只查用户名不碰凭据,§7 凭据零上行红线不变;deviceMeta.ghLogin:undefined=旧版未上报/null=已上报未登录);② 派发弹窗自动比对「仓库 owner vs 在线设备 gh 账号」,不匹配时琥珀色提示 + 默认勾选**「自动 fork 后派发」**(显式勾选才 fork;组织成员有直推权限可取消勾选);③ runner 领取 viaFork 任务时幂等 `gh repo fork <upstream> --clone=false`(already exists 等同成功),克隆 **fork 副本**到 `<workspaceRoot>/<ghLogin>/<repo>`,gh 未登录则如实报错不猜;④ phase1_result 回流实探 forkRepo(唯一事实源),批准后 PR head 固化为 `owner:branch` 跨仓形式(base 仍是上游 baseBranch),publish 动作携 forkRepo 让 runner 在 fork 目录执行固化命令(`git push -u origin <branch>` 形状不变,origin=fork);⑤ 冻结命令白名单新增 head 的恰一冒号 `owner:branch` 形状校验(owner 段 GitHub 登录名规则,base 位仍拒冒号);审批卡与手机同卡展示「经 fork xxx,PR 指向上游」。fork 内容 = 上游公开仓副本,零本地数据外发;推代码/PR 仍逐条过 Phase 2 审批门。门禁:protocol 66 / runner 125(+tsc)/ web 610(+tsc)/ core 92 / plugin-skill 44 全绿
 - 前置阅读: `docs/design/sandbox-control-hardening.md`(围栏/审批/热更新模式)、`docs/design/workshop-scenario-loop.md`(场景档案)
 - 上游背景: 「开源贡献雷达」工坊(commit 980549a)已交付发现与调研环节;本文档补齐「动手」环节
 
@@ -85,13 +86,15 @@ T0(纯手工交接包:卡片一键复制任务包,用户粘贴进本地 claude �
 
 1. 驾驶舱「设备」页点「配对新 runner」→ 云端生成**一次性配对码**(8 位字符,5 分钟过期,绑定当前登录用户);
 2. 用户本地执行 `agtpilot-runner pair --server https://<部署地址> --code XXXXXXXX`;
-3. runner POST 配对码 + 设备元信息(hostname/platform/版本)→ 云端核销配对码,生成 `deviceSecret`(256-bit 随机):
+3. runner POST 配对码 + 设备元信息(hostname/platform/版本/**ghLogin 公开登录名**)→ 云端核销配对码,生成 `deviceSecret`(256-bit 随机):
    - 云端侧:secret-box 加密存 user-store `devices.json`(deviceId/secret 密文/元信息/lastSeenAt/状态);
    - runner 侧:`~/.agtpilot/runner/credentials.json`(0600),含 server URL(配对时固定,防任务来源漂移)+ deviceId + deviceSecret;
 4. 后续所有 /api/runner/* 调用带 `X-Runner-Id` + `Authorization: Bearer <deviceSecret>`;
 5. 设备页可**吊销**(删除 secret → 轮询 401,runner 本地自毁凭据并提示重新配对);一个用户可配多台(家用台式机/工作机),派发时选设备。
 
 安全注记:配对码短有效期 + 云端 UI 展示待配对设备 hostname 供人工确认(防配对码钓鱼);deviceSecret 泄露的影响面 = 该设备可拉取该用户任务并伪造事件,**不能**读历史任务内容(事件下行只含新派发),且可一键吊销。
+
+ghLogin 注记:runner 每次心跳顺带上报 `gh api user` 查到的**公开登录名**(与查 claude 版本同性质,不读取/不缓存/不上传任何 token —— §7 凭据零上行)。三态:`undefined` = 旧版 runner 未上报(云端沿用存量值)、`null` = 已上报但未登录(派发弹窗给 `gh auth login` 指引)、字符串 = 已登录(派发弹窗据此比对仓库 owner,决定是否建议经 fork 派发,§6.1)。
 
 ## 5. 任务协议(packages/protocol/src/runner.ts,纯类型+清洗函数,vitest 直测)
 
@@ -111,6 +114,7 @@ interface RunnerTaskPack {
   prDraft: { title: string; bodyTemplate: string };      // PR 草稿(终稿由本地 agent 按实际改动补全)
   executor: { name: 'claude-code'; maxTurns?: number; timeoutMinutes?: number };
   dispatchNote?: string;              // 用户在派发弹窗里的补充说明(自由文本,进 prompt)
+  viaFork?: boolean;                  // 经 fork 派发(派发弹窗显式勾选;runner 克隆 fork 副本,§6.1)
 }
 ```
 
@@ -150,6 +154,7 @@ interface RunnerEvent {
 runner 领取任务后在 workspaceRoot 内执行:
 
 1. **仓库准备**:`git clone`(浅克隆可配)到 `<workspaceRoot>/<owner>/<repo>`,已存在则 fetch + 从 baseBranch 切新分支 —— 由 runner 直接执行(git 命令白名单内),不消耗 agent 轮次;
+   **经 fork 派发(pack.viaFork,派发弹窗显式勾选「自动 fork 后派发」)**:先实探本机 gh 登录名(未登录 → 如实报错终止,不猜不降级),幂等 `gh repo fork <upstream> --clone=false`(gh 报 already exists 等同成功),再克隆 **fork 副本** `<ghLogin>/<repo>` 到 `<workspaceRoot>/<ghLogin>/<repo>` —— origin 指向 fork,Phase 2 的 `git push -u origin <branch>` 推的就是 fork,PR 以 `owner:branch` 跨仓形式指向上游(§6.2)。fork 是对外可见动作,但内容 = 上游公开仓的副本、零本地数据,且只发生在用户显式勾选之后;实探到的 forkRepo 随 phase1_result 回流(云端固化 head 的唯一事实源);
 2. **调起 coding agent**(用户已装、已登录的 Claude Code,runner 不接触其凭据):
 
 ```
@@ -176,6 +181,8 @@ claude -p "<按任务包渲染的执行指令>" \
 5. **拒绝**:任务 `cancelled`,本地分支保留(用户可自行处置),runner 上报确认。
 
 固化命令集是防漂移围栏:审批批的就是执行的,runner 端校验命令前缀白名单(git push/gh pr create/gh issue comment 三类),白名单外一律拒绝执行并上报。
+
+经 fork 派发的固化差异:PR head 固化为 `<forkOwner>:<branch>` 跨仓形式(gh pr create 官方语法;base 仍是上游 baseBranch,gh 从 fork 克隆自动推断 base 仓),白名单对 head 位放行**恰一个冒号**的 owner:branch 形状(owner 段按 GitHub 登录名规则校验,base 位仍拒冒号);publish 动作携 `forkRepo`,runner 在 fork 克隆目录(`<workspaceRoot>/<forkOwner>/<repo>`,仍过路径围栏)执行固化命令,`git push` 形状不变。forkRepo 来源:phase1_result 实探值优先,缺省回退「绑定设备 ghLogin + 仓库名」推算,两头都没有 → head 退回裸分支名(gh 仍可从 origin 推断,只是不如显式确定)。审批卡(桌面/手机同卡)展示「经 fork xxx,PR 指向上游」。
 
 ### 6.3 兜底:T0 交接包(离线可用)
 

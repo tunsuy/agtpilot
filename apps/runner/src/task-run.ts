@@ -117,6 +117,9 @@ export async function runTask(
       diffstat: result.diffstat,
       testTail: result.testTail,
       prFinal: result.prFinal ?? undefined,
+      // 经 fork 派发:实际克隆的 fork 全名回流,云端固化 PR head(owner:branch)与
+      // Phase 2 发布目录以此为准(runner 实探的 gh 账号是唯一事实源)
+      forkRepo: repo.forkRepo,
     });
     push('state', { state: 'awaiting_approval' });
     await flush();

@@ -102,3 +102,11 @@ describe('handoffPackFor(T0 交接包与派发同源)', () => {
     expect(handoffPackFor({ ...opp, project: 'bad name' })).toBeNull();
   });
 });
+
+describe('buildTaskPackFromOpportunity · viaFork(经 fork 派发)', () => {
+  it('只认真正 true;false/缺省 → undefined(直连语义,清洗层同规则)', () => {
+    expect(buildTaskPackFromOpportunity(opp, { viaFork: true })!.viaFork).toBe(true);
+    expect(buildTaskPackFromOpportunity(opp, { viaFork: false })!.viaFork).toBeUndefined();
+    expect(buildTaskPackFromOpportunity(opp, {})!.viaFork).toBeUndefined();
+  });
+});

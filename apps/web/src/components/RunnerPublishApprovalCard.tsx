@@ -77,6 +77,9 @@ export function RunnerPublishApprovalCard({
           <p className="text-xs text-zinc-600 mt-1 break-all font-mono">
             {String(p.repo || '')} · <span className="text-zinc-500">{String(p.workBranch || '')}</span> →{' '}
             {String(p.baseBranch || 'main')}
+            {typeof p.forkRepo === 'string' && p.forkRepo && (
+              <span className="text-zinc-500">(经 fork {p.forkRepo},PR 指向上游)</span>
+            )}
           </p>
           {typeof p.issueUrl === 'string' && p.issueUrl && (
             <a

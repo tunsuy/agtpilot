@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeCronScenario, resolveCronPrompt } from '../cron-scenario';
+import { CRON_SCENARIOS } from '@/workshops/registry';
 import type { ScenarioProfile } from '../scenario-profile';
 
 const profile: ScenarioProfile = {
@@ -24,6 +25,24 @@ const ossProfile: ScenarioProfile = {
   createdAt: Date.now(),
   updatedAt: Date.now(),
 };
+
+describe('CRON_SCENARIOS 注册表(场景单一事实源)', () => {
+  it('场景声明齐全:两个订阅场景在注册表内', () => {
+    expect(Object.keys(CRON_SCENARIOS).sort()).toEqual(['oss_radar_weekly', 'xhs_weekly_topics']);
+  });
+
+  it('声明字段完备:key 与注册表条目一致、count 区间自洽、build 可调', () => {
+    for (const [entryKey, spec] of Object.entries(CRON_SCENARIOS)) {
+      expect(spec.key).toBe(entryKey);
+      expect(spec.profileSlot).toBeTruthy();
+      expect(spec.countMin).toBeLessThan(spec.countMax);
+      expect(spec.defaultCount).toBeGreaterThanOrEqual(spec.countMin);
+      expect(spec.defaultCount).toBeLessThanOrEqual(spec.countMax);
+      // 无档案可调(触发时档案可能缺失,绝不能抛)
+      expect(typeof spec.build(spec.defaultCount, undefined)).toBe('string');
+    }
+  });
+});
 
 describe('normalizeCronScenario', () => {
   it('白名单 key + 合法 count 保留', () => {

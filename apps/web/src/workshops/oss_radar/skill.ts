@@ -9,7 +9,20 @@ import {
   OSS_CONTRIB_KINDS,
 } from './context';
 import { str, num } from '../shared/params';
-import type { WorkshopSkill } from '../types';
+import type { WorkshopSkill, CronScenarioSpec } from '../types';
+
+/** cron 雷达周扫场景 key(注册表汇入 CRON_SCENARIOS,派生 CronScenarioKey union) */
+export const CRON_KEY = 'oss_radar_weekly' as const;
+
+/** cron 雷达周扫场景:技术栈/排除项来自贡献者档案;关注方向与机会类型不在 cron 标记里存快照,触发时不限(档案优先) */
+export const CRON: CronScenarioSpec = {
+  key: CRON_KEY,
+  profileSlot: 'oss_radar',
+  countMin: 3,
+  countMax: 10,
+  defaultCount: 5,
+  build: (count, profile) => buildOssRadarPrompt({ count, profile }),
+};
 
 export const WORKSHOP_SKILL: WorkshopSkill = {
   meta: {
@@ -44,4 +57,5 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       title: `开源贡献雷达 · ${Math.min(7, Math.max(3, count))} 条机会`,
     };
   },
+  cron: CRON,
 };

@@ -6,7 +6,7 @@
  * 新增工坊 = 新建一个包目录 + 在 WORKSHOP_SKILLS 加一行 + 配一个表单组件
  * (FORMS 映射在 WorkshopsView,Record<WorkshopId, Component> 保编译期穷尽)。
  */
-import { WORKSHOP_SKILL as XHS } from './xhs/skill';
+import { WORKSHOP_SKILL as XHS, CRON as XHS_CRON, CRON_KEY as XHS_CRON_KEY } from './xhs/skill';
 import { WORKSHOP_SKILL as WECHAT_MP } from './wechat_mp/skill';
 import { WORKSHOP_SKILL as ZHIHU } from './zhihu/skill';
 import { WORKSHOP_SKILL as WEIBO } from './weibo/skill';
@@ -17,13 +17,14 @@ import { WORKSHOP_SKILL as PPT } from './ppt/skill';
 import { WORKSHOP_SKILL as FOLLOW_BUILDERS } from './follow_builders/skill';
 import { WORKSHOP_SKILL as INVEST } from './invest/skill';
 import { WORKSHOP_SKILL as EDU } from './edu/skill';
-import { WORKSHOP_SKILL as OSS_RADAR } from './oss_radar/skill';
+import { WORKSHOP_SKILL as OSS_RADAR, CRON as OSS_CRON, CRON_KEY as OSS_CRON_KEY } from './oss_radar/skill';
 import type {
   WorkshopId,
   WorkshopDef,
   WorkshopSkill,
   WorkshopRun,
   WorkshopRunContext,
+  CronScenarioSpec,
 } from './types';
 
 /** id → skill 包(类型键全覆盖,新增工坊漏配会在编译期报错) */
@@ -77,7 +78,19 @@ export function buildWorkshopRun(
   return WORKSHOP_SKILLS[id].run(params, ctx);
 }
 
-export type { WorkshopId, WorkshopDef, WorkshopSkill, WorkshopRun, WorkshopRunContext };
+/**
+ * cron 订阅场景声明(从各包清单汇总;cron-scenario.ts 按此分发,不再硬编码场景)。
+ * 新增订阅场景 = 在包的 skill.ts 里声明 cron + 在这里加一行;CronScenarioKey union 由此派生。
+ */
+export const CRON_SCENARIOS = {
+  [XHS_CRON_KEY]: XHS_CRON,
+  [OSS_CRON_KEY]: OSS_CRON,
+} satisfies Readonly<Record<string, CronScenarioSpec>>;
+
+/** cron 场景 key 白名单(编译期 union 与运行时 CRON_SCENARIOS 同源) */
+export type CronScenarioKey = keyof typeof CRON_SCENARIOS;
+
+export type { WorkshopId, WorkshopDef, WorkshopSkill, WorkshopRun, WorkshopRunContext, CronScenarioSpec };
 export {
   WORKSHOP_CATEGORIES,
   type WorkshopAccent,

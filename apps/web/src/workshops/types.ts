@@ -77,8 +77,29 @@ export interface WorkshopRunContext {
   scenarioProfile?: ScenarioProfile;
 }
 
-/** 一个工坊 skill 包的完整装配:元数据 + 参数分发 */
+/** 一个工坊 skill 包的完整装配:元数据 + 参数分发(+ 可选 cron 订阅场景声明) */
 export interface WorkshopSkill {
   meta: WorkshopDef;
   run: (params: Record<string, unknown>, ctx?: WorkshopRunContext) => WorkshopRun;
+  /**
+   * cron 订阅场景声明(仅订阅型工坊如 xhs/oss_radar 填):cron-scenario.ts 按 key
+   * 从注册表汇总的 CRON_SCENARIOS 找到这里,触发时用当前档案重建 prompt。
+   * 声明即生效:白名单、count 钳制区间、缺省值、档案槽位全部以这里为单一事实源。
+   */
+  cron?: CronScenarioSpec;
+}
+
+/** cron 订阅场景声明(cron 任务存场景标记而非写死的 prompt,触发时现读档案重建) */
+export interface CronScenarioSpec {
+  /** 场景标记(cron 任务上存的 key;全局唯一,注册表按它分发) */
+  key: string;
+  /** 档案槽位:触发时 getProfile(profileSlot) 取当前档案 */
+  profileSlot: string;
+  /** 产出条数钳制区间(区间外的 count 丢弃,走 defaultCount) */
+  countMin: number;
+  countMax: number;
+  /** count 缺省值 */
+  defaultCount: number;
+  /** (count, profile) => prompt;档案读取由调用方注入,保持纯可测 */
+  build: (count: number, profile: ScenarioProfile | undefined) => string;
 }

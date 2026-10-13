@@ -1,12 +1,25 @@
 /**
  * 小红书图文工坊 · skill 包清单(meta 从 components/workshops/registry.ts 平移,
- * run 分发体从 components/workshops/run.ts 平移;prompt 正文见 prompt.ts,
- * cron 每周选题场景的 buildXhsWeeklyTopicsPrompt 也在其中,cron-scenario 直接引用)。
+ * run 分发体从 components/workshops/run.ts 平移;prompt 正文见 context.ts + .md 模板,
+ * cron 每周选题场景在本包声明(CRON),cron-scenario 经注册表分发,不再直接引用)。
  */
 import { Share2 } from 'lucide-react';
-import { buildXhsWorkshopPrompt } from './context';
+import { buildXhsWorkshopPrompt, buildXhsWeeklyTopicsPrompt } from './context';
 import { str, num } from '../shared/params';
-import type { WorkshopSkill } from '../types';
+import type { WorkshopSkill, CronScenarioSpec } from '../types';
+
+/** cron 每周选题场景 key(注册表汇入 CRON_SCENARIOS,派生 CronScenarioKey union) */
+export const CRON_KEY = 'xhs_weekly_topics' as const;
+
+/** cron 每周选题场景:触发时按 xhs 槽位当前档案重建(缺省 7 条,3-10 钳制) */
+export const CRON: CronScenarioSpec = {
+  key: CRON_KEY,
+  profileSlot: 'xhs',
+  countMin: 3,
+  countMax: 10,
+  defaultCount: 7,
+  build: (count, profile) => buildXhsWeeklyTopicsPrompt({ count, profile }),
+};
 
 export const WORKSHOP_SKILL: WorkshopSkill = {
   meta: {
@@ -38,4 +51,5 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       title: `小红书内容工坊 · ${style}`,
     };
   },
+  cron: CRON,
 };

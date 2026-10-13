@@ -12,6 +12,8 @@ export interface SearchResultItem {
   snippet: string;
   score?: number;
   engine?: string;
+  /** 发布时间(epoch ms):google-news RSS 的 pubDate 解析而来,时效过滤/排序用 */
+  publishedAt?: number;
 }
 
 export interface SearchPluginConfig {
@@ -125,6 +127,18 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     return items;
   }
 
+  /** 相对年龄标注:让模型不用心算就能判断「几天前」—— 不标注时模型会把
+   *  几个月前的结果也当「最新动态」作答(生产实测踩坑) */
+  function relativeAge(ts: number): string {
+    const days = Math.floor((Date.now() - ts) / 86_400_000);
+    if (days <= 0) {
+      const hours = Math.max(0, Math.floor((Date.now() - ts) / 3_600_000));
+      return hours <= 1 ? '1 小时内' : `${hours} 小时前`;
+    }
+    if (days < 30) return `${days} 天前`;
+    return `约 ${Math.floor(days / 30)} 个月前`;
+  }
+
   /** Google News RSS:标题自带信息量,摘要位放来源+时间;链接为跳转链(浏览器可开) */
   async function searchGoogleNews(query: string, maxResults: number): Promise<SearchResultItem[]> {
     const items: SearchResultItem[] = [];
@@ -147,12 +161,27 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       const pubDate = /<pubDate>([\s\S]*?)<\/pubDate>/.exec(block)?.[1]?.trim() || '';
       // RSS <source url="…">来源名</source>:比"来自 Google News 实时资讯"占位文案有信息量
       const source = /<source[^>]*>([\s\S]*?)<\/source>/.exec(block)?.[1]?.trim() || '';
-      const snippet = [source ? `来源: ${source}` : '', pubDate ? `发布时间: ${pubDate}` : '']
-        .filter(Boolean)
-        .join(' · ') || '来自 Google News 实时资讯';
-      items.push({ title, url: link, snippet, engine: 'google-news' });
+      // 发布时间解析成 epoch(RFC822 pubDate,Date.parse 原生支持);摘要带
+      // 绝对时间 + 相对年龄,模型一眼可判新旧
+      const publishedAt = pubDate ? Date.parse(pubDate) : NaN;
+      const snippet =
+        [
+          source ? `来源: ${source}` : '',
+          pubDate ? `发布时间: ${pubDate}${Number.isFinite(publishedAt) ? `(${relativeAge(publishedAt)})` : ''}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ') || '来自 Google News 实时资讯';
+      items.push({
+        title,
+        url: link,
+        snippet,
+        engine: 'google-news',
+        ...(Number.isFinite(publishedAt) ? { publishedAt } : {}),
+      });
     }
     if (items.length === 0) throw new Error('google-news: 0 items parsed');
+    // 按发布时间倒序:RSS 默认混合相关性与时间,不排的话旧闻会插在新闻前面
+    items.sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0));
     return items;
   }
 
@@ -273,15 +302,32 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       properties: {
         query: { type: 'string', description: '待搜索的关键词或自然语言问题' },
         maxResults: { type: 'number', description: '期望返回的搜索结果条目数 (默认 5)' },
+        recencyDays: {
+          type: 'number',
+          description:
+            '时效过滤:只保留近 N 天内发布的结果(新闻/资讯/「最新」类问题建议传 7~30)。会过滤掉带发布时间的旧结果并按时间倒序;无发布时间的结果保留',
+        },
       },
       required: ['query'],
     },
-    execute: async ({ query, maxResults = 5 }, session?: any) => {
+    execute: async ({ query, maxResults = 5, recencyDays }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'search_web', query, maxResults },
+        payload: { tool: 'search_web', query, maxResults, recencyDays },
         timestamp: Date.now(),
       });
+
+      /** 时效过滤:保留近 N 天的带时间结果(无时间戳的保留,不给来源瞎判);
+       *  全滤光则退回未过滤集合并注明 —— 比静默返回空更利于模型改写关键词再查 */
+      const applyRecency = (items: SearchResultItem[]) => {
+        if (!recencyDays || recencyDays <= 0 || items.length === 0) return { items, note: undefined as string | undefined };
+        const cutoff = Date.now() - recencyDays * 86_400_000;
+        const fresh = items.filter((it) => it.publishedAt === undefined || it.publishedAt >= cutoff);
+        if (fresh.length === 0) {
+          return { items, note: `近 ${recencyDays} 天无带发布时间的结果,以下为未过滤结果(注意甄别时效)` };
+        }
+        return { items: fresh, note: fresh.length < items.length ? `已过滤 ${items.length - fresh.length} 条 ${recencyDays} 天前的旧结果` : undefined };
+      };
 
       // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离，绝不进 process.env）
       const exaKey = session?.env?.EXA_API_KEY || config.exaApiKey || process.env.EXA_API_KEY;
@@ -292,7 +338,8 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
         try {
           const items = await searchExa(exaKey, query, maxResults);
           if (items.length > 0) {
-            return { success: true, query, count: items.length, engine: 'exa', results: items };
+            const { items: filtered, note } = applyRecency(items);
+            return { success: true, query, count: filtered.length, engine: 'exa', results: filtered, ...(note ? { recencyNote: note } : {}) };
           }
         } catch (err: any) {
           console.warn('[SearchPlugin] Exa 搜索失败，自动降级:', err.message);
@@ -304,7 +351,8 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
         try {
           const items = await searchTavily(tavilyKey, query, maxResults);
           if (items.length > 0) {
-            return { success: true, query, count: items.length, engine: 'tavily', results: items };
+            const { items: filtered, note } = applyRecency(items);
+            return { success: true, query, count: filtered.length, engine: 'tavily', results: filtered, ...(note ? { recencyNote: note } : {}) };
           }
         } catch (err: any) {
           console.warn('[SearchPlugin] Tavily 搜索失败，自动降级:', err.message);
@@ -315,13 +363,15 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       try {
         const { items, errors: freeErrors } = await searchFreeSources(query, maxResults);
         if (items.length > 0) {
+          const { items: filtered, note } = applyRecency(items);
           return {
             success: true,
             query,
-            count: items.length,
-            engine: items[0]?.engine || 'aggregator',
-            results: items,
+            count: filtered.length,
+            engine: filtered[0]?.engine || 'aggregator',
+            results: filtered,
             ...(freeErrors.length > 0 ? { degradedSources: freeErrors } : {}),
+            ...(note ? { recencyNote: note } : {}),
           };
         }
         // 零结果 + 有失败记录 = 真实失败（报出每源的失败原因），

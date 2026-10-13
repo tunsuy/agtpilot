@@ -42,6 +42,13 @@ class AgentBackend {
   /** 装配 Promise（resolve 即全部插件就绪；单插件失败只跳过不拖垮内核） */
   private runtimePromise: Promise<void> | null = null;
   private activeAbortControllers: Map<string, AbortController> = new Map();
+  /**
+   * 同任务并发护栏(missionId → 在飞轮次的落地 Promise):
+   * 续聊追问打进一个还在跑的任务时,先 abort 旧轮,新轮 IIFE 开跑前
+   * await 旧轮完全落地 —— 两轮步骤绝不交错写入同一 mission(否则 steps
+   * 顺序错乱、UI 布局乱掉),旧轮 finally 也不会误删新轮的把手。
+   */
+  private runInflight: Map<string, Promise<void>> = new Map();
   /** 已挂进调度池的 cron 任务：jobId → 归属用户（调度本体在 plugin-cron 的 CronService） */
   private activeCronJobs: Map<string, { userId: string; name?: string }> = new Map();
   private cronSchedulerInitialized = false;
@@ -1011,7 +1018,42 @@ class AgentBackend {
       }
     }
 
+    // 旧轮落地 Promise:新轮 IIFE 开跑前 await 它(两轮步骤绝不交错);
+    // 若旧轮控制器已丢(正在自然收尾),只排队不 abort
+    let prevRunToAwait: Promise<void> | undefined;
     if (targetMission) {
+      // 并发护栏(须在下方 ensureLiveStep 之前):上一轮还在跑时(用户追问
+      // 打断),按 stopMission 的收尾口径关掉旧轮的流式残留再 abort 控制器。
+      // 先关 live step 至关重要 —— ensureLiveStep 会复用 RUNNING 的 live
+      // step,不先关掉会让两轮共用同一占位步骤串台。
+      const prevRun = this.runInflight.get(targetMission.id);
+      const prevController = prevRun ? this.activeAbortControllers.get(targetMission.id) : undefined;
+      if (prevRun) {
+        prevRunToAwait = prevRun;
+        if (prevController) {
+          this.flushDeltas(targetMission.id);
+          closeLiveStep(targetMission, { status: 'FAILED', finalTitle: '已被新追问打断' });
+          targetMission.steps.forEach((st) => {
+            if (st.status === 'RUNNING' || st.status === 'PENDING') {
+              st.status = 'FAILED';
+            }
+          });
+          prevController.abort();
+          // 拒绝旧轮挂起的人机协同审批(只清本任务的),终止后不残留授权弹窗
+          const guardMissionId = targetMission.id;
+          const pendingApprovals = this.state.approvalRequests.filter((r) => r.taskId === guardMissionId);
+          for (const req of pendingApprovals) {
+            try {
+              this.orchestrator?.submitApproval(req.id, false);
+            } catch {
+              // ignore
+            }
+            this.broadcast({ type: 'approval_resolved', data: { approvalId: req.id } });
+            this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== req.id);
+          }
+        }
+      }
+
       targetMission.status = 'ACTIVE';
       targetMission.progress = 10;
       targetMission.steps.push({
@@ -1070,9 +1112,23 @@ class AgentBackend {
     const abortController = new AbortController();
     this.activeAbortControllers.set(targetMission.id, abortController);
 
-    // 异步执行任务生命周期
-    (async () => {
+    // 本轮登记的运行时把手:finally 里按身份比对删除,防止旧轮收尾时
+    // 误删新轮的把手(并发护栏的另一半)
+    let ownRuntime: { userId?: string; env?: Record<string, string>; sandbox?: import('@agtpilot/core').SandboxSessionPolicy; notices: string[] } | undefined;
+
+    // 异步执行任务生命周期(let 先声明:finally 里按身份比对在飞标记)
+    let runPromise: Promise<void> | undefined;
+    runPromise = (async () => {
       try {
+        // 串行化:等被打断的旧轮完全落地(含其 finally 清理)再开跑,两轮
+        // 步骤绝不交错写入同一 mission;30s 兜底防旧轮异常悬挂拖死新轮
+        if (prevRunToAwait) {
+          await Promise.race([
+            prevRunToAwait.catch(() => {}),
+            new Promise<void>((resolve) => setTimeout(resolve, 30_000)),
+          ]);
+        }
+
         // 1. 注入当前登录用户专属沉淀的长效记忆与画像：
         // 执行红线(rule)全量注入,其余按与本次任务目标的相关性排序 + 条数/字符预算截断
         let userMemoryPrompt = '';
@@ -1415,12 +1471,13 @@ class AgentBackend {
 
         // 登记本任务运行时把手:治理事件(记忆删除/授权撤销)发生后仍能
         // 传导到 in-flight 任务(凭证即时清除 + 下一步注入治理提示)
-        this.taskRuntimes.set(targetMission.id, {
+        ownRuntime = {
           userId: options.userId,
           env: taskEnv,
           sandbox: taskSandbox,
           notices: [],
-        });
+        };
+        this.taskRuntimes.set(targetMission.id, ownRuntime);
 
         if (hasLlm) {
           // 调用真正的大模型 + 工具链编排 (Vercel AI SDK + Cordis 工具集)
@@ -1556,7 +1613,11 @@ class AgentBackend {
             })();
           }
 
-          if (!result.success && result.error) {
+          // 并发护栏:本轮已被更新的追问打断(controller 被换掉)时,任务
+          // 归新轮接管 —— 不改状态、不收 live step、不补错误步骤
+          const superseded = () => this.activeAbortControllers.get(targetMission.id) !== abortController;
+
+          if (!result.success && result.error && !superseded()) {
             targetMission.status = 'DONE';
             // 派发期创建的「正在思考」live step 兜底收尾(幂等:
             // orchestrator error 事件已收过则此处空操作)
@@ -1585,21 +1646,35 @@ class AgentBackend {
           this.addTerminalLog('stderr', '[Config Required] 当前用户未配置大模型 API Key。请前往顶部「连接器」添加自定义 OpenAI、DeepSeek 或中转站 Key。', options.userId);
         }
       } catch (err: any) {
-        targetMission.status = 'DONE';
-        // 同上:预编排阶段(记忆构建/配置加载等)抛错时收掉思考占位
-        closeLiveStep(targetMission, { status: 'FAILED' });
-        targetMission.steps.push({
-          id: `step_err`,
-          title: `Execution error: ${err.message}`,
-          status: 'FAILED',
-        });
-        this.addTerminalLog('stderr', `[Mission Error] ${err.message}`, targetMission.userId);
-        this.broadcast({ type: 'mission_updated', data: targetMission });
+        // 并发护栏:被新追问打断导致的 AbortError 走这里 —— 本轮已收尾
+        // (runMission 打断时按 stopMission 口径处理过步骤/live step),
+        // 不再改任务状态、不补错误步骤,任务归新轮接管
+        if (this.activeAbortControllers.get(targetMission.id) === abortController) {
+          targetMission.status = 'DONE';
+          // 同上:预编排阶段(记忆构建/配置加载等)抛错时收掉思考占位
+          closeLiveStep(targetMission, { status: 'FAILED' });
+          targetMission.steps.push({
+            id: `step_err`,
+            title: `Execution error: ${err.message}`,
+            status: 'FAILED',
+          });
+          this.addTerminalLog('stderr', `[Mission Error] ${err.message}`, targetMission.userId);
+          this.broadcast({ type: 'mission_updated', data: targetMission });
+        }
       } finally {
-        this.activeAbortControllers.delete(targetMission.id);
-        this.taskRuntimes.delete(targetMission.id);
+        // 身份比对删除:旧轮的收尾不得误删新轮登记的把手/控制器/在飞标记
+        if (this.activeAbortControllers.get(targetMission.id) === abortController) {
+          this.activeAbortControllers.delete(targetMission.id);
+        }
+        if (ownRuntime && this.taskRuntimes.get(targetMission.id) === ownRuntime) {
+          this.taskRuntimes.delete(targetMission.id);
+        }
+        if (this.runInflight.get(targetMission.id) === runPromise) {
+          this.runInflight.delete(targetMission.id);
+        }
       }
     })();
+    this.runInflight.set(targetMission.id, runPromise);
 
     return targetMission;
   }

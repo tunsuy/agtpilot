@@ -203,6 +203,75 @@ describe('免费搜索源:search_web 零 Key 聚合', () => {
   });
 });
 
+/** 时效治理:google-news 按发布时间倒序 + 相对年龄标注 + recencyDays 过滤
+ *  (生产踩坑:模型把几个月前的旧闻当「最新动态」作答 —— 摘要只给绝对
+ *  时间不够,模型没有可靠的「今天」基准,也不做心算) */
+describe('时效:发布时间排序、相对年龄标注与 recencyDays 过滤', () => {
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toUTCString();
+
+  it('google-news 结果带 publishedAt 且按时间倒序,摘要含相对年龄', async () => {
+    // RSS 故意乱序:3 天前 → 90 天前 → 1 小时前
+    stubFetch({
+      'news.google.com/rss/search': () => ({
+        ok: true,
+        text: async () =>
+          gnewsRss([
+            { title: '三天前的新闻', link: 'https://news.google.com/rss/articles/a1', pubDate: daysAgo(3), source: '源A' },
+            { title: '三个月前的旧闻', link: 'https://news.google.com/rss/articles/a2', pubDate: daysAgo(90), source: '源B' },
+            { title: '一小时的新闻', link: 'https://news.google.com/rss/articles/a3', pubDate: daysAgo(2 / 24), source: '源C' },
+          ]),
+      }),
+      'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
+      wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
+    });
+    const r = await setupPlugin().search_web.execute({ query: '字节跳动 融资', maxResults: 5 });
+    expect(r.success).toBe(true);
+    const gnews = r.results.filter((x: any) => x.engine === 'google-news');
+    expect(gnews.map((x: any) => x.title)).toEqual(['一小时的新闻', '三天前的新闻', '三个月前的旧闻']);
+    expect(gnews[0].snippet).toContain('2 小时前');
+    expect(gnews[1].snippet).toContain('3 天前');
+    expect(gnews[2].snippet).toContain('约 3 个月前');
+  });
+
+  it('recencyDays 过滤旧闻,保留新鲜与无时间戳条目,recencyNote 注明过滤量', async () => {
+    stubFetch({
+      'news.google.com/rss/search': () => ({
+        ok: true,
+        text: async () =>
+          gnewsRss([
+            { title: '两条新消息', link: 'https://news.google.com/rss/articles/b1', pubDate: daysAgo(2), source: '源A' },
+            { title: '两个月前的旧闻', link: 'https://news.google.com/rss/articles/b2', pubDate: daysAgo(60), source: '源B' },
+          ]),
+      }),
+      'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
+      wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
+    });
+    const r = await setupPlugin().search_web.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
+    expect(r.success).toBe(true);
+    expect(r.results.some((x: any) => x.title === '两个月前的旧闻')).toBe(false);
+    expect(r.results.some((x: any) => x.title === '两条新消息')).toBe(true);
+    expect(r.recencyNote).toContain('已过滤 1 条');
+  });
+
+  it('全滤光时退回未过滤结果并注明(静默空结果会让模型误判「无新闻」)', async () => {
+    stubFetch({
+      'news.google.com/rss/search': () => ({
+        ok: true,
+        text: async () =>
+          gnewsRss([
+            { title: '只有旧闻', link: 'https://news.google.com/rss/articles/c1', pubDate: daysAgo(120), source: '源A' },
+          ]),
+      }),
+      'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
+      wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
+    });
+    const r = await setupPlugin().search_web.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
+    expect(r.success).toBe(true);
+    expect(r.results.some((x: any) => x.title === '只有旧闻')).toBe(true);
+    expect(r.recencyNote).toContain('近 7 天无');
+  });
+});
+
 describe('P5:缺 Key 工具的挂载声明', () => {
   it('config 无 Key 时 search_exa/search_tavily 声明 requiredEnv(编排器据此不挂秒败的壳)', () => {
     const tools = setupPlugin();

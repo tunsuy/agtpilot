@@ -7,25 +7,38 @@ function fakeClient(result: unknown) {
 }
 
 describe('pollTick', () => {
-  it('成功:打印队列概览,返回 ok', async () => {
+  it('成功:打印队列概览,outcome=ok,未领取时 claimed=null', async () => {
     const logs: string[] = [];
     const client = fakeClient({ serverTime: 1, claimed: null, queue: [{ taskId: 'a', state: 'queued' }, { taskId: 'b', state: 'done' }] });
-    const outcome = await pollTick(client, (l) => logs.push(l));
-    expect(outcome).toBe('ok');
+    const r = await pollTick(client, (l) => logs.push(l));
+    expect(r.outcome).toBe('ok');
+    expect(r.claimed).toBeNull();
     expect(logs[0]).toContain('待领 1');
     expect(logs[0]).toContain('在飞 1'); // done 是终态不计在飞
   });
 
-  it('401 → auth(调用方自毁凭据);426 → upgrade;网络错误 → ok(下轮重试)', async () => {
+  it('claim 领取:claimed 原样透出给调用方(接 runTask),日志提示开始执行', async () => {
+    const logs: string[] = [];
+    const claimed = { taskId: 'rtask_9', pack: { repo: 'o/r' } };
+    const client = fakeClient({ serverTime: 1, claimed, queue: [] });
+    const r = await pollTick(client, (l) => logs.push(l), { claim: true });
+    expect(r.outcome).toBe('ok');
+    expect(r.claimed).toEqual(claimed);
+    expect(logs.some((l) => l.includes('领取任务 rtask_9'))).toBe(true);
+  });
+
+  it('401 → auth(调用方自毁凭据);426 → upgrade;网络错误 → ok(下轮重试);claimed 均为 null', async () => {
     const logs: string[] = [];
     const authClient = { poll: async () => { throw new RunnerAuthError('401'); } } as any;
-    expect(await pollTick(authClient, (l) => logs.push(l))).toBe('auth');
+    const authR = await pollTick(authClient, (l) => logs.push(l));
+    expect(authR.outcome).toBe('auth');
+    expect(authR.claimed).toBeNull();
 
     const upgradeClient = { poll: async () => { throw new RunnerUpgradeError('426'); } } as any;
-    expect(await pollTick(upgradeClient, (l) => logs.push(l))).toBe('upgrade');
+    expect((await pollTick(upgradeClient, (l) => logs.push(l))).outcome).toBe('upgrade');
 
     const flakyClient = { poll: async () => { throw new Error('ECONNREFUSED'); } } as any;
-    expect(await pollTick(flakyClient, (l) => logs.push(l))).toBe('ok');
+    expect((await pollTick(flakyClient, (l) => logs.push(l))).outcome).toBe('ok');
     expect(logs.at(-1)).toContain('将重试');
   });
 });

@@ -74,6 +74,12 @@ export interface RunnerTaskPack {
   constraints: string[];
   /** 验收:哪些测试要绿 */
   acceptance: { testCommand?: string; note?: string };
+  /**
+   * Issue 上下文(标题+正文摘要,云端派发时装入;协议只增不改的增补字段)。
+   * Phase 1 禁网(WebFetch/WebSearch 在 disallowedTools),本地 agent 看不到
+   * Issue 页面 —— 干活依据必须随包携带。
+   */
+  issueContext?: string;
   /** 认领留言草稿(是否发送由 Phase 2 审批决定,决策项 6 已拍板并入) */
   claimDraft?: string;
   /** PR 草稿(终稿由本地 agent 按实际改动补全) */
@@ -186,6 +192,8 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
 
   const repo = str(o.repo, 201);
   if (!repo || !REPO_RE.test(repo)) return null;
+  // 路径穿越防线:owner/repo 任一段为 '.'/'..' 即拒(workspaceRoot 围栏的第一道闸)
+  if (repo.split('/').some((seg) => seg === '.' || seg === '..')) return null;
 
   const issueUrl = str(o.issueUrl, 500);
   if (!issueUrl || !issueUrl.startsWith('https://')) return null;
@@ -195,7 +203,9 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
     return null;
   }
   const baseBranch = optStr(o.baseBranch, 200);
-  if (baseBranch !== undefined && (!BRANCH_RE.test(baseBranch) || baseBranch.startsWith('-'))) return null;
+  if (baseBranch !== undefined && (!BRANCH_RE.test(baseBranch) || baseBranch.startsWith('-') || baseBranch.includes('..'))) {
+    return null;
+  }
 
   const constraints = Array.isArray(o.constraints)
     ? o.constraints
@@ -226,6 +236,7 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
     workBranch,
     constraints,
     acceptance,
+    issueContext: optStr(o.issueContext, 8000),
     claimDraft: optStr(o.claimDraft, 5000),
     prDraft: { title: prTitle, bodyTemplate: str(pr.bodyTemplate, 20000) ?? '' },
     executor: {

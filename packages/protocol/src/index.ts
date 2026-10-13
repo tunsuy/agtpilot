@@ -121,3 +121,6 @@ export interface ModelStepResult {
 
 /** 本地 Runner 桥接协议(docs/design/local-runner-bridge.md §5):类型+清洗函数+状态机 */
 export * from './runner';
+
+/** 任务包渲染器(执行指令 / T0 交接包 / PR 终稿提取,web 与 runner 同源) */
+export * from './runner-taskpack';

@@ -842,7 +842,9 @@ class AgentBackend {
 
       if (event.type === 'approval_requested') {
         const mission = this.state.missions.find((m) => m.id === this.state.activeMissionId);
-        const userId = mission?.userId || event.data?.userId;
+        // 事件自带 userId(runner_publish 审批必带)优先于 activeMission 归属:
+        // 多用户并发时后者可能把推送发给别人
+        const userId = event.data?.userId || mission?.userId;
         if (!userId) return;
         const req = event.data || {};
         sendPushToUser(userId, {
@@ -875,7 +877,26 @@ class AgentBackend {
     }
   }
 
-  public submitApproval(approvalId: string, approved: boolean): boolean {
+  /**
+   * 注册 runner_publish 审批(M3,docs/design/local-runner-bridge.md §6.2):
+   * runner-bridge 在任务进入 awaiting_approval 时创建持久审批单,这里把卡片
+   * 灌入内存态 + 广播(SSE 审批卡 + Web Push 复用既有链路)。
+   * silent=true 只补状态不广播(/api/agent/state 拉取时的重启重灌路径,幂等)。
+   */
+  public registerRunnerApproval(req: ApprovalRequest, opts?: { silent?: boolean }) {
+    if (this.state.approvalRequests.some((r) => r.id === req.id)) return;
+    this.state.approvalRequests.push(req);
+    if (opts?.silent) return;
+    this.broadcast({ type: 'approval_requested', data: req });
+    this.addTerminalLog('system', `[Runner] 待审批:${req.description}`, req.userId);
+  }
+
+  public submitApproval(approvalId: string, approved: boolean, opts?: { includeClaim?: boolean }): boolean {
+    // runner_publish 审批不走 orchestrator(它不认识这个 id):由 runner-bridge 持久裁决
+    const runnerReq = this.state.approvalRequests.find((r) => r.id === approvalId && r.action === 'runner_publish');
+    if (runnerReq) {
+      return this.resolveRunnerApproval(runnerReq, approved, opts);
+    }
     // 内核未就绪（极早期请求）时必然没有挂起中的审批，直接返回未命中
     if (!this.orchestrator) return false;
     const success = this.orchestrator.submitApproval(approvalId, approved);
@@ -894,6 +915,40 @@ class AgentBackend {
 
     this.broadcast({ type: 'approval_resolved', data: { approvalId, approved } });
     this.addTerminalLog('system', `[Approval] User ${approved ? 'AUTHORIZED' : 'REJECTED'} action ${approvalId}.`, req?.userId);
+    return success;
+  }
+
+  /**
+   * runner_publish 审批裁决:调 runner-bridge 持久化落盘(批准 → 固化命令集 +
+   * finishing;拒绝 → rejected + cancel 指令下行),然后撤卡广播。
+   * 卡片是内存态、审批单是持久态:裁决失败(任务已过期/已裁决)也要撤卡,
+   * 避免用户面对一张点不动的死卡。
+   */
+  private resolveRunnerApproval(req: ApprovalRequest, approved: boolean, opts?: { includeClaim?: boolean }): boolean {
+    let success = false;
+    try {
+      const { resolvePublishApproval } = require('@/lib/runner-bridge');
+      if (req.userId) {
+        const r = resolvePublishApproval(req.userId, req.id, approved, opts);
+        success = Boolean(r?.ok);
+        if (!success) {
+          this.addTerminalLog('stderr', `[Runner] 审批 ${req.id} 未生效(${r?.error || '未知原因'}):任务可能已过期或已裁决`, req.userId);
+        }
+      }
+    } catch (e: any) {
+      this.addTerminalLog('stderr', `[Runner] 审批裁决异常:${e?.message || e}`, req.userId);
+    }
+    this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== req.id);
+    this.broadcast({ type: 'approval_resolved', data: { approvalId: req.id, approved } });
+    if (success) {
+      this.addTerminalLog(
+        'system',
+        approved
+          ? `[Runner] 批准发布:${req.description}(命令集已固化,等本地 runner 领取执行)`
+          : `[Runner] 已拒绝发布:${req.description}(本地分支保留,cancel 指令随轮询下行)`,
+        req.userId
+      );
+    }
     return success;
   }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { recordRunnerEvents } from '@/lib/runner-bridge';
+import { getAgentBackend } from '@/lib/agent-backend';
+import { createPublishApproval, getRunnerTask, recordRunnerEvents, runnerApprovalToRequest } from '@/lib/runner-bridge';
 import { authenticateRunnerRequest } from '@/lib/runner-route-auth';
 
 /**
@@ -11,8 +12,9 @@ import { authenticateRunnerRequest } from '@/lib/runner-route-auth';
  * 数据最小化红线(§5.3):代码文件内容与凭据永不上传,由 runner 侧 redaction
  * 与本协议 normalize 双层兜底(payload 超限整体降级为截断标记)。
  *
- * M3 接线点:stateChanges 里出现 awaiting_approval → 创建 ApprovalRequest
- * (action 'runner_publish', dangerLevel high)+ Web Push;done → PR 回流 Mission 卡。
+ * M3 接线:stateChanges 里出现 awaiting_approval → 创建持久审批单 +
+ * 注册 ApprovalRequest(action 'runner_publish', dangerLevel high)→
+ * SSE 审批卡 + Web Push(agent-backend 既有链路);done → PR 链接推送。
  */
 export async function POST(req: NextRequest) {
   try {
@@ -25,6 +27,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: '参数缺失: events 数组必填' }, { status: 400 });
     }
     const result = recordRunnerEvents(authed.userId, authed.device.deviceId, events);
+
+    if (result.stateChanges.length > 0) {
+      const backend = getAgentBackend();
+      for (const sc of result.stateChanges) {
+        if (sc.to === 'awaiting_approval') {
+          const created = createPublishApproval(authed.userId, sc.taskId);
+          const request = created ? runnerApprovalToRequest(created.task, authed.userId) : null;
+          if (request) backend.registerRunnerApproval(request);
+        }
+        if (sc.to === 'done') {
+          // PR 链接回流后的完成推送(复用 Web Push;失败不影响事件应答)
+          try {
+            const { sendPushToUser } = await import('@/lib/push');
+            const task = getRunnerTask(authed.userId, sc.taskId);
+            sendPushToUser(authed.userId, {
+              title: '贡献完成',
+              body: task?.prUrl ? `PR 已创建:${task.prUrl}` : `任务 ${sc.taskId} 已完成`,
+              tag: `runner-done-${sc.taskId}`,
+              url: '/',
+            }).catch(() => {});
+          } catch {
+            // push 不可用不影响主流程
+          }
+        }
+      }
+    }
+
     return NextResponse.json({ success: true, ...result });
   } catch (e: any) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 });

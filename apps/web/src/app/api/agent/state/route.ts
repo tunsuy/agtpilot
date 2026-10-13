@@ -9,6 +9,19 @@ export async function GET() {
 
   const backend = getAgentBackend();
 
+  // runner_publish 审批重灌(M3):卡片是内存态、审批单持久在 runner 存储,
+  // 服务重启后这里按登录用户重新灌入(silent 不广播,幂等去重)
+  if (userId) {
+    try {
+      const { listPendingRunnerApprovalRequests } = await import('@/lib/runner-bridge');
+      for (const req of listPendingRunnerApprovalRequests(userId)) {
+        backend.registerRunnerApproval(req, { silent: true });
+      }
+    } catch {
+      // runner 存储不可读不阻塞主状态返回
+    }
+  }
+
   let scopedMissions: any[] = [];
   if (userId) {
     const persistedMissions = getUserMissions(userId);

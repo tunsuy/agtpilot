@@ -55,6 +55,7 @@ import { parseArticlePackages } from '../lib/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../lib/topic-picks';
 import { OssOpportunityList } from './workshops/OssOpportunityCard';
+import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../lib/oss-opportunities';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
@@ -96,7 +97,7 @@ interface CockpitViewProps {
   viewport: ViewportState;
   terminalLogs: TerminalLog[];
   approvalRequests: ApprovalRequest[];
-  onApproval: (id: string, approved: boolean) => void;
+  onApproval: (id: string, approved: boolean, opts?: { includeClaim?: boolean }) => void;
   connectorSuggestions?: ConnectorSuggestion[];
   onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
   onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
@@ -528,7 +529,11 @@ export function CockpitView({
                 {approvalRequests.length} 项待审批
               </span>
             )}
-            {approvalRequests.map((req) => (
+            {approvalRequests.map((req) =>
+              req.action === 'runner_publish' ? (
+                // 本地贡献发布审批(M3):专用高危卡(PR 终稿/diffstat/固化命令集/认领留言勾选)
+                <RunnerPublishApprovalCard key={req.id} req={req} onApproval={onApproval} />
+              ) : (
               <div
                 key={req.id}
                 className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/90 shadow-xs flex items-center justify-between"
@@ -562,7 +567,8 @@ export function CockpitView({
                   </button>
                 </div>
               </div>
-            ))}
+              )
+            )}
           </div>
         )}
 

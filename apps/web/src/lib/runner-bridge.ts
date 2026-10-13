@@ -10,12 +10,16 @@ import {
   PAIR_CODE_TTL_MS,
   RUNNER_TASK_TTL_MS,
   RUNNER_PROTOCOL_VERSION,
+  buildPublishCommands,
   canTransitionRunnerTask,
   isTerminalRunnerState,
   isValidPairCodeFormat,
   normalizeRunnerEvent,
   normalizeTaskPack,
+  type ApprovalRequest,
+  type RunnerApproval,
   type RunnerDeviceInfo,
+  type RunnerDeviceAction,
   type RunnerDeviceMeta,
   type RunnerEvent,
   type RunnerPairCodeRecord,
@@ -402,4 +406,193 @@ export function recordRunnerEvents(
 
   if (dirty || sweepExpired(tasks, now)) writeTasks(userId, tasks);
   return result;
+}
+
+// ---------- Phase 2 审批门(§6.2,M3) ----------
+//
+// 审批单随任务记录持久化(tasks.json):agent-backend 的卡片列表是内存态,
+// 服务重启后由 listPendingRunnerApprovalRequests 重新灌入(/api/agent/state 拉取时),
+// 审批的**持久真相**永远在这里。固化命令集在批准时刻构建(buildPublishCommands),
+// 批准后不可变 —— 审批批的就是 runner 执行的(§6.2 防漂移围栏)。
+
+function newApprovalId(now: number): string {
+  return `rappr_${now.toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+/** 最近一条 phase1_result 载荷(PR 终稿/diffstat/测试尾部快照来源) */
+function latestPhase1Payload(task: RunnerTaskRecord): Record<string, unknown> | null {
+  const events = task.events ?? [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'phase1_result') return events[i].payload ?? null;
+  }
+  return null;
+}
+
+function snapshotStr(p1: Record<string, unknown> | null, key: string, max: number): string | undefined {
+  const v = p1?.[key];
+  return typeof v === 'string' && v ? v.slice(0, max) : undefined;
+}
+
+/**
+ * 任务进入 awaiting_approval 时创建审批单(幂等:已有 pending 单直接复用)。
+ * 非 awaiting_approval / 任务不存在 → null。
+ */
+export function createPublishApproval(
+  userId: string,
+  taskId: string,
+  now: number = Date.now()
+): { task: RunnerTaskRecord; approval: RunnerApproval } | null {
+  const tasks = readTasks(userId);
+  const task = tasks.find((t) => t.taskId === taskId);
+  if (!task || task.state !== 'awaiting_approval') return null;
+  if (task.approval?.status === 'pending') return { task, approval: task.approval };
+
+  const p1 = latestPhase1Payload(task);
+  const prFinal = (p1?.prFinal && typeof p1.prFinal === 'object' ? p1.prFinal : null) as
+    | { title?: unknown; body?: unknown }
+    | null;
+  const approval: RunnerApproval = {
+    approvalId: newApprovalId(now),
+    status: 'pending',
+    createdAt: now,
+    // PR 终稿(agent 起草)优先,缺省回落派发时的草稿
+    prTitle: String(
+      (typeof prFinal?.title === 'string' && prFinal.title.trim()) || task.pack.prDraft.title
+    ).slice(0, 300),
+    prBody: String(
+      (typeof prFinal?.body === 'string' && prFinal.body.trim()) || task.pack.prDraft.bodyTemplate || ''
+    ).slice(0, 20000),
+    commitHash: snapshotStr(p1, 'commitHash', 64),
+    diffstat: snapshotStr(p1, 'diffstat', 4000),
+    testTail: snapshotStr(p1, 'testTail', 2048),
+  };
+  task.approval = approval;
+  task.approvalId = approval.approvalId;
+  task.updatedAt = now;
+  writeTasks(userId, tasks);
+  return { task, approval };
+}
+
+/** 审批单 → 既有 ApprovalRequest(驾驶舱审批卡 + Web Push 复用,§8 审批门行) */
+export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string): ApprovalRequest | null {
+  const a = task.approval;
+  if (!a || a.status !== 'pending') return null;
+  const preview = buildPublishCommands({
+    workBranch: task.pack.workBranch,
+    baseBranch: task.pack.baseBranch,
+    prTitle: a.prTitle,
+    prBody: a.prBody,
+  });
+  return {
+    id: a.approvalId,
+    action: 'runner_publish',
+    description: `发布本地贡献成果:${task.pack.repo} · 推送 ${task.pack.workBranch} 并创建 PR`,
+    dangerLevel: 'high',
+    params: {
+      taskId: task.taskId,
+      repo: task.pack.repo,
+      workBranch: task.pack.workBranch,
+      baseBranch: task.pack.baseBranch ?? 'main',
+      issueUrl: task.pack.issueUrl,
+      prTitle: a.prTitle,
+      prBody: a.prBody,
+      commitHash: a.commitHash,
+      diffstat: a.diffstat,
+      testTail: a.testTail,
+      // 决策项 6:认领留言由审批卡勾选,勾选后 gh issue comment 进固化命令集
+      claimDraft: task.pack.claimDraft,
+      claimCommand: task.pack.claimDraft
+        ? { cmd: 'gh', args: ['issue', 'comment', task.pack.issueUrl, '--body', task.pack.claimDraft] }
+        : undefined,
+      // 批准后必执行的两条(展示预览;批准时刻重新固化落盘,以落盘为准)
+      commands: preview ?? undefined,
+    },
+    // 不设 taskId:runner 任务不是 Mission,避免 submitApproval 误定位 mission
+    userId,
+  };
+}
+
+export type ResolveApprovalResult =
+  | { ok: true; task: RunnerTaskRecord }
+  | { ok: false; error: 'not_found' | 'not_pending' | 'invalid_commands' };
+
+/**
+ * 审批裁决(agent-backend.submitApproval 的 runner_publish 分支调用):
+ * - 批准:构建固化命令集(含勾选的认领留言)落盘,任务 → finishing,等 runner 轮询领取;
+ * - 拒绝:审批单记 rejected,任务**留在 awaiting_approval** —— cancel 指令下行,
+ *   由 runner 上报 state cancelled 落终态(§6.2 步骤 5:本地分支保留,runner 上报确认)。
+ */
+export function resolvePublishApproval(
+  userId: string,
+  approvalId: string,
+  approved: boolean,
+  opts?: { includeClaim?: boolean },
+  now: number = Date.now()
+): ResolveApprovalResult {
+  const tasks = readTasks(userId);
+  const task = tasks.find((t) => t.approval?.approvalId === approvalId);
+  if (!task || !task.approval) return { ok: false, error: 'not_found' };
+  const a = task.approval;
+  if (a.status !== 'pending' || task.state !== 'awaiting_approval') return { ok: false, error: 'not_pending' };
+
+  if (approved) {
+    const includeClaim = Boolean(opts?.includeClaim && task.pack.claimDraft);
+    const commands = buildPublishCommands({
+      workBranch: task.pack.workBranch,
+      baseBranch: task.pack.baseBranch,
+      prTitle: a.prTitle,
+      prBody: a.prBody,
+      issueUrl: task.pack.issueUrl,
+      claimDraft: task.pack.claimDraft,
+      includeClaim,
+    });
+    if (!commands) return { ok: false, error: 'invalid_commands' };
+    a.status = 'approved';
+    a.decidedAt = now;
+    a.includeClaim = includeClaim;
+    a.commands = commands; // 固化:此后不再随任何输入变化
+    task.state = 'finishing';
+  } else {
+    a.status = 'rejected';
+    a.decidedAt = now;
+  }
+  task.updatedAt = now;
+  writeTasks(userId, tasks);
+  return { ok: true, task };
+}
+
+/**
+ * 设备轮询下行的审批结果动作:
+ * - finishing + approved → publish(携带固化命令集;runner 逐条白名单复核后执行);
+ * - awaiting_approval + rejected → cancel(runner 上报 cancelled 确认,本地分支保留)。
+ * 由任务状态推导,天然幂等:runner 事件到达前每次轮询都会重复下发同一动作。
+ */
+export function getDeviceActions(userId: string, deviceId: string): RunnerDeviceAction[] {
+  const actions: RunnerDeviceAction[] = [];
+  for (const t of readTasks(userId)) {
+    if (t.deviceId !== deviceId) continue;
+    const a = t.approval;
+    if (!a) continue;
+    if (t.state === 'finishing' && a.status === 'approved' && a.commands && a.commands.length > 0) {
+      actions.push({
+        taskId: t.taskId,
+        approvalId: a.approvalId,
+        kind: 'publish',
+        repo: t.pack.repo,
+        workBranch: t.pack.workBranch,
+        commands: a.commands,
+      });
+    } else if (t.state === 'awaiting_approval' && a.status === 'rejected') {
+      actions.push({ taskId: t.taskId, approvalId: a.approvalId, kind: 'cancel', repo: t.pack.repo, workBranch: t.pack.workBranch });
+    }
+  }
+  return actions;
+}
+
+/** 挂起中的 runner 审批卡(服务重启后 /api/agent/state 拉取时重灌 agent-backend,幂等) */
+export function listPendingRunnerApprovalRequests(userId: string): ApprovalRequest[] {
+  return readTasks(userId)
+    .filter((t) => t.state === 'awaiting_approval' && t.approval?.status === 'pending')
+    .map((t) => runnerApprovalToRequest(t, userId))
+    .filter((r): r is ApprovalRequest => r !== null);
 }

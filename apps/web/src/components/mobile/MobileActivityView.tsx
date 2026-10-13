@@ -18,6 +18,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { ApprovalRequest, ConnectorSuggestion, Mission, TerminalLog } from '../../types/agent';
+import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../lib/topic-picks';
 
@@ -26,7 +27,7 @@ interface MobileActivityViewProps {
   activeMissionId: string | null;
   onSelectMission: (id: string) => void;
   approvalRequests: ApprovalRequest[];
-  onApproval: (approvalId: string, approved: boolean) => void;
+  onApproval: (approvalId: string, approved: boolean, opts?: { includeClaim?: boolean }) => void;
   connectorSuggestions?: ConnectorSuggestion[];
   onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
   onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
@@ -126,7 +127,13 @@ export function MobileActivityView({
             待你审批 · {approvalRequests.length}
           </h2>
           <ul className="space-y-2.5">
-            {approvalRequests.map((req) => (
+            {approvalRequests.map((req) =>
+              req.action === 'runner_publish' ? (
+                // 本地贡献发布审批(M3):专用高危卡,与桌面驾驶舱同一组件(细节不缩水)
+                <li key={req.id}>
+                  <RunnerPublishApprovalCard req={req} onApproval={onApproval} />
+                </li>
+              ) : (
               <li key={req.id} className={`rounded-xl border px-4 py-3.5 shadow-sm ${DANGER_STYLE[req.dangerLevel] || DANGER_STYLE.low}`}>
                 <div className="flex items-start gap-2.5">
                   <ShieldAlert
@@ -172,7 +179,8 @@ export function MobileActivityView({
                   </button>
                 </div>
               </li>
-            ))}
+              )
+            )}
           </ul>
         </section>
       )}

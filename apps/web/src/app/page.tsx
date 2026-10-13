@@ -368,7 +368,7 @@ export default function Workspace() {
     }
   };
 
-  const handleApproval = async (approvalId: string, approved: boolean) => {
+  const handleApproval = async (approvalId: string, approved: boolean, opts?: { includeClaim?: boolean }) => {
     // 乐观移除：卡片先消失再等 POST 返回。POST 若卡顿半秒，旧逻辑里卡片
     // 一直挂着，用户自然会再点一次（第二个 ApprovalRequest 由此而来）
     setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
@@ -376,7 +376,8 @@ export default function Workspace() {
       await fetch('/api/agent/approval', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approvalId, approved }),
+        // options:runner_publish 审批的「代发认领留言」勾选(决策项 6);其余审批忽略
+        body: JSON.stringify({ approvalId, approved, options: opts }),
       });
     } catch (err) {
       // 网络失败时提示；后端广播 approval_resolved 会同步真实状态

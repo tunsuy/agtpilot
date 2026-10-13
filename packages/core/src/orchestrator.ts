@@ -36,6 +36,7 @@ const APPROVAL_TIMEOUT_MS = Math.max(0, Number(process.env.AGTPILOT_APPROVAL_TIM
 /** 缺省系统提示（CLI 单用户路径；Web 层传入自己的产品化提示） */
 export const DEFAULT_SYSTEM_PROMPT =
   '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用已接入的原子工具来完成任务。\n' +
+  '涉及多个异构动作的复杂任务，先用 planner_create_plan 建立任务看板再开始执行；简单任务直接执行，不要建看板。\n' +
   '当缺少某个平台的专用工具或连接器未授权时，优先使用可用的网页浏览类工具直接在网页上完成操作作为兜底，而不是放弃任务。\n' +
   '多个互相独立的工具调用请在同一轮并行发起。独立检索尤其如此：把主题拆成多个不同角度的关键词/信息源，一轮批量发出全部搜索，等结果齐了再汇总决定下一步 —— 每轮只发一个查询会成倍浪费模型往返与上下文重发；浏览多个互不依赖的网页同理。任务看板由系统随工具执行自动推进，无需调用 planner_update_task 汇报进度。';
 
@@ -113,6 +114,12 @@ export class OrchestratorService extends Service {
     const FAILURE_GUARD_THRESHOLD = 3;
     // 效率统计（识别空转任务）
     const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0 };
+    // 看板推进批处理缓冲:本步(一轮模型调用)内执行成功的真实工具名。
+    // 推进延到下一步 prepareStep 才结算 —— 逐个即时推进有个实锤 bug:
+    // 同轮并行的 3 个搜索服务同一个计划步骤,第 1 个成功推进当前步骤后,
+    // 第 2、3 个成功会把【后续步骤】也误标完成(看板跳步)。批处理按
+    // 「一轮最多推进一次」结算,同轮并行调用天然归入同一步骤。
+    const roundToolSuccesses: string[] = [];
     // 只读并行门控(读写锁,一次任务一把):SDK 对同轮全部工具调用是 Promise.all
     // 并发触发的 —— readOnly 工具保留并发红利,非只读工具经此收敛为独占串行
     const toolGate = new ToolGate();
@@ -266,16 +273,12 @@ export class OrchestratorService extends Service {
         } else {
           lastFailedTool = '';
           consecutiveFailures = 0;
-          // 看板自动推进：真实工具执行成功即推进当前 in_progress 的计划步骤。
-          // 模型不再需要为"汇报进度"单独花一轮调用 planner_update_task ——
-          // 这是"本该 2 步的任务跑 6 步"的最大膨胀源（每个阶段一次汇报调用）。
-          // 失败（可能合法重试）、被熔断跳过、被审批拒绝的调用不推进。
+          // 看板自动推进(批处理):真实工具执行成功的工具名入队,下一步
+          // prepareStep 开头结算推进。模型不再需要为"汇报进度"单独花一轮
+          // 调用 planner_update_task —— 这是"本该 2 步的任务跑 6 步"的最大
+          // 膨胀源。失败(可能合法重试)、被熔断跳过、被审批拒绝的不入队。
           if (!callSkippedOrRejected) {
-            try {
-              this.ctx.reflect.get('planner')?.noteToolResult(taskId, toolDef.name);
-            } catch {
-              // 看板推进失败不影响主流程
-            }
+            roundToolSuccesses.push(toolDef.name);
           }
         }
 
@@ -371,6 +374,18 @@ export class OrchestratorService extends Service {
         //    追加到本步消息末尾 —— 刻意放在压缩之后，保证提示不被蒸馏掉。
         prepareStep: async ({ stepNumber, messages }: { stepNumber: number; messages: Array<any> }) => {
           const adjust: { activeTools?: string[]; messages?: Array<any> } = {};
+          // 看板推进结算(先于本步一切调整):上一轮入队的成功调用在此一次性
+          // 推进看板。一轮最多推进一次 —— 上轮同批的并行调用(如 3 个角度的
+          // search)属于同一计划步骤,逐个推进会跳步。推进失败不影响主流程。
+          if (roundToolSuccesses.length > 0) {
+            const lastName = roundToolSuccesses[roundToolSuccesses.length - 1];
+            roundToolSuccesses.length = 0;
+            try {
+              this.ctx.reflect.get('planner')?.noteToolResult(taskId, lastName);
+            } catch {
+              // 看板推进失败不影响主流程
+            }
+          }
           if (routedTools) {
             const recentText = (messages || [])
               .slice(-8)

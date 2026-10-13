@@ -15,7 +15,7 @@ describe('buildTaskSystemPrompt', () => {
     expect(s).toContain('多角度');
   });
 
-  it('抽取自 agent-backend 的九条行为准则完整保留(防调优中丢失红线)', () => {
+  it('行为准则完整保留(防调优中丢失红线)', () => {
     const s = buildTaskSystemPrompt();
     for (const keyword of [
       'AgtPilot',
@@ -24,6 +24,7 @@ describe('buildTaskSystemPrompt', () => {
       '中途授权',
       '结构化交付',
       '步数经济',
+      '看板规划',
       '安静执行',
       '小红书托管边界',
       '公众号草稿箱边界',
@@ -32,6 +33,24 @@ describe('buildTaskSystemPrompt', () => {
     ]) {
       expect(s).toContain(keyword);
     }
+  });
+
+  /**
+   * 看板规划优化(对照 CC/Codex/Manus 公开实践):
+   * - 正面触发清单(旧版只有反面清单「不要」,判「该」靠感觉)
+   * - 「先规划后执行」时序(旧版没约束建板发生在动手之前)
+   * - 追问注入后的重建语义(配合 steering 特性:【用户追加消息】改向时重建看板)
+   */
+  it('看板规划规则给出正面触发清单、规划先行时序与追问改向重建语义', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('三个以上异构动作'); // 正面触发判据
+    expect(s).toContain('多个待办事项'); // 一条消息多事项也触发
+    expect(s).toContain('再开始执行第一个动作'); // 先规划后执行
+    expect(s).toContain('【用户追加消息】'); // steering 改向重建
+    expect(s).toContain('重建看板'); // 重建出口
+    // 看板策略已从步数经济里拆出独立规则(两条各自一个注意力锚点)
+    expect(s.indexOf('【步数经济】')).toBeGreaterThan(0);
+    expect(s.indexOf('【看板规划】')).toBeGreaterThan(s.indexOf('【步数经济】'));
   });
 
   it('用户记忆块按需插值:有值时插入、缺省时无空占位', () => {

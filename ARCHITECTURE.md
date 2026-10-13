@@ -120,3 +120,11 @@ flowchart TD
 | `AGTPILOT_TOOL_SEARCH_THRESHOLD` | 10 (%) | 工具声明 tokens 超过窗口该比例才启用路由 |
 | `AGTPILOT_COMPACT_THRESHOLD` | 30000 | 会话压缩触发阈值（tokens，下限 2000） |
 | `AGTPILOT_COMPACT_RECENT` | 10 | 近期保护窗口（消息数，下限 4） |
+| `AGTPILOT_SUBAGENT=0` | 开 | plugin-subagent 总闸：`0` 时不注册 `research_subagent` 工具 |
+| `AGTPILOT_SUBAGENT_MAX_STEPS` | 8 | 子循环步数上限（钳制 2..20） |
+| `AGTPILOT_SUBAGENT_MAX_TOKENS` | 60000 | 单次子 run token 自记账上限（`0` = 不限） |
+| `AGTPILOT_SUBAGENT_TIMEOUT_MS` | 180000 | 单次子 run 墙钟超时（下限 30000） |
+| `AGTPILOT_SUBAGENT_MAX_CONCURRENT` | 4 | 并发信号量上限（钳制 1..8），超限排队不拒绝 |
+| `AGTPILOT_SUBAGENT_PROVIDER` / `_MODEL` | 继承 `AGTPILOT_FAST_*` | 子 agent 专用模型（per-call 覆盖，不动 router 全局档位） |
+| `AGTPILOT_SUBAGENT_REPORT_LIMIT` | 8000 | final report 字符上限，超限截断并标 `truncated` |
+| `AGTPILOT_SUBAGENT_WHITELIST` | 内置名单 | 只读白名单覆盖（逗号分隔；仍受注册表 `readOnly` 声明硬校验） |

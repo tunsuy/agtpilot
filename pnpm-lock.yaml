@@ -259,6 +259,9 @@ importers:
       '@agtpilot/plugin-skill':
         specifier: workspace:*
         version: link:../plugin-skill
+      '@agtpilot/plugin-subagent':
+        specifier: workspace:*
+        version: link:../plugin-subagent
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
         version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
@@ -552,6 +555,22 @@ importers:
       '@agtpilot/core':
         specifier: workspace:*
         version: link:../core
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.6.4)(jiti@1.21.7)(tsx@4.23.15)(yaml@2.9.1)
+
+  packages/plugin-subagent:
+    dependencies:
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agtpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
         version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)

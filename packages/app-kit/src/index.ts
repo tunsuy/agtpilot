@@ -18,6 +18,8 @@ import * as NotifyPlugin from '@agtpilot/plugin-notify';
 import * as RagPlugin from '@agtpilot/plugin-rag';
 import * as DesktopPlugin from '@agtpilot/plugin-desktop';
 import * as RouterPlugin from '@agtpilot/plugin-router';
+import * as SubagentPlugin from '@agtpilot/plugin-subagent';
+import type { SubagentPluginConfig } from '@agtpilot/plugin-subagent';
 
 /**
  * agtpilot 装配工厂（composition root）。
@@ -48,6 +50,8 @@ export interface CreateAgentOptions {
   browser?: { headless?: boolean };
   /** 技能插件配置（存储适配器注入等；缺省无 store → 带 gate 的技能保守不注入） */
   skill?: SkillPluginConfig;
+  /** 子 agent 插件配置（白名单/预算覆盖、M2 transcript 落盘适配器注入等） */
+  subagent?: SubagentPluginConfig;
   /** 跳过指定插件（按插件名，如 'plugin-browser'）——最小化部署用 */
   exclude?: string[];
 }
@@ -76,9 +80,10 @@ export async function createAgentRuntime(options: CreateAgentOptions = {}): Prom
   // 2. 原子能力插件。顺序不敏感：插件间的依赖由 cordis inject 声明解析
   //    （如 plugin-model inject ['agent']），此处只做并列加载。
   await mount('plugin-model', ModelPlugin);
-  // router 硬依赖 model 服务（inject: ['model']）：model 加载失败时跳过，避免挂起
+  // router / subagent 硬依赖 model 服务（inject 含 'model'）：model 加载失败时跳过，避免挂起
   if (loaded.some((l) => l.plugin === 'plugin-model' && l.ok)) {
     await mount('plugin-router', RouterPlugin);
+    await mount('plugin-subagent', SubagentPlugin, options.subagent);
   }
   await mount('plugin-planner', PlannerPlugin);
   await mount('plugin-memory', MemoryPlugin);

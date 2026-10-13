@@ -24,6 +24,7 @@
     "@agtpilot/plugin-router": "workspace:*",
     "@agtpilot/plugin-sandbox": "workspace:*",
     "@agtpilot/plugin-search": "workspace:*",
-    "@agtpilot/plugin-skill": "workspace:*"
+    "@agtpilot/plugin-skill": "workspace:*",
+    "@agtpilot/plugin-subagent": "workspace:*"
   }
 }

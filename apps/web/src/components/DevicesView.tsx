@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MonitorSmartphone, Plus, Trash2, Copy, Check, RefreshCw, Terminal, Loader2 } from 'lucide-react';
+import { copyToClipboard } from '../utils/nativeBridge';
+import {MonitorSmartphone, Plus, Trash2, Copy, Check, RefreshCw, Terminal, Loader2 } from 'lucide-react';
 
 /**
  * 本地 Runner 设备页(docs/design/local-runner-bridge.md §4,M1)
@@ -103,13 +104,11 @@ export function DevicesView() {
   };
 
   const copyText = async (text: string, key: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(key);
-      setTimeout(() => setCopied(null), 1500);
-    } catch {
-      /* 剪贴板不可用时静默(用户可手动选择复制) */
-    }
+    // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
+    const ok = await copyToClipboard(text);
+    if (!ok) return; // 剪贴板不可用时静默(用户可手动选择复制)
+    setCopied(key);
+    setTimeout(() => setCopied(null), 1500);
   };
 
   const pairCommand = pairCode

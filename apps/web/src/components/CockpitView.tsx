@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
-import { useSession } from 'next-auth/react';
+import { copyToClipboard } from '../utils/nativeBridge';
+import {useSession } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -259,9 +260,10 @@ export function CockpitView({
     stepsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const handleCopyArtifact = () => {
+  const handleCopyArtifact = async () => {
     if (!activeArtifact?.content) return;
-    navigator.clipboard.writeText(activeArtifact.content);
+    // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
+    if (!(await copyToClipboard(activeArtifact.content))) return;
     setCopiedArtifact(true);
     setTimeout(() => setCopiedArtifact(false), 2000);
   };
@@ -996,9 +998,9 @@ export function CockpitView({
                             {st.answer && !isStreaming && (
                               <button
                                 type="button"
-                                onClick={(e) => {
+                                onClick={async (e) => {
                                   e.stopPropagation();
-                                  navigator.clipboard.writeText(st.answer!);
+                                  if (!(await copyToClipboard(st.answer!))) return;
                                   setCopiedStepId(st.id);
                                   setTimeout(() => setCopiedStepId(null), 2000);
                                 }}
@@ -1501,9 +1503,9 @@ export function CockpitView({
               document.body.removeChild(link);
             };
 
-            const handleCopyCurrent = () => {
+            const handleCopyCurrent = async () => {
               if (!currentArtifact?.content) return;
-              navigator.clipboard.writeText(currentArtifact.content);
+              if (!(await copyToClipboard(currentArtifact.content))) return;
               setCopiedArtifact(true);
               setTimeout(() => setCopiedArtifact(false), 2000);
             };

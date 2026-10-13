@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { signIn } from 'next-auth/react';
+import { copyToClipboard } from '../utils/nativeBridge';
+import {signIn } from 'next-auth/react';
 import {
   X,
   Sparkles,
@@ -120,9 +121,10 @@ export function AuthModal({
     };
   }, [authMethod, wechatCode, isOpen]);
 
-  const handleCopyCode = () => {
+  const handleCopyCode = async () => {
     if (!wechatCode) return;
-    navigator.clipboard.writeText(wechatCode);
+    // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
+    if (!(await copyToClipboard(wechatCode))) return;
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
   };

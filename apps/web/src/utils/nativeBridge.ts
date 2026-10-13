@@ -2,6 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { Share } from '@capacitor/share';
 import { Clipboard } from '@capacitor/clipboard';
 import { App } from '@capacitor/app';
+import { webCopyToClipboard } from './clipboard';
 
 /**
  * 判断当前是否运行在 Capacitor 原生移动端应用中
@@ -94,13 +95,11 @@ export const copyToClipboard = async (text: string): Promise<boolean> => {
     if (isNativePlatform()) {
       await Clipboard.write({ string: text });
       return true;
-    } else if (navigator.clipboard) {
-      await navigator.clipboard.writeText(text);
-      return true;
     }
-    return false;
   } catch (err) {
     console.warn('[NativeBridge] Clipboard error:', err);
     return false;
   }
+  // web:Clipboard API 只在安全上下文(https/localhost)存在,http 部署降级 execCommand
+  return webCopyToClipboard(text);
 };

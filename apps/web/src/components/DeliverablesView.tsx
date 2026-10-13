@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import { copyToClipboard } from '../utils/nativeBridge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -167,9 +168,10 @@ export function DeliverablesView({
     return filteredArtifacts[0] || allArtifacts[0] || null;
   }, [selectedArtifactId, allArtifacts, filteredArtifacts]);
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!activeItem?.content) return;
-    navigator.clipboard.writeText(activeItem.content);
+    // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
+    if (!(await copyToClipboard(activeItem.content))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

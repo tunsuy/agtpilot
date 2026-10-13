@@ -40,8 +40,7 @@ T0(纯手工交接包:卡片一键复制任务包,用户粘贴进本地 claude �
 - 执行中逐工具审批回环(Claude Code 自带权限门承担;云端 canUseTool 级联动列 v2,§6.4);
 - 多 coding agent 适配落地(v1 只做 Claude Code,接口留扩展,§6.5);
 - 任务并行(v1 runner 单任务串行,队列 FIFO);
-- E2B 云端验证环境(方案 A,另文);
-- npm 公开发布(默认仓内安装,发布是决策项 §12.1)。
+- E2B 云端验证环境(方案 A,另文)。
 
 ## 3. 架构总览
 
@@ -218,13 +217,14 @@ v1 仅 ClaudeCodeAdapter;Codex CLI / aider 适配器等接口消费者,协议与
 - `apps/runner`:新包 `@agtpilot/runner`,bin `agtpilot-runner`,子命令 `pair/start/stop/status/logs`;Node ≥ 20,依赖刻意薄(不装 app-kit/cordis —— 它不是 Agent,只是桥);
 - `packages/protocol/src/runner.ts`:协议类型与清洗函数(web 与 runner 共同依赖,单一事实源);
 - `apps/web`:lib/runner-bridge.ts + /api/runner/* 路由 + 设备页 + 卡片改造;
-- 分发:v1 仓内安装(`pnpm --filter @agtpilot/runner build` + 全局 bin 链接,README 一条命令);npm 发布(@agtpilot scope)列决策项。
+- 分发(**已拍板 2026-10-13:发 npm**):正式渠道 `npm i -g @agtpilot/runner` 一条命令安装;仓内安装(`pnpm --filter @agtpilot/runner build` + bin 链接)保留为开发者路径。前置:注册 npmjs `@agtpilot` org(名字是否被占用,注册时才能确认;被占则退 `@agtpilothq` 等备选并在文档记录)。
+- 版本兼容治理(发 npm 后成为硬约束):runner 在**配对与每次心跳**上报自身版本与协议版本;协议字段只增不改,破坏性变更走大版本号,云端对过旧版本拒绝派发并提示升级命令。
 
 ## 10. 里程碑与测试策略
 
 | 里程碑 | 内容 | 测试门禁 | 量级 |
 |---|---|---|---|
-| M1 协议+配对+在线 | protocol/runner.ts;pair/devices/tasks/events 路由;runner 骨架(pair/start/heartbeat);设备页 | 协议 normalize 纯函数测试;路由 vitest(鉴权/配对码过期/吊销 401);runner 单测(假 fetch) | 中 |
+| M1 协议+配对+在线 | protocol/runner.ts;pair/devices/tasks/events 路由;runner 骨架(pair/start/heartbeat);设备页;npm org 注册 + `@agtpilot/runner` 占位发布(0.0.x 抢名) | 协议 normalize 纯函数测试;路由 vitest(鉴权/配对码过期/吊销 401);runner 单测(假 fetch) | 中 |
 | M2 任务包+执行+回流 | 任务包渲染器;卡片「派发到本地」+弹窗;ClaudeCodeAdapter(spawn+stream-json 解析);事件回流→Mission 卡 | 渲染器快照测试;**假 claude 二进制 fixture**(输出录制好的 stream-json,测解析/超时/失败分支,不依赖真 CLI);web 组件测试 | 中大 |
 | M3 审批闭环 | awaiting_approval→审批卡+Web Push→固化命令集下行→finishing 执行→PR 回流 | 状态机纯函数全路径测试;固化命令白名单校验测试(含注入畸形命令拒绝用例) | 中 |
 | M4 硬化 | 离线队列/TTL/断网重发幂等;redaction;审计视图;交接包兜底按钮;README/安装脚本 | redaction 用例库(密钥形态);事件幂等去重测试 | 中小 |
@@ -249,7 +249,7 @@ v1 仅 ClaudeCodeAdapter;Codex CLI / aider 适配器等接口消费者,协议与
 
 ## 12. 决策项(待负责人拍板)
 
-1. **分发**:v1 仓内安装(推荐,先跑通)/ 直接发 npm @agtpilot scope;
+1. ~~分发~~ **已拍板(2026-10-13 负责人)**:发 npm(`@agtpilot/runner`),仓内安装保留为开发者路径;版本兼容治理与 org 注册见 §9;
 2. **workspaceRoot 默认值**:`~/agtpilot-workspace`(推荐,与个人工作区隔离)/ 用户现有 `~/dev`;
 3. **v1 执行器**:仅 Claude Code、接口留扩展(推荐)/ 同期做 Codex CLI 适配;
 4. **事件明细默认档**:standard(推荐:工具名+一行摘要+测试尾部+diffstat)/ minimal;

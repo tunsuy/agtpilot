@@ -2,7 +2,7 @@
  * AI Builders 日报工坊 · skill 包清单(平移自 components/workshops/{registry,run}.ts)。
  */
 import { Rss } from 'lucide-react';
-import { buildFollowBuildersPrompt, FB_RANGES, FB_LANGUAGES, FB_CATEGORIES } from './prompt';
+import { buildFollowBuildersPrompt, FB_RANGES, FB_LANGUAGES, FB_CATEGORIES } from './context';
 import { str } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

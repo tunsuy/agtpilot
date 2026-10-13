@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '../prompt';
+import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '../context';
 import { normalizeScenarioProfile } from '@/lib/scenario-profile';
 
 const profileInput = {

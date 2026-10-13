@@ -2,7 +2,7 @@
  * 知乎专栏工坊 · skill 包清单(平移自 components/workshops/{registry,run}.ts)。
  */
 import { PenLine } from 'lucide-react';
-import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES } from './prompt';
+import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES } from './context';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

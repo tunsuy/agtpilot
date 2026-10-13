@@ -1,13 +1,19 @@
 /**
- * AI Builders 日报工坊 · Prompt 构建器
+ * AI Builders 日报工坊 · 模板上下文(正文见 prompt.main.md)
  *
  * 数据来自 follow-builders 开源项目(MIT)的中央 feed(上游 GitHub Action 日更):
  * AI builder 的 X 动态(上游仅存 24h)、AI 播客新集转写(14 天)、
  * Anthropic/Claude 官方博客(72h)。Agent 用只读工具
- * follow_builders_fetch_feed 拉素材,按本 prompt 的日报规范改写成
- * 指定语言的日报 —— 只总结、不发布、每条带原文链接(格式即契约,
- * 与其余工坊同款:纯函数构建,便于测试锚定)。
+ * follow_builders_fetch_feed 拉素材,按模板的日报规范改写成
+ * 指定语言的日报 —— 只总结、不发布、每条带原文链接。
+ *
+ * 分节规范(sectionSpecs)是按所选类别拼装的动态列表:类别全空时
+ * 输出保留一个空行(与旧构建器 join('') 行为逐字节一致),所以走变量
+ * 注入而不是模板 {{#if}}——行级消隐会把这行吃掉。
  */
+
+import prompt from './prompt.main.md';
+import { renderTemplate } from '../engine';
 
 export const FB_LANGUAGES = ['中文', '英文', '中英混合'] as const;
 
@@ -59,23 +65,16 @@ export function buildFollowBuildersPrompt(input: FollowBuildersInput = {}): stri
     sectionSpecs.push('   - 「官方博客」:每篇 = 标题 + 2-3 句摘要 + 链接');
   }
 
-  return `【AI Builders 日报】
-生成一份「${range.name}」的 AI builders 日报,输出语言:${language}。
-
-第一步(必须):调用 follow_builders_fetch_feed 工具拉取素材,参数 rangeHours=${range.hours}、categories=${JSON.stringify(catIds)}。该工具只读、返回已按时间窗过滤的 X 动态 / 播客转写摘录 / 官方博客内容,以及各 feed 的生成时间与新鲜度标记。
-
-覆盖范围如实标注:X 动态上游只保留最近 24 小时${range.hours > 24 ? `(即使本次选了「${range.name}」,X 部分也只有 24h 的量,须在日报中注明)` : ''};播客覆盖最近 14 天;博客覆盖最近 72 小时。
-
-第二步:把素材改写成日报,结构与要求:
-1. 开头两句话总览:今天最值得注意的 1-2 件事 + 一句整体趋势感受(注明是你的判断)
-2. 按类别分节输出(本次类别:${catNames}):
-${sectionSpecs.join('\n')}
-3. 结尾一行:数据时间(用工具返回的 generatedAt)与覆盖范围说明
-
-硬性红线:
-- 只使用工具返回的真实内容,不得编造推文、观点、数据或链接;每条信息必须附素材里的原文 url
-- 工具返回 staleWarning 时,必须在日报开头用一行明确提示「⚠️ 数据可能过期(上游 feed 超 48 小时未更新)」;X 类别过期可按工具提示降级用 X 连接器/网页搜索自取,并注明数据来源已降级
-- 工具返回 success=false 时,按错误信息里的降级路径执行;完全拿不到数据就如实告知,不要凭记忆编一份日报
-- 翻译改写保持技术术语原意(产品名/模型名/人名保留原文);观点归属写清楚是谁说的
-- 日报只展示给用户,不做任何发布动作,不调用任何发布类接口`;
+  return renderTemplate(prompt, {
+    language,
+    rangeName: range.name,
+    rangeHours: range.hours,
+    rangeNote:
+      range.hours > 24
+        ? `(即使本次选了「${range.name}」,X 部分也只有 24h 的量,须在日报中注明)`
+        : '',
+    catNames,
+    categoriesJson: JSON.stringify(catIds),
+    sectionSpecs: sectionSpecs.join('\n'),
+  });
 }

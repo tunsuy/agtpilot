@@ -2,7 +2,7 @@
  * 邮件分诊工坊 · skill 包清单(平移自 components/workshops/{registry,run}.ts)。
  */
 import { Inbox } from 'lucide-react';
-import { buildEmailTriagePrompt, EMAIL_TRIAGE_SCOPES } from './prompt';
+import { buildEmailTriagePrompt, EMAIL_TRIAGE_SCOPES } from './context';
 import { str } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

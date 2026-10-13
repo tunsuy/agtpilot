@@ -2,7 +2,7 @@
  * 周报生成工坊 · skill 包清单(平移自 components/workshops/{registry,run}.ts)。
  */
 import { ClipboardList } from 'lucide-react';
-import { buildWeeklyReportPrompt, WEEKLY_REPORT_PERIODS } from './prompt';
+import { buildWeeklyReportPrompt, WEEKLY_REPORT_PERIODS } from './context';
 import { str } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

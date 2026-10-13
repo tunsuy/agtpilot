@@ -2,7 +2,7 @@
  * 邮件分诊工坊表单:范围 / 特别关注 / 是否起草回复。
  */
 import { useState } from 'react';
-import { EMAIL_TRIAGE_SCOPES } from '@/workshops/email_triage/prompt';
+import { EMAIL_TRIAGE_SCOPES } from '@/workshops/email_triage/context';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';
 import { recordRun, lastRunOf } from '../history';

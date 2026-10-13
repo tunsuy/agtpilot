@@ -4,7 +4,7 @@ import {
   FB_LANGUAGES,
   FB_RANGES,
   FB_CATEGORIES,
-} from '../prompt';
+} from '../context';
 
 describe('buildFollowBuildersPrompt · 缺省值(零输入可跑)', () => {
   it('不传参 = 中文 / 最近 24 小时 / 全类别', () => {

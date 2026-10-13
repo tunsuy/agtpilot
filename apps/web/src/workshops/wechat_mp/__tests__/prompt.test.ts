@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildWechatMpWorkshopPrompt, WECHAT_MP_TOPIC_PRESETS } from '../prompt';
+import { buildWechatMpWorkshopPrompt, WECHAT_MP_TOPIC_PRESETS } from '../context';
 import { normalizeScenarioProfile } from '@/lib/scenario-profile';
 
 const profileInput = {

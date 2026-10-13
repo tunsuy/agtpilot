@@ -2,7 +2,7 @@
  * 公众号文章工坊 · skill 包清单(平移自 components/workshops/{registry,run}.ts)。
  */
 import { Newspaper } from 'lucide-react';
-import { buildWechatMpWorkshopPrompt } from './prompt';
+import { buildWechatMpWorkshopPrompt } from './context';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

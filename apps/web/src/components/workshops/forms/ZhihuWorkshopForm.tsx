@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { QrCode } from 'lucide-react';
-import { ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '@/workshops/zhihu/prompt';
+import { ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '@/workshops/zhihu/context';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun } from '../run';

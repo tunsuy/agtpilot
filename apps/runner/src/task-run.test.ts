@@ -120,11 +120,30 @@ describe('runTask(领取任务 → 本地执行 → 事件回流编排)', () => 
     expect(summaries).toEqual(progress.map((p) => (p as any).summary));
   });
 
-  it('事件上行失败不阻塞执行(M4 离线队列兜底,当前只记日志)', async () => {
+  it('事件上行失败不阻塞执行(bin 侧离线队列缓冲补发,task-run 只记日志)', async () => {
     const { deps, logs } = makeDeps({
       postEvents: async () => { throw new Error('ECONNREFUSED'); },
     });
     expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
     expect(logs.some((l) => l.includes('事件上行失败'))).toBe(true);
+  });
+
+  it('M4 审计钩子:task_claimed 开始留痕,task_result 记录结局', async () => {
+    const audited: Record<string, unknown>[] = [];
+    const { deps } = makeDeps({ audit: (e) => audited.push(e) });
+    await runTask({ taskId: 'rtask_1', pack: validPack }, deps);
+    expect(audited.map((e) => e.kind)).toEqual(['task_claimed', 'task_result']);
+    expect(audited[0]).toMatchObject({ taskId: 'rtask_1', repo: 'vllm-project/vllm', workBranch: 'contrib/fix-1' });
+    expect(audited[1]).toMatchObject({ outcome: 'awaiting_approval', commitHash: 'abc123' });
+  });
+
+  it('M4 审计钩子:失败路径记录 failed 与原因', async () => {
+    const audited: Record<string, unknown>[] = [];
+    const { deps } = makeDeps({ adapter: fakeAdapter({ installed: false }), audit: (e) => audited.push(e) });
+    await runTask({ taskId: 'rtask_1', pack: validPack }, deps);
+    const last = audited.at(-1)!;
+    expect(last.kind).toBe('task_result');
+    expect(last.outcome).toBe('failed');
+    expect(String(last.message)).toContain('claude');
   });
 });

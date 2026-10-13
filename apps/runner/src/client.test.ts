@@ -97,4 +97,26 @@ describe('RunnerClient.postEvents', () => {
     expect(await client.postEvents([{ garbage: true }])).toEqual({ accepted: 0, rejected: 0 });
     expect(calls).toHaveLength(0);
   });
+
+  it('M4 redaction 集中闸:密钥形态与本机 deviceSecret 值在出网前被替换', async () => {
+    const { impl, calls } = fakeFetch([{ status: 200, body: { success: true, accepted: 1, rejected: 0 } }]);
+    const client = new RunnerClient('https://s', creds, impl);
+    await client.postEvents([
+      {
+        ...validEvent,
+        payload: {
+          summary: 'auth ghp_aBcD1234567890aBcD1234567890aBcD1234 失败',
+          nested: { stderr: `Bearer ${creds.deviceSecret} 被记录` },
+        },
+      },
+    ]);
+    const raw = String(calls[0].init?.body);
+    expect(raw).toContain('[REDACTED]');
+    expect(raw).not.toContain('ghp_aBcD1234567890aBcD1234567890aBcD1234');
+    expect(raw).not.toContain(creds.deviceSecret);
+    // 结构化字段不动
+    const body = JSON.parse(raw);
+    expect(body.events[0].eventId).toBe('ev_1');
+    expect(body.events[0].payload.summary).toContain('auth');
+  });
 });

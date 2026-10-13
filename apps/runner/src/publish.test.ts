@@ -63,9 +63,10 @@ function fakeExec(opts: { failOn?: string; stderr?: string } = {}) {
   return { calls, exec };
 }
 
-function makeDeps(exec: PublishDeps['exec']): PublishDeps & { posted: unknown[][]; logs: string[] } {
+function makeDeps(exec: PublishDeps['exec']): PublishDeps & { posted: unknown[][]; logs: string[]; audited: Record<string, unknown>[] } {
   const posted: unknown[][] = [];
   const logs: string[] = [];
+  const audited: Record<string, unknown>[] = [];
   let n = 0;
   return {
     deviceId: 'dev_1',
@@ -76,10 +77,12 @@ function makeDeps(exec: PublishDeps['exec']): PublishDeps & { posted: unknown[][
     workspaceRoot: wsRoot,
     exec,
     log: (l) => logs.push(l),
+    audit: (e) => audited.push(e),
     now: () => 5000,
     newEventId: () => `ev_${++n}`,
     posted,
     logs,
+    audited,
   };
 }
 
@@ -185,7 +188,7 @@ describe('handleDeviceActions(审批动作 → 事件编排)', () => {
     expect(deps.posted).toHaveLength(0);
   });
 
-  it('事件上行失败不外抛(云端会幂等重发指令),handled 照常计数', async () => {
+  it('事件上行失败不外抛(离线队列已缓冲,云端会幂等重发指令),handled 照常计数', async () => {
     const { exec } = fakeExec();
     const deps = makeDeps(exec);
     deps.postEvents = async () => {
@@ -194,5 +197,31 @@ describe('handleDeviceActions(审批动作 → 事件编排)', () => {
     const n = await handleDeviceActions([makeAction()], deps);
     expect(n).toBe(1);
     expect(deps.logs.some((l) => l.includes('事件上行失败'))).toBe(true);
+  });
+
+  it('M4 审计:publish 成功逐条留痕 publish_cmd + publish_result(ok/prUrl)', async () => {
+    const { exec } = fakeExec();
+    const deps = makeDeps(exec);
+    await handleDeviceActions([makeAction()], deps);
+    const kinds = deps.audited.map((e) => e.kind);
+    expect(kinds).toEqual(['publish_cmd', 'publish_cmd', 'publish_result']);
+    expect(deps.audited[0]).toMatchObject({ taskId: 'rtask_1', approvalId: 'rappr_1', cmd: 'git', ok: true });
+    expect(deps.audited[2]).toMatchObject({ ok: true, prUrl: PR_URL });
+  });
+
+  it('M4 审计:publish 失败记录出错命令(ok:false + stderr 尾部);cancel 记录 action_cancel', async () => {
+    const { exec } = fakeExec({ failOn: 'push', stderr: 'remote: denied' });
+    const deps = makeDeps(exec);
+    await handleDeviceActions([makeAction()], deps);
+    const cmd = deps.audited.find((e) => e.kind === 'publish_cmd')!;
+    expect(cmd.ok).toBe(false);
+    expect(String(cmd.error)).toContain('denied');
+    const result = deps.audited.find((e) => e.kind === 'publish_result')!;
+    expect(result.ok).toBe(false);
+
+    const cancelDeps = makeDeps(fakeExec().exec);
+    await handleDeviceActions([makeAction({ kind: 'cancel', commands: undefined })], cancelDeps);
+    expect(cancelDeps.audited).toHaveLength(1);
+    expect(cancelDeps.audited[0]).toMatchObject({ kind: 'action_cancel', taskId: 'rtask_1', workBranch: 'contrib/x' });
   });
 });

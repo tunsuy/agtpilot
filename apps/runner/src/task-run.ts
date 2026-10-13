@@ -10,8 +10,8 @@ import { prepareRepo, type PreparedRepo } from './repo';
  *
  * 设计约束:
  * - 串行单任务(心跳循环在任务执行期间被占用;bin 侧另起保活轮询维持在线状态);
- * - 进度事件按 flushThreshold 批量上行(减少请求数;断网离线队列 M4 交付,
- *   现阶段上行失败只记日志不阻塞执行);
+ * - 进度事件按 flushThreshold 批量上行(减少请求数;断网离线缓冲由 bin 侧
+ *   ReliableEventPoster 包装承担,task-run 只管调 postEvents,失败记日志不阻塞);
  * - 云端 pack 再过一次 normalizeTaskPack(runner 侧防御性校验,与云端清洗同源)。
  */
 
@@ -23,6 +23,8 @@ export interface TaskRunDeps {
   /** 测试注入点:仓库准备(默认真 git) */
   prepare?: (pack: RunnerTaskPack, root: string) => Promise<PreparedRepo>;
   log?: (line: string) => void;
+  /** M4:本地审计钩子(bin 注入 appendAudit;失败静默由 audit 模块承担) */
+  audit?: (entry: Record<string, unknown>) => void;
   now?: () => number;
   newEventId?: () => string;
   /** 进度事件批量上行阈值(默认 10 条) */
@@ -36,6 +38,7 @@ export async function runTask(
   deps: TaskRunDeps
 ): Promise<TaskRunOutcome> {
   const log = deps.log ?? (() => {});
+  const audit = deps.audit ?? (() => {});
   const now = deps.now ?? Date.now;
   const newId = deps.newEventId ?? (() => randomUUID());
   const threshold = Math.max(1, deps.flushThreshold ?? 10);
@@ -49,8 +52,9 @@ export async function runTask(
       const r = await deps.postEvents(batch);
       log(`事件上行:${r.accepted} 接受 / ${r.rejected} 拒绝`);
     } catch (e) {
-      // M4 离线事件队列会本地缓冲重发;现阶段只记日志,不阻塞任务执行
-      log(`事件上行失败(M4 离线队列将补发):${(e as Error)?.message || e}`);
+      // 离线缓冲由 bin 侧 ReliableEventPoster 包装承担(错误文案已含缓冲信息);
+      // 这里只记日志,不阻塞任务执行
+      log(`事件上行失败:${(e as Error)?.message || e}`);
     }
   };
   const push = (type: RunnerEventType, payload?: Record<string, unknown>) => {
@@ -60,6 +64,7 @@ export async function runTask(
     push('error', { message, ...extra });
     push('state', { state: 'failed' });
     await flush();
+    audit({ kind: 'task_result', taskId, outcome: 'failed', message: message.slice(0, 500) });
     log(`任务 ${taskId} 失败:${message}`);
     return 'failed';
   };
@@ -71,6 +76,7 @@ export async function runTask(
   }
 
   log(`任务 ${taskId} 开始 · ${pack.repo} · 分支 ${pack.workBranch} · 执行器 ${deps.adapter.name}`);
+  audit({ kind: 'task_claimed', taskId, repo: pack.repo, workBranch: pack.workBranch });
   push('state', { state: 'running' });
   await flush(); // 状态事件立即上行,云端设备页/任务卡即时可见
 
@@ -111,6 +117,7 @@ export async function runTask(
     });
     push('state', { state: 'awaiting_approval' });
     await flush();
+    audit({ kind: 'task_result', taskId, outcome: 'awaiting_approval', commitHash: result.commitHash });
     log(`任务 ${taskId} Phase 1 完成 → 等待云端审批(commit ${String(result.commitHash ?? '').slice(0, 8)})`);
     return 'awaiting_approval';
   }

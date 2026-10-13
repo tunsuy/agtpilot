@@ -32,6 +32,8 @@ export interface PublishDeps {
   /** 测试注入点(默认真 execFile,数组传参无 shell) */
   exec?: ExecAsync;
   log?: (line: string) => void;
+  /** M4:本地审计钩子(bin 注入 appendAudit) */
+  audit?: (entry: Record<string, unknown>) => void;
   now?: () => number;
   newEventId?: () => string;
 }
@@ -42,6 +44,7 @@ export type PublishOutcome = { ok: true; prUrl: string | null } | { ok: false; e
 export async function executePublishAction(action: RunnerDeviceAction, deps: PublishDeps): Promise<PublishOutcome> {
   const exec = deps.exec ?? defaultExecAsync;
   const log = deps.log ?? (() => {});
+  const audit = deps.audit ?? (() => {});
 
   let repoDir: string;
   try {
@@ -78,9 +81,27 @@ export async function executePublishAction(action: RunnerDeviceAction, deps: Pub
       const r = await exec(c.cmd, c.args, { cwd: repoDir, timeout: PUBLISH_CMD_TIMEOUT_MS });
       const found = extractPrUrl(`${r.stdout ?? ''}\n${r.stderr ?? ''}`);
       if (found) prUrl = found;
+      // 审计(本地):固化命令逐条留痕(参数截断,PR 正文可能很长)
+      audit({
+        kind: 'publish_cmd',
+        taskId: action.taskId,
+        approvalId: action.approvalId,
+        cmd: c.cmd,
+        argv: c.args.map((a) => (a.length > 200 ? a.slice(0, 200) + `…(${a.length} 字符)` : a)),
+        ok: true,
+      });
       log(`发布命令成功:${label} …`);
     } catch (e: any) {
       const tail = String(e?.stderr || e?.message || e).slice(-500);
+      audit({
+        kind: 'publish_cmd',
+        taskId: action.taskId,
+        approvalId: action.approvalId,
+        cmd: c.cmd,
+        argv: c.args.slice(0, 4),
+        ok: false,
+        error: tail,
+      });
       return { ok: false, error: `发布命令失败(${label}):${tail}` };
     }
   }
@@ -89,11 +110,13 @@ export async function executePublishAction(action: RunnerDeviceAction, deps: Pub
 
 /**
  * 处理一次轮询下行的全部审批动作(串行;v1 单任务哲学)。
- * 事件上行失败只记日志(M4 离线队列补发);动作由云端任务状态推导,
- * runner 没把状态推进到终态前,下次轮询会幂等重发同一动作。
+ * 事件上行失败只记日志(bin 侧 ReliableEventPoster 已缓冲,恢复后补发);
+ * 动作由云端任务状态推导,runner 没把状态推进到终态前,下次轮询会幂等
+ * 重发同一动作(git/gh 天然幂等性兜底重复执行窗口)。
  */
 export async function handleDeviceActions(rawActions: unknown[], deps: PublishDeps): Promise<number> {
   const log = deps.log ?? (() => {});
+  const audit = deps.audit ?? (() => {});
   const now = deps.now ?? Date.now;
   const newId = deps.newEventId ?? (() => randomUUID());
   let handled = 0;
@@ -113,6 +136,7 @@ export async function handleDeviceActions(rawActions: unknown[], deps: PublishDe
 
     if (action.kind === 'cancel') {
       log(`任务 ${action.taskId} 审批被拒绝:本地分支 ${action.workBranch} 保留(可自行处置),上报取消确认`);
+      audit({ kind: 'action_cancel', taskId: action.taskId, approvalId: action.approvalId, workBranch: action.workBranch });
       push('state', { state: 'cancelled' });
     } else {
       log(`任务 ${action.taskId} 审批通过,执行固化命令集(${action.commands?.length ?? 0} 条)…`);
@@ -120,10 +144,12 @@ export async function handleDeviceActions(rawActions: unknown[], deps: PublishDe
       if (r.ok) {
         push('phase2_result', { prUrl: r.prUrl ?? undefined, approvalId: action.approvalId });
         push('state', { state: 'done' });
+        audit({ kind: 'publish_result', taskId: action.taskId, approvalId: action.approvalId, ok: true, prUrl: r.prUrl });
         log(`任务 ${action.taskId} 发布完成${r.prUrl ? ` · PR ${r.prUrl}` : ''}`);
       } else {
         push('error', { message: r.error, approvalId: action.approvalId });
         push('state', { state: 'failed' });
+        audit({ kind: 'publish_result', taskId: action.taskId, approvalId: action.approvalId, ok: false, error: r.error.slice(0, 500) });
         log(`任务 ${action.taskId} 发布失败:${r.error}`);
       }
     }
@@ -132,7 +158,9 @@ export async function handleDeviceActions(rawActions: unknown[], deps: PublishDe
       const res = await deps.postEvents(events);
       log(`事件上行:${res.accepted} 接受 / ${res.rejected} 拒绝`);
     } catch (e) {
-      log(`事件上行失败(M4 离线队列将补发;云端会重发指令,发布命令幂等性由 git/gh 兜底):${(e as Error)?.message || e}`);
+      // ReliableEventPoster 已把事件写入离线队列(错误文案含缓冲条数),恢复后自动补发;
+      // 云端会幂等重发指令,发布命令幂等性由 git/gh 兜底
+      log(`事件上行失败:${(e as Error)?.message || e}`);
     }
   }
   return handled;

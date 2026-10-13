@@ -5,6 +5,7 @@ import {
   type RunnerDeviceMeta,
   type RunnerEvent,
 } from '@agtpilot/protocol';
+import { redactEvent } from './redaction';
 
 /** runner 自身版本(与 package.json 同步维护;心跳/配对上报,云端做版本治理 §9) */
 export const RUNNER_VERSION = '0.0.1';
@@ -103,9 +104,15 @@ export class RunnerClient {
     , { headers: this.headers() });
   }
 
-  /** 批量上行事件(断网重发安全:云端按 eventId 幂等去重);畸形项本地先行过滤 */
+  /** 批量上行事件(断网重发安全:云端按 eventId 幂等去重);
+   *  M4:上行前过 redaction(已知密钥形态 + 本机 deviceSecret 值黑名单,§5.3),
+   *  畸形项本地先行过滤。这里是全部事件出本机的唯一出口(集中闸)。 */
   async postEvents(events: unknown[]): Promise<{ accepted: number; rejected: number }> {
-    const clean = events.map((e) => normalizeRunnerEvent(e)).filter((e): e is RunnerEvent => e !== null);
+    const blacklist = this.creds?.deviceSecret ? [this.creds.deviceSecret] : [];
+    const clean = events
+      .map((e) => redactEvent(e, blacklist))
+      .map((e) => normalizeRunnerEvent(e))
+      .filter((e): e is RunnerEvent => e !== null);
     if (clean.length === 0) return { accepted: 0, rejected: 0 };
     const body = await this.request<{ accepted?: number; rejected?: number }>(this.url('/api/runner/events'), {
       method: 'POST',

@@ -148,6 +148,27 @@ export function tail2k(s: string): string {
 
 export type SpawnImpl = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess;
 
+/**
+ * tree-kill(§7 资源围栏,M4):claude 以 detached 起独立进程组,
+ * 超时时按组负 pid 杀整棵树(claude 可能再 spawn 子进程,单杀父进程会留孤儿);
+ * 组杀失败(平台不支持/已退出)回落单进程 kill。
+ */
+export function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (typeof child.pid === 'number') {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      /* 组不存在或已退出,回落 */
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    /* 已退出 */
+  }
+}
+
 const execFileAsync = promisify(execFile) as unknown as ExecAsync;
 const defaultExec: ExecAsync = (cmd, args, opts) =>
   execFileAsync(cmd, args, { timeout: 10 * 60 * 1000, maxBuffer: 16 * 1024 * 1024, ...opts });
@@ -257,7 +278,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     return { ok: true, commitHash, diffstat: diffstat || undefined, testTail, prFinal };
   }
 
-  /** spawn claude 并流式消费 stdout;超时 SIGTERM→5s→SIGKILL */
+  /** spawn claude 并流式消费 stdout;超时 tree-kill(SIGTERM→5s→SIGKILL,整进程组) */
   private runClaude(
     args: string[],
     repoDir: string,
@@ -269,6 +290,8 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
         cwd: repoDir,
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        // 独立进程组:超时可整树 kill(见 killTree)
+        detached: true,
       });
       let buf = '';
       let stderrTail = '';
@@ -280,13 +303,9 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
 
       const killTimer = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGTERM');
+        killTree(child, 'SIGTERM');
         setTimeout(() => {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* 已退出 */
-          }
+          killTree(child, 'SIGKILL');
         }, 5000).unref?.();
       }, timeoutMs);
 

@@ -104,6 +104,8 @@ export interface RunnerTaskRecord {
   userId: string;
   /** 领取后绑定设备 */
   deviceId?: string;
+  /** 派发时指定的目标设备(§4「派发时选设备」):只有该设备可领取;缺省 = 任意在线设备 FIFO */
+  targetDeviceId?: string;
   pack: RunnerTaskPack;
   state: RunnerTaskState;
   createdAt: number;

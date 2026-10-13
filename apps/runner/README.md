@@ -28,7 +28,7 @@ bash apps/runner/scripts/install.sh          # 生成 ~/.local/bin/agtpilot-runn
 # 1. web 驾驶舱「设备」页 → 配对新 Runner → 得到 8 位配对码(5 分钟有效)
 # 2. 本地:
 agtpilot-runner pair --server https://<部署地址> --code XXXXXXXX
-agtpilot-runner start                          # 前台心跳 + FIFO 领取任务,Ctrl+C 退出
+agtpilot-runner start                          # 前台心跳 + 领取任务(FIFO;派发到本设备的定向任务优先归属本机),Ctrl+C 退出
 agtpilot-runner status                         # 配对状态 + 实例是否在跑
 agtpilot-runner stop                           # 停止后台(nohup/tmux)起的实例
 agtpilot-runner logs --tail 50 [--json]        # 本地审计日志

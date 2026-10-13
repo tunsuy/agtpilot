@@ -55,6 +55,26 @@ describe('pollTick', () => {
     const malformed = fakeClient({ serverTime: 1, claimed: null, queue: [], actions: 'nope' });
     expect((await pollTick(malformed, () => {})).actions).toEqual([]);
   });
+  it('targetDeviceId(派发时指定设备):待领只算本机可领(无绑定或绑定本机);在飞不受影响', async () => {
+    const logs: string[] = [];
+    const client = fakeClient({
+      serverTime: 1,
+      claimed: null,
+      queue: [
+        { taskId: 'a', state: 'queued' }, // 无绑定 → 可领
+        { taskId: 'b', state: 'queued', targetDeviceId: 'dev_me' }, // 绑定本机 → 可领
+        { taskId: 'c', state: 'queued', targetDeviceId: 'dev_other' }, // 绑定他机 → 不计待领
+        { taskId: 'd', state: 'running', targetDeviceId: 'dev_other' },
+      ],
+    });
+    await pollTick(client, (l) => logs.push(l), { deviceId: 'dev_me' });
+    expect(logs[0]).toContain('待领 2');
+    expect(logs[0]).toContain('在飞 4'); // 在飞 = 全部非终态(含 queued),与定向无关
+    // 不传 deviceId:只有无绑定任务计入待领
+    const logs2: string[] = [];
+    await pollTick(client, (l) => logs2.push(l));
+    expect(logs2[0]).toContain('待领 1');
+  });
 });
 
 describe('runHeartbeatLoop', () => {

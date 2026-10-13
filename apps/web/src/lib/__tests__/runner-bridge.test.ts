@@ -290,3 +290,42 @@ describe('设备 ghLogin(公开登录名:配对/心跳上报,列表透出)', () 
     expect(listDevices(USER_A, T0)[0].ghLogin).toBe('other-acct');
   });
 });
+
+describe('派发时指定设备(targetDeviceId:任务绑定,仅该设备可领取)', () => {
+  it('绑定设备 A:A 可领取;设备 B 轮询拿不到', () => {
+    const a = pairDevice(USER_A);
+    const b = pairDevice(USER_A);
+    const rec = enqueueTask(USER_A, validPack, T0, { targetDeviceId: a.deviceId });
+    expect(rec!.targetDeviceId).toBe(a.deviceId);
+    expect(claimNextTask(USER_A, b.deviceId, T0 + 1)).toBeNull();
+    const claimed = claimNextTask(USER_A, a.deviceId, T0 + 2);
+    expect(claimed!.taskId).toBe(validPack.taskId);
+    expect(claimed!.deviceId).toBe(a.deviceId); // 领取后照旧绑定执行设备
+  });
+
+  it('FIFO 与定向共存:跳过绑定给他机的更老任务,领取本机可领的', () => {
+    const a = pairDevice(USER_A);
+    const b = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_t_b' }, T0, { targetDeviceId: b.deviceId });
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_t_a' }, T0 + 1, { targetDeviceId: a.deviceId });
+    expect(claimNextTask(USER_A, a.deviceId, T0 + 2)!.taskId).toBe('rtask_t_a');
+    expect(claimNextTask(USER_A, b.deviceId, T0 + 3)!.taskId).toBe('rtask_t_b');
+  });
+
+  it('非法目标拒绝入队:畸形 id / 不存在 / 他人设备 / 已吊销 → null(不静默降级 FIFO)', () => {
+    const a = pairDevice(USER_A);
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_x1' }, T0, { targetDeviceId: 'dev_nope' })).toBeNull();
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_x2' }, T0, { targetDeviceId: 'dev_0123456789abcdef' })).toBeNull();
+    expect(enqueueTask(USER_B, { ...validPack, taskId: 'rtask_x3' }, T0, { targetDeviceId: a.deviceId })).toBeNull();
+    revokeDevice(USER_A, a.deviceId);
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_x4' }, T0, { targetDeviceId: a.deviceId })).toBeNull();
+    // 拒绝入队是真的没入库,不是只返回值难看
+    expect(getRunnerTasks(USER_A).some((t) => t.taskId.startsWith('rtask_x'))).toBe(false);
+  });
+
+  it('无绑定任务保持存量 FIFO 语义:任意设备可领', () => {
+    const a = pairDevice(USER_A);
+    enqueueTask(USER_A, validPack, T0);
+    expect(claimNextTask(USER_A, a.deviceId, T0 + 1)!.taskId).toBe(validPack.taskId);
+  });
+});

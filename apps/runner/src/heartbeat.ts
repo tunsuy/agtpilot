@@ -15,15 +15,19 @@ export interface TickResult {
   actions: unknown[];
 }
 
-/** 单次轮询:成功打印队列概览并返回领取结果;401/426 返回专属结果由调用方处置 */
+/** 单次轮询:成功打印队列概览并返回领取结果;401/426 返回专属结果由调用方处置。
+ *  opts.deviceId:待领计数只算本机可领的 queued(无绑定 或 绑定到本设备;
+ *  派发时可指定目标设备,§4)——不传则绑定到其它设备的任务不计入。 */
 export async function pollTick(
   client: Pick<RunnerClient, 'poll'>,
   log: (line: string) => void,
-  opts: { claim?: boolean } = {}
+  opts: { claim?: boolean; deviceId?: string } = {}
 ): Promise<TickResult> {
   try {
     const result: PollResult = await client.poll({ claim: opts.claim });
-    const queued = result.queue.filter((t) => t.state === 'queued').length;
+    const queued = result.queue.filter(
+      (t) => t.state === 'queued' && (!t.targetDeviceId || t.targetDeviceId === opts.deviceId)
+    ).length;
     const active = result.queue.filter((t) => !['done', 'failed', 'cancelled', 'expired'].includes(t.state)).length;
     log(`心跳 ok · 队列 ${result.queue.length}(待领 ${queued} / 在飞 ${active})`);
     const actions = Array.isArray(result.actions) ? result.actions : [];

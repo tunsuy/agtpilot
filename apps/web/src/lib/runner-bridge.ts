@@ -276,14 +276,33 @@ export function updateDeviceMeta(userId: string, deviceId: string, meta: RunnerD
 
 // ---------- 任务队列与事件(§5) ----------
 
-/** 入队(派发在 M2 接 UI;协议清洗失败 → null,拒绝入队) */
-export function enqueueTask(userId: string, packInput: unknown, now: number = Date.now()): RunnerTaskRecord | null {
+const DEVICE_ID_RE = /^dev_[0-9a-f]{16}$/;
+
+/**
+ * 入队(派发在 M2 接 UI;协议清洗失败 → null,拒绝入队)。
+ * targetDeviceId(派发时指定设备,§4):必须是本用户未吊销的配对设备,
+ * 否则 null 拒绝入队;缺省 = 不绑定,任意在线设备 FIFO 领取(存量语义)。
+ */
+export function enqueueTask(
+  userId: string,
+  packInput: unknown,
+  now: number = Date.now(),
+  opts: { targetDeviceId?: string } = {}
+): RunnerTaskRecord | null {
   const pack = normalizeTaskPack(packInput);
   if (!pack) return null;
+  let targetDeviceId: string | undefined;
+  if (opts.targetDeviceId !== undefined) {
+    if (!DEVICE_ID_RE.test(opts.targetDeviceId)) return null;
+    const device = readDevices(userId).find((d) => d.deviceId === opts.targetDeviceId);
+    if (!device || device.revoked) return null; // 目标设备不存在/已吊销:拒绝入队,不静默降级 FIFO
+    targetDeviceId = opts.targetDeviceId;
+  }
   if (readTasks(userId).some((t) => t.taskId === pack.taskId)) return null; // taskId 冲突(幂等)
   const record: RunnerTaskRecord = {
     taskId: pack.taskId,
     userId,
+    ...(targetDeviceId ? { targetDeviceId } : {}),
     pack,
     state: 'queued',
     createdAt: now,
@@ -310,12 +329,12 @@ function sweepExpired(tasks: RunnerTaskRecord[], now: number): boolean {
   return changed;
 }
 
-/** runner 领取:FIFO 取最老 queued → dispatched 并绑定设备 */
+/** runner 领取:FIFO 取最老的可领 queued 任务(无绑定 或 绑定到本设备)→ dispatched 并绑定设备 */
 export function claimNextTask(userId: string, deviceId: string, now: number = Date.now()): RunnerTaskRecord | null {
   const tasks = readTasks(userId);
   const changed = sweepExpired(tasks, now);
   const next = tasks
-    .filter((t) => t.state === 'queued')
+    .filter((t) => t.state === 'queued' && (!t.targetDeviceId || t.targetDeviceId === deviceId))
     .sort((a, b) => a.createdAt - b.createdAt)[0];
   if (next) {
     next.state = 'dispatched';

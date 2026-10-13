@@ -120,7 +120,7 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
           };
         }),
       tick: async () => {
-        const r = await pollTick(client, log, { claim: true });
+        const r = await pollTick(client, log, { claim: true, deviceId: creds.deviceId });
         if (r.outcome === 'ok' && r.actions.length > 0) {
           // 审批结果动作(M3):先于新任务处理(发布是分钟级动作,不阻塞心跳太久);
           // 单任务串行哲学下,若此刻正在执行 Phase 1,动作等本 tick 结束后自然串行

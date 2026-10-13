@@ -250,7 +250,7 @@ v1 仅 ClaudeCodeAdapter;Codex CLI / aider 适配器等接口消费者,协议与
 ## 12. 决策项(待负责人拍板)
 
 1. ~~分发~~ **已拍板(2026-10-13 负责人)**:发 npm(`@agtpilot/runner`),仓内安装保留为开发者路径;版本兼容治理与 org 注册见 §9;
-2. **workspaceRoot 默认值**:`~/agtpilot-workspace`(推荐,与个人工作区隔离)/ 用户现有 `~/dev`;
+2. ~~workspaceRoot 默认值~~ **已拍板(2026-10-13 负责人)**:`~/agtpilot-workspace`(专用隔离,机器人副本与个人工作区分开;配对后可本地改,云端设备页同步确认);
 3. **v1 执行器**:仅 Claude Code、接口留扩展(推荐)/ 同期做 Codex CLI 适配;
 4. **事件明细默认档**:standard(推荐:工具名+一行摘要+测试尾部+diffstat)/ minimal;
 5. **审批通道**:产品内审批卡 + Web Push(推荐;微信通道是运维侧,不做进产品)/ 需要另议;

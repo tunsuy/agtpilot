@@ -1,0 +1,257 @@
+# 本地 Runner 桥接设计(T1:借力本地 coding agent CLI 完成贡献闭环)
+
+- 日期: 2026-10-13
+- 状态: **设计提案**(未动代码,待负责人拍板 §12 决策项后排期)
+- 前置阅读: `docs/design/sandbox-control-hardening.md`(围栏/审批/热更新模式)、`docs/design/workshop-scenario-loop.md`(场景档案)
+- 上游背景: 「开源贡献雷达」工坊(commit 980549a)已交付发现与调研环节;本文档补齐「动手」环节
+
+## 1. 背景与决策记录
+
+### 1.1 缺口
+
+贡献雷达能扫出带 Issue 直达链接的机会清单,但认领后的循环(clone → 改码 → 跑测试 → commit → PR)产品没有承接能力。2026-10-13 与负责人对齐了四个候选:
+
+| 方案 | 形态 | 结论 |
+|---|---|---|
+| A · E2B 云端持久沙箱 | 云端 MicroVM 执行 | **降级为可选补充**(只读验证性质);写操作在云端执行须托管用户 git 凭据,风险与责任不划算 |
+| B · 自托管容器层 | 每用户容器 + 持久卷 | **暂缓**;重运维,且负责人已明确不要常驻服务进程(见 sandbox-control-hardening §2 借鉴矩阵) |
+| C · 自建本地 runner | 云端派发低级操作,本地执行 | **被 T1 取代**:文件编辑/命令执行/测试/git/权限门,Claude Code 这类本地 coding agent CLI 全部已做好且身经百战,自建等于重造并自背安全审计 |
+| **T1 · 薄桥接(本文档)** | 本地薄 runner 接任务 → 调起用户已装的 coding agent CLI(headless)→ 状态/PR 回流 | **负责人选定**(2026-10-13「那就t1」) |
+
+T0(纯手工交接包:卡片一键复制任务包,用户粘贴进本地 claude 会话)不单独排期,降级为 T1 的**离线兜底交互**(§8.3):任务包格式两者共用。
+
+### 1.2 分工哲学
+
+**agtpilot 当调度台,不当施工队**:发现机会(雷达)、调研(GitHub MCP/DeepWiki)、打任务包、追踪进度、审批外发;写代码这段外包给用户本地已装的 coding agent。这与既有三层围栏(发布永远人工 / 对外发送前逐条审批 / 云端只读调研)一脉相承:
+
+- 云端 Agent 对第三方仓库永远只读(雷达红线不变);
+- **一切写操作发生在用户自己的机器、用户自己的 git 身份下**;
+- **对外可见动作(git push / gh pr create)必须经云端审批门**,审批通过前 runner 拒绝执行。
+
+## 2. 目标 / 非目标
+
+**目标**
+1. 驾驶舱(含手机浏览器)一键把贡献机会「派发到本地」,本地 Claude Code headless 自动完成 clone → 改码 → 测试循环;
+2. push/PR 走既有审批卡(dangerLevel=high)+ Web Push 通知,批准后 runner 执行**审批时固化的命令集**,PR 链接回流卡片;
+3. runner 出站-only(HTTPS 轮询),用户机器零开放端口,云端零新增常驻进程;
+4. 数据最小化:默认只上行结构化状态摘要,代码内容与凭据永不上传。
+
+**非目标(v1 不做)**
+- 执行中逐工具审批回环(Claude Code 自带权限门承担;云端 canUseTool 级联动列 v2,§6.4);
+- 多 coding agent 适配落地(v1 只做 Claude Code,接口留扩展,§6.5);
+- 任务并行(v1 runner 单任务串行,队列 FIFO);
+- E2B 云端验证环境(方案 A,另文);
+- npm 公开发布(默认仓内安装,发布是决策项 §12.1)。
+
+## 3. 架构总览
+
+```
+┌────────────────────────── 云端(现有 Next.js web 进程,零新增常驻进程) ──────────────────────────┐
+│  驾驶舱 UI(机会卡「派发到本地」/审批卡/设备页)                                                      │
+│      │ SSE(既有 /api/agent/events)          ▲ Web Push(既有 /api/push)                          │
+│  agent-backend(Mission/ApprovalRequest 既有机制)                                                 │
+│      │                                                                                          │
+│  runner-bridge 服务(lib,仿 cron-service:user-store 持久化 + secret-box 加密)                    │
+│      │   设备注册表 devices.json / 任务队列 runner-tasks.json(每用户)                              │
+│  API: /api/runner/{pair,devices,tasks,events,dispatch}(next-auth 会话 或 设备密钥认证)             │
+└──────┬───────────────────────────────────────────────────────────────────────────────────────────┘
+       │ HTTPS,出站-only,轮询(任务拉取+心跳 ≈5s / 事件批量上行)
+┌──────┴─────────────── 用户本地机器 ──────────────────────────┐
+│  apps/runner(@agtpilot/runner,bin: agtpilot-runner)         │
+│    pair / start / stop / status / logs                       │
+│    ├─ 设备密钥 ~/.agtpilot/runner/credentials.json (0600)     │
+│    ├─ 任务执行器 ClaudeCodeAdapter                            │
+│    │    spawn: claude -p <任务包> --output-format stream-json │
+│    │           --allowedTools … --disallowedTools …           │
+│    │    (用户自己的 Claude 订阅/凭据,runner 不经手)             │
+│    ├─ workspaceRoot 路径围栏(默认 ~/agtpilot-workspace)       │
+│    └─ 审计日志(append-only,本地) + 上行 redaction             │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 3.1 通信方式决策:HTTPS 轮询,不用 WebSocket
+
+- web 是标准 `next start` 部署,无自定义 server;引 WS 需要新端口/常驻进程,**违背负责人已确认的「不加常驻进程」原则**(sandbox-control-hardening §2);
+- runner 在家庭/办公网络后,出站 HTTPS 是唯一零配置可达方向;轮询 3-5s 对「分钟级编码任务」的时延完全够用;
+- 云端→前端实时性已由既有 SSE 承担,runner 事件进 agent-backend 后自动获得 SSE + Web Push 全链路;
+- 事件上行用批量 POST(断网本地缓冲重发,幂等 eventId 去重)。
+
+## 4. 配对与设备管理
+
+1. 驾驶舱「设备」页点「配对新 runner」→ 云端生成**一次性配对码**(8 位字符,5 分钟过期,绑定当前登录用户);
+2. 用户本地执行 `agtpilot-runner pair --server https://<部署地址> --code XXXXXXXX`;
+3. runner POST 配对码 + 设备元信息(hostname/platform/版本)→ 云端核销配对码,生成 `deviceSecret`(256-bit 随机):
+   - 云端侧:secret-box 加密存 user-store `devices.json`(deviceId/secret 密文/元信息/lastSeenAt/状态);
+   - runner 侧:`~/.agtpilot/runner/credentials.json`(0600),含 server URL(配对时固定,防任务来源漂移)+ deviceId + deviceSecret;
+4. 后续所有 /api/runner/* 调用带 `X-Runner-Id` + `Authorization: Bearer <deviceSecret>`;
+5. 设备页可**吊销**(删除 secret → 轮询 401,runner 本地自毁凭据并提示重新配对);一个用户可配多台(家用台式机/工作机),派发时选设备。
+
+安全注记:配对码短有效期 + 云端 UI 展示待配对设备 hostname 供人工确认(防配对码钓鱼);deviceSecret 泄露的影响面 = 该设备可拉取该用户任务并伪造事件,**不能**读历史任务内容(事件下行只含新派发),且可一键吊销。
+
+## 5. 任务协议(packages/protocol/src/runner.ts,纯类型+清洗函数,vitest 直测)
+
+### 5.1 任务包(TaskPack,T0 交接包同格式超集)
+
+```ts
+interface RunnerTaskPack {
+  taskId: string;
+  kind: 'oss_contribution';          // v1 唯一类型,协议留扩展
+  repo: string;                       // owner/repo
+  issueUrl: string;                   // 直达链接(雷达产出)
+  baseBranch?: string;                // 缺省 main
+  workBranch: string;                 // 如 contrib/oss-radar-<issueNo>
+  constraints: string[];              // 只修这个 Issue/不动无关文件/遵循 CONTRIBUTING
+  acceptance: { testCommand?: string; note?: string };  // 验收:哪些测试要绿
+  claimDraft?: string;                // 认领留言草稿(是否发送由 Phase 2 审批决定)
+  prDraft: { title: string; bodyTemplate: string };      // PR 草稿(终稿由本地 agent 按实际改动补全)
+  executor: { name: 'claude-code'; maxTurns?: number; timeoutMinutes?: number };
+  dispatchNote?: string;              // 用户在派发弹窗里的补充说明(自由文本,进 prompt)
+}
+```
+
+### 5.2 状态机
+
+```
+queued ──派发──▶ dispatched ──runner领取──▶ running(Phase 1)
+   │                                          │ 成功:本地 commit 完成、测试绿
+   │                                          ▼
+   │                              awaiting_approval(Phase 2 审批卡)
+   │                                 │批准              │拒绝
+   │                                 ▼                  ▼
+   └──TTL(默认7天)过期──▶ expired   finishing ──▶ done(PR 链接回流) / failed
+                                              │
+                                   cancelled(用户撤销,任何非终态可撤)
+```
+
+### 5.3 事件流(上行,数据最小化分级)
+
+```ts
+interface RunnerEvent {
+  eventId: string;                    // 幂等去重
+  taskId: string; deviceId: string; at: number;
+  type: 'state' | 'progress' | 'phase1_result' | 'phase2_result' | 'error';
+  // progress 载荷(默认 standard 档):工具名 + 一行摘要 + 测试尾部 ≤2KB + diffstat
+  // minimal 档只发 state;verbose 档(按任务 opt-in)发完整 stream-json 事件
+  payload?: Record<string, unknown>;
+}
+```
+
+**永不上传**:代码文件内容(verbose 档也只传工具事件与 diffstat,不传 diff 正文;「查看 diff」由用户本地看)、任何环境凭据、claude CLI 的会话密钥。runner 上行前过 redaction(已知密钥形态正则 + secret 值黑名单)。
+
+## 6. 两阶段执行(核心安全设计)
+
+### 6.1 Phase 1 · 本地自主干活(无对外副作用)
+
+runner 领取任务后在 workspaceRoot 内执行:
+
+1. **仓库准备**:`git clone`(浅克隆可配)到 `<workspaceRoot>/<owner>/<repo>`,已存在则 fetch + 从 baseBranch 切新分支 —— 由 runner 直接执行(git 命令白名单内),不消耗 agent 轮次;
+2. **调起 coding agent**(用户已装、已登录的 Claude Code,runner 不接触其凭据):
+
+```
+claude -p "<按任务包渲染的执行指令>" \
+  --output-format stream-json \
+  --permission-mode default \
+  --allowedTools "Read,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git checkout:*),Bash(git branch:*),Bash(<acceptance.testCommand 白名单化>)" \
+  --disallowedTools "Bash(git push:*),Bash(gh:*),WebFetch,WebSearch" \
+  --max-turns <executor.maxTurns 缺省 60> \
+  --add-dir <仓库目录>
+```
+
+3. runner 解析 stream-json 事件流 → 映射 RunnerEvent 上行(驾驶舱任务卡实时走 SSE);
+4. 终止条件:agent 正常结束且验收命令通过 + 存在本地 commit → 上报 `phase1_result`(diffstat/测试尾部/commit hash/agent 起草的 PR 终稿标题+正文);失败/超时/超轮次 → `failed`(带尾部诊断)。
+
+**红线**:绝不使用 `--dangerously-skip-permissions`;Phase 1 的 allowedTools 里**没有任何产生对外副作用的命令**(push/gh/网络全禁)——即使 prompt 注入劫持了 agent,它能造成的最坏结果局限在本地工作区副本内。
+
+### 6.2 Phase 2 · 对外发送门(必须人工审批)
+
+1. runner 上报 `awaiting_approval` + PR 终稿草稿;
+2. 云端创建 **ApprovalRequest**(复用既有机制):`action: 'runner_publish'`, `dangerLevel: 'high'`, params 含 taskId/repo/workBranch/**固化命令集**(如 `git push -u origin <branch>`、`gh pr create --title … --body-file …`,以及是否代发认领留言)+ PR 草稿全文;
+3. SSE `approval_requested` → 驾驶舱审批卡;Web Push → 手机收到通知,手机浏览器里批准/拒绝;
+4. **批准**:任务进入 `finishing`,下行队列标记 approved(含审批时固化的命令集与 approvalId);runner 下次轮询领取后**逐条执行固化命令集,不重新规划、不追加命令**;任何一条失败即停并上报;成功后 PR URL 回流,任务卡终态 `done`;
+5. **拒绝**:任务 `cancelled`,本地分支保留(用户可自行处置),runner 上报确认。
+
+固化命令集是防漂移围栏:审批批的就是执行的,runner 端校验命令前缀白名单(git push/gh pr create/gh issue comment 三类),白名单外一律拒绝执行并上报。
+
+### 6.3 兜底:T0 交接包(离线可用)
+
+任务卡永远带「复制交接包」按钮:把 TaskPack 渲染成十几行 markdown(仓库/Issue 链接/约束/验收/认领留言草稿),用户粘进任意本地 coding agent 会话即可人工走完全程 —— runner 未配对/离线/执行失败时的降级路径,也是 T1 交付前的过渡用法。
+
+### 6.4 v2 备选:执行中审批联动
+
+Claude Agent SDK 的 `canUseTool` 回调(或 PreToolUse hook)可把「执行中要跑白名单外命令」实时推成云端审批,批准后续跑。v1 不做的原因:两阶段模型已覆盖贡献循环的全部对外动作,执行中联动只增加复杂度不增加能力;等真实使用暴露需求再上。
+
+### 6.5 执行器抽象
+
+```ts
+interface ExecutorAdapter {
+  name: string;
+  detect(): Promise<{ installed: boolean; version?: string; loggedIn?: boolean }>;
+  run(taskPack: RunnerTaskPack, repoDir: string, onEvent: (e: RunnerEvent) => void): Promise<Phase1Result>;
+}
+```
+
+v1 仅 ClaudeCodeAdapter;Codex CLI / aider 适配器等接口消费者,协议与审批门完全复用。`detect()` 结果在派发弹窗展示(未装/未登录时禁用派发、给安装指引链接,只检测不代装不碰凭据)。
+
+## 7. Runner 侧围栏与审计
+
+- **路径围栏**:所有文件与 git 操作限 `<workspaceRoot>/<owner>/<repo>` 内(与 plugin-sandbox resolveSafePath 同语义:解析后前缀校验,拒 ../ 穿越与绝对路径逃逸);workspaceRoot 配对时确定、可在本地配置改(改后需云端设备页确认);
+- **资源围栏**:任务级 timeout(缺省 30 分钟)+ maxTurns + 子进程 tree-kill;
+- **并发**:v1 单任务串行,领取新任务前检查无 running;
+- **审计日志**:本地 append-only JSONL(任务/事件/固化命令集/执行结果),`agtpilot-runner logs` 可查;云端侧事件同样落 user-store(既有治理六维框架内);
+- **凭据零上行**:git/gh/Claude 凭据全部留在本地原处,runner 代码里不存在读取它们的逻辑(诚实声明:redaction 防的是意外,不读取才是根本)。
+
+## 8. 与现有产品的复用清单
+
+| 复用点 | 现有资产 | 新增 |
+|---|---|---|
+| 任务来源 | 贡献雷达机会卡(OssOpportunityCard) | 「派发到本地」按钮 + 派发弹窗(选设备/分支名/补充说明/交接包预览) |
+| 任务包格式 | 本设计 TaskPack | lib/runner-taskpack.ts 渲染器(纯函数,vitest) |
+| 任务追踪 | Mission 模型 + mission_updated SSE + 驾驶舱 | runner 任务映射为 Mission 子类,卡片加状态徽章(排队/Runner执行中/待审批/PR已提) |
+| 审批门 | ApprovalRequest + /api/agent/approval + 审批卡 | 新 action 类型 runner_publish(高危样式) |
+| 手机通知 | Web Push(/api/push,vapid) | awaiting_approval 时触发 |
+| 持久化/加密 | user-store + secret-box | devices.json / runner-tasks.json |
+| 协议类型 | packages/protocol | src/runner.ts(类型+normalize,纯函数) |
+| 云端服务形态 | cron-service.ts(轮询式服务,无常驻进程) | lib/runner-bridge.ts 同款形态 |
+
+## 9. 仓库落位与分发
+
+- `apps/runner`:新包 `@agtpilot/runner`,bin `agtpilot-runner`,子命令 `pair/start/stop/status/logs`;Node ≥ 20,依赖刻意薄(不装 app-kit/cordis —— 它不是 Agent,只是桥);
+- `packages/protocol/src/runner.ts`:协议类型与清洗函数(web 与 runner 共同依赖,单一事实源);
+- `apps/web`:lib/runner-bridge.ts + /api/runner/* 路由 + 设备页 + 卡片改造;
+- 分发:v1 仓内安装(`pnpm --filter @agtpilot/runner build` + 全局 bin 链接,README 一条命令);npm 发布(@agtpilot scope)列决策项。
+
+## 10. 里程碑与测试策略
+
+| 里程碑 | 内容 | 测试门禁 | 量级 |
+|---|---|---|---|
+| M1 协议+配对+在线 | protocol/runner.ts;pair/devices/tasks/events 路由;runner 骨架(pair/start/heartbeat);设备页 | 协议 normalize 纯函数测试;路由 vitest(鉴权/配对码过期/吊销 401);runner 单测(假 fetch) | 中 |
+| M2 任务包+执行+回流 | 任务包渲染器;卡片「派发到本地」+弹窗;ClaudeCodeAdapter(spawn+stream-json 解析);事件回流→Mission 卡 | 渲染器快照测试;**假 claude 二进制 fixture**(输出录制好的 stream-json,测解析/超时/失败分支,不依赖真 CLI);web 组件测试 | 中大 |
+| M3 审批闭环 | awaiting_approval→审批卡+Web Push→固化命令集下行→finishing 执行→PR 回流 | 状态机纯函数全路径测试;固化命令白名单校验测试(含注入畸形命令拒绝用例) | 中 |
+| M4 硬化 | 离线队列/TTL/断网重发幂等;redaction;审计视图;交接包兜底按钮;README/安装脚本 | redaction 用例库(密钥形态);事件幂等去重测试 | 中小 |
+
+既有门禁基线(web tsc+vitest / core / plugin-skill)全程保持全绿;runner 包新增自己的 vitest 套件进门禁清单。
+
+## 11. 威胁模型(诚实版)
+
+**能防**
+- prompt 注入劫持本地 agent 后对外作恶:Phase 1 工具白名单零对外副作用;push/PR 只有审批固化的命令集能触发,白名单外拒绝;
+- 伪造任务/事件:deviceSecret 认证 + server URL 配对时固定 + 每用户队列隔离;
+- 配对码钓鱼:5 分钟过期 + 一次性核销 + 云端 UI 展示设备 hostname 人工确认;
+- 代码/凭据外泄:数据最小化分级 + redaction + 凭据零上行零读取;
+- 跨用户串台:队列/事件/审批全按 userId 归属(既有 SSE 过滤锚点同款);
+- 失控执行:timeout + maxTurns + tree-kill + 单任务串行。
+
+**不能防(不夸大)**
+- runner 进程在用户机器上被本地恶意软件劫持 —— 同机信任边界,与 sandbox-control-hardening §3 的既有诚实声明一致;
+- Claude Code CLI 自身作恶或其权限门被绕过 —— 依赖 Anthropic 的产品安全,我们只保证不 skip-permissions、白名单最小化;
+- 用户批准了不该批的审批(审批卡展示 diffstat/测试尾部/命令集原文,降低但不消除误批);
+- redaction 正则未覆盖的新型密钥形态(根本缓解仍是「不读取、不上传文件内容」)。
+
+## 12. 决策项(待负责人拍板)
+
+1. **分发**:v1 仓内安装(推荐,先跑通)/ 直接发 npm @agtpilot scope;
+2. **workspaceRoot 默认值**:`~/agtpilot-workspace`(推荐,与个人工作区隔离)/ 用户现有 `~/dev`;
+3. **v1 执行器**:仅 Claude Code、接口留扩展(推荐)/ 同期做 Codex CLI 适配;
+4. **事件明细默认档**:standard(推荐:工具名+一行摘要+测试尾部+diffstat)/ minimal;
+5. **审批通道**:产品内审批卡 + Web Push(推荐;微信通道是运维侧,不做进产品)/ 需要另议;
+6. **认领留言代发**:PR 合并进 Phase 2 审批(勾选后 `gh issue comment` 进固化命令集)(推荐)/ v1 不做代发。

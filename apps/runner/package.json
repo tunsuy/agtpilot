@@ -5,18 +5,31 @@
   "description": "AgtPilot 本地薄 runner:接云端派发的贡献任务,调起本地 coding agent CLI(docs/design/local-runner-bridge.md)",
   "license": "MIT",
   "bin": {
-    "agtpilot-runner": "src/bin.ts"
+    "agtpilot-runner": "dist/bin.mjs"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },
-  "dependencies": {
-    "@agtpilot/protocol": "workspace:*"
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tunsuy/agtpilot.git",
+    "directory": "apps/runner"
   },
   "devDependencies": {
+    "@agtpilot/protocol": "workspace:*",
+    "esbuild": "^0.28.2",
     "vitest": "^3.2.4"
   },
   "scripts": {
-    "test": "vitest run"
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "prepublishOnly": "node scripts/build.mjs && vitest run"
   }
 }

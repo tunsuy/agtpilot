@@ -37,6 +37,14 @@ agtpilot-runner config                         # 工作区/凭据/审计/离线�
 
 (未安装包装命令时用 `pnpm --filter @agtpilot/runner exec tsx src/bin.ts <子命令>`。)
 
+### npm 发布构建(已就绪,待 org 注册)
+
+`pnpm --filter @agtpilot/runner build` → `dist/bin.mjs`:esbuild 单文件 bundle
+(协议包一并打入,**零运行时依赖**,只用 Node 内置模块;不 minify,保持可审计),
+package.json 的 bin/files/publishConfig 已按发布形态配置,`prepublishOnly`
+自动构建+跑测试。`npm pack --dry-run` 验证:3 文件 / 包体 ≈20KB。
+仓内开发路径(tsx 直跑 TS 源)不受影响。
+
 `start` 领取任务后:仓库 clone/fetch 到工作区(默认 `~/agtpilot-workspace`,
 `AGTPILOT_WORKSPACE_ROOT` 可覆写)→ 调起本地 `claude -p`(headless + stream-json,
 工具白名单固化:禁 git push / gh / 联网,永不使用 --dangerously-skip-permissions)→

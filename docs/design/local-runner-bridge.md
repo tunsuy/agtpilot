@@ -221,7 +221,7 @@ v1 仅 ClaudeCodeAdapter;Codex CLI / aider 适配器等接口消费者,协议与
 - `apps/runner`:新包 `@agtpilot/runner`,bin `agtpilot-runner`,子命令 `pair/start/stop/status/logs`;Node ≥ 20,依赖刻意薄(不装 app-kit/cordis —— 它不是 Agent,只是桥);
 - `packages/protocol/src/runner.ts`:协议类型与清洗函数(web 与 runner 共同依赖,单一事实源);
 - `apps/web`:lib/runner-bridge.ts + /api/runner/* 路由 + 设备页 + 卡片改造;
-- 分发(**已拍板 2026-10-13:发 npm**):正式渠道 `npm i -g @agtpilot/runner` 一条命令安装;仓内安装(`pnpm --filter @agtpilot/runner build` + bin 链接)保留为开发者路径。前置:注册 npmjs `@agtpilot` org(名字是否被占用,注册时才能确认;被占则退 `@agtpilothq` 等备选并在文档记录)。
+- 分发(**已拍板 2026-10-13:发 npm**):正式渠道 `npm i -g @agtpilot/runner` 一条命令安装;仓内安装(`pnpm --filter @agtpilot/runner build` + bin 链接)保留为开发者路径。前置:注册 npmjs `@agtpilot` org(名字是否被占用,注册时才能确认;被占则退 `@agtpilothq` 等备选并在文档记录)。**发布构建已就绪(2026-10-13)**:`apps/runner/scripts/build.mjs`(esbuild bundle → `dist/bin.mjs`,协议包一并打入、零运行时依赖、不 minify 保持可审计),package.json bin/files/publishConfig(access public)/prepublishOnly(build+test)已配齐;`npm pack --dry-run` = 3 文件 / 包体 ≈20KB;bundle 拷出仓外独立可跑(config/status/--help 冒烟通过)。**唯一剩余前置**:npmjs 凭据(负责人提供 access token)+ `@agtpilot` org 存在(CLI 建不了 org,需网页创建;被占则退 `@agtpilothq`)。
 - 版本兼容治理(发 npm 后成为硬约束):runner 在**配对与每次心跳**上报自身版本与协议版本;协议字段只增不改,破坏性变更走大版本号,云端对过旧版本拒绝派发并提示升级命令。
 
 ## 10. 里程碑与测试策略

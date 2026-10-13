@@ -118,3 +118,6 @@ export interface ModelStepResult {
     completionTokens: number;
   };
 }
+
+/** 本地 Runner 桥接协议(docs/design/local-runner-bridge.md §5):类型+清洗函数+状态机 */
+export * from './runner';

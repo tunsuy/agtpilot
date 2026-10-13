@@ -15,13 +15,14 @@ import {
   ExternalLink,
   Smartphone,
   Download,
+  MonitorSmartphone,
 } from 'lucide-react';
 import { Mission, ApprovalRequest, User } from '../types/agent';
 import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
-  activeView: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables';
-  onViewChange: (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => void;
+  activeView: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices';
+  onViewChange: (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices') => void;
   currentMission: Mission | null;
   connectedCount: number;
   memoryCount?: number;
@@ -215,6 +216,19 @@ export function Navbar({
               {connectedCount}
             </span>
           )}
+        </button>
+
+        <button
+          onClick={() => onViewChange('devices')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'devices'
+              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+          }`}
+          title="本地 Runner 设备(贡献任务派发到本地)"
+        >
+          <MonitorSmartphone className="h-3.5 w-3.5" />
+          <span>设备</span>
         </button>
       </nav>
 

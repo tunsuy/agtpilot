@@ -12,6 +12,7 @@ import { DeliverablesView } from '../components/DeliverablesView';
 import { MemoriesView } from '../components/MemoriesView';
 import { CronJobsView } from '../components/CronJobsView';
 import { GoalsView } from '../components/GoalsView';
+import { DevicesView } from '../components/DevicesView';
 import { AuthModal } from '../components/AuthModal';
 import { DownloadAppModal } from '../components/DownloadAppModal';
 import { useIsMobile } from '../components/mobile/useIsMobile';
@@ -41,7 +42,7 @@ import type { CronScenario } from '../lib/cron-scenario';
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
   const { isMobile, mounted: mobileReady } = useIsMobile();
-  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices'>('home');
   // 移动端专属状态：底部 tab + 全屏覆盖层（复用桌面视图做"更多"入口）
   const [mobileTab, setMobileTab] = useState<MobileTab>('home');
   const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'patrol' | 'workshops' | null>(null);
@@ -846,7 +847,7 @@ export default function Workspace() {
     };
   }, [session?.user?.id]);
 
-  const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables') => {
+  const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices') => {
     // 首页允许所有人浏览概览，其余页面（工作台、工坊、连接器、记忆库、巡航、交付库、长期目标）必须登录
     if (view !== 'home' && sessionStatus !== 'loading' && !session?.user) {
       setAuthModalTab('login');
@@ -1221,6 +1222,12 @@ export default function Workspace() {
                 onOpenCockpit={() => setActiveView('cockpit')}
                 onRunMission={handleRun}
               />
+            </main>
+          )}
+
+          {activeView === 'devices' && (
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
+              <DevicesView />
             </main>
           )}
         </div>

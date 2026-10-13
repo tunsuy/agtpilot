@@ -2,6 +2,7 @@
 
 - 日期: 2026-10-13
 - 状态: **定稿**(§12 全部决策项已于 2026-10-13 由负责人拍板;按 §10 里程碑 M1→M4 排期开工)
+- 进度: **M1 已落地**(2026-10-13):`packages/protocol/src/runner.ts`(35 测)、`/api/runner/{pair-code,pair,devices,tasks,events}` 路由、`apps/web/src/lib/runner-bridge.ts`(18 测)、`apps/runner` 骨架 pair/start 心跳/status(20 测)、设备页 `DevicesView`;npm org 注册 + 占位发布待负责人提供 npmjs 账号后进行
 - 前置阅读: `docs/design/sandbox-control-hardening.md`(围栏/审批/热更新模式)、`docs/design/workshop-scenario-loop.md`(场景档案)
 - 上游背景: 「开源贡献雷达」工坊(commit 980549a)已交付发现与调研环节;本文档补齐「动手」环节
 

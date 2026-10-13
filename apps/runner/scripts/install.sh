@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AgtPilot 本地 runner 安装脚本(仓内开发者路径;正式渠道 npm i -g @agtpilot/runner 待 npmjs org 注册后启用)。
+# AgtPilot 本地 runner 安装脚本(仓内开发者路径;正式渠道 npm i -g @agtpilot/runner 已发布)。
 # 用法: bash apps/runner/scripts/install.sh   [安装前缀可用 PREFIX 覆写,默认 ~/.local/bin]
 set -euo pipefail
 

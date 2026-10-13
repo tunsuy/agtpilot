@@ -23,7 +23,7 @@ AgtPilot 本地薄 runner:接云端派发的开源贡献任务,调起你本地�
 ## 使用(配对 → 心跳 → 领取执行)
 
 ```bash
-# 0.(仓内开发者路径)安装包装命令;正式渠道为 npm i -g @agtpilot/runner(org 注册后启用)
+# 0. 正式渠道:npm i -g @agtpilot/runner(0.0.1 已发布);仓内开发者路径如下
 bash apps/runner/scripts/install.sh          # 生成 ~/.local/bin/agtpilot-runner(需先 pnpm install)
 # 1. web 驾驶舱「设备」页 → 配对新 Runner → 得到 8 位配对码(5 分钟有效)
 # 2. 本地:
@@ -37,7 +37,7 @@ agtpilot-runner config                         # 工作区/凭据/审计/离线�
 
 (未安装包装命令时用 `pnpm --filter @agtpilot/runner exec tsx src/bin.ts <子命令>`。)
 
-### npm 发布构建(已就绪,待 org 注册)
+### npm 发布构建(0.0.1 已于 2026-10-13 发布至 @agtpilot org)
 
 `pnpm --filter @agtpilot/runner build` → `dist/bin.mjs`:esbuild 单文件 bundle
 (协议包一并打入,**零运行时依赖**,只用 Node 内置模块;不 minify,保持可审计),

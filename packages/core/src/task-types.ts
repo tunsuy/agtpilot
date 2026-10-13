@@ -44,6 +44,15 @@ export interface TaskOptions {
    * 每次返回一条(上层自行排队),抛错时内核静默跳过。
    */
   getStepNotice?: () => string | null | undefined | Promise<string | null | undefined>;
+  /**
+   * 任务执行中排队的用户追加消息(docs/design/mid-run-user-messages.md):
+   * 每步 prepareStep 前调用,返回非空字符串时内核把它作为一条
+   * 【用户追加消息】user 消息追加到本步消息末尾 —— 用户在任务进行中发的
+   * 追问不打断轮次,而是注入到正在跑的这一轮(steering)。多条由上层
+   * 合并成一条(对齐 Claude Code)。与 getStepNotice 同款拉取式通道,
+   * 抛错时内核静默跳过。
+   */
+  getUserMessages?: () => string | null | undefined | Promise<string | null | undefined>;
 }
 
 /** 单任务执行效率统计（识别"本该 2 步却跑了很多步"的空转任务） */

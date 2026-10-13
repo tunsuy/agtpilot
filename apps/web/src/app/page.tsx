@@ -15,6 +15,7 @@ import { GoalsView } from '../components/GoalsView';
 import { AuthModal } from '../components/AuthModal';
 import { DownloadAppModal } from '../components/DownloadAppModal';
 import { useIsMobile } from '../components/mobile/useIsMobile';
+import { findLiveStep } from '../lib/live-steps';
 import { MobileTabBar, MobileTab } from '../components/mobile/MobileTabBar';
 import { MobileHomeView } from '../components/mobile/MobileHomeView';
 import { MobileActivityView } from '../components/mobile/MobileActivityView';
@@ -459,14 +460,32 @@ export default function Workspace() {
       status: 'DONE' as const,
     };
     if (missionId && missions.some((m) => m.id === missionId)) {
-      setMissions((prev) =>
-        prev.map((m) =>
-          m.id === missionId
-            ? { ...m, status: 'ACTIVE', steps: [...m.steps, optimisticUserStep, optimisticLiveStep] }
-            : m
-        )
-      );
-      setActiveMissionId(missionId);
+      // 任务进行中的追问:后端只排队不打断(runInflight 在飞),前端同样
+      // 只追加置灰的排队气泡 —— 不再立「正在思考」占位,避免双 live step
+      // (这正是当初两轮交错把布局打乱的入口)。在飞判定:有 RUNNING live
+      // step,或轮内工具执行期 live step 暂关但 mission 仍 ACTIVE。服务器
+      // mission_updated 到达后按权威状态覆盖。
+      const target = missions.find((m) => m.id === missionId)!;
+      const inFlight = Boolean(findLiveStep(target)) || target.status === 'ACTIVE';
+      if (inFlight) {
+        setMissions((prev) =>
+          prev.map((m) =>
+            m.id === missionId
+              ? { ...m, status: 'ACTIVE', steps: [...m.steps, { ...optimisticUserStep, queued: true }] }
+              : m
+          )
+        );
+        setActiveMissionId(missionId);
+      } else {
+        setMissions((prev) =>
+          prev.map((m) =>
+            m.id === missionId
+              ? { ...m, status: 'ACTIVE', steps: [...m.steps, optimisticUserStep, optimisticLiveStep] }
+              : m
+          )
+        );
+        setActiveMissionId(missionId);
+      }
     } else {
       const localMission: Mission = {
         id: `mission_local_${Date.now()}`,

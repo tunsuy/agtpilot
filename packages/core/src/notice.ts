@@ -29,3 +29,23 @@ export function appendStepNotice(messages: any[], notice?: string | null): any[]
   const injected: StepNoticeMessage = { role: 'user', content: `${STEP_NOTICE_PREFIX}${text}` };
   return [...(messages || []), injected];
 }
+
+/**
+ * 用户追加消息前缀(docs/design/mid-run-user-messages.md):任务执行中用户
+ * 追问经 prepareStep 注入。与治理提示同样刻意区别于工具结果—— Claude Code
+ * 生产踩过排队消息紧贴 tool_result 被模型误读为工具输出的坑(#97575),
+ * 显式前缀 + user 角色双保险。
+ */
+export const USER_MESSAGE_PREFIX = '【用户追加消息】';
+
+/**
+ * 把任务执行中用户排队的追加消息作为 user 消息追加到末尾(不改原数组)。
+ * 与 appendStepNotice 同构:调用方在压缩之后调用,防被蒸馏;经 adjust.messages
+ * 进入循环状态后随 result.messages 落进会话历史,续聊不丢上下文。
+ */
+export function appendUserMessage(messages: any[], text?: string | null): any[] | null {
+  const content = typeof text === 'string' ? text.trim() : '';
+  if (!content) return null;
+  const injected: StepNoticeMessage = { role: 'user', content: `${USER_MESSAGE_PREFIX}${content}` };
+  return [...(messages || []), injected];
+}

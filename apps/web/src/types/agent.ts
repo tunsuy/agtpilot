@@ -60,6 +60,12 @@ export interface MissionStep {
   /** UI 语义：过程叙述归入任务活动流，只有 final/intervention 使用正式消息卡。 */
   messageKind?: 'progress' | 'final' | 'intervention';
   userPrompt?: string;
+  /**
+   * 排队中的追问(docs/design/mid-run-user-messages.md):任务进行中发的
+   * 消息先置灰显示「排队中」,不打断在飞轮次;prepareStep 边界注入或
+   * 轮末派发时由后端清除,气泡转正常色。
+   */
+  queued?: boolean;
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
   /** 工具步骤开始时间（用于计算真实耗时，替代旧的硬编码假值） */
   startedAt?: number;

@@ -583,12 +583,27 @@ export function CockpitView({
                   // ================= 1. 用户提问气泡 (轻量现代感带用户专属头像) =================
                   if (turn.type === 'user') {
                     const st = turn.step;
+                    // 排队中的追问:置灰 + 「排队中」提示(不打断在飞轮次,
+                    // 下一步注入或轮末派发时由后端清除转正)
+                    const isQueued = Boolean(st.queued);
                     return (
                       <div key={st.id} className="flex items-start justify-end gap-2.5 pt-2 group">
-                        <div className="max-w-[85%] rounded-2xl bg-zinc-900 text-zinc-50 px-4 py-2.5 shadow-sm text-xs leading-relaxed selection:bg-zinc-700">
+                        <div
+                          className={
+                            isQueued
+                              ? 'max-w-[85%] rounded-2xl bg-zinc-100 text-zinc-400 border border-zinc-200 px-4 py-2.5 shadow-sm text-xs leading-relaxed italic selection:bg-zinc-200'
+                              : 'max-w-[85%] rounded-2xl bg-zinc-900 text-zinc-50 px-4 py-2.5 shadow-sm text-xs leading-relaxed selection:bg-zinc-700'
+                          }
+                        >
                           <p className="whitespace-pre-wrap font-normal">
                             {st.userPrompt || st.title}
                           </p>
+                          {isQueued && (
+                            <p className="mt-1 text-[10px] not-italic text-zinc-400 flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              排队中，将在当前步骤完成后注入（不打断任务）
+                            </p>
+                          )}
                         </div>
                         {currentUser?.image ? (
                           <img

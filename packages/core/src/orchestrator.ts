@@ -15,7 +15,7 @@ import {
 } from './routing';
 import { messageText, truncateToolOutput, TOOL_OUTPUT_LIMIT } from './text';
 import { compactConversationMessages } from './compaction';
-import { appendStepNotice } from './notice';
+import { appendStepNotice, appendUserMessage } from './notice';
 import { ToolGate } from './tool-gate';
 import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
@@ -396,6 +396,19 @@ export class OrchestratorService extends Service {
               if (withNotice) adjust.messages = withNotice;
             } catch {
               // 治理提示获取失败不影响主流程
+            }
+          }
+          // 用户追加消息注入(压缩之后,与治理提示同一插入点):任务执行中
+          // 用户排队的追问在此进入本轮上下文,模型下一步即见(docs/design/
+          // mid-run-user-messages.md)。注入的消息经 adjust.messages 进入循环
+          // 状态,随 result.messages 落进会话历史,续聊不丢
+          if (options.getUserMessages) {
+            try {
+              const userText = await options.getUserMessages();
+              const withUser = appendUserMessage(adjust.messages ?? messages, userText);
+              if (withUser) adjust.messages = withUser;
+            } catch {
+              // 追加消息获取失败不影响主流程(消息仍在队列里,下步重试)
             }
           }
           // 检查点采用本步实际使用的消息（含压缩重写与治理提示注入）

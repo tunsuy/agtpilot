@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { appendStepNotice, STEP_NOTICE_PREFIX } from './notice';
+import { appendStepNotice, appendUserMessage, STEP_NOTICE_PREFIX, USER_MESSAGE_PREFIX } from './notice';
 
 describe('appendStepNotice', () => {
   it('空提示返回 null(调用方跳过注入)', () => {
@@ -40,5 +40,44 @@ describe('appendStepNotice', () => {
     const next = appendStepNotice(undefined as any, '治理事件');
     expect(next!.length).toBe(1);
     expect(next![0].role).toBe('user');
+  });
+});
+
+/** 用户追加消息注入(docs/design/mid-run-user-messages.md):
+ *  任务进行中的追问经 prepareStep 注入 —— 前缀 + user 角色是与工具
+ *  结果区分的双保险(Claude Code 生产踩过排队消息被误读为工具输出的坑) */
+describe('appendUserMessage', () => {
+  it('空消息返回 null(队列无消息时内核跳过,消息数组保持原样)', () => {
+    const messages = [{ role: 'user', content: 'hi' }];
+    expect(appendUserMessage(messages, null)).toBeNull();
+    expect(appendUserMessage(messages, undefined)).toBeNull();
+    expect(appendUserMessage(messages, '')).toBeNull();
+    expect(appendUserMessage(messages, '  \n ')).toBeNull();
+  });
+
+  it('排队消息以【用户追加消息】前缀的 user 消息追加到末尾', () => {
+    const messages = [
+      { role: 'user', content: '查一下 ai 最新发展' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'search_web', input: {} }] },
+      { role: 'tool', content: '搜索结果…' },
+    ];
+    // 上层已把多条排队消息合并成一条(\n\n 拼接,对齐 Claude Code)
+    const merged = '卡住了吗\n\n顺便也查下融资动态';
+    const next = appendUserMessage(messages, merged);
+    expect(next).not.toBeNull();
+    expect(next!.length).toBe(4);
+    expect(next![3]).toEqual({
+      role: 'user',
+      content: `${USER_MESSAGE_PREFIX}${merged}`,
+    });
+    // 前缀必须区别于治理提示,两者可能同帧注入
+    expect(USER_MESSAGE_PREFIX).not.toBe(STEP_NOTICE_PREFIX);
+  });
+
+  it('不修改原消息数组(不可变追加),空白被裁剪', () => {
+    const messages = [{ role: 'user', content: 'hi' }];
+    const next = appendUserMessage(messages, '  追问内容  ');
+    expect(messages.length).toBe(1);
+    expect(next![1].content).toBe(`${USER_MESSAGE_PREFIX}追问内容`);
   });
 });

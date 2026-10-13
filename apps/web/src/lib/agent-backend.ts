@@ -44,11 +44,19 @@ class AgentBackend {
   private activeAbortControllers: Map<string, AbortController> = new Map();
   /**
    * 同任务并发护栏(missionId → 在飞轮次的落地 Promise):
-   * 续聊追问打进一个还在跑的任务时,先 abort 旧轮,新轮 IIFE 开跑前
-   * await 旧轮完全落地 —— 两轮步骤绝不交错写入同一 mission(否则 steps
-   * 顺序错乱、UI 布局乱掉),旧轮 finally 也不会误删新轮的把手。
+   * 用于「在飞判定」——runMission 据此把任务进行中的追问转入排队注入
+   * (steering)而不是打断重跑;finally 里按身份比对删除,保证 stopMission
+   * 打断后的收尾语义正确。
    */
   private runInflight: Map<string, Promise<void>> = new Map();
+  /**
+   * 任务进行中的用户追加消息队列(missionId → 消息原文数组,
+   * docs/design/mid-run-user-messages.md §3.1):在飞轮次收到追问时只排队
+   * 不打断,runTask 的 getUserMessages 通道在每步 prepareStep 前拉取合并
+   * 注入;轮末仍有剩余则自动派发续聊兜底。stopMission 清空(用户主动终止
+   * 语义强于排队发送)。
+   */
+  private queuedUserInputs: Map<string, string[]> = new Map();
   /** 已挂进调度池的 cron 任务：jobId → 归属用户（调度本体在 plugin-cron 的 CronService） */
   private activeCronJobs: Map<string, { userId: string; name?: string }> = new Map();
   private cronSchedulerInitialized = false;
@@ -174,9 +182,11 @@ class AgentBackend {
           if (m.status === 'ACTIVE' || m.status === 'WAITING_APPROVAL' || m.status === 'QUEUED') {
             m.status = 'INTERRUPTED';
             if (Array.isArray(m.steps)) {
-              // 中断时 RUNNING 的步骤（含流式 live step）一并标 FAILED，不留僵尸"执行中"
+              // 中断时 RUNNING 的步骤（含流式 live step）一并标 FAILED，不留僵尸"执行中"；
+              // 排队中的追问气泡转正（内存队列已随进程消失，不再显示"排队中"）
               m.steps.forEach((st: any) => {
                 if (st.status === 'RUNNING') st.status = 'FAILED';
+                if (st.queued) delete st.queued;
               });
               m.steps.push({
                 id: `step_intr_${Date.now()}`,
@@ -970,6 +980,11 @@ class AgentBackend {
     // 清掉未广播的流式增量缓冲（残段丢弃，任务即将终止）
     this.flushDeltas(missionId);
 
+    // 排队的追加消息一并清空:用户主动终止语义强于排队发送,不清会在
+    // 轮末兜底里诈尸(队列残留触发无人消费的续聊派发);排队气泡转正
+    // 显示(灰 → 正常),不再挂「排队中」
+    this.queuedUserInputs.delete(missionId);
+
     const controller = this.activeAbortControllers.get(missionId);
     if (controller) {
       controller.abort();
@@ -992,6 +1007,7 @@ class AgentBackend {
     const mission = this.state.missions.find((m) => m.id === missionId);
     if (mission && mission.status !== 'DONE') {
       mission.status = 'DONE';
+      this.clearQueuedStepFlags(mission);
       mission.steps.forEach((st) => {
         if (st.status === 'RUNNING' || st.status === 'PENDING') {
           st.status = 'FAILED';
@@ -1013,10 +1029,12 @@ class AgentBackend {
       controller.abort();
     }
     this.activeAbortControllers.clear();
+    this.queuedUserInputs.clear();
 
     this.state.missions.forEach((m) => {
       if (m.status !== 'DONE') {
         m.status = 'DONE';
+        this.clearQueuedStepFlags(m);
         m.steps.forEach((st) => {
           if (st.status === 'RUNNING' || st.status === 'PENDING') {
             st.status = 'FAILED';
@@ -1035,7 +1053,10 @@ class AgentBackend {
     this.addTerminalLog('system', '[System] All active missions terminated upon logout/reset.');
   }
 
-  public async runMission(goal: string, options: { title?: string; userId?: string; missionId?: string } = {}): Promise<Mission> {
+  public async runMission(
+    goal: string,
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean } = {}
+  ): Promise<Mission> {
     await this.ensureRuntime();
 
     // 续聊目标定位：内存 → 持久化库回水（重启后内存为空，但磁盘上的
@@ -1059,51 +1080,58 @@ class AgentBackend {
       }
     }
 
-    // 旧轮落地 Promise:新轮 IIFE 开跑前 await 它(两轮步骤绝不交错);
-    // 若旧轮控制器已丢(正在自然收尾),只排队不 abort
-    let prevRunToAwait: Promise<void> | undefined;
-    if (targetMission) {
-      // 并发护栏(须在下方 ensureLiveStep 之前):上一轮还在跑时(用户追问
-      // 打断),按 stopMission 的收尾口径关掉旧轮的流式残留再 abort 控制器。
-      // 先关 live step 至关重要 —— ensureLiveStep 会复用 RUNNING 的 live
-      // step,不先关掉会让两轮共用同一占位步骤串台。
-      const prevRun = this.runInflight.get(targetMission.id);
-      const prevController = prevRun ? this.activeAbortControllers.get(targetMission.id) : undefined;
-      if (prevRun) {
-        prevRunToAwait = prevRun;
-        if (prevController) {
-          this.flushDeltas(targetMission.id);
-          closeLiveStep(targetMission, { status: 'FAILED', finalTitle: '已被新追问打断' });
-          targetMission.steps.forEach((st) => {
-            if (st.status === 'RUNNING' || st.status === 'PENDING') {
-              st.status = 'FAILED';
-            }
-          });
-          prevController.abort();
-          // 拒绝旧轮挂起的人机协同审批(只清本任务的),终止后不残留授权弹窗
-          const guardMissionId = targetMission.id;
-          const pendingApprovals = this.state.approvalRequests.filter((r) => r.taskId === guardMissionId);
-          for (const req of pendingApprovals) {
-            try {
-              this.orchestrator?.submitApproval(req.id, false);
-            } catch {
-              // ignore
-            }
-            this.broadcast({ type: 'approval_resolved', data: { approvalId: req.id } });
-            this.state.approvalRequests = this.state.approvalRequests.filter((r) => r.id !== req.id);
-          }
-        }
-      }
-
-      targetMission.status = 'ACTIVE';
-      targetMission.progress = 10;
+    // 任务进行中的追问 → 只排队,不打断(docs/design/mid-run-user-messages.md):
+    // 在飞轮次仍在消耗已搜到的资料与推理,abort 重跑既作废工作又答非所问
+    // (「卡住了吗」是问状态,不是想推翻原任务)。排队消息经 runTask 的
+    // getUserMessages 通道在下一步 prepareStep 边界注入本轮(steering),
+    // 真打断由「停止」按钮负责。
+    if (targetMission && this.runInflight.has(targetMission.id)) {
+      const queue = this.queuedUserInputs.get(targetMission.id) || [];
+      queue.push(goal);
+      this.queuedUserInputs.set(targetMission.id, queue);
       targetMission.steps.push({
         id: `step_${Date.now()}`,
         role: 'user',
         title: goal,
         userPrompt: goal,
+        queued: true, // 前端置灰「排队中」,注入或轮末派发时清除
         status: 'DONE',
       });
+      this.state.activeMissionId = targetMission.id;
+      this.broadcast({ type: 'mission_updated', data: targetMission });
+      this.addTerminalLog(
+        'system',
+        `[Steering] 任务进行中收到追加消息,已排队等待在下一步注入(不打断当前轮)`,
+        targetMission.userId
+      );
+      if (targetMission.userId) {
+        try {
+          const { saveUserMission } = await import('@/lib/user-store');
+          saveUserMission(targetMission.userId, targetMission);
+        } catch {
+          // 落盘失败不影响排队,轮末检查点会再存
+        }
+      }
+      return targetMission;
+    }
+
+    if (targetMission) {
+      targetMission.status = 'ACTIVE';
+      targetMission.progress = 10;
+      // 轮末兜底派发的续聊走 skipUserStep:排队气泡已在会话流里,
+      // 再推一条用户步骤会重复;正常续聊(用户手动发)照常推
+      if (!options.skipUserStep) {
+        targetMission.steps.push({
+          id: `step_${Date.now()}`,
+          role: 'user',
+          title: goal,
+          userPrompt: goal,
+          status: 'DONE',
+        });
+      } else {
+        // 排队气泡转正(灰 → 正常色),这轮就是去消费它们的
+        this.clearQueuedStepFlags(targetMission);
+      }
       this.state.activeMissionId = targetMission.id;
       // 派发即点亮「正在思考」live step：续聊场景下用户气泡与思考占位
       // 同帧到达，记忆构建/压缩/首轮模型调用等静默窗口不再像卡死
@@ -1160,15 +1188,9 @@ class AgentBackend {
     // 异步执行任务生命周期(let 先声明:finally 里按身份比对在飞标记)
     let runPromise: Promise<void> | undefined;
     runPromise = (async () => {
+      // 本轮是否正常落地(成功答复)——轮末兜底是否派发续聊的判据
+      let roundLanded = false;
       try {
-        // 串行化:等被打断的旧轮完全落地(含其 finally 清理)再开跑,两轮
-        // 步骤绝不交错写入同一 mission;30s 兜底防旧轮异常悬挂拖死新轮
-        if (prevRunToAwait) {
-          await Promise.race([
-            prevRunToAwait.catch(() => {}),
-            new Promise<void>((resolve) => setTimeout(resolve, 30_000)),
-          ]);
-        }
 
         // 1. 注入当前登录用户专属沉淀的长效记忆与画像：
         // 执行红线(rule)全量注入,其余按与本次任务目标的相关性排序 + 条数/字符预算截断
@@ -1547,11 +1569,15 @@ class AgentBackend {
             taskSandbox,
             // 回退弧感知通道:每步 prepareStep 前取一条排队的治理提示注入
             getStepNotice: () => this.taskRuntimes.get(targetMission.id)?.notices.shift() ?? null,
+            // 用户追加消息通道(同款拉取式):任务进行中排队的追问在此
+            // 合并注入本轮 —— 追问不打断轮次,而是调整它的方向(steering)
+            getUserMessages: () => this.drainQueuedUserInputs(targetMission),
             system: buildTaskSystemPrompt(userMemoryPrompt),
           });
 
           if (result.success && result.messages) {
             targetMission.conversationMessages = result.messages;
+            roundLanded = true;
             this.broadcast({ type: 'mission_updated', data: targetMission });
           }
 
@@ -1667,8 +1693,9 @@ class AgentBackend {
             })();
           }
 
-          // 并发护栏:本轮已被更新的追问打断(controller 被换掉)时,任务
-          // 归新轮接管 —— 不改状态、不收 live step、不补错误步骤
+          // 并发护栏:本轮已被停止(controller 被 abort/换掉)时,收尾
+          // 不改状态、不收 live step、不补错误步骤(stopMission 已按自己的
+          // 口径处理过步骤/live step)
           const superseded = () => this.activeAbortControllers.get(targetMission.id) !== abortController;
 
           if (!result.success && result.error && !superseded()) {
@@ -1700,9 +1727,9 @@ class AgentBackend {
           this.addTerminalLog('stderr', '[Config Required] 当前用户未配置大模型 API Key。请前往顶部「连接器」添加自定义 OpenAI、DeepSeek 或中转站 Key。', options.userId);
         }
       } catch (err: any) {
-        // 并发护栏:被新追问打断导致的 AbortError 走这里 —— 本轮已收尾
-        // (runMission 打断时按 stopMission 口径处理过步骤/live step),
-        // 不再改任务状态、不补错误步骤,任务归新轮接管
+        // 并发护栏:被停止导致的 AbortError 走这里 —— 本轮已收尾
+        // (stopMission 已按自己的口径处理过步骤/live step),不再改任务
+        // 状态、不补错误步骤
         if (this.activeAbortControllers.get(targetMission.id) === abortController) {
           targetMission.status = 'DONE';
           // 同上:预编排阶段(记忆构建/配置加载等)抛错时收掉思考占位
@@ -1716,7 +1743,8 @@ class AgentBackend {
           this.broadcast({ type: 'mission_updated', data: targetMission });
         }
       } finally {
-        // 身份比对删除:旧轮的收尾不得误删新轮登记的把手/控制器/在飞标记
+        // 身份比对删除:本轮收尾只删自己登记的把手/控制器/在飞标记,
+        // 不误删后续轮次(轮末兜底可能紧接着派发的新轮)
         if (this.activeAbortControllers.get(targetMission.id) === abortController) {
           this.activeAbortControllers.delete(targetMission.id);
         }
@@ -1726,11 +1754,58 @@ class AgentBackend {
         if (this.runInflight.get(targetMission.id) === runPromise) {
           this.runInflight.delete(targetMission.id);
         }
+
+        // 轮末兜底:注入通道没来得及消费的追加消息(典型:最终答复流式
+        // 期间收到追问,后面没有 prepareStep 边界了),合并成一条自动派发
+        // 一轮续聊把它们发出去 —— 对齐 Claude Code 的「轮末自动发出」。
+        // 仅在本轮正常落地时派发;失败/被停止(stop 已清队列)不派发,
+        // 失败轮次的追问留给用户看到错误后自行重发。
+        // 注意顺序:须在上方 runInflight 删除之后,派发的新轮才不会被
+        // runMission 的在飞判定误当在飞轮次再次排队。
+        const leftover = roundLanded ? this.queuedUserInputs.get(targetMission.id) : undefined;
+        if (leftover && leftover.length > 0) {
+          this.queuedUserInputs.delete(targetMission.id);
+          const merged = leftover.join('\n\n');
+          // 排队气泡已可见,skipUserStep 免得重复推用户步骤
+          void this.runMission(merged, {
+            userId: targetMission.userId,
+            missionId: targetMission.id,
+            skipUserStep: true,
+          });
+        }
       }
     })();
     this.runInflight.set(targetMission.id, runPromise);
 
     return targetMission;
+  }
+
+  /**
+   * getUserMessages 通道的取数回调(runTask 每步 prepareStep 前调用):
+   * 取走该任务当前排队的全部追加消息,合并成一条(多条 \n\n 拼接,
+   * 对齐 Claude Code),同时把对应排队气泡转正(清 queued 标记)。
+   * 空队列返回 null —— 内核据此跳过,消息数组保持原样。
+   */
+  private drainQueuedUserInputs(mission: Mission): string | null {
+    const queued = this.queuedUserInputs.get(mission.id);
+    if (!queued || queued.length === 0) return null;
+    this.queuedUserInputs.delete(mission.id);
+    this.clearQueuedStepFlags(mission);
+    this.broadcast({ type: 'mission_updated', data: mission });
+    this.addTerminalLog('system', `[Steering] 已注入用户追加消息 ${queued.length} 条`, mission.userId);
+    return queued.join('\n\n');
+  }
+
+  /** 清掉 mission 里排队气泡的 queued 标记(注入或轮末派发时转正) */
+  private clearQueuedStepFlags(mission: Mission) {
+    let touched = false;
+    for (const st of mission.steps) {
+      if (st.queued) {
+        delete st.queued;
+        touched = true;
+      }
+    }
+    return touched;
   }
 
   public initCronScheduler() {

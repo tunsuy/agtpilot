@@ -101,6 +101,9 @@ export async function runTask(
     if (ev.kind === 'tool') {
       push('progress', { kind: 'tool', tool: ev.tool, summary: ev.summary });
       log(`· ${ev.tool} ${ev.summary}`);
+    } else if (ev.kind === 'result') {
+      // result 事件无 summary 字段(终稿正文不进事件流,数据最小化);只报成败标志
+      push('progress', { kind: 'result', isError: ev.isError });
     } else {
       push('progress', { kind: ev.kind, summary: ev.summary });
     }

@@ -97,6 +97,7 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
     const outcome = await runHeartbeatLoop({
       intervalMs,
       shouldStop: () => stopped,
+      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       tick: async () => {
         const r = await pollTick(client, log, { claim: true });
         if (r.outcome === 'ok' && r.actions.length > 0) {

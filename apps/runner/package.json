@@ -1,6 +1,6 @@
 {
   "name": "@agtpilot/runner",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "description": "AgtPilot 本地薄 runner:接云端派发的贡献任务,调起本地 coding agent CLI(docs/design/local-runner-bridge.md)",
   "license": "MIT",
@@ -24,12 +24,15 @@
   },
   "devDependencies": {
     "@agtpilot/protocol": "workspace:*",
+    "@types/node": "^20.0.0",
     "esbuild": "^0.28.2",
+    "typescript": "^5.7.0",
     "vitest": "^3.2.4"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "node scripts/build.mjs && vitest run"
+    "prepublishOnly": "node scripts/build.mjs && tsc --noEmit && vitest run"
   }
 }

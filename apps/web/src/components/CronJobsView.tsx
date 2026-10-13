@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { CronJobItem } from '../types/agent';
 import { formatCronNextRun, isValidCronPattern } from '@/lib/cron-utils';
-import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/prompt';
+import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
 import { buildOssRadarPrompt } from '@/workshops/oss_radar/prompt';
 import type { CronScenario } from '@/lib/cron-scenario';
 

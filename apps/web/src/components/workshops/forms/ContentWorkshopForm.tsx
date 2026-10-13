@@ -7,9 +7,9 @@
  */
 import { useEffect, useState } from 'react';
 import { CalendarClock, Lightbulb, Loader2, Smartphone } from 'lucide-react';
-import { XHS_WORKSHOP_STYLES, buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/prompt';
+import { XHS_WORKSHOP_STYLES, buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
 import { WEIBO_WORKSHOP_STYLES } from '@/workshops/weibo/context';
-import { VIDEO_SCRIPT_DURATIONS } from '@/workshops/video/prompt';
+import { VIDEO_SCRIPT_DURATIONS } from '@/workshops/video/context';
 import {
   findLatestTopicPicks,
   hasRunningTopicMission,

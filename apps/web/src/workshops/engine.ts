@@ -82,7 +82,11 @@ function assertOwnLine(template: string, t: Token, directive: string): void {
 export function renderTemplate(template: string, vars: TemplateVars): string {
   // .md 文件按惯例以单个换行结尾;提示词输出不带尾换行(旧构建器语义),剥掉一层。
   // 需要输出尾换行的模板,文件结尾留两个换行即可。
-  const src = template.replace(/\n$/, '');
+  // 条件块体的递归渲染走 renderBody(不剥层)——块体不是文件,不能重复规范化。
+  return renderBody(template.replace(/\n$/, ''), vars);
+}
+
+function renderBody(src: string, vars: TemplateVars): string {
   const tokens = tokenize(src);
   let out = '';
   // 条件块把 {{/if}} 行尾换行一并消费;相邻的下一个文本 token 需让出这个换行
@@ -128,7 +132,7 @@ export function renderTemplate(template: string, vars: TemplateVars): string {
       const branchEnd = truthy ? (elseIdx === -1 ? tokens[j].start : tokens[elseIdx].start) : tokens[j].start;
       const body = branchStart === -1 ? '' : src.slice(branchStart, branchEnd).replace(/^\n/, '').replace(/\n$/, '');
       if (body) {
-        const rendered = renderTemplate(body, vars);
+        const rendered = renderBody(body, vars);
         if (rendered) {
           out += rendered;
           if (tokens[j].end < src.length) out += '\n';

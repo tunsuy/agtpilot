@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildXhsWorkshopPrompt } from '../prompt';
+import { buildXhsWorkshopPrompt } from '../context';
 import { normalizeScenarioProfile } from '@/lib/scenario-profile';
 
 const profileInput = {

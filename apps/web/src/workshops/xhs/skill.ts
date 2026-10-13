@@ -4,7 +4,7 @@
  * cron 每周选题场景的 buildXhsWeeklyTopicsPrompt 也在其中,cron-scenario 直接引用)。
  */
 import { Share2 } from 'lucide-react';
-import { buildXhsWorkshopPrompt } from './prompt';
+import { buildXhsWorkshopPrompt } from './context';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

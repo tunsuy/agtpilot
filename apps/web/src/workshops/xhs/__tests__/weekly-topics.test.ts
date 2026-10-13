@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildXhsWeeklyTopicsPrompt } from '../prompt';
+import { buildXhsWeeklyTopicsPrompt } from '../context';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
 
 const profile: ScenarioProfile = {

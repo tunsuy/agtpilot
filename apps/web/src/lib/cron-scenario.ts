@@ -5,7 +5,7 @@
  * 用户改档案后,下一次触发自动用最新档案重建 —— 避免订阅里的 prompt 快照过期。
  * 普通任务(用户手输 prompt)不受影响,原样返回。
  */
-import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/prompt';
+import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
 import { buildOssRadarPrompt } from '@/workshops/oss_radar/prompt';
 import type { ScenarioProfile } from './scenario-profile';
 

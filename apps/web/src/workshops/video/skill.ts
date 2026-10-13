@@ -3,7 +3,7 @@
  * 双平台共用 prompt.ts 的一套脚本结构,差异在 PLATFORM_NOTES;两个 id 各自装配 skill。
  */
 import { Video, Tv } from 'lucide-react';
-import { buildVideoScriptPrompt, type VideoPlatformId } from './prompt';
+import { buildVideoScriptPrompt, type VideoPlatformId } from './context';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 

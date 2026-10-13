@@ -68,6 +68,12 @@ describe('renderTemplate · 条件块行语义', () => {
     expect(renderTemplate(t, { profile: '' })).toBe('尾行');
   });
 
+  it('块内保留空行(多值内容自身带尾换行的拼接形态)', () => {
+    const t = 'A\n{{#if f}}\n{{body}}\n\n{{/if}}\nC\n';
+    expect(renderTemplate(t, { f: true, body: 'B' })).toBe('A\nB\n\nC');
+    expect(renderTemplate(t, { f: false, body: 'B' })).toBe('A\nC');
+  });
+
   it('块在文件开头', () => {
     expect(renderTemplate('{{#if f}}\nB\n{{/if}}\nC\n', { f: true })).toBe('B\nC');
     expect(renderTemplate('{{#if f}}\nB\n{{/if}}\nC\n', { f: false })).toBe('C');

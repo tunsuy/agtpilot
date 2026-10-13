@@ -3,19 +3,25 @@
 /**
  * 开源贡献机会卡片(开源贡献雷达工坊交付物)
  *
- * 把 parseOssOpportunities 的结构化结果渲染成「可直达、可复制」的机会卡:
+ * 把 parseOssOpportunities 的结构化结果渲染成「可直达、可复制、可派发」的机会卡:
  * 项目 + 类型/难度徽章 + 简介 + Issue 直达链接(新标签打开)+ 匹配点 + 第一步。
- * 纯只读展示——工坊红线是全程只读,卡片上没有任何写操作入口;
- * 「复制整条」把机会摘要粘进笔记/聊天,「起草认领留言」引导到任务聊天里续聊(发送前经审批)。
+ *
+ * 工坊本身红线是全程只读(检索/解析不改任何东西);卡片上的两个动作都不越线:
+ * - 「复制交接包」:T0 人工降级路径,粘进任意本地 coding agent 会话人工干;
+ * - 「派发到本地」:入用户任务队列,由本地 runner 驱动用户自己的 claude CLI 执行
+ *   Phase 1(只修 Issue、禁 push/禁网),push/PR 走云端审批门(M3)——发布永远人工。
+ * 状态徽章从 /api/runner/tasks/mine 回流(queued→…→done/failed),按 Issue 链接匹配。
  */
-import React, { useState } from 'react';
-import { Copy, Check, Radar, ChevronDown, ExternalLink } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Copy, Check, Radar, ChevronDown, ExternalLink, Send, MonitorSmartphone } from 'lucide-react';
 import { copyToClipboard } from '../../utils/nativeBridge';
 import {
   buildOssOpportunityCopyText,
   type OssOpportunity,
   type OssOpportunityParseResult,
 } from '../../lib/oss-opportunities';
+import { handoffPackFor, pickIssueUrl, type RunnerTaskSummary } from '../../lib/runner-dispatch';
+import { DispatchRunnerModal } from './DispatchRunnerModal';
 
 /** 单字段复制按钮:成功打勾、失败明示,不静默假成功(与笔记包卡同款) */
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -51,8 +57,56 @@ function difficultyClass(difficulty: string): string {
   return 'bg-zinc-50 text-zinc-600 border-zinc-200';
 }
 
-function OssOpportunityCard({ opp }: { opp: OssOpportunity }) {
+/** 任务状态徽章(M2 事件回流):状态机 9 态 → 用户话术;failed 悬浮看原因;done 附 PR 直达 */
+const TASK_STATE_META: Record<string, { label: string; cls: string }> = {
+  queued: { label: '已派发 · 排队中', cls: 'bg-zinc-50 text-zinc-600 border-zinc-200' },
+  dispatched: { label: '已被 runner 领取', cls: 'bg-sky-50 text-sky-700 border-sky-100' },
+  running: { label: '本地执行中', cls: 'bg-sky-50 text-sky-700 border-sky-100' },
+  awaiting_approval: { label: '待云端审批', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  finishing: { label: '发布执行中', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  done: { label: '完成', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  failed: { label: '失败', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  cancelled: { label: '已取消', cls: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+  expired: { label: '已过期', cls: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+};
+
+function TaskStateBadge({ task }: { task: RunnerTaskSummary }) {
+  const meta = TASK_STATE_META[task.state] ?? { label: task.state, cls: 'bg-zinc-50 text-zinc-600 border-zinc-200' };
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${meta.cls} min-w-0`}
+      title={task.state === 'failed' && task.error ? task.error : `任务 ${task.taskId} · 分支 ${task.workBranch}`}
+    >
+      <MonitorSmartphone className="h-3 w-3 shrink-0" />
+      <span className="truncate">{meta.label}</span>
+      {task.state === 'done' && task.prUrl && (
+        <a
+          href={task.prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          PR
+        </a>
+      )}
+    </span>
+  );
+}
+
+function OssOpportunityCard({
+  opp,
+  task,
+  onDispatch,
+}: {
+  opp: OssOpportunity;
+  /** 该机会最近一次派发任务(按 Issue 链接匹配;无则不显示徽章) */
+  task?: RunnerTaskSummary | null;
+  /** 打开派发弹窗;不可派发(项目名/链接不合规)时不传,卡片回到纯只读 */
+  onDispatch?: () => void;
+}) {
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const handoff = useMemo(() => handoffPackFor(opp), [opp]);
 
   const handleCopyAll = async () => {
     const ok = await copyToClipboard(buildOssOpportunityCopyText(opp));
@@ -153,23 +207,84 @@ function OssOpportunityCard({ opp }: { opp: OssOpportunity }) {
             <span className="break-words">{opp.firstStep}</span>
           </div>
         )}
+
+        {/* 派发动作行:状态徽章 + 复制交接包(T0 降级)+ 派发到本地(M2) */}
+        {(handoff || task) && (
+          <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-zinc-100">
+            <div className="min-w-0">{task ? <TaskStateBadge task={task} /> : <span />}</div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {handoff && <CopyButton text={handoff} label="复制交接包" />}
+              {handoff && onDispatch && (
+                <button
+                  type="button"
+                  onClick={onDispatch}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-sky-200 bg-sky-50 text-sky-700 text-[11px] font-medium hover:bg-sky-100 transition"
+                  title="任务入队,由你本地 runner 驱动 claude CLI 执行;push/PR 走云端审批"
+                >
+                  <Send className="h-3 w-3" />
+                  派发到本地
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-/** 机会列表:多卡垂直堆叠 + 尾部「其他输出内容」折叠(fallback 不丢检索时间/数据源说明) */
+/** 机会列表:多卡垂直堆叠 + 派发弹窗 + 任务状态回流 + 尾部「其他输出内容」折叠 */
 export function OssOpportunityList({ result }: { result: OssOpportunityParseResult }) {
   const [showFallback, setShowFallback] = useState(false);
+  const [tasks, setTasks] = useState<RunnerTaskSummary[]>([]);
+  const [dispatchOpp, setDispatchOpp] = useState<OssOpportunity | null>(null);
+
+  const refreshTasks = useCallback(async () => {
+    try {
+      const r = await fetch('/api/runner/tasks/mine');
+      const j = await r.json();
+      if (j?.success && Array.isArray(j.tasks)) setTasks(j.tasks as RunnerTaskSummary[]);
+    } catch {
+      /* 状态徽章是增强信息,拉取失败不打扰工坊主流程 */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshTasks();
+    const timer = setInterval(refreshTasks, 15000); // 客户端轮询(与 DevicesView 同款,无常驻服务)
+    return () => clearInterval(timer);
+  }, [refreshTasks]);
+
+  // tasks 新→旧排序(runner-bridge 保证),find 即取该 Issue 最近一次派发
+  const taskFor = (opp: OssOpportunity): RunnerTaskSummary | null => {
+    const url = pickIssueUrl(opp.links);
+    return url ? (tasks.find((t) => t.issueUrl === url) ?? null) : null;
+  };
 
   return (
     <div className="space-y-3">
       {result.opportunities.map((opp) => (
-        <OssOpportunityCard key={`${opp.number}-${opp.project}`} opp={opp} />
+        <OssOpportunityCard
+          key={`${opp.number}-${opp.project}`}
+          opp={opp}
+          task={taskFor(opp)}
+          onDispatch={() => setDispatchOpp(opp)}
+        />
       ))}
       <p className="text-[10px] text-zinc-400 leading-relaxed">
-        想贡献哪条:链接直达 Issue 人工核对;也可在任务里让 Agent 起草认领留言或 PR 描述——发送前逐条经你审批,代码由你本地动手。
+        想贡献哪条:「派发到本地」交给你自己的 runner + claude CLI 干 Phase 1(只修 Issue、禁
+        push/禁网),push/PR 走云端审批;「复制交接包」随时可人工接管——发送前逐条经你审批,发布永远人工。
       </p>
+      {dispatchOpp && (
+        <DispatchRunnerModal
+          opp={dispatchOpp}
+          onClose={() => setDispatchOpp(null)}
+          onDispatched={() => {
+            setDispatchOpp(null);
+            refreshTasks();
+          }}
+        />
+      )}
       {result.fallback && (
         <div className="rounded-xl border border-zinc-200 overflow-hidden">
           <button

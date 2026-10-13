@@ -3,6 +3,7 @@
 - 日期: 2026-10-13
 - 状态: **定稿**(§12 全部决策项已于 2026-10-13 由负责人拍板;按 §10 里程碑 M1→M4 排期开工)
 - 进度: **M1 已落地**(2026-10-13):`packages/protocol/src/runner.ts`(35 测)、`/api/runner/{pair-code,pair,devices,tasks,events}` 路由、`apps/web/src/lib/runner-bridge.ts`(18 测)、`apps/runner` 骨架 pair/start 心跳/status(20 测)、设备页 `DevicesView`;npm org 注册 + 占位发布待负责人提供 npmjs 账号后进行
+- 进度: **M2 已落地**(2026-10-13):任务包渲染器 `packages/protocol/src/runner-taskpack.ts`(renderTaskPrompt/renderHandoffPack/extractPrFinal,同源不漂移,12 测);`apps/runner` 执行链 `repo.ts`(clone/fetch+切分支,workspaceRoot 围栏第二道闸)+ `executor.ts`(ClaudeCodeAdapter:spawn `claude -p` + stream-json 流式解析 + 独立复跑验收 + git commit 校验,§6.1 固化白名单/禁用清单,永不传 `--dangerously-skip-permissions`)+ `task-run.ts`(领取→running→phase1_result→awaiting_approval 事件编排)+ bin start 接 claim(51 测,含**假 claude 二进制 fixture** `test/fake-claude.mjs` 测成功/超时/失败/max_turns/无产出/验收不过,不碰真 CLI);web 机会卡「派发到本地」弹窗 `DispatchRunnerModal.tsx` + 「复制交接包」T0 兜底 + 任务状态徽章回流 `/api/runner/tasks/mine`(runner-dispatch 9 测)
 - 前置阅读: `docs/design/sandbox-control-hardening.md`(围栏/审批/热更新模式)、`docs/design/workshop-scenario-loop.md`(场景档案)
 - 上游背景: 「开源贡献雷达」工坊(commit 980549a)已交付发现与调研环节;本文档补齐「动手」环节
 
@@ -205,7 +206,7 @@ v1 仅 ClaudeCodeAdapter;Codex CLI / aider 适配器等接口消费者,协议与
 | 复用点 | 现有资产 | 新增 |
 |---|---|---|
 | 任务来源 | 贡献雷达机会卡(OssOpportunityCard) | 「派发到本地」按钮 + 派发弹窗(选设备/分支名/补充说明/交接包预览) |
-| 任务包格式 | 本设计 TaskPack | lib/runner-taskpack.ts 渲染器(纯函数,vitest) |
+| 任务包格式 | 本设计 TaskPack | `packages/protocol/src/runner-taskpack.ts` 渲染器(纯函数,vitest;放协议包而非 web/lib,让 web 交接包预览与 runner 执行指令同源) |
 | 任务追踪 | Mission 模型 + mission_updated SSE + 驾驶舱 | runner 任务映射为 Mission 子类,卡片加状态徽章(排队/Runner执行中/待审批/PR已提) |
 | 审批门 | ApprovalRequest + /api/agent/approval + 审批卡 | 新 action 类型 runner_publish(高危样式) |
 | 手机通知 | Web Push(/api/push,vapid) | awaiting_approval 时触发 |

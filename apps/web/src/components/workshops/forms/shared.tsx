@@ -2,9 +2,39 @@
  * 工坊表单共享 UI:弹窗外壳(标题/说明/Prompt 预览/提交)、单选/多选 Chip 组、输入字段。
  * 各工坊表单只声明字段,视觉与交互节奏在这里统一。
  */
-import React, { useState } from 'react';
-import { X, Sparkles, ShieldCheck, Eye } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Sparkles, ShieldCheck, Eye, TriangleAlert } from 'lucide-react';
 import type { WorkshopDef, WorkshopAccent } from '../registry';
+
+// ---- 服务端覆盖标志(预览诚实) ----
+
+/** 会话级缓存:多个弹窗共享一次 /api/workshops/overrides 请求 */
+let overrideListPromise: Promise<string[]> | null = null;
+
+function fetchOverriddenWorkshops(): Promise<string[]> {
+  if (!overrideListPromise) {
+    overrideListPromise = fetch('/api/workshops/overrides')
+      .then((r) => (r.ok ? r.json() : { overridden: [] }))
+      .then((j) => (Array.isArray(j?.overridden) ? j.overridden as string[] : []))
+      .catch(() => []);
+  }
+  return overrideListPromise;
+}
+
+/** 该工坊在服务端是否存在覆盖版本(拿不到名单按无覆盖处理,不阻塞预览) */
+function useServerWorkshopOverride(workshopId: string): boolean {
+  const [overridden, setOverridden] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    fetchOverriddenWorkshops().then((ids) => {
+      if (alive) setOverridden(ids.includes(workshopId));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [workshopId]);
+  return overridden;
+}
 
 export interface AccentClasses {
   iconBg: string;
@@ -143,6 +173,7 @@ export function WorkshopModalShell({
   children: React.ReactNode;
 }) {
   const [showPreview, setShowPreview] = useState(false);
+  const serverOverridden = useServerWorkshopOverride(def.id);
   const Icon = def.icon;
   const accent = ACCENTS[def.accent];
 
@@ -182,9 +213,17 @@ export function WorkshopModalShell({
             <span>{showPreview ? '收起任务预览' : '高级 · 查看将发给 Agent 的任务描述'}</span>
           </button>
           {showPreview && (
-            <pre className="px-3 pb-3 text-[10px] leading-relaxed text-zinc-500 whitespace-pre-wrap break-all max-h-56 overflow-y-auto">
-              {previewPrompt}
-            </pre>
+            <>
+              {serverOverridden && (
+                <p className="mx-3 mb-2 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-[10px] leading-relaxed text-amber-700 flex items-start gap-1.5">
+                  <TriangleAlert className="h-3.5 w-3.5 mt-px flex-shrink-0" />
+                  服务端存在该工坊的覆盖版本,实际发送以服务端为准(下方预览为打包模板,仅供参考)。
+                </p>
+              )}
+              <pre className="px-3 pb-3 text-[10px] leading-relaxed text-zinc-500 whitespace-pre-wrap break-all max-h-56 overflow-y-auto">
+                {previewPrompt}
+              </pre>
+            </>
           )}
         </div>
 

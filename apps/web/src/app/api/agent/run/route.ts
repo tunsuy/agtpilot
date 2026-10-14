@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getAgentBackend } from '@/lib/agent-backend';
+import { renderWorkshopRunServer } from '@/workshops/server-render';
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,15 +13,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { prompt, title, missionId } = await req.json();
+    const { prompt, title, missionId, workshop } = await req.json();
 
-    if (!prompt || typeof prompt !== 'string') {
+    // 工坊任务可选携带 {workshopId, params}:服务端权威渲染(注册表 + 档案现读 +
+    // 覆盖目录热修),该请求忽略客户端拼好的 prompt;普通手输 prompt 不受影响。
+    let finalPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+    let finalTitle = title;
+    if (workshop && typeof workshop.id === 'string') {
+      const run = renderWorkshopRunServer(session.user.id, workshop.id, workshop.params);
+      if (!run) {
+        return NextResponse.json(
+          { success: false, error: `未知工坊: ${workshop.id}` },
+          { status: 400 }
+        );
+      }
+      finalPrompt = run.prompt;
+      finalTitle = run.title;
+    }
+
+    if (!finalPrompt) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
     }
 
     const backend = getAgentBackend();
-    const mission = await backend.runMission(prompt.trim(), {
-      title,
+    const mission = await backend.runMission(finalPrompt, {
+      title: finalTitle,
       userId: session.user.id,
       missionId,
     });

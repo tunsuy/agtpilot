@@ -10,13 +10,13 @@ import { OSS_INTERESTS, OSS_CONTRIB_KINDS, buildOssRadarPrompt } from '@/worksho
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { CronJobItem } from '../../../types/agent';
 import type { WorkshopDef } from '../registry';
-import { buildWorkshopRun } from '../run';
+import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, MultiChipGroup, FieldLabel, WorkshopModalShell, inputClass } from './shared';
 
 interface Props {
   workshop: WorkshopDef;
-  onRun: (prompt: string, title?: string) => void | Promise<void>;
+  onRun: (prompt: string, title?: string, workshop?: WorkshopRunPayload) => void | Promise<void>;
   onClose: () => void;
   /** 贡献者档案(WorkshopsView 预取下传);有值时注入 Prompt 并展示摘要条 */
   scenarioProfile?: ScenarioProfile | null;
@@ -134,7 +134,7 @@ export function OssRadarForm({ workshop, onRun, onClose, scenarioProfile, onEdit
 
   const handleSubmit = () => {
     recordRun(workshop.id, preview.title, params);
-    onRun(preview.prompt, preview.title);
+    onRun(preview.prompt, preview.title, { id: workshop.id, params });
   };
 
   const toggle = (list: string[], setList: (v: string[]) => void) => (id: string) => {

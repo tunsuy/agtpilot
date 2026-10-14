@@ -13,7 +13,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Sparkles, Play, Clock, ArrowRight, UserRoundPen } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo, Mission } from '../../types/agent';
 import { WORKSHOPS, WORKSHOP_CATEGORIES, getWorkshop, type WorkshopDef, type WorkshopId } from './registry';
-import { buildWorkshopRun } from './run';
+import { buildWorkshopRun, type WorkshopRunPayload } from './run';
 import { recordRun, recentRuns, relativeTime, type WorkshopRunRecord } from './history';
 import type { ScenarioProfile } from '../../lib/scenario-profile';
 import { ScenarioProfileWizard } from './ScenarioProfileWizard';
@@ -31,8 +31,8 @@ import { OssRadarForm } from './forms/OssRadarForm';
 
 interface WorkshopsViewProps {
   connectors: ConnectorApp[];
-  /** 表单/重跑产出的结构化 Prompt,作为新任务交给 Agent 并跳转任务页 */
-  onRunPrompt: (prompt: string, title?: string) => void | Promise<void>;
+  /** 表单/重跑产出的结构化 Prompt,作为新任务交给 Agent 并跳转任务页;带 workshop 载荷时服务端权威渲染 */
+  onRunPrompt: (prompt: string, title?: string, workshop?: WorkshopRunPayload) => void | Promise<void>;
   /** 缺必需依赖时跳连接器页配置;带 depId 时连接器页自动搜索定位到对应卡片 */
   onOpenConnectors: (depId?: string) => void;
   /** 全量任务列表:小红书表单内嵌最近一次选题清单的可勾选卡片 */
@@ -149,7 +149,7 @@ export function WorkshopsView({
     const run = buildWorkshopRun(def.id, record.params, profileCtx(def));
     recordRun(def.id, run.title, record.params);
     setHistory(recentRuns(20));
-    onRunPrompt(run.prompt, run.title);
+    onRunPrompt(run.prompt, run.title, { id: def.id, params: record.params });
   };
 
   const rerunnable = useMemo(
@@ -333,7 +333,7 @@ export function WorkshopsView({
         <ActiveForm
           key={activeWorkshop.id}
           workshop={activeWorkshop}
-          onRun={(prompt, title) => onRunPrompt(prompt, title)}
+          onRun={(prompt, title, workshop) => onRunPrompt(prompt, title, workshop)}
           onClose={() => setActiveId(null)}
           scenarioProfile={activeProfile ?? null}
           onEditProfile={activeWorkshop.profileSlot ? () => setWizardKey(activeWorkshop.profileSlot!) : undefined}

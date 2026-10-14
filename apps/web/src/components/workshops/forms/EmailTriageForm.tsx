@@ -4,13 +4,13 @@
 import { useState } from 'react';
 import { EMAIL_TRIAGE_SCOPES } from '@/workshops/email_triage/context';
 import type { WorkshopDef } from '../registry';
-import { buildWorkshopRun } from '../run';
+import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass } from './shared';
 
 interface Props {
   workshop: WorkshopDef;
-  onRun: (prompt: string, title?: string) => void | Promise<void>;
+  onRun: (prompt: string, title?: string, workshop?: WorkshopRunPayload) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -28,7 +28,7 @@ export function EmailTriageForm({ workshop, onRun, onClose }: Props) {
 
   const handleSubmit = () => {
     recordRun(workshop.id, preview.title, params);
-    onRun(preview.prompt, preview.title);
+    onRun(preview.prompt, preview.title, { id: workshop.id, params });
   };
 
   return (

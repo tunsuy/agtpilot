@@ -9,13 +9,13 @@ import {
   INVEST_DELIVERIES,
 } from '@/workshops/invest/context';
 import type { WorkshopDef } from '../registry';
-import { buildWorkshopRun } from '../run';
+import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, MultiChipGroup, FieldLabel, WorkshopModalShell, inputClass, textareaClass } from './shared';
 
 interface Props {
   workshop: WorkshopDef;
-  onRun: (prompt: string, title?: string) => void | Promise<void>;
+  onRun: (prompt: string, title?: string, workshop?: WorkshopRunPayload) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -46,7 +46,7 @@ export function InvestWorkshopForm({ workshop, onRun, onClose }: Props) {
 
   const handleSubmit = () => {
     recordRun(workshop.id, preview.title, params);
-    onRun(preview.prompt, preview.title);
+    onRun(preview.prompt, preview.title, { id: workshop.id, params });
   };
 
   return (

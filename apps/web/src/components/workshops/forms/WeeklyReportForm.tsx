@@ -8,13 +8,13 @@ import {
   WEEKLY_REPORT_DELIVERIES,
 } from '@/workshops/weekly/context';
 import type { WorkshopDef } from '../registry';
-import { buildWorkshopRun } from '../run';
+import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, FieldLabel, WorkshopModalShell, textareaClass } from './shared';
 
 interface Props {
   workshop: WorkshopDef;
-  onRun: (prompt: string, title?: string) => void | Promise<void>;
+  onRun: (prompt: string, title?: string, workshop?: WorkshopRunPayload) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -37,7 +37,7 @@ export function WeeklyReportForm({ workshop, onRun, onClose }: Props) {
 
   const handleSubmit = () => {
     recordRun(workshop.id, preview.title, params);
-    onRun(preview.prompt, preview.title);
+    onRun(preview.prompt, preview.title, { id: workshop.id, params });
   };
 
   return (

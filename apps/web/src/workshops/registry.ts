@@ -24,6 +24,7 @@ import type {
   WorkshopSkill,
   WorkshopRun,
   WorkshopRunContext,
+  WorkshopRunPayload,
   CronScenarioSpec,
 } from './types';
 
@@ -90,7 +91,15 @@ export const CRON_SCENARIOS = {
 /** cron 场景 key 白名单(编译期 union 与运行时 CRON_SCENARIOS 同源) */
 export type CronScenarioKey = keyof typeof CRON_SCENARIOS;
 
-export type { WorkshopId, WorkshopDef, WorkshopSkill, WorkshopRun, WorkshopRunContext, CronScenarioSpec };
+export type {
+  WorkshopId,
+  WorkshopDef,
+  WorkshopSkill,
+  WorkshopRun,
+  WorkshopRunContext,
+  WorkshopRunPayload,
+  CronScenarioSpec,
+};
 export {
   WORKSHOP_CATEGORIES,
   type WorkshopAccent,

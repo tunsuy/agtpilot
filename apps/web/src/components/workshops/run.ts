@@ -9,5 +9,6 @@ export {
   buildWorkshopRun,
   type WorkshopRun,
   type WorkshopRunContext,
+  type WorkshopRunPayload,
   type WorkshopId,
 } from '@/workshops/registry';

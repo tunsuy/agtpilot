@@ -8,6 +8,7 @@ import { HomeView } from '../components/HomeView';
 import { CockpitView } from '../components/CockpitView';
 import { ConnectorsView } from '../components/ConnectorsView';
 import { WorkshopsView } from '../components/workshops/WorkshopsView';
+import type { WorkshopRunPayload } from '../components/workshops/run';
 import { DeliverablesView } from '../components/DeliverablesView';
 import { MemoriesView } from '../components/MemoriesView';
 import { CronJobsView } from '../components/CronJobsView';
@@ -472,7 +473,12 @@ export default function Workspace() {
 
   const { data: session, status: sessionStatus } = useSession();
 
-  const handleRun = async (text: string, title?: string, targetMissionId?: string | null) => {
+  const handleRun = async (
+    text: string,
+    title?: string,
+    targetMissionId?: string | null,
+    workshop?: WorkshopRunPayload
+  ) => {
     if (!text.trim() || isSubmitting) return;
 
     // 检查登录状态：未登录用户直接拦截并弹出登录弹窗
@@ -557,7 +563,8 @@ export default function Workspace() {
       await fetch('/api/agent/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text.trim(), title, missionId }),
+        // 带 workshop 载荷的工坊任务由服务端权威渲染(注册表+当前档案+覆盖目录),忽略客户端 prompt
+        body: JSON.stringify({ prompt: text.trim(), title, missionId, ...(workshop ? { workshop } : {}) }),
       });
     } catch (e) {
       console.error(e);
@@ -979,8 +986,8 @@ export default function Workspace() {
             {mobileOverlay === 'workshops' && (
               <WorkshopsView
                 connectors={connectors}
-                onRunPrompt={(prompt, title) => {
-                  handleRun(prompt, title, null);
+                onRunPrompt={(prompt, title, workshop) => {
+                  handleRun(prompt, title, null, workshop);
                   // 任务发起后回到活动页看执行流,关闭工坊覆盖层
                   setMobileOverlay(null);
                 }}
@@ -1218,7 +1225,7 @@ export default function Workspace() {
             <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
               <WorkshopsView
                 connectors={connectors}
-                onRunPrompt={(prompt, title) => handleRun(prompt, title, null)}
+                onRunPrompt={(prompt, title, workshop) => handleRun(prompt, title, null, workshop)}
                 onOpenConnectors={(depId) => {
                   if (depId) setConnectorLocate(depId);
                   handleViewChange('connectors');

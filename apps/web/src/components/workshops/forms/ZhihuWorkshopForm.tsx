@@ -9,13 +9,13 @@ import { QrCode } from 'lucide-react';
 import { ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '@/workshops/zhihu/context';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { WorkshopDef } from '../registry';
-import { buildWorkshopRun } from '../run';
+import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass } from './shared';
 
 interface Props {
   workshop: WorkshopDef;
-  onRun: (prompt: string, title?: string) => void | Promise<void>;
+  onRun: (prompt: string, title?: string, workshop?: WorkshopRunPayload) => void | Promise<void>;
   onClose: () => void;
   /** 场景档案(WorkshopsView 预取下传);有值时注入 Prompt 并展示摘要条 */
   scenarioProfile?: ScenarioProfile | null;
@@ -75,7 +75,7 @@ export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
 
   const handleSubmit = () => {
     recordRun(workshop.id, preview.title, params);
-    onRun(preview.prompt, preview.title);
+    onRun(preview.prompt, preview.title, { id: workshop.id, params });
   };
 
   return (

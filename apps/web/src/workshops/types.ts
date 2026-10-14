@@ -72,6 +72,16 @@ export interface WorkshopRun {
   title: string;
 }
 
+/**
+ * 服务端权威渲染的工坊任务载荷:/api/agent/run 收到 {workshop: {id, params}} 后
+ * 用注册表 + user-store 当前档案重渲染 prompt(并应用覆盖目录热修),忽略客户端拼好的 prompt;
+ * 普通手输 prompt 不带此载荷,不受影响。
+ */
+export interface WorkshopRunPayload {
+  id: string;
+  params: Record<string, unknown>;
+}
+
 /** 运行上下文:场景档案等表单之外的状态,表单与「一键重跑」共用 */
 export interface WorkshopRunContext {
   scenarioProfile?: ScenarioProfile;

@@ -825,6 +825,61 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
       },
     ],
   },
+
+  // ---- 网文创作(小说工坊 P2 配套 · 红线:发布永远人工、不接正文抓取)----
+  {
+    id: 'fanqie_radar',
+    name: '番茄小说榜单 (fanqie-radar)',
+    icon: 'Radar',
+    category: 'Content',
+    description:
+      '开源 fanqie-radar(本地 stdio,免凭证):番茄小说公开榜单元数据(榜单/标签/热度)与选题调研分析,供网文选题参考。只读公开数据,项目自身红线即不抓章节正文(版权红线,本产品也不接正文抓取类连接器)。需本机安装:Python ≥ 3.10,`pip install .` 后提供 fanqie-radar 命令;本地子进程默认关闭,点「启用」后才为你的任务挂载。',
+    authType: 'none',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["番茄榜单", "番茄小说", "网文选题", "fanqie"],
+    optIn: true,
+    tokenEnvVar: 'MCP_FANQIE_RADAR_OPTIN',
+    docUrl: 'https://github.com/WindXRan/fanqie-radar',
+    servers: [
+      {
+        name: 'fanqie_radar',
+        subagentOpen: true, // 公开榜单元数据,只读;项目声明不抓正文(与本产品版权红线一致)
+        transport: 'stdio',
+        command: 'fanqie-radar',
+      },
+    ],
+  },
+  {
+    id: 'tomato_writer',
+    name: '番茄作者后台 (tomato-writer-mcp)',
+    icon: 'Tomato',
+    category: 'Content',
+    description:
+      '开源 tomato-writer-mcp(本地 stdio):番茄小说作者后台的章节管理——查稿件、存草稿、发布/定时发布章节。红线:发布章节 = 真实平台副作用,subagentOpen 永不开放,每次发布都由你在主循环人工审批;AI 使用声明由作者本人在番茄后台如实勾选,本连接器不代填不绕过;平台 Cookie 约 1-2 个月过期需重取。需本机 clone 源码并 pnpm build(入口通常是仓库下 dist/index.js)。凭证只存你的本地托管钥匙,绝不入库不进日志。',
+    authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["番茄作者后台", "番茄作家", "tomato writer"],
+    tokenEnvVar: 'MCP_TOMATO_WRITER_CRED',
+    quickAuthUrl: 'https://fanqienovel.com/main/writer',
+    authHint:
+      '先 clone fuhei/tomato-writer-mcp 并 pnpm install && pnpm build;再浏览器登录 fanqienovel.com 作者后台 → F12 Network → 任一请求复制 Cookie 与 x-csrf-token,按「入口文件绝对路径|||Cookie|||CSRF Token」三段格式填到下方(如 /home/me/tomato-writer-mcp/dist/index.js|||sessionid=...|||abc123)。',
+    docUrl: 'https://github.com/fuhei/tomato-writer-mcp',
+    servers: [
+      {
+        name: 'tomato_writer',
+        subagentOpen: false, // publish_chapter = 真实平台发布(现实副作用),只走主循环逐次人工审批
+        transport: 'stdio',
+        command: 'node',
+        // 入口路径进 args(用户本机 build 产物,无 npx 包);Cookie/CSRF 经 env 注入,
+        // 不出现在命令行(避免进程列表泄露),也绝不进 process.env 转发
+        args: (cred) => [parseTomatoWriterCred(cred)?.entryPath || ''],
+        env: (cred) => {
+          const p = parseTomatoWriterCred(cred);
+          return { TOMATO_COOKIE: p?.cookie || '', TOMATO_CSRF_TOKEN: p?.csrf || '' };
+        },
+      },
+    ],
+  },
 ];
 
 export function getMcpConnectorDef(id: string): McpConnectorDef | undefined {
@@ -846,6 +901,23 @@ export function parseAppCredential(raw: string): { id: string; secret: string } 
   const parts = t.split(/\s*[:：]\s*/);
   if (parts.length < 2 || !parts[0].trim() || !parts[1].trim()) return null;
   return { id: parts[0].trim(), secret: parts.slice(1).join(':').trim() };
+}
+
+/**
+ * 解析番茄作者后台三段组合凭证「entryPath|||cookie|||csrf」(||| 分隔,
+ * Cookie 自身含 ; 与空格所以不能用冒号/逗号分段)。任一段缺失返回 null ——
+ * 调用方拿到 null 就传空值,子进程自然启动失败并显式报错,绝不静默半配置。
+ */
+export function parseTomatoWriterCred(
+  raw: string
+): { entryPath: string; cookie: string; csrf: string } | null {
+  const t = (raw || '').trim();
+  if (!t) return null;
+  const parts = t.split('|||');
+  if (parts.length !== 3) return null;
+  const [entryPath, cookie, csrf] = parts.map((p) => p.trim());
+  if (!entryPath || !cookie || !csrf) return null;
+  return { entryPath, cookie, csrf };
 }
 
 /** MCP OAuth start → callback 之间传递 CSRF state 的 httpOnly cookie 名 */

@@ -10,7 +10,7 @@ import { WORKSHOP_SKILL as XHS, CRON as XHS_CRON, CRON_KEY as XHS_CRON_KEY } fro
 import { WORKSHOP_SKILL as WECHAT_MP } from './wechat_mp/skill';
 import { WORKSHOP_SKILL as ZHIHU } from './zhihu/skill';
 import { WORKSHOP_SKILL as WEIBO } from './weibo/skill';
-import { WORKSHOP_SKILL as NOVEL } from './novel/skill';
+import { WORKSHOP_SKILL as NOVEL, CRON as NOVEL_CRON, CRON_KEY as NOVEL_CRON_KEY } from './novel/skill';
 import { WORKSHOP_SKILL_DOUYIN, WORKSHOP_SKILL_BILIBILI } from './video/skill';
 import { WORKSHOP_SKILL as EMAIL_TRIAGE } from './email_triage/skill';
 import { WORKSHOP_SKILL as WEEKLY } from './weekly/skill';
@@ -119,6 +119,7 @@ export function resolveArtifactDraft<K extends 'article-package' | 'note-package
 export const CRON_SCENARIOS = {
   [XHS_CRON_KEY]: XHS_CRON,
   [OSS_CRON_KEY]: OSS_CRON,
+  [NOVEL_CRON_KEY]: NOVEL_CRON,
 } satisfies Readonly<Record<string, CronScenarioSpec>>;
 
 /** cron 场景 key 白名单(编译期 union 与运行时 CRON_SCENARIOS 同源) */

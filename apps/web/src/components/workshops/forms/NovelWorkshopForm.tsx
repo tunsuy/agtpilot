@@ -1,23 +1,36 @@
 /**
- * 网文小说工坊表单 · 三模式(开新书/续写下一章/全书体检)
- * docs/design/novel-workshop.md §5-§6
+ * 网文小说工坊表单 · 四模式(开新书/续写下一章/全书体检/文风学习)
+ * docs/design/novel-workshop.md §5-§7
  *
  * 续写/审查需要书状态:表单从 /api/novels 拉书库列表与全书快照,
  * 客户端预览经 ctx.novelState 装配;提交带 {id:'novel', params} 载荷后,
  * /api/agent/run 走服务端权威渲染(server-render 的 novel loader 现读书库,
  * 客户端快照只影响预览,不影响实发)。书未加载完成前预览与提交都不可用——
  * 不拿半截状态拼 prompt。
+ *
+ * P1 增量:作者档案注入(profileSlot 'novel',摘要条 + 编辑入口);
+ * 订阅日更(scenario 型 cron 任务,按书绑定,触发时服务端现读书库重建);
+ * 全书导出 TXT/EPUB(直下);每 N 章体检提醒(isReviewDue,发起体检即落
+ * markReviewed——提醒启发式的落点,失败可重跑不影响状态一致性)。
+ *
+ * P2 增量:文风学习(样文提炼文风锚,绑书可选——绑书则结果卡可写回本书,
+ * 之后续写自动注入;不绑则复制留作开书自定义文风锚)。续写模式的文风以
+ * 书自己的锚为准(表单风格选择只属于开书),否则写回的锚永远被表单值盖掉。
  */
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Loader2, PenLine, Stethoscope } from 'lucide-react';
+import { BookOpen, CalendarClock, Download, Loader2, PenLine, Sparkles, Stethoscope } from 'lucide-react';
 import {
   NOVEL_GENRES,
   NOVEL_STYLES,
   NOVEL_REVIEW_FOCUS,
+  STYLE_SAMPLES_MAX,
   clampChapterWords,
   clampOpeningChapters,
 } from '@/workshops/novel/context';
 import type { NovelBook, NovelBookSummary } from '@/lib/novel-context';
+import { isReviewDue, REVIEW_EVERY_N } from '@/lib/novel-context';
+import type { ScenarioProfile } from '@/lib/scenario-profile';
+import type { CronJobItem } from '@/types/agent';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
@@ -27,23 +40,37 @@ interface Props {
   workshop: WorkshopDef;
   onRun: (prompt: string, title?: string, workshop?: WorkshopRunPayload) => void | Promise<void>;
   onClose: () => void;
+  /** 作者档案(WorkshopsView 按 profileSlot 'novel' 预取下传);有值时注入 Prompt 并展示摘要条 */
+  scenarioProfile?: ScenarioProfile | null;
+  /** 点击摘要条「查看/编辑」打开档案向导 */
+  onEditProfile?: () => void;
 }
 
-type NovelMode = 'genesis' | 'continue' | 'review';
+type NovelMode = 'genesis' | 'continue' | 'review' | 'style';
 
 const MODES: Array<{ id: NovelMode; name: string; icon: typeof BookOpen }> = [
   { id: 'genesis', name: '开新书', icon: BookOpen },
   { id: 'continue', name: '续写下一章', icon: PenLine },
   { id: 'review', name: '全书体检', icon: Stethoscope },
+  { id: 'style', name: '文风学习', icon: Sparkles },
 ];
 
 const CHAPTER_WORDS = [1000, 2000, 3000, 5000];
 const OPENING_CHAPTERS = [1, 2, 3, 5];
+/** 日更时刻 chip(cron 整点触发:`0 H * * *`) */
+const SUB_HOURS = [6, 9, 12, 18, 21];
 
-export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
+const postCron = (body: Record<string, unknown>) =>
+  fetch('/api/cron/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((r) => r.json());
+
+export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile }: Props) {
   const saved = lastRunOf(workshop.id)?.params || {};
   const [mode, setMode] = useState<NovelMode>(
-    saved.mode === 'continue' || saved.mode === 'review' ? saved.mode : 'genesis'
+    saved.mode === 'continue' || saved.mode === 'review' || saved.mode === 'style' ? saved.mode : 'genesis'
   );
 
   // ---- 开新书参数 ----
@@ -55,8 +82,17 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
   );
   const [premise, setPremise] = useState<string>(typeof saved.premise === 'string' ? saved.premise : '');
   const [style, setStyle] = useState<string>(typeof saved.style === 'string' && saved.style ? saved.style : NOVEL_STYLES[0]);
+  // 自定义文风锚:非预设值回填(与 customGenre 同模式);「文风学习」提炼的锚可粘贴进来开书
+  const [customStyle, setCustomStyle] = useState<string>(
+    typeof saved.style === 'string' && saved.style && !(NOVEL_STYLES as readonly string[]).includes(saved.style)
+      ? saved.style
+      : ''
+  );
   const [chapterWords, setChapterWords] = useState<number>(clampChapterWords(saved.chapterWords));
   const [openingChapters, setOpeningChapters] = useState<number>(clampOpeningChapters(saved.openingChapters));
+
+  // ---- 文风学习(P2):样文必填,绑书可选 ----
+  const [samples, setSamples] = useState<string>(typeof saved.samples === 'string' ? saved.samples : '');
 
   // ---- 书库(续写/审查) ----
   const [books, setBooks] = useState<NovelBookSummary[] | null>(null);
@@ -67,7 +103,16 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
     typeof saved.focus === 'string' && saved.focus ? saved.focus : NOVEL_REVIEW_FOCUS[0]
   );
 
+  // ---- 订阅日更(P1:scenario 型 cron,按书绑定) ----
+  const [cronJob, setCronJob] = useState<CronJobItem | null>(null);
+  const [cronLoading, setCronLoading] = useState(false);
+  const [cronBusy, setCronBusy] = useState(false);
+  const [cronMsg, setCronMsg] = useState<string | null>(null);
+  const [subHour, setSubHour] = useState<number>(9);
+
   const needBook = mode !== 'genesis';
+  /** 续写/审查必须先有书;文风学习绑书可选——不绑定也能纯提炼(预览不依赖书快照) */
+  const requiresBook = mode === 'continue' || mode === 'review' || (mode === 'style' && Boolean(bookId));
 
   useEffect(() => {
     if (!needBook || books !== null) return;
@@ -105,38 +150,143 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
     };
   }, [needBook, bookId]);
 
+  // 订阅状态按书查:同一本书最多一条活跃的日更任务(换书重新查)
+  useEffect(() => {
+    if (mode !== 'continue' || !bookId) {
+      setCronJob(null);
+      setCronMsg(null);
+      return;
+    }
+    let alive = true;
+    setCronLoading(true);
+    (async () => {
+      try {
+        const res = await fetch('/api/cron/jobs');
+        const data = await res.json();
+        const job = data.success
+          ? (data.jobs || []).find(
+              (j: CronJobItem) =>
+                j.scenario?.key === 'novel_daily_chapter' &&
+                j.scenario?.bookId === bookId &&
+                j.status !== 'cancelled'
+            )
+          : null;
+        if (alive) setCronJob(job || null);
+      } catch {
+        // 未登录/后端未就绪时静默:订阅区显示未订阅,可重试
+        if (alive) setCronJob(null);
+      } finally {
+        if (alive) setCronLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [mode, bookId]);
+
   const params = useMemo(
     () => ({
       mode,
       genre: customGenre.trim() || genre,
       premise,
-      style,
+      // 续写走书自己的文风锚(含「文风学习」写回的);表单风格选择只属于开书
+      style: mode === 'continue' ? '' : customStyle.trim() || style,
       chapterWords,
       openingChapters,
       bookId,
       focus,
+      samples,
     }),
-    [mode, genre, customGenre, premise, style, chapterWords, openingChapters, bookId, focus]
+    [mode, genre, customGenre, premise, style, customStyle, chapterWords, openingChapters, bookId, focus, samples]
   );
 
-  // 预览:续写/审查在书快照到位前不拼(宁空勿错;实发 prompt 由服务端 loader 现读重建)
+  // 预览:续写/审查在书快照到位前不拼;文风学习绑了书同样等快照,不绑直接拼
+  // (宁空勿错;实发 prompt 由服务端 loader 现读重建)
+  // 作者档案与书快照同路注入 ctx(服务端权威渲染时两者都现读,这里只影响预览)
   const preview = useMemo(() => {
-    if (needBook && !book) return null;
+    if (requiresBook && !book) return null;
+    const ctx =
+      book || scenarioProfile
+        ? {
+            ...(book ? { novelState: book } : {}),
+            ...(scenarioProfile ? { scenarioProfile } : {}),
+          }
+        : undefined;
     try {
-      return buildWorkshopRun(workshop.id, params, book ? { novelState: book } : undefined);
+      return buildWorkshopRun(workshop.id, params, ctx);
     } catch {
       return null;
     }
-  }, [workshop.id, params, needBook, book]);
+  }, [workshop.id, params, requiresBook, book, scenarioProfile]);
 
   const handleSubmit = () => {
     if (!preview) return;
+    // 发起体检即记「已体检到当前章」:提醒启发式的落点(fire-and-forget,
+    // 失败不拦提交——体检任务可重跑,重跑会再次标记,不影响书库一致性)
+    if (mode === 'review' && bookId) {
+      fetch('/api/novels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'markReviewed', bookId }),
+      }).catch(() => {});
+    }
     recordRun(workshop.id, preview.title, params);
     onRun(preview.prompt, preview.title, { id: workshop.id, params });
   };
 
+  /** 开通/修改日更:同书先取消旧任务再建新任务(保证时刻/字数一致) */
+  const handleSubscribe = async () => {
+    if (!book) return;
+    setCronBusy(true);
+    setCronMsg(null);
+    try {
+      if (cronJob) await postCron({ action: 'cancel', id: cronJob.id });
+      const data = await postCron({
+        action: 'create',
+        name: `《${book.title}》日更`,
+        pattern: `0 ${subHour} * * *`,
+        // 存档的 prompt 仅作展示快照;触发时服务端现读书库+档案重建(requiresServerState)
+        prompt:
+          preview?.prompt || `(场景订阅:小说日更,触发时服务端现读《${book.title}》续写下一章)`,
+        scenario: { key: 'novel_daily_chapter', count: chapterWords, bookId },
+      });
+      if (data.success) {
+        setCronJob(data.newJob || null);
+        setCronMsg(`已订阅:每天 ${subHour}:00 自动续写本章约 ${chapterWords} 字`);
+      } else {
+        setCronMsg(data.error || '订阅失败,请重试');
+      }
+    } catch {
+      setCronMsg('网络异常,订阅失败,请重试');
+    } finally {
+      setCronBusy(false);
+    }
+  };
+
+  const handleUnsubscribe = async () => {
+    if (!cronJob) return;
+    setCronBusy(true);
+    setCronMsg(null);
+    try {
+      await postCron({ action: 'cancel', id: cronJob.id });
+      setCronJob(null);
+      setCronMsg('已取消日更');
+    } catch {
+      setCronMsg('网络异常,取消失败,请重试');
+    } finally {
+      setCronBusy(false);
+    }
+  };
+
   const accent = ACCENTS[workshop.accent];
-  const submitLabel = mode === 'genesis' ? '开始开书' : mode === 'continue' ? '生成下一章' : '开始体检';
+  const submitLabel =
+    mode === 'genesis'
+      ? '开始开书'
+      : mode === 'continue'
+        ? '生成下一章'
+        : mode === 'review'
+          ? '开始体检'
+          : '提炼文风锚';
 
   return (
     <WorkshopModalShell
@@ -144,8 +294,34 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
       onClose={onClose}
       onSubmit={handleSubmit}
       submitLabel={submitLabel}
-      previewPrompt={preview?.prompt || (bookLoading ? '书状态加载中…' : '请先选择一本书(书库为空时先「开新书」)')}
+      previewPrompt={
+        preview?.prompt ||
+        (bookLoading
+          ? '书状态加载中…'
+          : mode === 'style' && !samples.trim()
+            ? '粘贴样文后即可预览文风学习任务(仅限你本人创作或已获授权的文本)'
+            : '请先选择一本书(书库为空时先「开新书」)')
+      }
     >
+      {/* 作者档案摘要条:让用户看见「Agent 已经认识我」,可回访编辑(注入开书/续写/体检 prompt) */}
+      {scenarioProfile && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-violet-50/70 border border-violet-100">
+          <span className="text-[11px] text-violet-700 leading-relaxed min-w-0 truncate">
+            作者档案:{scenarioProfile.positioning.niche} · {scenarioProfile.positioning.audience}
+            {scenarioProfile.cadence.postsPerWeek ? ` · 每周 ${scenarioProfile.cadence.postsPerWeek} 章` : ''}
+          </span>
+          {onEditProfile && (
+            <button
+              type="button"
+              onClick={onEditProfile}
+              className="shrink-0 text-[11px] font-medium text-violet-600 hover:text-violet-800 transition"
+            >
+              查看/编辑
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 模式切换 */}
       <div className="flex gap-1.5">
         {MODES.map((m) => {
@@ -206,11 +382,18 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
             <FieldLabel>文风锚</FieldLabel>
             <ChipGroup
               options={NOVEL_STYLES.map((s) => ({ id: s as string, name: s.split(':')[0] }))}
-              value={style}
+              value={customStyle.trim() ? '__custom__' : style}
               onChange={setStyle}
               accent={workshop.accent}
             />
-            <p className="text-[10px] text-zinc-400 leading-relaxed">{style}</p>
+            <input
+              type="text"
+              value={customStyle}
+              onChange={(e) => setCustomStyle(e.target.value)}
+              placeholder="自定义文风锚(填写后优先于上方预设;「文风学习」提炼的锚可粘贴到这)"
+              className={inputClass}
+            />
+            <p className="text-[10px] text-zinc-400 leading-relaxed">{customStyle.trim() || style}</p>
           </div>
 
           <div className="flex gap-4">
@@ -241,17 +424,43 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
         </>
       )}
 
+      {/* 文风学习(P2):样文必填(不凭空编造文风);绑书可选,在下方「绑定书目」 */}
+      {mode === 'style' && (
+        <>
+          <div className="space-y-1.5">
+            <FieldLabel>作者样文(必填)</FieldLabel>
+            <textarea
+              value={samples}
+              onChange={(e) => setSamples(e.target.value)}
+              placeholder={'粘贴你本人创作或已获授权的文本片段(建议 500-6000 字)。\n样文越能代表你的调性,提炼出的文风锚越准。'}
+              rows={8}
+              className={textareaClass}
+            />
+            <p className="text-[10px] text-zinc-400 leading-relaxed">
+              仅限本人创作或已获授权的文本;超过 {STYLE_SAMPLES_MAX} 字自动截断。疑似他人作品只提炼通用文风特征,
+              严禁复刻其情节链/人名组合/名场面(版权红线)。
+            </p>
+          </div>
+          <p className="text-[11px] text-zinc-500 leading-relaxed rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5">
+            产出 150-600 字「文风锚」(只描述怎么写,不生成情节正文)。绑定书目后可在结果卡片上一键写回,
+            之后这本书每次续写自动注入;不绑定则复制留作开书时的自定义文风锚。
+          </p>
+        </>
+      )}
+
       {needBook && (
         <>
           <div className="space-y-1.5">
-            <FieldLabel>选择书目</FieldLabel>
+            <FieldLabel>{mode === 'style' ? '绑定书目(可选)' : '选择书目'}</FieldLabel>
             {books === null ? (
               <p className="text-[11px] text-zinc-400 flex items-center gap-1.5">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> 书库加载中…
               </p>
             ) : books.length === 0 ? (
               <p className="text-[11px] text-zinc-500 leading-relaxed rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5">
-                书库还是空的:先用「开新书」生成,再在任务结果卡片上点「存入书库」。
+                {mode === 'style'
+                  ? '书库为空:可不绑定直接提炼,产出的文风锚复制留作开书用。'
+                  : '书库还是空的:先用「开新书」生成,再在任务结果卡片上点「存入书库」。'}
               </p>
             ) : (
               <select
@@ -259,10 +468,11 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
                 onChange={(e) => setBookId(e.target.value)}
                 className={inputClass}
               >
-                <option value="">— 请选择 —</option>
+                <option value="">{mode === 'style' ? '— 不绑定书目(纯提炼) —' : '— 请选择 —'}</option>
                 {books.map((b) => (
                   <option key={b.bookId} value={b.bookId}>
                     《{b.title}》 第{b.progress.chapterCount}章 · {b.progress.wordCount}字 · 未回收伏笔{b.openForeshadows}
+                    {b.reviewDue ? ' · 建议体检' : ''}
                   </option>
                 ))}
               </select>
@@ -275,6 +485,28 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
             </p>
           )}
 
+          {/* 全书导出(P1):直下 TXT/EPUB,人工审阅后自行投稿——不经过任何平台投递 */}
+          {book && bookId && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] text-zinc-500 flex items-center gap-1">
+                <Download className="h-3.5 w-3.5" /> 全书导出:
+              </span>
+              <a
+                href={`/api/novels?bookId=${encodeURIComponent(bookId)}&export=txt`}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-medium border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 transition"
+              >
+                TXT
+              </a>
+              <a
+                href={`/api/novels?bookId=${encodeURIComponent(bookId)}&export=epub`}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-medium border border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 transition"
+              >
+                EPUB
+              </a>
+              <span className="text-[10px] text-zinc-400">下载后人工审阅,投稿平台由你操作</span>
+            </div>
+          )}
+
           {book && mode === 'continue' && (
             <>
               <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5 text-[11px] text-zinc-500 leading-relaxed">
@@ -283,6 +515,15 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
                 {book.ledger.filter((f) => f.status === 'planted').length} 条。
                 生成时注入恒定上下文(设定集+出场人物卡+细纲+近章摘要),写后反思自动写回书库。
               </div>
+
+              {/* 体检提醒(P1):距上次体检新写满 N 章建议先体检(发起体检即消提醒) */}
+              {isReviewDue(book) && (
+                <p className="text-[11px] text-amber-600 leading-relaxed rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2.5">
+                  距上次全书体检已新写 {book.progress.chapterCount - (book.lastReviewedChapter || 0)} 章(每{' '}
+                  {REVIEW_EVERY_N} 章提醒一次):长篇连更最容易积累前后矛盾,建议先切到「全书体检」核对一遍再继续。
+                </p>
+              )}
+
               <div className="space-y-1.5">
                 <FieldLabel>每章字数</FieldLabel>
                 <ChipGroup
@@ -291,6 +532,54 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
                   onChange={setChapterWords}
                   accent={workshop.accent}
                 />
+              </div>
+
+              {/* 订阅日更(P1):scenario 型 cron,按书绑定;产物仍走任务交付+人工入库 */}
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5 space-y-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-600">
+                  <CalendarClock className="h-3.5 w-3.5" /> 订阅日更(每天自动续写这本书)
+                </div>
+                {cronLoading ? (
+                  <p className="text-[11px] text-zinc-400 flex items-center gap-1.5">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> 订阅状态加载中…
+                  </p>
+                ) : cronJob ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-zinc-500 leading-relaxed min-w-0">
+                      已订阅:每天 {cronJob.pattern.split(' ')[1]}:00 自动续写(触发时服务端现读书库与档案重建任务)。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleUnsubscribe}
+                      disabled={cronBusy}
+                      className="shrink-0 text-[11px] font-medium text-rose-500 hover:text-rose-700 disabled:opacity-50 transition"
+                    >
+                      取消日更
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <ChipGroup
+                      options={SUB_HOURS.map((h) => ({ id: h, name: `${h}:00` }))}
+                      value={subHour}
+                      onChange={setSubHour}
+                      accent={workshop.accent}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSubscribe}
+                      disabled={cronBusy}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-medium text-white transition disabled:opacity-50 ${accent.btn}`}
+                    >
+                      {cronBusy ? '订阅中…' : `订阅每天 ${subHour}:00 日更`}
+                    </button>
+                  </>
+                )}
+                {cronMsg && <p className="text-[10px] text-zinc-500">{cronMsg}</p>}
+                <p className="text-[10px] text-zinc-400 leading-relaxed">
+                  日更产物以任务交付,仍需你人工审阅后点「存入书库」才写回本书(反思写回只在入库时发生);
+                  发布到任何平台永远由你手动操作。
+                </p>
               </div>
             </>
           )}
@@ -315,9 +604,13 @@ export function NovelWorkshopForm({ workshop, onRun, onClose }: Props) {
       {/* 提交不可用原因(诚实提示,不静默禁用) */}
       {needBook && !preview && !bookLoading && (
         <p className="text-[11px] text-amber-600 leading-relaxed">
-          {books && books.length > 0 && !bookId
-            ? '请先选择一本书。'
-            : '书状态未就绪,无法生成任务。'}
+          {mode === 'style'
+            ? samples.trim()
+              ? '文风学习任务未就绪,请检查样文内容与绑定书目。'
+              : '请先粘贴样文:没有样文就提炼不出文风,绝不凭空编造。'
+            : books && books.length > 0 && !bookId
+              ? '请先选择一本书。'
+              : '书状态未就绪,无法生成任务。'}
         </p>
       )}
     </WorkshopModalShell>

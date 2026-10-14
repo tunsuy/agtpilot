@@ -5,6 +5,10 @@
 
 任务:只写第 {{nextIndex}} 章,不要写多章,不要重写前文。每章约 {{chapterWords}} 字(±10%),文风锚:{{style}}。严禁调用任何发布/投稿/自动上传类工具。
 
+{{#if profileSection}}
+{{profileSection}}
+
+{{/if}}
 输出严格按以下字段头契约(【】独占一行,零寒暄零过程说明):
 
 【书号】

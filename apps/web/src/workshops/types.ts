@@ -141,4 +141,9 @@ export interface CronScenarioSpec {
   build: (count: number, profile: ScenarioProfile | undefined) => string;
   /** 派发来源工坊 id:随任务记录透传,记忆蒸馏层据此不把表单参数沉淀为长期定位 */
   workshopId: string;
+  /**
+   * 触发时需要服务端现读状态(如 novel 日更要现读书库):build() 只是诚实占位,
+   * 纯函数 resolveCronPrompt 对它抛错,必须走 server-render 的 resolveCronPromptServer。
+   */
+  requiresServerState?: boolean;
 }

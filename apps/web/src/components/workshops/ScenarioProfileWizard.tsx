@@ -86,8 +86,27 @@ const OSS_RADAR_COPY: ScenarioCopy = {
   showCadence: false,
 };
 
+const NOVEL_COPY: ScenarioCopy = {
+  noun: '作者档案',
+  steps: [
+    { title: '作者定位', hint: '让 Agent 知道你写哪个题材赛道、读者是谁' },
+    { title: '文风人设', hint: '写两句你最自然的叙事口吻,开书与续写会带上你的声音' },
+    { title: '更新节奏', hint: '一章算一篇;日更订阅与开书建议会匹配你的更新频率' },
+  ],
+  fields: {
+    niche: { label: '题材方向', placeholder: '如:都市异能 / 玄幻升级流 / 悬疑刑侦,可写更细的赛道' },
+    audience: { label: '目标读者', placeholder: '如:男频 18-30 免费平台读者 / 女频言情老书虫' },
+    differentiation: { label: '卖点差异', placeholder: '如:主角智商在线不无脑、金手指有代价、快节奏三章一爽' },
+    toneSamples: { placeholder: '写两句你偏好的叙事口吻,每行一句,如:\n短句白描,动作戏不堆形容词\n对话带市井味,吐槽克制不油腻' },
+    taboos: { label: '禁忌', placeholder: '用顿号或逗号分隔,如:不写虐主、不碰政治敏感、少用网络烂梗' },
+  },
+  showTone: true,
+  showCadence: true,
+};
+
 const SCENARIO_COPIES: Record<string, ScenarioCopy> = {
   oss_radar: OSS_RADAR_COPY,
+  novel: NOVEL_COPY,
 };
 
 export function ScenarioProfileWizard({

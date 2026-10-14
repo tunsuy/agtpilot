@@ -1,11 +1,13 @@
 'use client';
 
 /**
- * 网文小说包卡片(novel 工坊交付物 · docs/design/novel-workshop.md §6)
+ * 网文小说包卡片(novel 工坊交付物 · docs/design/novel-workshop.md §6-§7)
  *
- * 两种包两种卡:
+ * 三种包三种卡:
  * - 开书包:六件套折叠预览 + 开篇章节列表 + 「存入书库」(POST /api/novels action=create);
- * - 续写包:章节 + 反思五连预览 + 「存入书库」(action=append,写回状态库)。
+ * - 续写包:章节 + 反思五连预览 + 「存入书库」(action=append,写回状态库);
+ * - 文风锚包(P2 文风学习):文风锚全文 + 绑书时「写回本书」(action=updateStyle),
+ *   未绑书时可复制留作开书文风锚。
  *
  * 书号校验(归属闭环):续写包回显的【书号】入库前先按当前用户书库核对——
  * 命中直接入;未命中(书被删/串书)绝不猜,给书目下拉由用户指认后再入。
@@ -16,17 +18,21 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  Copy,
   Library,
   Loader2,
   PenLine,
+  Sparkles,
   TriangleAlert,
 } from 'lucide-react';
 import type {
   NovelPackage,
   NovelGenesisPackage,
   NovelContinuePackage,
+  NovelStylePackage,
 } from '../../workshops/novel/novel-package';
 import type { NovelBookSummary } from '../../lib/novel-context';
+import { REVIEW_EVERY_N } from '../../lib/novel-context';
 
 const countWords = (s: string) => String(s || '').replace(/\s/g, '').length;
 
@@ -58,7 +64,7 @@ function Section({ label, count, children }: { label: string; count?: string; ch
 type SaveState =
   | { phase: 'idle' }
   | { phase: 'saving' }
-  | { phase: 'saved'; bookId: string; chapterCount: number; wordCount: number; nextChapter: number }
+  | { phase: 'saved'; bookId: string; chapterCount: number; wordCount: number; nextChapter: number; reviewDue?: boolean }
   | { phase: 'error'; message: string };
 
 function SaveButton({
@@ -237,7 +243,7 @@ function ContinueCard({ pkg }: { pkg: NovelContinuePackage }) {
       });
       const data = await res.json();
       if (data.success && data.progress) {
-        setSave({ phase: 'saved', bookId: targetBookId, ...data.progress });
+        setSave({ phase: 'saved', bookId: targetBookId, ...data.progress, reviewDue: Boolean(data.reviewDue) });
       } else {
         setSave({ phase: 'error', message: data.error || '入库失败' });
       }
@@ -324,11 +330,124 @@ function ContinueCard({ pkg }: { pkg: NovelContinuePackage }) {
             {save.message}
           </p>
         )}
+        {/* 体检提醒(P1):入库后到体检节点就提示,不静默积累矛盾 */}
+        {save.phase === 'saved' && save.reviewDue && (
+          <p className="text-[11px] text-amber-600 flex items-start gap-1 leading-relaxed">
+            <TriangleAlert className="h-3.5 w-3.5 mt-px shrink-0" />
+            这一章入库后,距上次全书体检已新写满 {REVIEW_EVERY_N} 章:建议去工坊跑一次「全书体检」,核对伏笔/时间线/人物状态。
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- 文风锚包卡(P2 文风学习) ----
+
+type StylePhase = 'idle' | 'saving' | 'saved' | 'copied' | 'error';
+
+function StyleAnchorCard({ pkg }: { pkg: NovelStylePackage }) {
+  const [phase, setPhase] = useState<StylePhase>('idle');
+  const [message, setMessage] = useState('');
+
+  const handleSave = async () => {
+    if (!pkg.bookId) return;
+    setPhase('saving');
+    setMessage('');
+    try {
+      const res = await fetch('/api/novels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateStyle', bookId: pkg.bookId, style: pkg.style }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPhase('saved');
+      } else {
+        setPhase('error');
+        setMessage(data.error || '写回失败');
+      }
+    } catch (err: any) {
+      setPhase('error');
+      setMessage(err?.message || '网络异常');
+    }
+  };
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(pkg.style);
+      setPhase('copied');
+      setMessage('');
+    } catch {
+      setPhase('error');
+      setMessage('复制失败:请手动选中「文风锚」文本复制');
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-zinc-50/70 border-b border-zinc-100">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-700 min-w-0">
+          <Sparkles className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+          <span className="truncate">文风锚包{pkg.bookId ? ` · 书号 ${pkg.bookId}` : ' · 未绑定书目'}</span>
+          <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-700 text-[10px] font-medium border border-violet-100">
+            {countWords(pkg.style)}字
+          </span>
+        </span>
+      </div>
+
+      <div className="p-4 space-y-2.5">
+        <div className="rounded-lg border border-zinc-200 px-3 py-2.5 text-[11px] text-zinc-600 leading-relaxed whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
+          {pkg.style}
+        </div>
+
+        <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-zinc-100">
+          <span className="text-[10px] text-zinc-400 leading-relaxed min-w-0">
+            {pkg.bookId
+              ? '写回后,这本书之后的每次续写都会注入这份文风锚(覆盖旧锚)。'
+              : '未绑定书目:复制后在「开新书」的自定义文风锚里粘贴,或之后绑书重跑文风学习。'}
+          </span>
+          <span className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-600 text-[11px] font-medium hover:border-zinc-300 transition"
+            >
+              {phase === 'copied' ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+              {phase === 'copied' ? '已复制' : '复制'}
+            </button>
+            {pkg.bookId &&
+              (phase === 'saved' ? (
+                <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-medium">
+                  <Check className="h-3.5 w-3.5" />
+                  已写回本书
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={phase === 'saving'}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-medium transition shadow-xs disabled:opacity-50"
+                >
+                  {phase === 'saving' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {phase === 'saving' ? '写回中…' : '写回本书'}
+                </button>
+              ))}
+          </span>
+        </div>
+        {phase === 'error' && (
+          <p className="text-[11px] text-red-600 flex items-start gap-1">
+            <TriangleAlert className="h-3.5 w-3.5 mt-px shrink-0" />
+            {message}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
 export function NovelPackageCard({ pkg }: { pkg: NovelPackage }) {
-  return pkg.kind === 'genesis' ? <GenesisCard pkg={pkg} /> : <ContinueCard pkg={pkg} />;
+  if (pkg.kind === 'genesis') return <GenesisCard pkg={pkg} />;
+  if (pkg.kind === 'style') return <StyleAnchorCard pkg={pkg} />;
+  return <ContinueCard pkg={pkg} />;
 }

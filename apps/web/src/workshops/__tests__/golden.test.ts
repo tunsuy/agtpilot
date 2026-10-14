@@ -78,6 +78,7 @@ const GOLDEN_NOVEL_BOOK: NovelBook = {
   timeline: ['第1章|周五雨夜|林凡捡到手机', '第2章|周六|拜师'],
   summaries: ['林凡捡到预知手机。', '拜师学艺,右手骨折。'],
   volumeSummary: '小人物崛起。',
+  lastReviewedChapter: 0,
   chapters: [
     { index: 1, title: '雨夜差评', wordCount: 3000, createdAt: 1700000000000 },
     { index: 2, title: '拜师', wordCount: 3000, createdAt: 1700000001000 },

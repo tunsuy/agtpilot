@@ -17,6 +17,11 @@ export interface CronScenario {
   key: CronScenarioKey;
   /** 产出条数(钳制区间与缺省值见各场景声明),缺省按场景默认 */
   count?: number;
+  /**
+   * 目标书号(novel 日更场景用):这里只做松散清洗(≤64 字符),权威校验在触发时
+   * getNovelBook(按 userId 隔离)——别人的书号在触发时自然 404,不构成越权通道。
+   */
+  bookId?: string;
 }
 
 /** 入口清洗:白名单外的 key 一律无效(忽略而非报错,老任务/恶意输入都安全降级) */
@@ -30,12 +35,17 @@ export function normalizeCronScenario(input: any): CronScenario | null {
     Number.isFinite(rawCount) && rawCount >= spec.countMin && rawCount <= spec.countMax
       ? Math.round(rawCount)
       : undefined;
-  return { key: key as CronScenarioKey, count };
+  const rawBookId = (input as any).bookId;
+  const bookId =
+    typeof rawBookId === 'string' && rawBookId.trim() ? rawBookId.trim().slice(0, 64) : undefined;
+  return { key: key as CronScenarioKey, count, bookId };
 }
 
 /**
  * 触发时解析任务真正要执行的 prompt:
  * - scenario 任务:按当前档案现读重建(档案读取由调用方注入,保持本函数纯可测);
+ * - requiresServerState 场景(novel 日更):纯函数拿不到书库,诚实抛错——
+ *   调度侧必须走 server-render 的 resolveCronPromptServer(服务端现读);
  * - 普通任务:原样返回 job.prompt。
  */
 export function resolveCronPrompt(
@@ -45,6 +55,9 @@ export function resolveCronPrompt(
   const scenario = normalizeCronScenario(job.scenario);
   if (!scenario) return job.prompt || '';
   const spec = CRON_SCENARIOS[scenario.key];
+  if (spec.requiresServerState) {
+    throw new Error(`场景 ${scenario.key} 需要服务端现读状态,不能用纯函数 resolveCronPrompt 解析`);
+  }
   return spec.build(scenario.count ?? spec.defaultCount, getProfile(spec.profileSlot));
 }
 

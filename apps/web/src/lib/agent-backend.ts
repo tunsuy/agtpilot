@@ -12,7 +12,7 @@ import {
   finalizeWithAnswer,
   resolveMission,
 } from './live-steps';
-import { resolveCronPrompt, cronWorkshopId } from './cron-scenario';
+import { cronWorkshopId } from './cron-scenario';
 import { settleToolStep, upsertToolStep } from './tool-steps';
 import { accumulateMissionUsage, buildEfficiencyStepTitle } from './mission-efficiency';
 import { buildTaskSystemPrompt } from './task-system-prompt';
@@ -1923,10 +1923,11 @@ class AgentBackend {
       });
 
       // 以任务归属用户的身份启动智能体生命周期执行。
-      // scenario 订阅任务(如小红书每周选题)触发时用最新档案重建 prompt,不用建订阅时的快照
+      // scenario 订阅任务(如小红书每周选题、小说日更)触发时服务端现读档案/书库
+      // 重建 prompt,不用建订阅时的快照;requiresServerState 场景(novel)只能走这条路
       try {
-        const { getUserScenarioProfiles } = require('@/lib/user-store');
-        const prompt = resolveCronPrompt(jobInfo, (key) => getUserScenarioProfiles(userId)[key]);
+        const { resolveCronPromptServer } = require('@/workshops/server-render');
+        const prompt = resolveCronPromptServer(jobInfo, userId) as string;
         await this.runMission(prompt, {
           title: `【自动巡航】${jobInfo.name}`,
           userId,
@@ -1975,10 +1976,10 @@ class AgentBackend {
       data: { jobId: jobInfo.id, userId, runCount: jobInfo.runCount },
     });
 
-    // 与定时触发同源:scenario 订阅任务手动触发也按最新档案重建 prompt
+    // 与定时触发同源:scenario 订阅任务手动触发也服务端现读档案/书库重建 prompt
     try {
-      const { getUserScenarioProfiles } = require('@/lib/user-store');
-      const prompt = resolveCronPrompt(jobInfo, (key) => getUserScenarioProfiles(userId)[key]);
+      const { resolveCronPromptServer } = require('@/workshops/server-render');
+      const prompt = resolveCronPromptServer(jobInfo, userId) as string;
       await this.runMission(prompt, {
         title: `【自动巡航】${jobInfo.name}`,
         userId,

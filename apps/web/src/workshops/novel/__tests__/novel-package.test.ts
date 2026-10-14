@@ -234,6 +234,50 @@ describe('parseNovelPackage · 续写包', () => {
   });
 });
 
+describe('parseNovelPackage · 文风锚包(P2 文风学习)', () => {
+  const STYLE_TEXT =
+    '第一人称冷叙述,段落平均不超过三行。动作戏白描,不堆形容词,打斗用短句快速切换。对白占比高,人物口吻区分明显:主角惜字如金,女主毒舌爱反问。情绪爽点直给,铺垫不超过半章,每章结尾留钩子。氛围重视觉与听觉,环境描写服务于事件铺垫而非抒情。';
+  const STYLE_FIXTURE = `【书号】
+nv_m3k9x2_a1b2c3
+
+【文风锚】
+${STYLE_TEXT}`;
+
+  it('绑书样例完整解析:书号 + 文风锚全文', () => {
+    const pkg = parseNovelPackage(STYLE_FIXTURE);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('style');
+    if (pkg!.kind !== 'style') return;
+    expect(pkg!.bookId).toBe('nv_m3k9x2_a1b2c3');
+    expect(pkg!.style).toContain('第一人称冷叙述');
+    expect(pkg!.style).toContain('环境描写服务于事件铺垫而非抒情');
+  });
+
+  it('未绑书:无【书号】段,bookId 为 null(锚留作开书用)', () => {
+    const pkg = parseNovelPackage(`【文风锚】\n${STYLE_TEXT}`);
+    expect(pkg!.kind).toBe('style');
+    if (pkg!.kind === 'style') expect(pkg!.bookId).toBeNull();
+  });
+
+  it('书号格式错:诚实降级为未绑定文风锚(不当续写包也不整包拒收)', () => {
+    const pkg = parseNovelPackage(STYLE_FIXTURE.replace('nv_m3k9x2_a1b2c3', 'book-123'));
+    expect(pkg!.kind).toBe('style');
+    if (pkg!.kind === 'style') expect(pkg!.bookId).toBeNull();
+  });
+
+  it('文风锚过短(<30 有效字):诚实降级 null(半截输出不入库)', () => {
+    expect(parseNovelPackage('【文风锚】\n太短了。')).toBeNull();
+    expect(parseNovelPackage('【书号】\nnv_m3k9x2_a1b2c3\n\n【文风锚】\n   ')).toBeNull();
+  });
+
+  it('文风锚包与笔记包/文章包双向互斥;开书/续写样例不被当文风锚包', () => {
+    expect(parseNotePackages(STYLE_FIXTURE).packages).toEqual([]);
+    expect(parseArticlePackages(STYLE_FIXTURE).packages).toEqual([]);
+    expect(parseNovelPackage(GENESIS_FIXTURE)!.kind).toBe('genesis');
+    expect(parseNovelPackage(CONTINUE_FIXTURE)!.kind).toBe('continue');
+  });
+});
+
 describe('格式互斥 · 与笔记包/文章包双向不碰撞', () => {
   const NOTE_FIXTURE = `【标题候选】
 1. 秋冬通勤穿搭三件套

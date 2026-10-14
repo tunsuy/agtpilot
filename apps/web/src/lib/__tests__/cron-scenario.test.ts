@@ -27,19 +27,30 @@ const ossProfile: ScenarioProfile = {
 };
 
 describe('CRON_SCENARIOS 注册表(场景单一事实源)', () => {
-  it('场景声明齐全:两个订阅场景在注册表内', () => {
-    expect(Object.keys(CRON_SCENARIOS).sort()).toEqual(['oss_radar_weekly', 'xhs_weekly_topics']);
+  it('场景声明齐全:三个订阅场景在注册表内', () => {
+    expect(Object.keys(CRON_SCENARIOS).sort()).toEqual([
+      'novel_daily_chapter',
+      'oss_radar_weekly',
+      'xhs_weekly_topics',
+    ]);
   });
 
-  it('声明字段完备:key 与注册表条目一致、count 区间自洽、build 可调', () => {
+  it('声明字段完备:key 与注册表条目一致、count 区间自洽、纯函数场景 build 可调', () => {
     for (const [entryKey, spec] of Object.entries(CRON_SCENARIOS)) {
       expect(spec.key).toBe(entryKey);
       expect(spec.profileSlot).toBeTruthy();
       expect(spec.countMin).toBeLessThan(spec.countMax);
       expect(spec.defaultCount).toBeGreaterThanOrEqual(spec.countMin);
       expect(spec.defaultCount).toBeLessThanOrEqual(spec.countMax);
-      // 无档案可调(触发时档案可能缺失,绝不能抛)
-      expect(typeof spec.build(spec.defaultCount, undefined)).toBe('string');
+      if (spec.requiresServerState) {
+        // novel 日更:build 是诚实占位——纯函数调它必须抛错并指名服务端路径,
+        // 绝不静默产出假 prompt(触发时走 server-render.resolveCronPromptServer)
+        expect(spec.workshopId).toBe('novel');
+        expect(() => spec.build(spec.defaultCount, undefined)).toThrow(/server-render/);
+      } else {
+        // 无档案可调(触发时档案可能缺失,绝不能抛)
+        expect(typeof spec.build(spec.defaultCount, undefined)).toBe('string');
+      }
     }
   });
 });
@@ -84,6 +95,31 @@ describe('normalizeCronScenario', () => {
       count: undefined,
     });
   });
+
+  it('bookId(novel 日更目标书):字符串去空白保留,超长截断 64,非字符串/空白丢弃', () => {
+    expect(
+      normalizeCronScenario({ key: 'novel_daily_chapter', count: 3000, bookId: '  nv_x1_abc123  ' })
+    ).toEqual({ key: 'novel_daily_chapter', count: 3000, bookId: 'nv_x1_abc123' });
+    expect(normalizeCronScenario({ key: 'novel_daily_chapter', bookId: 'a'.repeat(100) })).toEqual({
+      key: 'novel_daily_chapter',
+      count: undefined,
+      bookId: 'a'.repeat(64),
+    });
+    // 非字符串/空白:丢弃(权威校验在触发时 getNovelBook,这里只做松散清洗)
+    expect(normalizeCronScenario({ key: 'novel_daily_chapter', bookId: 42 })).toEqual({
+      key: 'novel_daily_chapter',
+      count: undefined,
+      bookId: undefined,
+    });
+    expect(normalizeCronScenario({ key: 'novel_daily_chapter', bookId: '   ' })).toEqual({
+      key: 'novel_daily_chapter',
+      count: undefined,
+      bookId: undefined,
+    });
+    // novel count 区间 = 每章字数 1000-6000
+    expect(normalizeCronScenario({ key: 'novel_daily_chapter', count: 500 })!.count).toBeUndefined();
+    expect(normalizeCronScenario({ key: 'novel_daily_chapter', count: 2500 })!.count).toBe(2500);
+  });
 });
 
 describe('resolveCronPrompt', () => {
@@ -124,6 +160,14 @@ describe('resolveCronPrompt', () => {
   it('普通任务:原样返回 job.prompt', () => {
     const job = { prompt: '帮我总结今天的邮件' };
     expect(resolveCronPrompt(job, () => profile)).toBe('帮我总结今天的邮件');
+  });
+
+  it('requiresServerState 场景(novel 日更):纯函数路径诚实抛错,强制走服务端解析', () => {
+    const job = {
+      prompt: '旧快照',
+      scenario: { key: 'novel_daily_chapter' as const, count: 3000, bookId: 'nv_x1_a1b2c3' },
+    };
+    expect(() => resolveCronPrompt(job, () => undefined)).toThrow(/需要服务端现读状态/);
   });
 
   it('scenario 非法(脏数据/恶意 key):降级回 job.prompt', () => {

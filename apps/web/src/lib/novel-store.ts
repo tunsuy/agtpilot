@@ -29,6 +29,7 @@ import type {
   CreateNovelInput,
   AppendChapterInput,
 } from './novel-context';
+import { isReviewDue } from './novel-context';
 
 export type {
   NovelCharacter,
@@ -40,7 +41,7 @@ export type {
   CreateNovelInput,
   AppendChapterInput,
 } from './novel-context';
-export { assembleChapterContext, assembleReviewContext } from './novel-context';
+export { assembleChapterContext, assembleReviewContext, isReviewDue, REVIEW_EVERY_N } from './novel-context';
 
 // ---- 路径消毒(artifact-files 同款) ----
 
@@ -90,6 +91,10 @@ function readBookJson(userId: string, bookId: string): NovelBook | null {
     const raw = fs.readFileSync(file, 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || typeof parsed.bookId !== 'string') return null;
+    // P0 落盘的老书没有体检字段:读时兜底,不迁移文件(下次写回自然补齐)
+    if (typeof parsed.lastReviewedChapter !== 'number' || !Number.isFinite(parsed.lastReviewedChapter)) {
+      parsed.lastReviewedChapter = 0;
+    }
     return parsed as NovelBook;
   } catch {
     return null;
@@ -124,6 +129,7 @@ function toSummary(book: NovelBook): NovelBookSummary {
     updatedAt: book.updatedAt,
     progress: book.progress,
     openForeshadows: book.ledger.filter((f) => f.status === 'planted').length,
+    reviewDue: isReviewDue(book),
   };
 }
 
@@ -202,6 +208,7 @@ export function createNovelBook(userId: string, input: CreateNovelInput): NovelB
     timeline: input.timelineSeeds || [],
     summaries,
     volumeSummary: String(input.volumeSummary || ''),
+    lastReviewedChapter: 0,
     chapters,
   };
   atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
@@ -297,6 +304,39 @@ export function appendChapter(userId: string, bookId: string, input: AppendChapt
   }
 
   if (String(input.volumeSummary || '').trim()) book.volumeSummary = String(input.volumeSummary).trim();
+  book.updatedAt = Date.now();
+  atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
+  return book;
+}
+
+/**
+ * 标记「已体检到当前章」:发起全书体检任务时调用(P1 每 N 章自动审查提醒)。
+ * 只是提醒启发式的落点,不是状态一致性的一部分——体检任务失败可重跑,
+ * 重跑会再次标记,不会造成书库状态错误。书不存在抛错(调用方 404)。
+ */
+export function markNovelReviewed(userId: string, bookId: string): NovelBook {
+  const book = readBookJson(userId, bookId);
+  if (!book) throw new Error(`书不存在: ${bookId}`);
+  book.lastReviewedChapter = book.progress.chapterCount;
+  book.updatedAt = Date.now();
+  atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
+  return book;
+}
+
+/** 文风锚上限:一段可注入 prompt 的风格描述,2000 字足够(超长必是误粘贴正文) */
+export const MAX_STYLE_CHARS = 2000;
+
+/**
+ * 更新一本书的文风锚(P2 文风学习的落库点;表单手改也走这里)。
+ * 空样式/超长抛错——文风锚每次续写都注入,脏值会长期污染全书文风。
+ */
+export function updateNovelStyle(userId: string, bookId: string, style: string): NovelBook {
+  const book = readBookJson(userId, bookId);
+  if (!book) throw new Error(`书不存在: ${bookId}`);
+  const next = String(style || '').trim();
+  if (!next) throw new Error('文风锚为空,拒绝写入(会长期注入续写 prompt,不落脏值)');
+  if (next.length > MAX_STYLE_CHARS) throw new Error(`文风锚超长(> ${MAX_STYLE_CHARS} 字),拒绝写入`);
+  book.style = next;
   book.updatedAt = Date.now();
   atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
   return book;

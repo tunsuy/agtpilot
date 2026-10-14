@@ -83,6 +83,8 @@ export interface NovelBook {
   summaries: string[];
   /** 全书滚动总纲(反思时更新,分层压缩的顶层) */
   volumeSummary: string;
+  /** 上次全书体检时写到的章号(0=从未体检;每 N 章体检提醒的依据,P1) */
+  lastReviewedChapter: number;
   chapters: ChapterMeta[];
 }
 
@@ -98,6 +100,8 @@ export interface NovelBookSummary {
   progress: NovelBook['progress'];
   /** 未回收伏笔数(列表徽标) */
   openForeshadows: number;
+  /** 是否到了建议体检的节点(距上次体检新写章节 ≥ REVIEW_EVERY_N) */
+  reviewDue: boolean;
 }
 
 /** 开书输入(来自开书包契约解析结果) */
@@ -137,6 +141,14 @@ export interface AppendChapterInput {
 }
 
 // ---- 恒定上下文装配(§2 核心机制,纯函数) ----
+
+/** 体检提醒间隔:距上次体检新写满这么多章,建议跑一次全书体检(P1 自动审查提醒) */
+export const REVIEW_EVERY_N = 5;
+
+/** 是否到体检节点(纯派生,不落额外状态;lastReviewedChapter 缺失按 0 兜底) */
+export function isReviewDue(book: Pick<NovelBook, 'progress'> & { lastReviewedChapter?: number }): boolean {
+  return book.progress.chapterCount - (book.lastReviewedChapter || 0) >= REVIEW_EVERY_N;
+}
 
 /** 装配预算:近章摘要条数 / 时间线条数 */
 const RECENT_SUMMARIES = 3;

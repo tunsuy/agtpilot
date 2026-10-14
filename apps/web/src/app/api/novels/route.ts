@@ -7,16 +7,23 @@ import {
   createNovelBook,
   appendChapter,
   deleteNovelBook,
+  markNovelReviewed,
+  updateNovelStyle,
+  isReviewDue,
+  MAX_STYLE_CHARS,
   type CreateNovelInput,
   type AppendChapterInput,
 } from '@/lib/novel-store';
+import { buildNovelTxt, buildNovelEpub } from '@/lib/novel-export';
 
 /**
  * 网文小说书库(docs/design/novel-workshop.md §6)
  *
  * GET  ?无参 → 书库列表(轻量摘要);?bookId= → 全书状态(不含正文,
- *      续写/审查表单的服务端现读同源数据);&chapter=N → 附该章正文。
- * POST action=create(开书包入库)/ append(续写包反思写回)/ delete。
+ *      续写/审查表单的服务端现读同源数据);&chapter=N → 附该章正文;
+ *      &export=txt|epub → 全书导出直下(P1,附件流,不落 artifact-files)。
+ * POST action=create(开书包入库)/ append(续写包反思写回)/ delete /
+ *      markReviewed(体检提醒落点)/ updateStyle(文风锚)。
  *
  * 边界:书号入库前按当前登录用户校验(getNovelBook 按 userId 隔离);
  * 章序号永远由 novel-store 按 progress.nextChapter 分配,请求体传什么不算什么;
@@ -26,6 +33,22 @@ import {
 async function requireUser(): Promise<string | null> {
   const session = await auth();
   return session?.user?.id || null;
+}
+
+/** 导出文件名消毒:书名可能带路径/引号等字符,只留可读安全集(不消毒就是不信任边界) */
+function safeExportName(title: string, ext: 'txt' | 'epub'): string {
+  const base = String(title || '小说').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim().slice(0, 60) || '小说';
+  return `《${base}》.${ext}`;
+}
+
+/** Content-Disposition:ASCII fallback + RFC 5987 filename*(中文书名) */
+function attachmentHeaders(name: string, contentType: string): Record<string, string> {
+  const ascii = 'novel-export.' + name.split('.').pop();
+  return {
+    'Content-Type': contentType,
+    'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'Cache-Control': 'no-store',
+  };
 }
 
 export async function GET(req: NextRequest) {
@@ -41,6 +64,26 @@ export async function GET(req: NextRequest) {
     const book = getNovelBook(userId, bookId);
     if (!book) {
       return NextResponse.json({ success: false, error: `书不存在: ${bookId}` }, { status: 404 });
+    }
+    // 全书导出(P1):txt | epub 直下;非法值当没传,走 JSON 分支
+    const exportFmt = req.nextUrl.searchParams.get('export');
+    if (exportFmt === 'txt' || exportFmt === 'epub') {
+      const readChapter = (index: number) => getChapterContent(userId, bookId, index);
+      if (exportFmt === 'txt') {
+        const txt = buildNovelTxt(book, readChapter);
+        return new NextResponse(txt, {
+          headers: attachmentHeaders(safeExportName(book.title, 'txt'), 'text/plain; charset=utf-8'),
+        });
+      }
+      try {
+        const epub = buildNovelEpub(book, readChapter);
+        return new NextResponse(new Uint8Array(epub), {
+          headers: attachmentHeaders(safeExportName(book.title, 'epub'), 'application/epub+zip'),
+        });
+      } catch (err: any) {
+        // 「没有正文无法导出」是业务态(400),其余如实 500
+        return NextResponse.json({ success: false, error: err.message }, { status: 400 });
+      }
     }
     const chapterParam = req.nextUrl.searchParams.get('chapter');
     let chapterContent: string | null = null;
@@ -188,7 +231,32 @@ export async function POST(req: NextRequest) {
         );
       }
       const book = appendChapter(userId, bookId, input);
-      return NextResponse.json({ success: true, bookId, progress: book.progress });
+      return NextResponse.json({ success: true, bookId, progress: book.progress, reviewDue: isReviewDue(book) });
+    }
+
+    if (action === 'markReviewed') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      if (!bookId || !getNovelBook(userId, bookId)) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      const book = markNovelReviewed(userId, bookId);
+      return NextResponse.json({ success: true, bookId, lastReviewedChapter: book.lastReviewedChapter });
+    }
+
+    if (action === 'updateStyle') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      if (!bookId || !getNovelBook(userId, bookId)) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      const style = typeof body?.style === 'string' ? body.style.trim() : '';
+      if (!style) {
+        return NextResponse.json({ success: false, error: '文风锚不能为空' }, { status: 400 });
+      }
+      if (style.length > MAX_STYLE_CHARS) {
+        return NextResponse.json({ success: false, error: `文风锚超长(> ${MAX_STYLE_CHARS} 字)` }, { status: 400 });
+      }
+      const book = updateNovelStyle(userId, bookId, style);
+      return NextResponse.json({ success: true, bookId, style: book.style });
     }
 
     if (action === 'delete') {

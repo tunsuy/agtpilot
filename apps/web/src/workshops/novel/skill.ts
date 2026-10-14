@@ -15,12 +15,34 @@ import {
   buildNovelGenesisPrompt,
   buildNovelContinuePrompt,
   buildNovelReviewPrompt,
+  buildNovelStylePrompt,
   NOVEL_GENRES,
   clampChapterWords,
 } from './context';
 import { str } from '../shared/params';
-import type { WorkshopSkill } from '../types';
+import type { CronScenarioSpec, WorkshopSkill } from '../types';
 import type { NovelBook } from '@/lib/novel-context';
+
+/** cron 日更场景 key(注册表汇入 CRON_SCENARIOS,派生 CronScenarioKey union) */
+export const CRON_KEY = 'novel_daily_chapter' as const;
+
+/**
+ * cron 日更场景:count = 每章字数(不是产出条数);目标书 bookId 存在任务标记上,
+ * 触发时服务端现读书库重建续写 prompt(requiresServerState)——build 只是诚实占位,
+ * 纯函数路径(客户端预览/无书库上下文)调它直接抛错,绝不静默产出假 prompt。
+ */
+export const CRON: CronScenarioSpec = {
+  key: CRON_KEY,
+  profileSlot: 'novel',
+  countMin: 1000,
+  countMax: 6000,
+  defaultCount: 3000,
+  requiresServerState: true,
+  build: () => {
+    throw new Error('novel 日更场景需要服务端现读书库(server-render.resolveCronPromptServer),纯函数重建不可用');
+  },
+  workshopId: 'novel',
+};
 
 export const WORKSHOP_SKILL: WorkshopSkill = {
   meta: {
@@ -32,9 +54,27 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     accent: 'violet',
     deps: [],
     note: '按职业作者方法论(设定集/人物卡/三层大纲/伏笔台账/时间线/文风锚)建库,每章生成只注入恒定上下文,写后反思写回,长篇前后一致。产出存入你的书库(可手改);投递任何平台前请人工审阅,并按平台规则如实勾选 AI 辅助声明——发布永远由你确认,本工坊不自动发布。',
+    profileSlot: 'novel',
   },
+  cron: CRON,
   run: (params, ctx) => {
     const mode = str(params.mode, 'genesis');
+    if (mode === 'style') {
+      // 文风学习(P2):书绑定可选——绑了书号就必须拿到书状态(不猜),没绑则纯提炼
+      const bookId = str(params.bookId);
+      const book: NovelBook | undefined = ctx?.novelState;
+      if (bookId && !book) {
+        throw new Error('缺少小说状态(书不存在或参数缺 bookId),无法绑定文风锚');
+      }
+      return {
+        prompt: buildNovelStylePrompt({
+          samples: str(params.samples),
+          book: bookId ? book ?? null : null,
+          profile: ctx?.scenarioProfile ?? null,
+        }),
+        title: bookId && book ? `《${book.title}》文风学习` : '文风学习',
+      };
+    }
     if (mode === 'continue' || mode === 'review') {
       const book: NovelBook | undefined = ctx?.novelState;
       if (!book) {
@@ -43,7 +83,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       }
       if (mode === 'review') {
         return {
-          prompt: buildNovelReviewPrompt({ book, focus: str(params.focus) }),
+          prompt: buildNovelReviewPrompt({ book, focus: str(params.focus), profile: ctx?.scenarioProfile ?? null }),
           title: `《${book.title}》全书体检`,
         };
       }
@@ -51,6 +91,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         book,
         style: str(params.style),
         chapterWords: clampChapterWords(params.chapterWords),
+        profile: ctx?.scenarioProfile ?? null,
       });
       return { prompt, title: `《${book.title}》第${nextIndex}章` };
     }
@@ -63,6 +104,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         style: str(params.style, '爽文快节奏:短段落、强钩子、三章一小爽五章一大爽'),
         chapterWords: clampChapterWords(params.chapterWords),
         openingChapters: params.openingChapters,
+        profile: ctx?.scenarioProfile ?? null,
       }),
       title: `网文开书:${genre}`,
     };

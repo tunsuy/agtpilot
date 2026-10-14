@@ -5,9 +5,11 @@
  * 【字段头】输出,本模块把 markdown 解析回结构化;解析失败(返回 null)时调用方
  * 降级为普通 markdown 渲染。纯函数,无 React/node 运行时依赖,固定样例做契约测试。
  *
- * 两种包,互斥锚:
+ * 三种包,互斥锚:
  * - 开书包(genesis):必含【设定集】+【粗纲】+ 至少一章正文;
- * - 续写包(continue):必含【书号】(nv_ 前缀)+【本章摘要】+ 章节正文。
+ * - 续写包(continue):必含【书号】(nv_ 前缀)+【本章摘要】+ 章节正文;
+ * - 文风锚包(style,P2 文风学习):必含【文风锚】;【书号】可选(绑书时回显,
+ *   入库前仍按用户书库校验);不含正文段,与前两种互斥。
  * 【本章摘要】不命中文章包的【摘要】锚(其正则要求「摘要」顶格),双向互斥由测试锚定。
  *
  * 可信边界:包里的章节序号只做展示,入库序号永远由 novel-store 按 progress.nextChapter
@@ -49,13 +51,23 @@ export interface NovelContinuePackage {
   volumeSummary?: string;
 }
 
-export type NovelPackage = NovelGenesisPackage | NovelContinuePackage;
+export interface NovelStylePackage {
+  kind: 'style';
+  /** 绑定书号(【书号】回显且格式合法才有;null = 未绑定,产出可用作开书文风锚) */
+  bookId: string | null;
+  /** 提炼出的文风锚(纯风格描述,不含情节) */
+  style: string;
+}
+
+export type NovelPackage = NovelGenesisPackage | NovelContinuePackage | NovelStylePackage;
 
 // ---- 字段头 ----
 
 const BOOK_ID_RE = /^nv_[a-z0-9]+_[a-f0-9]{6}$/;
 /** 章节正文最短长度(去空白):低于此按解析失败降级,防把寒暄当正文入库 */
 const MIN_CHAPTER_CHARS = 200;
+/** 文风锚最短长度(去空白):一句话不算锚,防把寒暄/评论当文风写回全书 */
+const MIN_STYLE_CHARS = 30;
 
 type HeaderKey =
   | 'bookId'
@@ -72,6 +84,7 @@ type HeaderKey =
   | 'ledgerActions'
   | 'nextDetailed'
   | 'volumeSummary'
+  | 'styleAnchor'
   | 'chapter';
 
 /** 字段头正则(允许行尾追加说明,如【第3章 · 3000字】) */
@@ -92,6 +105,7 @@ const HEADERS: Array<[HeaderKey, RegExp]> = [
   ['charUpdates', /^\s*【\s*人物状态更新\s*[^】]*】\s*$/],
   ['nextDetailed', /^\s*【\s*下章细纲\s*[^】]*】\s*$/],
   ['volumeSummary', /^\s*【\s*总纲更新\s*[^】]*】\s*$/],
+  ['styleAnchor', /^\s*【\s*文风锚\s*[^】]*】\s*$/],
 ];
 
 /** 动态章头:【第N章】(N 支持阿拉伯数字;章头允许追加标题,如【第3章 夜袭】) */
@@ -392,6 +406,18 @@ export function parseNovelPackage(text: string): NovelPackage | null {
       timelineAppend: parseTimelineLines(joinLines(byKey('timeline')?.lines)),
       detailedAppend: parseDetailed(joinLines(byKey('nextDetailed')?.lines)),
       ...(volumeSummary ? { volumeSummary } : {}),
+    };
+  }
+
+  // ---- 文风锚包(P2 文风学习):无正文段,靠【文风锚】锚与前两种互斥 ----
+  const styleSeg = byKey('styleAnchor');
+  if (styleSeg) {
+    const styleText = joinLines(styleSeg.lines);
+    if (styleText.replace(/\s/g, '').length < MIN_STYLE_CHARS) return null;
+    return {
+      kind: 'style',
+      bookId: BOOK_ID_RE.test(bookIdRaw) ? bookIdRaw : null,
+      style: styleText,
     };
   }
 

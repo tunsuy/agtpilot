@@ -20,6 +20,11 @@ import {
   appendChapter,
   deleteNovelBook,
   countWords,
+  markNovelReviewed,
+  updateNovelStyle,
+  MAX_STYLE_CHARS,
+  isReviewDue,
+  REVIEW_EVERY_N,
   assembleChapterContext,
   assembleReviewContext,
   type NovelBook,
@@ -306,5 +311,63 @@ describe('assembleReviewContext · 审查上下文', () => {
     expect(ctx).toContain('## 逐章摘要');
     expect(ctx).toContain('## 粗纲/卷纲');
     expect(ctx).not.toMatch(/^【/m);
+  });
+});
+
+describe('markNovelReviewed / isReviewDue · 每 N 章体检提醒(P1)', () => {
+  it('新书 lastReviewedChapter=0;写满 N 章提醒触发,标记后归零并持久化', () => {
+    const book = seedBook();
+    expect(book.lastReviewedChapter).toBe(0);
+    expect(isReviewDue(book)).toBe(false); // 只写 1 章,未满 5
+    for (let i = 0; i < REVIEW_EVERY_N; i++) {
+      appendChapter('u1', book.bookId, { title: 't', content: LONG_BODY, summary: 's' });
+    }
+    const grown = getNovelBook('u1', book.bookId)!;
+    expect(isReviewDue(grown)).toBe(true); // 1+5 章,距上次体检(0)满 5
+    const marked = markNovelReviewed('u1', book.bookId);
+    expect(marked.lastReviewedChapter).toBe(6);
+    expect(isReviewDue(marked)).toBe(false);
+    // 落盘:重读仍在
+    expect(getNovelBook('u1', book.bookId)!.lastReviewedChapter).toBe(6);
+  });
+
+  it('markNovelReviewed 书不存在抛错(调用方 404)', () => {
+    expect(() => markNovelReviewed('u1', 'nv_nope_000000')).toThrow(/书不存在/);
+  });
+
+  it('legacy book.json 缺 lastReviewedChapter 字段:读取时归 0,不炸', () => {
+    const book = seedBook();
+    const jsonPath = path.join(dataDir, 'novels', 'u1', book.bookId, 'book.json');
+    const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    delete raw.lastReviewedChapter;
+    fs.writeFileSync(jsonPath, JSON.stringify(raw), 'utf8');
+    const legacy = getNovelBook('u1', book.bookId)!;
+    expect(legacy.lastReviewedChapter).toBe(0);
+    expect(listNovelBooks('u1').find((s) => s.bookId === book.bookId)!.reviewDue).toBe(false);
+  });
+
+  it('书库摘要带 reviewDue(表单下拉直接可显「建议体检」)', () => {
+    const book = seedBook();
+    for (let i = 0; i < REVIEW_EVERY_N; i++) {
+      appendChapter('u1', book.bookId, { title: 't', content: LONG_BODY, summary: 's' });
+    }
+    expect(listNovelBooks('u1').find((s) => s.bookId === book.bookId)!.reviewDue).toBe(true);
+  });
+});
+
+describe('updateNovelStyle · 文风锚写回(P2)', () => {
+  it('合法文风锚落盘,重读可见', () => {
+    const book = seedBook();
+    const updated = updateNovelStyle('u1', book.bookId, '第一人称冷叙述,短句为主,动作戏白描');
+    expect(updated.style).toBe('第一人称冷叙述,短句为主,动作戏白描');
+    expect(getNovelBook('u1', book.bookId)!.style).toBe('第一人称冷叙述,短句为主,动作戏白描');
+  });
+
+  it('空样式/超长/书不存在都抛错,不落脏值(文风锚长期注入续写 prompt)', () => {
+    const book = seedBook();
+    expect(() => updateNovelStyle('u1', book.bookId, '   ')).toThrow(/文风锚为空/);
+    expect(() => updateNovelStyle('u1', book.bookId, 'x'.repeat(MAX_STYLE_CHARS + 1))).toThrow(/文风锚超长/);
+    expect(() => updateNovelStyle('u1', 'nv_nope_000000', 'x')).toThrow(/书不存在/);
+    expect(getNovelBook('u1', book.bookId)!.style).toBe('爽文快节奏'); // 原值未被污染
   });
 });

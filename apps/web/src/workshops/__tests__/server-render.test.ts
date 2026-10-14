@@ -18,7 +18,7 @@ import {
   isWorkshopOverridden,
   resetWorkshopOverrideCache,
 } from '../overrides';
-import { renderWorkshopRunServer } from '../server-render';
+import { renderWorkshopRunServer, resolveCronPromptServer } from '../server-render';
 import { getUserScenarioProfiles, saveUserScenarioProfile } from '@/lib/user-store';
 import { createNovelBook, appendChapter } from '@/lib/novel-store';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
@@ -233,5 +233,120 @@ describe('novel loader(书状态服务端现读,docs/design/novel-workshop.md §
     expect(run!.title).toBe('《铁拳少年》全书体检');
     expect(run!.prompt).toContain('伏笔盘点');
     expect(run!.prompt).toContain('手机裂纹来历');
+  });
+});
+
+describe('novel style loader(P2 文风学习,绑书可选)', () => {
+  const LONG = '暴雨夜,林凡攥着手机在积水里狂奔,差评像追命的鼓点,一声声砸在他背上。'.repeat(8);
+  const SAMPLES = '雨夜,外卖箱撞在背上,冰凉。他攥紧手机,冲进巷子深处。';
+
+  it('不绑书:无书状态也渲染(纯提炼,锚留作开书用)', () => {
+    const run = renderWorkshopRunServer('u-style', 'novel', { mode: 'style', samples: SAMPLES });
+    expect(run).not.toBeNull();
+    expect(run!.title).toBe('文风学习');
+    expect(run!.prompt).toContain('【文风锚】');
+    expect(run!.prompt).toContain(SAMPLES);
+    expect(run!.prompt).not.toContain('绑定书目');
+    expect(run!.prompt).not.toContain('【书号】');
+  });
+
+  it('绑有效书:标题带书名,prompt 内嵌书号与回显契约', () => {
+    const book = createNovelBook('u-style-b', {
+      title: '铁拳少年',
+      chapters: [{ title: '雨夜差评', content: LONG, summary: '捡到手机。' }],
+    });
+    const run = renderWorkshopRunServer('u-style-b', 'novel', {
+      mode: 'style',
+      bookId: book.bookId,
+      samples: SAMPLES,
+    });
+    expect(run!.title).toBe('《铁拳少年》文风学习');
+    expect(run!.prompt).toContain('绑定书目:《铁拳少年》');
+    expect(run!.prompt).toContain(book.bookId);
+    expect(run!.prompt).toContain('【书号】');
+  });
+
+  it('绑了书但书不存在/无权访问:抛错(绝不猜绑定)', () => {
+    expect(() =>
+      renderWorkshopRunServer('u-style-c', 'novel', { mode: 'style', bookId: 'nv_nope_000000', samples: SAMPLES })
+    ).toThrow(/小说不存在或无权访问/);
+    const book = createNovelBook('u-style-owner', {
+      title: 't',
+      chapters: [{ title: 't', content: LONG, summary: 's' }],
+    });
+    expect(() =>
+      renderWorkshopRunServer('u-style-other', 'novel', { mode: 'style', bookId: book.bookId, samples: SAMPLES })
+    ).toThrow(/小说不存在或无权访问/);
+  });
+
+  it('缺样文:诚实抛错(绝不凭空编造文风)', () => {
+    expect(() => renderWorkshopRunServer('u-style-d', 'novel', { mode: 'style' })).toThrow(/需要样文/);
+  });
+});
+
+describe('resolveCronPromptServer(触发时服务端现读,P1 novel 日更)', () => {
+  const LONG = '暴雨夜,林凡攥着手机在积水里狂奔,差评像追命的鼓点,一声声砸在他背上。'.repeat(8);
+
+  it('普通任务:原样 job.prompt;空 prompt 返回空串', () => {
+    expect(resolveCronPromptServer({ prompt: '帮我总结今天的邮件' }, 'u-cron-a')).toBe('帮我总结今天的邮件');
+    expect(resolveCronPromptServer({}, 'u-cron-a')).toBe('');
+  });
+
+  it('scenario 非法(脏数据):降级回 job.prompt(与纯函数路径同语义)', () => {
+    expect(resolveCronPromptServer({ prompt: '兜底', scenario: { key: 'whatever' } as any }, 'u-cron-a')).toBe('兜底');
+  });
+
+  it('纯场景(xhs):档案从 user-store 现读注入重建(不依赖服务端书库)', () => {
+    const userId = 'u-cron-xhs';
+    saveUserScenarioProfile(userId, profile);
+    const prompt = resolveCronPromptServer(
+      { prompt: '旧快照', scenario: { key: 'xhs_weekly_topics', count: 5 } },
+      userId
+    );
+    expect(prompt).toContain('【账号档案】');
+    expect(prompt).toContain('产出 5 条选题');
+    expect(prompt).not.toContain('旧快照');
+  });
+
+  it('novel 日更:现读书库重建续写 prompt(书号逐字、下一章序号、count=每章字数)', () => {
+    const userId = 'u-cron-novel';
+    const book = createNovelBook(userId, {
+      title: '铁拳少年',
+      bible: '力量体系:青铜→白银,不可跳级。',
+      chapters: [{ title: '雨夜差评', content: LONG, summary: '捡到手机。' }],
+    });
+    const prompt = resolveCronPromptServer(
+      { prompt: '旧快照', scenario: { key: 'novel_daily_chapter', count: 2500, bookId: book.bookId } },
+      userId
+    );
+    expect(prompt).not.toContain('旧快照');
+    expect(prompt).toContain(book.bookId);
+    expect(prompt).toContain('《铁拳少年》第 2 章');
+    expect(prompt).toContain('2500');
+    expect(prompt).toContain('青铜→白银');
+
+    // 书库更新后再触发跟着变(现读,不是订阅时的快照)
+    appendChapter(userId, book.bookId, { title: '夜袭', content: LONG, summary: '夜探仓库。' });
+    const prompt2 = resolveCronPromptServer(
+      { scenario: { key: 'novel_daily_chapter', bookId: book.bookId } },
+      userId
+    );
+    expect(prompt2).toContain('《铁拳少年》第 3 章');
+    expect(prompt2).toContain('3000'); // count 缺省 → defaultCount 3000
+  });
+
+  it('novel 日更缺 bookId:诚实抛错(订阅时没绑定书)', () => {
+    expect(() =>
+      resolveCronPromptServer({ scenario: { key: 'novel_daily_chapter' } }, 'u-cron-novel2')
+    ).toThrow(/缺少 bookId/);
+  });
+
+  it('novel 日更书被删/别人的书号:抛错(任务失败可见,绝不静默用旧快照)', () => {
+    expect(() =>
+      resolveCronPromptServer(
+        { prompt: '旧快照', scenario: { key: 'novel_daily_chapter', bookId: 'nv_nope_000000' } },
+        'u-cron-novel3'
+      )
+    ).toThrow(/小说不存在或无权访问/);
   });
 });

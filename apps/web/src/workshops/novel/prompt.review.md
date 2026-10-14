@@ -1,5 +1,9 @@
 【网文小说工坊 · 全书体检】《{{bookTitle}}》
 审查侧重:{{focus}}
+{{#if profileSection}}
+{{profileSection}}
+
+{{/if}}
 下面是这本书设定库的全量核对材料(状态库视角:设定/人物/台账/时间线/逐章摘要,不含正文全文)。逐项交叉核对,输出体检报告(markdown,结论先行、证据在后):
 
 {{reviewContext}}

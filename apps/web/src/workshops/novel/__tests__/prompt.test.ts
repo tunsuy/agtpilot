@@ -9,6 +9,8 @@ import {
   buildNovelGenesisPrompt,
   buildNovelContinuePrompt,
   buildNovelReviewPrompt,
+  buildNovelStylePrompt,
+  STYLE_SAMPLES_MAX,
   clampChapterWords,
   clampOpeningChapters,
   NOVEL_GENRES,
@@ -17,6 +19,7 @@ import {
 } from '../context';
 import { WORKSHOP_SKILL } from '../skill';
 import type { NovelBook } from '@/lib/novel-context';
+import type { ScenarioProfile } from '@/lib/scenario-profile';
 
 function makeBook(overrides: Partial<NovelBook> = {}): NovelBook {
   return {
@@ -48,6 +51,7 @@ function makeBook(overrides: Partial<NovelBook> = {}): NovelBook {
     timeline: ['第1章|周五雨夜|林凡捡到手机', '第2章|周六|拜师'],
     summaries: ['林凡捡到预知手机。', '拜师学艺,右手骨折。'],
     volumeSummary: '小人物崛起。',
+    lastReviewedChapter: 0,
     chapters: [
       { index: 1, title: '雨夜差评', wordCount: 3000, createdAt: 1 },
       { index: 2, title: '拜师', wordCount: 3000, createdAt: 2 },
@@ -178,5 +182,102 @@ describe('skill.run() 分发与信任边界', () => {
     const run = WORKSHOP_SKILL.run({});
     expect(run.title).toContain('网文开书');
     expect(run.prompt).toContain(NOVEL_GENRES[0]);
+  });
+
+  it('style 分发(P2):不绑书可跑;绑了 bookId 但缺书状态抛错;绑书标题带书名', () => {
+    const loose = WORKSHOP_SKILL.run({ mode: 'style', samples: '我的样文片段。' });
+    expect(loose.title).toBe('文风学习');
+    expect(loose.prompt).toContain('【文风锚】');
+
+    expect(() => WORKSHOP_SKILL.run({ mode: 'style', bookId: 'nv_x_000000', samples: '样文' })).toThrow(
+      /缺少小说状态/
+    );
+
+    const bound = WORKSHOP_SKILL.run(
+      { mode: 'style', bookId: 'nv_test01_a1b2c3', samples: '样文' },
+      { novelState: makeBook() }
+    );
+    expect(bound.title).toBe('《铁拳少年》文风学习');
+    expect(bound.prompt).toContain('nv_test01_a1b2c3');
+  });
+});
+
+describe('文风学习 prompt(P2)', () => {
+  const SAMPLES = '雨夜,外卖箱撞在背上,冰凉。他攥紧手机,冲进巷子深处,身后的差评像追命的鼓点。';
+
+  it('缺样文诚实抛错(绝不凭空编造文风)', () => {
+    expect(() => buildNovelStylePrompt({ samples: '   ' })).toThrow(/需要样文/);
+  });
+
+  it('绑书:书名/书号注入 + 契约含【书号】回显段;含发布红线与样文合规红线', () => {
+    const p = buildNovelStylePrompt({ samples: SAMPLES, book: makeBook() });
+    expect(p).toContain('绑定书目:《铁拳少年》');
+    expect(p).toContain('nv_test01_a1b2c3');
+    expect(p).toContain('【书号】');
+    expect(p).toContain('【文风锚】');
+    expect(p).toContain(SAMPLES);
+    expect(p).toContain('不生成任何情节正文');
+    expect(p).toContain('严禁调用任何发布/投稿/自动上传类工具');
+    expect(p).toContain('严禁复刻其情节链/人名组合/名场面');
+    // 五点覆盖要求
+    for (const point of ['叙事节奏与章感', '句式与用词偏好', '对白风格', '情绪与爽点处理', '氛围与意象习惯']) {
+      expect(p).toContain(point);
+    }
+  });
+
+  it('不绑书:无绑定书目行与【书号】段(锚留作开书用)', () => {
+    const p = buildNovelStylePrompt({ samples: SAMPLES });
+    expect(p).not.toContain('绑定书目');
+    expect(p).not.toContain('【书号】');
+    expect(p).toContain('【文风锚】');
+  });
+
+  it('样文超长截断到上限(防整本粘贴撑爆 prompt),截断有显式标注', () => {
+    const long = 'x'.repeat(STYLE_SAMPLES_MAX + 1000);
+    const p = buildNovelStylePrompt({ samples: long });
+    expect(p).toContain(`(样文超长,已截断到 ${STYLE_SAMPLES_MAX} 字)`);
+    expect(p).toContain('x'.repeat(STYLE_SAMPLES_MAX));
+    expect(p).not.toContain('x'.repeat(STYLE_SAMPLES_MAX + 1));
+  });
+});
+
+describe('作者档案注入(P1 · profileSlot novel)', () => {
+  const novelProfile: ScenarioProfile = {
+    scenarioKey: 'novel',
+    version: 1,
+    positioning: { niche: '都市异能升级流', audience: '男频 18-30' },
+    persona: { toneSamples: ['短句直给'], taboos: ['不写虐主'] },
+    cadence: { postsPerWeek: 7 },
+    insights: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  it('有档案:四模式都注入【账号档案】段(定位/禁忌进 prompt)', () => {
+    for (const p of [
+      buildNovelGenesisPrompt({ genre: '都市', style: '', profile: novelProfile }),
+      buildNovelContinuePrompt({ book: makeBook(), profile: novelProfile }).prompt,
+      buildNovelReviewPrompt({ book: makeBook(), profile: novelProfile }),
+      buildNovelStylePrompt({ samples: '样文样文', profile: novelProfile }),
+    ]) {
+      expect(p).toContain('【账号档案】');
+      expect(p).toContain('都市异能升级流');
+      expect(p).toContain('不写虐主');
+    }
+  });
+
+  it('无档案:渲染与显式传 null 逐字节一致(黄金快照零漂移)', () => {
+    expect(buildNovelGenesisPrompt({ genre: '都市', style: NOVEL_STYLES[0], premise: 'p' })).toBe(
+      buildNovelGenesisPrompt({ genre: '都市', style: NOVEL_STYLES[0], premise: 'p', profile: null })
+    );
+    expect(buildNovelContinuePrompt({ book: makeBook() }).prompt).toBe(
+      buildNovelContinuePrompt({ book: makeBook(), profile: null }).prompt
+    );
+    expect(buildNovelReviewPrompt({ book: makeBook() })).toBe(
+      buildNovelReviewPrompt({ book: makeBook(), profile: null })
+    );
+    expect(buildNovelStylePrompt({ samples: '样文' })).toBe(
+      buildNovelStylePrompt({ samples: '样文', profile: null })
+    );
   });
 });

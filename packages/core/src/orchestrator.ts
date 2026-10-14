@@ -30,6 +30,24 @@ const LOOP_WINDOW_SIZE = 20;
 /** 窗口内同一签名（工具名 + 归一化参数）出现次数达到该值即熔断 */
 const LOOP_TRIGGER_COUNT = 4;
 
+// ---- 只读工具结果复用（TTL 缓存）----
+/** 复用窗口：上下文压缩把早前的调用记录抹掉后,模型的失忆性重发多在 1 分钟内;
+ *  5 分钟覆盖典型场景,又不至于长时间吃陈旧数据 */
+const TOOL_RESULT_CACHE_TTL_MS = 5 * 60_000;
+/** 缓存条数上限（FIFO 淘汰,防长任务内存膨胀） */
+const TOOL_RESULT_CACHE_MAX = 32;
+
+/** 工具「空返回」判定：null/undefined、空白串、空数组、无任何键的对象。
+ *  框架把「返回空」当成功会系统性高估有效率 —— 生产实测 17 次调用中 4 次
+ *  空返回,效率线仍报「失败 0 · 有效率 100%」。报错/跳过/拒绝各有口径,不算空返回。 */
+export function isEmptyToolOutput(out: any): boolean {
+  if (out == null) return true;
+  if (typeof out === 'string') return out.trim().length === 0;
+  if (Array.isArray(out)) return out.length === 0;
+  if (typeof out === 'object') return Object.keys(out).length === 0;
+  return false;
+}
+
 /** 高危操作审批等待上限（毫秒），超时自动拒绝并释放任务，杜绝永久悬挂。0 = 永不超时 */
 const APPROVAL_TIMEOUT_MS = Math.max(0, Number(process.env.AGTPILOT_APPROVAL_TIMEOUT_MS) || 5 * 60_000);
 
@@ -112,8 +130,11 @@ export class OrchestratorService extends Service {
     let lastFailedTool = '';
     let consecutiveFailures = 0;
     const FAILURE_GUARD_THRESHOLD = 3;
-    // 效率统计（识别空转任务）
-    const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0 };
+    // 效率统计（识别空转任务）；emptyCalls = 成功口径下的空返回,dedupedCalls = 只读复用
+    const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0, emptyCalls: 0, dedupedCalls: 0 };
+    // 只读工具结果缓存：TTL 内同签名（工具名 + 归一化参数）直接复用,不重新执行。
+    // 非只读工具绝不入缓存（两次 email_send 可能都是合法的）。
+    const toolResultCache = new Map<string, { at: number; output: any }>();
     // 看板推进批处理缓冲:本步(一轮模型调用)内执行成功的真实工具名。
     // 推进延到下一步 prepareStep 才结算 —— 逐个即时推进有个实锤 bug:
     // 同轮并行的 3 个搜索服务同一个计划步骤,第 1 个成功推进当前步骤后,
@@ -151,10 +172,27 @@ export class OrchestratorService extends Service {
       description: toolDef.description,
       parameters: toolDef.parameters, // 透传真实 JSON Schema，模型不再盲猜参数
       execute: async (args: any): Promise<any> => {
+        const toolSignature = `${toolDef.name}:${JSON.stringify(stableStringify(args))}`;
+        // 只读工具结果复用：上下文压缩会抹掉早前的工具记录,模型「失忆」后重发
+        // 同参数查询（生产实测:17 次调用里 5 对完全重复）。TTL 内直接复用:
+        // 不重新执行、不计入 toolCalls、单独计 dedupedCalls,事件流照常广播
+        //（UI 上该次调用照实展示,结果带 deduplicated 标记）。
+        if (toolDef.readOnly) {
+          const hit = toolResultCache.get(toolSignature);
+          if (hit && Date.now() - hit.at < TOOL_RESULT_CACHE_TTL_MS) {
+            stats.dedupedCalls++;
+            broadcast({ type: 'tool_call', payload: { tool: toolDef.name, args }, timestamp: Date.now() });
+            broadcast({
+              type: 'tool_result',
+              payload: { tool: toolDef.name, output: hit.output, deduplicated: true },
+              timestamp: Date.now(),
+            });
+            return hit.output;
+          }
+        }
         stats.toolCalls++;
         // 死循环检测 (Loop Detector)：滑动窗口计数见上；熔断降级为跳过本次调用
         // 并返回提醒，让模型换思路，而非终止整个任务
-        const toolSignature = `${toolDef.name}:${JSON.stringify(stableStringify(args))}`;
         signatureWindow.push(toolSignature);
         signatureCounts.set(toolSignature, (signatureCounts.get(toolSignature) || 0) + 1);
         if (signatureWindow.length > LOOP_WINDOW_SIZE) {
@@ -258,6 +296,10 @@ export class OrchestratorService extends Service {
         const callSkippedOrRejected = Boolean(
           output && typeof output === 'object' && (output.skipped || output.rejected)
         );
+        // 空返回统计：「返回空」既不是失败也不是有效调用 —— 单独计数,
+        // 有效率口径从 (总-失败-跳过)/总 收紧为 (总-失败-跳过-空返回)/总
+        const callEmpty = !callFailed && !callSkippedOrRejected && isEmptyToolOutput(output);
+        if (callEmpty) stats.emptyCalls++;
         if (callFailed) {
           stats.failedCalls++;
           if (toolDef.name === lastFailedTool) {
@@ -295,10 +337,19 @@ export class OrchestratorService extends Service {
         // 超长结果截断（头尾混合，防上下文膨胀导致模型退化）：
         // 见 truncateToolOutput —— 尾 > 头 > 中间的注意力分布 + 报错在尾部的经验
         const serialized = typeof output === 'string' ? output : JSON.stringify(output);
-        if (serialized.length > TOOL_OUTPUT_LIMIT) {
-          return truncateToolOutput(serialized, toolDef.name, TOOL_OUTPUT_LIMIT);
+        const finalOutput =
+          serialized.length > TOOL_OUTPUT_LIMIT
+            ? truncateToolOutput(serialized, toolDef.name, TOOL_OUTPUT_LIMIT)
+            : output;
+        // 只读且拿到非空数据的调用入缓存（缓存的是模型实际拿到的 finalOutput,
+        // 复用时不再二次截断）；空返回不缓存 —— 可能是瞬时故障,重试可能成功
+        if (toolDef.readOnly && !callFailed && !callSkippedOrRejected && !callEmpty) {
+          if (toolResultCache.size >= TOOL_RESULT_CACHE_MAX) {
+            toolResultCache.delete(toolResultCache.keys().next().value as string);
+          }
+          toolResultCache.set(toolSignature, { at: Date.now(), output: finalOutput });
         }
-        return output;
+        return finalOutput;
       },
     }));
 
@@ -336,9 +387,13 @@ export class OrchestratorService extends Service {
       failedCalls: stats.failedCalls,
       skippedCalls: stats.skippedCalls,
       approvalRejected: stats.approvalRejected,
+      emptyCalls: stats.emptyCalls,
+      dedupedCalls: stats.dedupedCalls,
       effectiveRate:
         stats.toolCalls > 0
-          ? Math.round(((stats.toolCalls - stats.failedCalls - stats.skippedCalls) / stats.toolCalls) * 100) / 100
+          ? Math.round(
+              ((stats.toolCalls - stats.failedCalls - stats.skippedCalls - stats.emptyCalls) / stats.toolCalls) * 100
+            ) / 100
           : 1,
       toolsMounted,
       toolsTotal: allTools.length,

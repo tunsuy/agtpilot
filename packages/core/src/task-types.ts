@@ -67,7 +67,11 @@ export interface TaskEfficiency {
   skippedCalls: number;
   /** 审批被拒绝的次数 */
   approvalRejected: number;
-  /** 有效调用率 = (总调用 - 失败 - 跳过) / 总调用，无调用时为 1 */
+  /** 执行成功但返回空结果的次数（null/空串/空对象；框架把空返回当成功会系统性高估有效率） */
+  emptyCalls: number;
+  /** 只读工具同参数调用命中 TTL 结果缓存被复用的次数（不重新执行,不计入 toolCalls） */
+  dedupedCalls: number;
+  /** 有效调用率 = (总调用 - 失败 - 跳过 - 空返回) / 总调用，无调用时为 1 */
   effectiveRate: number;
   /** 本次实际向模型声明的工具数 */
   toolsMounted: number;

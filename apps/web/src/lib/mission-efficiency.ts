@@ -19,10 +19,20 @@ function hasUsage(eff: Partial<TaskEfficiency>): boolean {
   return Number.isFinite(eff.promptTokens) || Number.isFinite(eff.completionTokens);
 }
 
-/** 执行效率摘要步骤标题（驾驶舱活动流 step_eff_ 条目） */
+/** 执行效率摘要步骤标题（驾驶舱活动流 step_eff_ 条目）
+ *  历史会话的 efficiency 事件没有 emptyCalls/dedupedCalls 字段 —— 数值字段一律
+ *  缺省 0,老数据不显示 NaN。 */
 export function buildEfficiencyStepTitle(eff: TaskEfficiency): string {
+  const empty = Number.isFinite((eff as Partial<TaskEfficiency>).emptyCalls)
+    ? (eff as Partial<TaskEfficiency>).emptyCalls!
+    : 0;
+  const deduped = Number.isFinite((eff as Partial<TaskEfficiency>).dedupedCalls)
+    ? (eff as Partial<TaskEfficiency>).dedupedCalls!
+    : 0;
   const base =
-    `执行效率: ${eff.stepsCount} 步 · 工具调用 ${eff.toolCalls} 次 · 失败 ${eff.failedCalls}` +
+    `执行效率: ${eff.stepsCount} 步 · 工具调用 ${eff.toolCalls} 次` +
+    (deduped > 0 ? ` · 只读复用 ${deduped}` : '') +
+    ` · 失败 ${eff.failedCalls} · 空返回 ${empty}` +
     ` · 熔断跳过 ${eff.skippedCalls} · 有效率 ${Math.round((eff.effectiveRate ?? 1) * 100)}%` +
     ` · 挂载工具 ${eff.toolsMounted}/${eff.toolsTotal}${eff.routed ? ' (按需)' : ''}`;
   if (!hasUsage(eff)) return base;

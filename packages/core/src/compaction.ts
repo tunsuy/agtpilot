@@ -1,6 +1,19 @@
 import { messageText, isToolCallMessage, truncateText } from './text';
 import { estimateTextTokens } from './routing';
 
+/** 从 tool 消息取结果正文（台账用）。
+ *  真实链路的 tool 消息是 AI SDK 数组分片（[{type:'tool-result', output}]），
+ *  messageText 会返回整个数组的 JSON —— 空输出也会被 JSON 壳撑成非空串。
+ *  这里逐分片取 output 本体；纯字符串 content 的旧形态原样返回。 */
+function toolResultParts(content: any): Array<{ toolCallId?: string; outputText: string }> {
+  if (Array.isArray(content)) {
+    return content
+      .filter((p: any) => p?.type === 'tool-result' || typeof p?.toolCallId === 'string')
+      .map((p: any) => ({ toolCallId: typeof p?.toolCallId === 'string' ? p.toolCallId : undefined, outputText: messageText(p?.output) }));
+  }
+  return [{ toolCallId: undefined, outputText: messageText(content) }];
+}
+
 /**
  * 会话压缩（Compaction，借鉴 Mastra Observer/Reflector 双层思路的轻量实现）。
  *
@@ -65,6 +78,11 @@ export async function compactConversationMessages(
   const digestEntries: string[] = [];
   const keptTexts: Array<{ role: string; content: any }> = [];
   let hasDroppable = false;
+  // 工具调用台账（系统精确统计）：蒸馏纪要是模型转述,压缩后模型对「用过什么
+  // 工具」的自报会漂（生产实测自报 10/4/1 vs 实际 7/6/2）。台账不经蒸馏,
+  // 由系统逐条生成、原样附在纪要末尾 —— 模型回答来源类问题时以此为准。
+  const callMetaById = new Map<string, { tool: string; argsText: string }>();
+  const ledgerByTool = new Map<string, string[]>();
   for (const m of middle) {
     const text = messageText(m.content);
     if (m.role === 'tool') {
@@ -73,6 +91,17 @@ export async function compactConversationMessages(
       if (toolCallId && options.keepToolCallIds?.has(toolCallId)) {
         keptTexts.push(m);
         continue;
+      }
+      // 台账记一条：调用参数摘要 + 结果状态（kept 的调用原文仍留在上下文,不必记）。
+      // 并行调用共享一条 tool 消息 → 逐分片记账（分片 id 关联回 assistant 的调用参数）
+      for (const part of toolResultParts(m.content)) {
+        const meta = part.toolCallId ? callMetaById.get(part.toolCallId) : undefined;
+        const status = part.outputText.trim() ? `返回 ${part.outputText.length} 字符` : '空返回';
+        const entry = `「${truncateText(meta?.argsText || '', 80)}」→ ${status}`;
+        const ledgerTool = meta?.tool ?? '(未知工具)';
+        const entries = ledgerByTool.get(ledgerTool);
+        if (entries) entries.push(entry);
+        else ledgerByTool.set(ledgerTool, [entry]);
       }
       digestEntries.push(`[工具结果] ${truncateText(text, COMPACT_DIGEST_ENTRY_LIMIT)}`);
       hasDroppable = true;
@@ -85,6 +114,13 @@ export async function compactConversationMessages(
       }
       for (const part of m.content as any[]) {
         if (part?.type === 'tool-call' || typeof part?.toolCallId === 'string') {
+          const id = part.toolCallId ?? part?.id;
+          if (typeof id === 'string') {
+            callMetaById.set(id, {
+              tool: part.toolName ?? '(unknown)',
+              argsText: messageText(part.input ?? part.args),
+            });
+          }
           digestEntries.push(
             `[工具调用] ${part.toolName ?? '(unknown)'} ${truncateText(messageText(part.input ?? part.args), 200)}`
           );
@@ -115,11 +151,21 @@ export async function compactConversationMessages(
     summary = `以下为历史工具执行流水（原文截断保底）：\n${truncateText(digest, 8 * 1024)}`;
   }
 
+  // 台账正文：每工具一行「工具名 ×次数」+ 逐条「参数摘要 → 结果状态」,整体限长防膨胀
+  let ledgerText = '';
+  if (ledgerByTool.size > 0) {
+    const lines: string[] = [];
+    for (const [tool, entries] of ledgerByTool) {
+      lines.push(`- ${tool} ×${entries.length}: ${entries.join(' ; ')}`);
+    }
+    ledgerText = `\n\n【工具调用台账】（系统精确统计,未经蒸馏；回答"用了哪些工具/调用了几次"时以此为准,不要凭记忆估计）\n${truncateText(lines.join('\n'), 2000)}`;
+  }
+
   return [
     ...messages.slice(0, headKeep),
     {
       role: 'user',
-      content: `【历史会话纪要】（系统自动压缩生成，替代更早的工具执行记录）\n${summary}`,
+      content: `【历史会话纪要】（系统自动压缩生成，替代更早的工具执行记录）\n${summary}${ledgerText}`,
     },
     ...keptTexts,
     ...messages.slice(recentStart),

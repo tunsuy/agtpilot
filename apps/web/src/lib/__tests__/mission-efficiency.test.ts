@@ -14,6 +14,8 @@ const EFF = (over: Partial<TaskEfficiency> = {}): TaskEfficiency => ({
   failedCalls: 0,
   skippedCalls: 0,
   approvalRejected: 0,
+  emptyCalls: 0,
+  dedupedCalls: 0,
   effectiveRate: 1,
   toolsMounted: 25,
   toolsTotal: 114,
@@ -54,6 +56,31 @@ describe('buildEfficiencyStepTitle', () => {
 
   it('字段存在但为 0（免费档/无计量）：仍追加段，显示 0', () => {
     expect(buildEfficiencyStepTitle(EFF())).toContain('tokens 输入 0 / 输出 0');
+  });
+
+  it('只读复用为 0 时不显示该段；空返回与失败/熔断同为常显项（口径并列可读）', () => {
+    const title = buildEfficiencyStepTitle(EFF());
+    expect(title).not.toContain('只读复用');
+    expect(title).toContain('失败 0');
+    expect(title).toContain('空返回 0');
+  });
+
+  it('空返回/只读复用 > 0 时如实展示（生产实测:空返回曾虚报有效率 100%）', () => {
+    const title = buildEfficiencyStepTitle(
+      EFF({ toolCalls: 17, emptyCalls: 4, dedupedCalls: 5, failedCalls: 0, skippedCalls: 0, effectiveRate: 0.76 })
+    );
+    expect(title).toContain('空返回 4');
+    expect(title).toContain('只读复用 5');
+    expect(title).toContain('有效率 76%');
+  });
+
+  it('历史事件缺 emptyCalls/dedupedCalls 字段：按 0 兜底,不出 NaN', () => {
+    const eff: any = EFF();
+    delete eff.emptyCalls;
+    delete eff.dedupedCalls;
+    const title = buildEfficiencyStepTitle(eff);
+    expect(title).not.toContain('NaN');
+    expect(title).toContain('空返回 0');
   });
 });
 

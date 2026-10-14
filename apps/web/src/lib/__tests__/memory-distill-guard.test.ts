@@ -165,6 +165,9 @@ describe('distillAgentExperience · 环境状态防绝对断言(生产实例:Fir
     // 环境快照处方禁令:工具/数据源组合会随扩展过期,排斥新工具
     expect(calls[0].system).toContain('封闭处方');
     expect(calls[0].system).toContain('排斥新工具');
+    // 战术不得升格红线:单次跑通≠普适,查询类偏好按 preference 记为建议
+    expect(calls[0].system).toContain('不等于普适规律');
+    expect(calls[0].system).toContain('严禁升格为 rule');
     // 自我纠偏:轨迹与旧环境事实矛盾 → 必须更新/删除
     expect(calls[0].system).toContain('矛盾');
     expect(calls[0].system).toContain('必须更新或删除');

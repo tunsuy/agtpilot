@@ -9,6 +9,7 @@
  */
 import type { LucideIcon } from 'lucide-react';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
+import type { NovelBook } from '@/lib/novel-context';
 import type { ArticlePackage } from './shared/article-package';
 import type { NotePackage } from './xhs/note-package';
 
@@ -17,6 +18,7 @@ export type WorkshopId =
   | 'wechat_mp'
   | 'zhihu'
   | 'weibo'
+  | 'novel'
   | 'video_douyin'
   | 'video_bilibili'
   | 'email_triage'
@@ -104,6 +106,12 @@ export interface WorkshopRunPayload {
 /** 运行上下文:场景档案等表单之外的状态,表单与「一键重跑」共用 */
 export interface WorkshopRunContext {
   scenarioProfile?: ScenarioProfile;
+  /**
+   * 小说工坊书状态快照(continue/review 模式必需):客户端预览由表单带
+   * 已拉取的书;服务端权威渲染由 server-render 的 novel loader 现读
+   * novel-store(状态永远以服务端为准,与档案现读同理)。
+   */
+  novelState?: NovelBook;
 }
 
 /** 一个工坊 skill 包的完整装配:元数据 + 参数分发(+ 可选 cron 订阅场景声明) */

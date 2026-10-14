@@ -20,6 +20,7 @@ import {
 } from '../overrides';
 import { renderWorkshopRunServer } from '../server-render';
 import { getUserScenarioProfiles, saveUserScenarioProfile } from '@/lib/user-store';
+import { createNovelBook, appendChapter } from '@/lib/novel-store';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'workshop-overrides-'));
@@ -166,5 +167,71 @@ describe('renderWorkshopRunServer(服务端权威渲染)', () => {
     const run = renderWorkshopRunServer('u5', 'weibo', null as any);
     expect(run).not.toBeNull();
     expect(typeof run!.prompt).toBe('string');
+  });
+});
+
+describe('novel loader(书状态服务端现读,docs/design/novel-workshop.md §5)', () => {
+  const LONG = '暴雨夜,林凡攥着手机在积水里狂奔,差评像追命的鼓点,一声声砸在他背上。'.repeat(8);
+
+  it('genesis 不需要书状态,照常渲染', () => {
+    const run = renderWorkshopRunServer('u-novel', 'novel', { mode: 'genesis', genre: '玄幻' });
+    expect(run).not.toBeNull();
+    expect(run!.title).toBe('网文开书:玄幻');
+    expect(run!.prompt).toContain('【设定集】');
+  });
+
+  it('continue/review 缺书或 bookId 无效:抛错带明确原因(调用方 500,绝不静默降级)', () => {
+    expect(() => renderWorkshopRunServer('u-novel', 'novel', { mode: 'continue' })).toThrow(/小说不存在或无权访问/);
+    expect(() =>
+      renderWorkshopRunServer('u-novel', 'novel', { mode: 'continue', bookId: 'nv_nope_000000' })
+    ).toThrow(/小说不存在或无权访问/);
+    expect(() =>
+      renderWorkshopRunServer('u-novel', 'novel', { mode: 'review', bookId: 'nv_nope_000000' })
+    ).toThrow(/小说不存在或无权访问/);
+  });
+
+  it('用户隔离:别人的 bookId 现读不到', () => {
+    const book = createNovelBook('u-novel-a', {
+      title: '铁拳少年',
+      chapters: [{ title: '雨夜差评', content: LONG, summary: '捡到手机。' }],
+    });
+    expect(() =>
+      renderWorkshopRunServer('u-novel-b', 'novel', { mode: 'continue', bookId: book.bookId })
+    ).toThrow(/小说不存在或无权访问/);
+  });
+
+  it('continue 有效 bookId:触发那一刻现读状态库(书号逐字内嵌,进度/状态注入)', () => {
+    const userId = 'u-novel-c';
+    const book = createNovelBook(userId, {
+      title: '铁拳少年',
+      bible: '力量体系:青铜→白银,不可跳级。',
+      characters: [{ name: '林凡', role: '主角', currentState: '右手骨折' }],
+      detailed: [{ index: 2, events: '夜探仓库' }],
+      chapters: [{ title: '雨夜差评', content: LONG, summary: '捡到手机。' }],
+    });
+    const run = renderWorkshopRunServer(userId, 'novel', { mode: 'continue', bookId: book.bookId, chapterWords: 2500 });
+    expect(run!.title).toBe('《铁拳少年》第2章');
+    expect(run!.prompt).toContain(book.bookId);
+    expect(run!.prompt).toContain('青铜→白银');
+    expect(run!.prompt).toContain('**当前状态:右手骨折**');
+    expect(run!.prompt).toContain('2500');
+
+    // 状态库更新后,同参数再渲染跟着变(现读,不是缓存)
+    appendChapter(userId, book.bookId, { title: '夜袭', content: LONG, summary: '夜探仓库。' });
+    const run2 = renderWorkshopRunServer(userId, 'novel', { mode: 'continue', bookId: book.bookId });
+    expect(run2!.title).toBe('《铁拳少年》第3章');
+  });
+
+  it('review 有效 bookId:体检上下文来自状态库', () => {
+    const userId = 'u-novel-d';
+    const book = createNovelBook(userId, {
+      title: '铁拳少年',
+      ledgerSeeds: [{ content: '手机裂纹来历', plantedChapter: 1 }],
+      chapters: [{ title: '雨夜差评', content: LONG, summary: '捡到手机。' }],
+    });
+    const run = renderWorkshopRunServer(userId, 'novel', { mode: 'review', bookId: book.bookId, focus: '伏笔盘点' });
+    expect(run!.title).toBe('《铁拳少年》全书体检');
+    expect(run!.prompt).toContain('伏笔盘点');
+    expect(run!.prompt).toContain('手机裂纹来历');
   });
 });

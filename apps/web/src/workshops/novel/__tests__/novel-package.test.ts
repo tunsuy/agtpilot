@@ -1,0 +1,284 @@
+/**
+ * novel-package 格式契约测试(docs/design/novel-workshop.md §4 + §9)
+ *
+ * 锁三件事:
+ * 1. 开书包/续写包按 prompt 契约样例完整解析(六件套字段、反思五连字段);
+ * 2. 坏输入诚实降级 null(缺锚段/正文过短/书号格式错),绝不半解析入库;
+ * 3. 与笔记包/文章包双向互斥:【本章摘要】不命中【摘要】锚、【书名】不命中
+ *    【标题】锚(novel 包不被别的解析器吃掉,别的包也不被 novel 吃掉)。
+ */
+import { describe, it, expect } from 'vitest';
+import { parseNovelPackage } from '../novel-package';
+import { parseNotePackages } from '../../xhs/note-package';
+import { parseArticlePackages } from '../../shared/article-package';
+
+const BODY = '暴雨夜,林凡攥着手机在积水里狂奔,差评像追命的鼓点,一声声砸在他背上。'.repeat(8);
+
+const GENESIS_FIXTURE = `【书名】
+《铁拳少年》
+
+【卖点】
+外卖骑手捡到预知差评的手机,每躲开一单差评就变强。
+
+【设定集】
+世界观:近未来江城,灵气复苏初期。
+力量体系:青铜→白银→黄金→宗师,严格逐级,不可跳级。
+势力:骑手工会、差评教团。
+
+【人物卡】
+## 林凡
+- 定位:主角
+- 性格:隐忍、机灵
+- 动机:还清家里的债
+- 口癖:这单我接了
+- 关系:与苏晚是合租室友
+- 当前状态:右手骨折,欠债三万
+
+## 苏晚
+- 定位:女主
+- 性格:毒舌心软
+- 动机:查清父亲失踪真相
+- 当前状态:刚以卧底身份入职差评教团
+
+【粗纲】
+第一卷·崛起(1-30章):林凡获得手机,躲差评变强,卷入教团阴谋。
+第二卷·白银(31-80章):正面抗衡教团,揭开苏晚父亲失踪案。
+
+【细纲】
+### 第1章 雨夜差评
+- 钩子:暴雨夜,林凡接到一个送不到的订单
+- 事件:捡到预知手机,躲开第一单差评
+- 情绪点:憋屈后第一次爽
+- 伏笔:埋手机屏裂纹
+- 字数:3000
+
+### 第2章 室友
+- 钩子:回家发现新室友是苏晚
+- 事件:两人冲突又和解,林凡露了一手
+- 情绪点:轻喜剧
+- 字数:3000
+
+【伏笔】
+- [埋设] 手机屏幕裂纹的来历 @第1章
+- [埋设] 苏晚父亲失踪与教团有关 @第2章
+
+【时间线】
+- 第1章|周五雨夜|林凡捡到手机
+- 第2章|周六|苏晚搬入合租
+
+【第1章 雨夜差评】
+雨夜差评
+${BODY}
+
+【本章摘要】
+林凡在暴雨夜送单,捡到一部能预知差评的手机,躲开第一单差评后右手骨折处开始自愈。
+
+【第2章 室友】
+室友
+${BODY}
+
+【本章摘要】
+林凡回家发现新室友苏晚,两人因误会冲突,林凡展露身手,苏晚注意到他的异常。`;
+
+const CONTINUE_FIXTURE = `【书号】
+nv_m3k9x2_a1b2c3
+
+【第3章 夜袭】
+夜袭
+${BODY}
+
+【本章摘要】
+林凡夜探仓库,在货架深处发现教团徽记,手机屏幕裂纹与徽记同时发烫。
+
+【人物状态更新】
+- 林凡:右手痊愈,晋升白银
+- 王五:身份暴露,被教团盯上
+
+【伏笔动作】
+- [埋设] 仓库背后的老板 @第3章
+- [回收] 手机屏幕裂纹 (方式:裂纹中浮现教团徽记)
+
+【时间线】
+- 第3章|周日凌晨|夜探仓库
+
+【下章细纲】
+### 第8章 对决
+- 事件:林凡与教团执事正面对决
+- 钩子:执事竟认识苏晚
+
+【总纲更新】
+林凡从躲避差评转为主动出击,与教团的冲突公开化。`;
+
+describe('parseNovelPackage · 开书包', () => {
+  it('契约样例完整解析:书名/卖点/设定集/人物卡/粗纲/细纲/伏笔/时间线/两章正文+摘要', () => {
+    const pkg = parseNovelPackage(GENESIS_FIXTURE);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('genesis');
+    if (pkg!.kind !== 'genesis') return;
+    expect(pkg!.title).toBe('铁拳少年');
+    expect(pkg!.premise).toContain('预知差评的手机');
+    expect(pkg!.bible).toContain('不可跳级');
+    expect(pkg!.outline).toContain('第二卷');
+
+    expect(pkg!.characters).toHaveLength(2);
+    const lin = pkg!.characters[0];
+    expect(lin).toMatchObject({
+      name: '林凡',
+      role: '主角',
+      personality: '隐忍、机灵',
+      motivation: '还清家里的债',
+      speech: '这单我接了',
+      relations: '与苏晚是合租室友',
+      currentState: '右手骨折,欠债三万',
+    });
+    expect(pkg!.characters[1].name).toBe('苏晚');
+
+    expect(pkg!.detailed).toHaveLength(2);
+    expect(pkg!.detailed[0]).toMatchObject({
+      index: 1,
+      title: '雨夜差评',
+      hook: '暴雨夜,林凡接到一个送不到的订单',
+      events: '捡到预知手机,躲开第一单差评',
+      emotion: '憋屈后第一次爽',
+      foreshadow: '埋手机屏裂纹',
+      targetWords: 3000,
+    });
+
+    expect(pkg!.ledgerSeeds).toEqual([
+      { content: '手机屏幕裂纹的来历', plantedChapter: 1 },
+      { content: '苏晚父亲失踪与教团有关', plantedChapter: 2 },
+    ]);
+    expect(pkg!.timelineSeeds).toEqual([
+      '第1章|周五雨夜|林凡捡到手机',
+      '第2章|周六|苏晚搬入合租',
+    ]);
+
+    expect(pkg!.chapters).toHaveLength(2);
+    expect(pkg!.chapters[0].title).toBe('雨夜差评');
+    expect(pkg!.chapters[0].content.replace(/\s/g, '').length).toBeGreaterThanOrEqual(200);
+    expect(pkg!.chapters[0].summary).toContain('开始自愈');
+    expect(pkg!.chapters[1].summary).toContain('注意到他的异常');
+  });
+
+  it('寒暄行丢弃:首个字段头之前的文本不进任何段', () => {
+    const pkg = parseNovelPackage('好的,以下是开书结果:\n\n' + GENESIS_FIXTURE);
+    expect(pkg!.kind).toBe('genesis');
+    if (pkg!.kind === 'genesis') expect(pkg!.bible).not.toContain('好的');
+  });
+
+  it('缺锚降级:没有【粗纲】不是开书包;章正文过短(<200字)不算有效章', () => {
+    // 注意不能替换成「大纲草稿」——【粗纲|大纲】锚允许行内后缀,「大纲草稿」仍会命中
+    const noOutline = GENESIS_FIXTURE.replace('【粗纲】', '【主线走向】');
+    expect(parseNovelPackage(noOutline)).toBeNull();
+    const thinChapter = GENESIS_FIXTURE.replace(new RegExp(BODY, 'g'), '太短了。');
+    expect(parseNovelPackage(thinChapter)).toBeNull();
+  });
+});
+
+describe('parseNovelPackage · 续写包', () => {
+  it('契约样例完整解析:书号/自称序号/正文/摘要/反思五连字段', () => {
+    const pkg = parseNovelPackage(CONTINUE_FIXTURE);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('continue');
+    if (pkg!.kind !== 'continue') return;
+    expect(pkg!.bookId).toBe('nv_m3k9x2_a1b2c3');
+    expect(pkg!.claimedIndex).toBe(3);
+    expect(pkg!.title).toBe('夜袭');
+    expect(pkg!.summary).toContain('教团徽记');
+    expect(pkg!.characterUpdates).toEqual([
+      { name: '林凡', currentState: '右手痊愈,晋升白银' },
+      { name: '王五', currentState: '身份暴露,被教团盯上' },
+    ]);
+    expect(pkg!.ledgerActions).toEqual([
+      { action: 'plant', content: '仓库背后的老板' },
+      { action: 'pay', keyword: '手机屏幕裂纹', payMethod: '裂纹中浮现教团徽记' },
+    ]);
+    expect(pkg!.timelineAppend).toEqual(['第3章|周日凌晨|夜探仓库']);
+    expect(pkg!.detailedAppend).toEqual([
+      { index: 8, title: '对决', events: '林凡与教团执事正面对决', hook: '执事竟认识苏晚' },
+    ]);
+    expect(pkg!.volumeSummary).toContain('主动出击');
+  });
+
+  it('「无」占位段:人物状态更新/伏笔动作写「无」解析为空数组,不产生脏条目', () => {
+    const pkg = parseNovelPackage(CONTINUE_FIXTURE.replace(/- 林凡:右手痊愈,晋升白银\n- 王五:身份暴露,被教团盯上/, '无'));
+    if (pkg!.kind === 'continue') expect(pkg!.characterUpdates).toEqual([]);
+  });
+
+  it('锚不吃尾缀变体:【伏笔动作】不被【伏笔】锚吞掉(贪婪尾缀回归),【伏笔台账】仍归 ledger', () => {
+    // 开书契约里【伏笔】允许行尾追加说明(如【伏笔台账】),但【伏笔动作】是续写契约的独立段
+    const genesisLedgerVariant = parseNovelPackage(GENESIS_FIXTURE.replace('【伏笔】', '【伏笔台账】'));
+    expect(genesisLedgerVariant!.kind).toBe('genesis');
+    if (genesisLedgerVariant!.kind === 'genesis') {
+      expect(genesisLedgerVariant!.ledgerSeeds).toHaveLength(2);
+    }
+    const mixed = parseNovelPackage(
+      CONTINUE_FIXTURE.replace('【伏笔动作】', '【伏笔】\n- [埋设] 不该被当动作的行\n\n【伏笔动作】')
+    );
+    expect(mixed).not.toBeNull();
+    if (mixed!.kind === 'continue') {
+      // 混入的【伏笔】段不污染 ledgerActions;【伏笔动作】段照常解析
+      expect(mixed!.ledgerActions).toEqual([
+        { action: 'plant', content: '仓库背后的老板' },
+        { action: 'pay', keyword: '手机屏幕裂纹', payMethod: '裂纹中浮现教团徽记' },
+      ]);
+    }
+  });
+
+  it('坏输入诚实降级 null:书号格式错/缺本章摘要/正文过短', () => {
+    expect(parseNovelPackage(CONTINUE_FIXTURE.replace('nv_m3k9x2_a1b2c3', 'book-123'))).toBeNull();
+    expect(parseNovelPackage(CONTINUE_FIXTURE.replace('【本章摘要】', '【摘要】'))).toBeNull();
+    expect(parseNovelPackage(CONTINUE_FIXTURE.replace(BODY, '短。'))).toBeNull();
+    expect(parseNovelPackage('')).toBeNull();
+    expect(parseNovelPackage('随便一段没有任何字段头的文本')).toBeNull();
+  });
+});
+
+describe('格式互斥 · 与笔记包/文章包双向不碰撞', () => {
+  const NOTE_FIXTURE = `【标题候选】
+1. 秋冬通勤穿搭三件套
+2. 一周通勤不重样
+
+【封面文案】
+通勤穿搭天花板
+
+【正文】
+${BODY}
+
+【标签】
+#穿搭 #通勤
+
+---
+`;
+  const ARTICLE_FIXTURE = `【标题候选】
+1. AI 编程工具横评
+
+【摘要】
+本文横评五款 AI 编程工具。
+
+【正文】
+${BODY}
+
+【封面建议】
+工具矩阵图
+
+---
+`;
+
+  it('笔记包/文章包样例不被 novel 解析器误吃', () => {
+    expect(parseNovelPackage(NOTE_FIXTURE)).toBeNull();
+    expect(parseNovelPackage(ARTICLE_FIXTURE)).toBeNull();
+  });
+
+  it('novel 开书包/续写包不被笔记包、文章包解析器误吃(【书名】≠【标题】,【本章摘要】≠【摘要】)', () => {
+    expect(parseNotePackages(GENESIS_FIXTURE).packages).toEqual([]);
+    expect(parseArticlePackages(GENESIS_FIXTURE).packages).toEqual([]);
+    expect(parseNotePackages(CONTINUE_FIXTURE).packages).toEqual([]);
+    expect(parseArticlePackages(CONTINUE_FIXTURE).packages).toEqual([]);
+  });
+
+  it('对照:文章包样例仍被文章包解析器命中(证明上面的空结果不是解析器全盲)', () => {
+    expect(parseArticlePackages(ARTICLE_FIXTURE).packages.length).toBeGreaterThan(0);
+    expect(parseNotePackages(NOTE_FIXTURE).packages.length).toBeGreaterThan(0);
+  });
+});

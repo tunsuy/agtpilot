@@ -28,6 +28,7 @@ import { FollowBuildersForm } from './forms/FollowBuildersForm';
 import { InvestWorkshopForm } from './forms/InvestWorkshopForm';
 import { EduWorkshopForm } from './forms/EduWorkshopForm';
 import { OssRadarForm } from './forms/OssRadarForm';
+import { NovelWorkshopForm } from './forms/NovelWorkshopForm';
 
 interface WorkshopsViewProps {
   connectors: ConnectorApp[];
@@ -56,6 +57,7 @@ const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
   wechat_mp: WechatMpWorkshopForm,
   zhihu: ZhihuWorkshopForm,
   weibo: ContentWorkshopForm,
+  novel: NovelWorkshopForm,
   video_douyin: ContentWorkshopForm,
   video_bilibili: ContentWorkshopForm,
   email_triage: EmailTriageForm,
@@ -146,7 +148,19 @@ export function WorkshopsView({
   const handleRerun = (record: WorkshopRunRecord) => {
     const def = getWorkshop(record.id);
     if (!def) return;
-    const run = buildWorkshopRun(def.id, record.params, profileCtx(def));
+    let run;
+    try {
+      run = buildWorkshopRun(def.id, record.params, profileCtx(def));
+    } catch (err) {
+      // 小说续写/体检需要书状态(客户端无快照时 run() 诚实抛错):
+      // 带 workshop 载荷直接交给服务端权威渲染(loader 现读书库;bookId 失效会在服务端报错),
+      // 客户端只沿用上次标题,不拿半截状态拼 prompt。
+      if (record.id !== 'novel') throw err;
+      recordRun(def.id, record.title, record.params);
+      setHistory(recentRuns(20));
+      onRunPrompt(`(服务端渲染:${record.title})`, record.title, { id: def.id, params: record.params });
+      return;
+    }
     recordRun(def.id, run.title, record.params);
     setHistory(recentRuns(20));
     onRunPrompt(run.prompt, run.title, { id: def.id, params: record.params });

@@ -10,7 +10,24 @@
 import { getWorkshop, getWorkshopSkill, type WorkshopId } from './registry';
 import { getWorkshopOverrides } from './overrides';
 import { getUserScenarioProfiles } from '@/lib/user-store';
-import type { WorkshopRun } from './types';
+import { getNovelBook } from '@/lib/novel-store';
+import type { WorkshopRun, WorkshopRunContext } from './types';
+
+/**
+ * 工坊状态 loader(服务端专属;放这里而非各包 skill.ts —— skill.ts 进客户端
+ * bundle,不得引 fs)。与档案现读同理:触发那一刻现读状态库,客户端只传 id。
+ * 抛错 = 权威渲染拒绝(调用方 500 带明确原因),绝不静默降级用客户端拼的 prompt。
+ */
+const STATE_LOADERS: Partial<Record<WorkshopId, (userId: string, params: Record<string, unknown>) => WorkshopRunContext>> = {
+  novel: (userId, params) => {
+    const mode = typeof params.mode === 'string' ? params.mode : 'genesis';
+    if (mode !== 'continue' && mode !== 'review') return {};
+    const bookId = typeof params.bookId === 'string' ? params.bookId.trim() : '';
+    const book = bookId ? getNovelBook(userId, bookId) : null;
+    if (!book) throw new Error(`小说不存在或无权访问: ${bookId || '(缺 bookId)'}`);
+    return { novelState: book };
+  },
+};
 
 export interface ServerWorkshopRun extends WorkshopRun {
   /** 服务端覆盖目录存在该工坊的覆盖文件(prompt 已替换为覆盖全文) */
@@ -33,7 +50,12 @@ export function renderWorkshopRunServer(
   // 档案现读:客户端预览用的可能是几分钟前的档案快照,触发那一刻才是准的
   const slot = skill.meta.profileSlot;
   const profile = slot ? getUserScenarioProfiles(userId)[slot] : undefined;
-  const run = skill.run(params || {}, profile ? { scenarioProfile: profile } : undefined);
+  // 状态 loader 现读(novel 续写/审查的书状态等;抛错 = 拒绝渲染,不静默降级)
+  const loaded = STATE_LOADERS[workshopId as WorkshopId]?.(userId, params || {}) || {};
+  const run = skill.run(params || {}, {
+    ...loaded,
+    ...(profile ? { scenarioProfile: profile } : {}),
+  });
   const override = getWorkshopOverrides(opts.overrideDir).byId[workshopId];
   if (override !== undefined) {
     return { ...run, prompt: override, overridden: true };

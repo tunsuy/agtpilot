@@ -57,6 +57,8 @@ import { parseArticlePackages } from '../workshops/shared/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../workshops/xhs/topic-picks';
 import { OssOpportunityList } from './workshops/OssOpportunityCard';
+import { NovelPackageCard } from './workshops/NovelPackageCard';
+import { parseNovelPackage } from '../workshops/novel/novel-package';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
 import { resolveArtifactDraft } from '../workshops/registry';
@@ -869,6 +871,10 @@ export function CockpitView({
                     const parsedOss = st.answer && !isStreaming ? parseOssOpportunities(st.answer) : null;
                     const ossResult =
                       parsedOss && parsedOss.opportunities.length > 0 ? parsedOss : null;
+                    // 小说包(novel 工坊):开书包锚【设定集】+【粗纲】,续写包锚【书号】(nv_ 前缀)
+                    // +【本章摘要】——【本章摘要】不命中文章包的【摘要】锚(其正则要求「摘要」顶格),
+                    // 与选题/笔记/文章/开源四种格式字段头互不相交(解析器测试双向锚定),顺序不敏感
+                    const parsedNovel = st.answer && !isStreaming ? parseNovelPackage(st.answer) : null;
                     // 搜索来源引用(ChatGPT 式):最终答复收尾后,取本轮(上一条
                     // 最终答复之后)检索步骤的结构化结果,渲染可跳转的来源卡
                     const answerIndex = currentMission.steps.findIndex((s) => s.id === st.id);
@@ -949,6 +955,10 @@ export function CockpitView({
                                   missionId={activeMissionId || currentMission?.id}
                                   onRunMission={onRunMission}
                                 />
+                              ) : st.answer && parsedNovel ? (
+                                /* 小说包(开书/续写):六件套或章节+反思预览,「存入书库」落状态库;
+                                   续写包书号入库前按用户书库校验,未命中给下拉指认(绝不猜归属) */
+                                <NovelPackageCard pkg={parsedNovel} />
                               ) : st.answer && ossResult ? (
                                 /* 开源贡献机会:只读卡片(Issue 直达链接/复制整条),无任何写操作入口 */
                                 <OssOpportunityList result={ossResult} />

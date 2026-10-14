@@ -3,6 +3,7 @@ import { buildWorkshopRun, type WorkshopRunContext } from '../../components/work
 import type { WorkshopId } from '../../components/workshops/registry';
 import { resolveCronPrompt } from '../../lib/cron-scenario';
 import type { ScenarioProfile } from '../../lib/scenario-profile';
+import type { NovelBook } from '../../lib/novel-context';
 
 /**
  * 工坊 skill 包重构 · Phase 0 快照锁定(golden master)。
@@ -46,6 +47,43 @@ const HOLLOW_PROFILE: ScenarioProfile = {
   updatedAt: 0,
 };
 
+/** novel 续写/审查的书状态夹具(全静态字段,快照可复现;时间戳固定) */
+const NOVEL_GOLDEN_STYLE = '爽文快节奏:短段落、强钩子、三章一小爽五章一大爽';
+const GOLDEN_NOVEL_BOOK: NovelBook = {
+  bookId: 'nv_golden_a1b2c3',
+  title: '铁拳少年',
+  genre: '都市',
+  premise: '外卖骑手捡到预知差评的手机',
+  style: '爽文快节奏',
+  status: 'active',
+  createdAt: 1700000000000,
+  updatedAt: 1700000001000,
+  progress: { chapterCount: 2, wordCount: 6000, nextChapter: 3 },
+  bible: '力量体系:青铜→白银→黄金,严格逐级不可跳级。',
+  characters: [
+    { name: '林凡', role: '主角', currentState: '右手骨折' },
+    { name: '苏晚', role: '女主', currentState: '卧底教团' },
+  ],
+  outline: '第一卷·崛起(1-30章):获得手机,卷入教团阴谋。',
+  detailed: [
+    { index: 3, title: '夜袭', events: '林凡夜探仓库', hook: '仓库异响' },
+    { index: 4, events: '对决' },
+    { index: 5, events: '白银试炼' },
+    { index: 6, events: '教团来袭' },
+  ],
+  ledger: [
+    { id: 'f1', content: '手机屏幕裂纹的来历', plantedChapter: 1, status: 'planted' },
+    { id: 'f2', content: '师父失踪之谜', plantedChapter: 1, status: 'paid', payChapter: 2, payMethod: '回忆揭示' },
+  ],
+  timeline: ['第1章|周五雨夜|林凡捡到手机', '第2章|周六|拜师'],
+  summaries: ['林凡捡到预知手机。', '拜师学艺,右手骨折。'],
+  volumeSummary: '小人物崛起。',
+  chapters: [
+    { index: 1, title: '雨夜差评', wordCount: 3000, createdAt: 1700000000000 },
+    { index: 2, title: '拜师', wordCount: 3000, createdAt: 1700000001000 },
+  ],
+};
+
 interface GoldenCase {
   label: string;
   id: WorkshopId;
@@ -68,6 +106,7 @@ const ALL_IDS: WorkshopId[] = [
   'invest',
   'edu',
   'oss_radar',
+  'novel',
 ];
 
 const FILLED: GoldenCase[] = [
@@ -164,6 +203,30 @@ const FILLED: GoldenCase[] = [
     params: { stack: 'Go', interests: ['agent', 'rag'], kinds: ['good_first_issue'], count: 5 },
     ctx: { scenarioProfile: { ...FULL_PROFILE, scenarioKey: 'oss_radar' } },
   },
+  {
+    label: 'filled-genesis',
+    id: 'novel',
+    params: {
+      mode: 'genesis',
+      genre: '玄幻',
+      premise: '废柴少年觉醒吞天魔骨',
+      style: NOVEL_GOLDEN_STYLE,
+      chapterWords: 2500,
+      openingChapters: 2,
+    },
+  },
+  {
+    label: 'filled-continue',
+    id: 'novel',
+    params: { mode: 'continue', bookId: GOLDEN_NOVEL_BOOK.bookId, chapterWords: 2000, style: '定制文风:冷峻白描' },
+    ctx: { novelState: GOLDEN_NOVEL_BOOK },
+  },
+  {
+    label: 'filled-review',
+    id: 'novel',
+    params: { mode: 'review', bookId: GOLDEN_NOVEL_BOOK.bookId, focus: '伏笔盘点' },
+    ctx: { novelState: GOLDEN_NOVEL_BOOK },
+  },
 ];
 
 /** 边界:钳制与非法枚举(count 0/99、未知 style/mode、数组里混入非法 id) */
@@ -213,6 +276,12 @@ const EDGE: GoldenCase[] = [
     label: 'edge-unknown-mode',
     id: 'edu',
     params: { mode: 'bogus', cardType: 'bogus', cardFormat: 'bogus' },
+  },
+  // novel 钳制:字数/章数越界收敛,空 genre 走「不限」分支
+  {
+    label: 'edge-clamp',
+    id: 'novel',
+    params: { mode: 'genesis', genre: '', premise: '', style: '', chapterWords: 99999, openingChapters: 99 },
   },
 ];
 

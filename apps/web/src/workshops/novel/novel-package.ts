@@ -1,0 +1,399 @@
+/**
+ * 网文小说包格式契约(docs/design/novel-workshop.md §4,归 novel 工坊包)
+ *
+ * 「格式即契约」同族(note-package / article-package):prompt 模板约定 Agent 按
+ * 【字段头】输出,本模块把 markdown 解析回结构化;解析失败(返回 null)时调用方
+ * 降级为普通 markdown 渲染。纯函数,无 React/node 运行时依赖,固定样例做契约测试。
+ *
+ * 两种包,互斥锚:
+ * - 开书包(genesis):必含【设定集】+【粗纲】+ 至少一章正文;
+ * - 续写包(continue):必含【书号】(nv_ 前缀)+【本章摘要】+ 章节正文。
+ * 【本章摘要】不命中文章包的【摘要】锚(其正则要求「摘要」顶格),双向互斥由测试锚定。
+ *
+ * 可信边界:包里的章节序号只做展示,入库序号永远由 novel-store 按 progress.nextChapter
+ * 分配(模型数数不可信);书号入库前按当前用户书库校验(见 /api/novels 与入库卡片)。
+ */
+import type { NovelCharacter, DetailedChapter } from '@/lib/novel-context';
+
+// ---- 解析结果类型 ----
+
+export interface NovelGenesisPackage {
+  kind: 'genesis';
+  title: string;
+  premise: string;
+  bible: string;
+  characters: NovelCharacter[];
+  outline: string;
+  detailed: DetailedChapter[];
+  ledgerSeeds: Array<{ content: string; plantedChapter: number }>;
+  timelineSeeds: string[];
+  chapters: Array<{ title: string; content: string; summary?: string }>;
+}
+
+export interface NovelContinuePackage {
+  kind: 'continue';
+  /** 书号(nv_…;服务端渲染时注入、Agent 回显;入库时按用户书库校验) */
+  bookId: string;
+  /** 包里自称的章序号(仅展示;入库序号以状态库为准) */
+  claimedIndex?: number;
+  title: string;
+  content: string;
+  summary: string;
+  characterUpdates: Array<{ name: string; currentState: string }>;
+  ledgerActions: Array<
+    | { action: 'plant'; content: string }
+    | { action: 'pay'; keyword: string; payMethod?: string }
+  >;
+  timelineAppend: string[];
+  detailedAppend: DetailedChapter[];
+  volumeSummary?: string;
+}
+
+export type NovelPackage = NovelGenesisPackage | NovelContinuePackage;
+
+// ---- 字段头 ----
+
+const BOOK_ID_RE = /^nv_[a-z0-9]+_[a-f0-9]{6}$/;
+/** 章节正文最短长度(去空白):低于此按解析失败降级,防把寒暄当正文入库 */
+const MIN_CHAPTER_CHARS = 200;
+
+type HeaderKey =
+  | 'bookId'
+  | 'title'
+  | 'premise'
+  | 'bible'
+  | 'characters'
+  | 'outline'
+  | 'detailed'
+  | 'ledger'
+  | 'timeline'
+  | 'summary'
+  | 'charUpdates'
+  | 'ledgerActions'
+  | 'nextDetailed'
+  | 'volumeSummary'
+  | 'chapter';
+
+/** 字段头正则(允许行尾追加说明,如【第3章 · 3000字】) */
+const HEADERS: Array<[HeaderKey, RegExp]> = [
+  ['bookId', /^\s*【\s*书号\s*[^】]*】\s*$/],
+  ['title', /^\s*【\s*书名\s*[^】]*】\s*$/],
+  ['premise', /^\s*【\s*(?:卖点|一句话卖点)\s*[^】]*】\s*$/],
+  ['bible', /^\s*【\s*设定集\s*[^】]*】\s*$/],
+  ['characters', /^\s*【\s*(?:人物卡|人物卡集)\s*[^】]*】\s*$/],
+  ['outline', /^\s*【\s*(?:粗纲|大纲)\s*[^】]*】\s*$/],
+  ['detailed', /^\s*【\s*(?:细纲|章细纲)\s*[^】]*】\s*$/],
+  // 伏笔动作必须排在伏笔之前,且伏笔锚用负向断言拒吃「动作」——【伏笔】[^】]* 尾缀规则
+  // 会把【伏笔动作】整行吞掉(双保险,不依赖遍历顺序)
+  ['ledgerActions', /^\s*【\s*伏笔动作\s*[^】]*】\s*$/],
+  ['ledger', /^\s*【\s*伏笔(?!\s*动作)[^】]*】\s*$/],
+  ['timeline', /^\s*【\s*时间线\s*[^】]*】\s*$/],
+  ['summary', /^\s*【\s*本章摘要\s*[^】]*】\s*$/],
+  ['charUpdates', /^\s*【\s*人物状态更新\s*[^】]*】\s*$/],
+  ['nextDetailed', /^\s*【\s*下章细纲\s*[^】]*】\s*$/],
+  ['volumeSummary', /^\s*【\s*总纲更新\s*[^】]*】\s*$/],
+];
+
+/** 动态章头:【第N章】(N 支持阿拉伯数字;章头允许追加标题,如【第3章 夜袭】) */
+const CHAPTER_HEADER = /^\s*【\s*第\s*([0-9]+)\s*章\s*([^】]*)】\s*$/;
+
+function matchHeader(line: string): HeaderKey | null {
+  for (const [key, re] of HEADERS) {
+    if (re.test(line)) return key;
+  }
+  return null;
+}
+
+/** 行扫描:把全文切成 [段键, 行数组] 序列;章段键为 {chapter, claimedIndex, headerRest} */
+interface Segment {
+  key: HeaderKey;
+  /** 仅 chapter 段:自称序号与章头余文(可能是章标题) */
+  claimedIndex?: number;
+  headerRest?: string;
+  lines: string[];
+}
+
+function segmentize(text: string): Segment[] {
+  const segs: Segment[] = [];
+  let cur: Segment | null = null;
+  for (const line of String(text || '').split('\n')) {
+    const ch = line.match(CHAPTER_HEADER);
+    if (ch) {
+      cur = { key: 'chapter', claimedIndex: Number(ch[1]), headerRest: (ch[2] || '').trim(), lines: [] };
+      segs.push(cur);
+      continue;
+    }
+    const h = matchHeader(line);
+    if (h) {
+      cur = { key: h, lines: [] };
+      segs.push(cur);
+      continue;
+    }
+    if (cur) cur.lines.push(line);
+    // 首个字段头之前的行(寒暄)丢弃:契约要求零寒暄,残余不值得保留
+  }
+  return segs;
+}
+
+const joinLines = (lines: string[] | undefined): string => (lines || []).join('\n').trim();
+const stripBullet = (s: string): string => s.replace(/^\s*[-*·]\s*/, '').trim();
+
+/** 首行非空文本(书名/章标题/书号取段内第一行) */
+function firstLine(lines: string[] | undefined): string {
+  for (const l of lines || []) {
+    const t = l.trim();
+    if (t) return t;
+  }
+  return '';
+}
+
+/** 书名规整:去《》与「」包裹 */
+function normalizeTitle(raw: string): string {
+  return raw.replace(/^《(.+)》$/, '$1').replace(/^「(.+)」$/, '$1').trim();
+}
+
+// ---- 人物卡 / 细纲子解析(genesis 与续写共用) ----
+
+const CHAR_KEY_MAP: Array<[RegExp, keyof NovelCharacter]> = [
+  [/^(?:定位|角色定位|身份)$/, 'role'],
+  [/^(?:外貌|外形|形象)$/, 'appearance'],
+  [/^(?:性格|个性)$/, 'personality'],
+  [/^(?:动机|目标|欲望)$/, 'motivation'],
+  [/^(?:口癖|语言风格|说话风格|台词风格)$/, 'speech'],
+  [/^(?:关系|人物关系|关系网)$/, 'relations'],
+  [/^(?:弧光|成长弧光|人物弧光|成长线)$/, 'arc'],
+  [/^(?:当前状态|现状|状态)$/, 'currentState'],
+];
+
+/** 人物卡段:## 姓名 起卡,- 键:值 行填充 */
+export function parseCharacters(block: string): NovelCharacter[] {
+  const out: NovelCharacter[] = [];
+  let cur: NovelCharacter | null = null;
+  for (const line of block.split('\n')) {
+    const name = line.match(/^\s*#{2,3}\s*(.+?)\s*$/);
+    if (name) {
+      const n = normalizeTitle(name[1]).replace(/^\*\*(.+)\*\*$/, '$1');
+      if (n) {
+        cur = { name: n };
+        out.push(cur);
+      }
+      continue;
+    }
+    if (!cur) continue;
+    const kv = line.match(/^\s*[-*·]?\s*\**([^:：*]{1,12})\**\s*[:：]\s*(.+)$/);
+    if (!kv) continue;
+    const key = kv[1].trim();
+    const val = kv[2].trim();
+    if (!key || !val) continue;
+    for (const [re, field] of CHAR_KEY_MAP) {
+      if (re.test(key)) {
+        (cur as unknown as Record<string, unknown>)[field] = val;
+        break;
+      }
+    }
+  }
+  return out.filter((c) => c.name);
+}
+
+const DETAIL_KEY_MAP: Array<[RegExp, 'title' | 'hook' | 'events' | 'emotion' | 'foreshadow' | 'targetWords']> = [
+  [/^(?:钩子|开篇钩子|开场钩子)$/, 'hook'],
+  [/^(?:事件|本章事件|剧情|情节)$/, 'events'],
+  [/^(?:情绪|情绪点|爽点|看点)$/, 'emotion'],
+  [/^(?:伏笔|伏笔动作)$/, 'foreshadow'],
+  [/^(?:字数|目标字数)$/, 'targetWords'],
+];
+
+/** 细纲段:### 第N章 标题? 起条,- 键:值 行填充;无序号时按出现顺序编号 */
+export function parseDetailed(block: string): DetailedChapter[] {
+  const out: DetailedChapter[] = [];
+  let cur: DetailedChapter | null = null;
+  let auto = 0;
+  for (const line of block.split('\n')) {
+    const head = line.match(/^\s*#{2,4}\s*第\s*([0-9]+)\s*章\s*(.*)$/);
+    if (head) {
+      auto = Number(head[1]);
+      cur = { index: auto, events: '' };
+      const t = normalizeTitle((head[2] || '').trim());
+      if (t) cur.title = t;
+      out.push(cur);
+      continue;
+    }
+    // 无章头的裸条目(- 事件:…)挂到上一条;没有上一条则忽略
+    if (!cur) continue;
+    const kv = line.match(/^\s*[-*·]?\s*\**([^:：*]{1,12})\**\s*[:：]\s*(.+)$/);
+    if (!kv) continue;
+    const key = kv[1].trim();
+    const val = kv[2].trim();
+    if (!key || !val) continue;
+    for (const [re, field] of DETAIL_KEY_MAP) {
+      if (re.test(key)) {
+        if (field === 'targetWords') {
+          const n = parseInt(val.replace(/[^\d]/g, ''), 10);
+          if (Number.isFinite(n) && n > 0) cur.targetWords = n;
+        } else {
+          (cur as unknown as Record<string, unknown>)[field] = val;
+        }
+        break;
+      }
+    }
+  }
+  return out.filter((d) => d.events || d.hook);
+}
+
+/** 伏笔行:- [埋设] 内容 (@N)? / - [回收] 关键词 (@方式:…)? */
+function parseLedgerLines(block: string, mode: 'genesis' | 'actions'): {
+  seeds: Array<{ content: string; plantedChapter: number }>;
+  actions: NovelContinuePackage['ledgerActions'];
+} {
+  const seeds: Array<{ content: string; plantedChapter: number }> = [];
+  const actions: NovelContinuePackage['ledgerActions'] = [];
+  for (const raw of block.split('\n')) {
+    const line = stripBullet(raw);
+    if (!line) continue;
+    const m = line.match(/^\[(埋设|回收)\]\s*(.+)$/);
+    if (!m) continue;
+    let body = m[2].trim();
+    if (m[1] === '埋设') {
+      let plantedChapter = 1;
+      const at = body.match(/[@(（]\s*(?:第)?\s*([0-9]+)\s*章\s*[)）]?\s*$/);
+      if (at) {
+        plantedChapter = Number(at[1]);
+        body = body.slice(0, at.index).trim();
+      }
+      if (!body) continue;
+      if (mode === 'genesis') seeds.push({ content: body, plantedChapter });
+      else actions.push({ action: 'plant', content: body });
+    } else {
+      // 回收:关键词 @方式:xxx / (方式:xxx) / 方式:xxx 尾缀均可
+      let keyword = body;
+      let payMethod: string | undefined;
+      const mm = body.match(/[@(（]?\s*方式\s*[:：]\s*(.+?)\s*[)）]?$/);
+      if (mm) {
+        payMethod = mm[1].trim();
+        keyword = body.slice(0, mm.index).replace(/[@(（\s]+$/, '').trim();
+      }
+      if (!keyword) continue;
+      actions.push({ action: 'pay', keyword, ...(payMethod ? { payMethod } : {}) });
+    }
+  }
+  return { seeds, actions };
+}
+
+/** 人物状态更新行:- 姓名: 新状态 */
+function parseCharUpdates(block: string): Array<{ name: string; currentState: string }> {
+  const out: Array<{ name: string; currentState: string }> = [];
+  for (const raw of block.split('\n')) {
+    const line = stripBullet(raw);
+    if (!line) continue;
+    const m = line.match(/^([^:：]{1,20})\s*[:：]\s*(.+)$/);
+    if (!m) continue;
+    const name = normalizeTitle(m[1].trim());
+    const state = m[2].trim();
+    if (name && state) out.push({ name, currentState: state });
+  }
+  return out;
+}
+
+/** 时间线段:去 bullet 的非空行 */
+function parseTimelineLines(block: string): string[] {
+  return block
+    .split('\n')
+    .map((l) => stripBullet(l))
+    .filter(Boolean);
+}
+
+/** 章段 → {title, content, summary}:标题取章头余文或正文首行,摘要取段内【本章摘要】子段 */
+function buildChapter(seg: Segment, nextSegs: Segment[]): { title: string; content: string; summary?: string } | null {
+  // 章段自身的 lines 到下一个任意字段头为止(segmentize 已切好);
+  // 【本章摘要】是独立段,紧跟在章段后面才归属本章
+  const summarySeg = nextSegs[0] && nextSegs[0].key === 'summary' ? nextSegs[0] : null;
+  const bodyLines = [...seg.lines];
+  let title = seg.headerRest ? normalizeTitle(seg.headerRest) : '';
+  // 无章头标题:正文首个非空行若是短行(<30字且无句读结尾)按标题处理
+  if (!title) {
+    const idx = bodyLines.findIndex((l) => l.trim());
+    if (idx >= 0) {
+      const cand = bodyLines[idx].trim();
+      if (cand.length > 0 && cand.length <= 30 && !/[。!?！？]$/.test(cand)) {
+        title = normalizeTitle(cand);
+        bodyLines.splice(idx, 1);
+      }
+    }
+  }
+  const content = joinLines(bodyLines);
+  if (content.replace(/\s/g, '').length < MIN_CHAPTER_CHARS) return null;
+  const summary = summarySeg ? joinLines(summarySeg.lines) : '';
+  return { title, content, ...(summary ? { summary } : {}) };
+}
+
+// ---- 主解析 ----
+
+/**
+ * 解析小说包:先试开书包(【设定集】+【粗纲】锚),再试续写包(【书号】+【本章摘要】锚)。
+ * 都不满足返回 null(调用方降级 markdown 渲染)。
+ */
+export function parseNovelPackage(text: string): NovelPackage | null {
+  if (!text || typeof text !== 'string') return null;
+  const segs = segmentize(text);
+  if (segs.length === 0) return null;
+  const byKey = (k: HeaderKey): Segment | undefined => segs.find((s) => s.key === k);
+
+  const bible = joinLines(byKey('bible')?.lines);
+  const outline = joinLines(byKey('outline')?.lines);
+  const bookIdRaw = normalizeTitle(firstLine(byKey('bookId')?.lines));
+  const hasSummarySeg = Boolean(byKey('summary'));
+
+  // ---- 开书包 ----
+  if (bible && outline) {
+    const chapters: Array<{ title: string; content: string; summary?: string }> = [];
+    segs.forEach((seg, i) => {
+      if (seg.key !== 'chapter') return;
+      const rest = segs.slice(i + 1);
+      const ch = buildChapter(seg, rest);
+      if (ch) chapters.push(ch);
+    });
+    if (chapters.length === 0) return null;
+    const title = normalizeTitle(firstLine(byKey('title')?.lines)) || '无题';
+    const { seeds } = parseLedgerLines(joinLines(byKey('ledger')?.lines), 'genesis');
+    return {
+      kind: 'genesis',
+      title,
+      premise: joinLines(byKey('premise')?.lines),
+      bible,
+      characters: parseCharacters(joinLines(byKey('characters')?.lines)),
+      outline,
+      detailed: parseDetailed(joinLines(byKey('detailed')?.lines)),
+      ledgerSeeds: seeds,
+      timelineSeeds: parseTimelineLines(joinLines(byKey('timeline')?.lines)),
+      chapters,
+    };
+  }
+
+  // ---- 续写包 ----
+  if (BOOK_ID_RE.test(bookIdRaw) && hasSummarySeg) {
+    const chapterSeg = segs.find((s) => s.key === 'chapter');
+    if (!chapterSeg) return null;
+    const rest = segs.slice(segs.indexOf(chapterSeg) + 1);
+    const ch = buildChapter(chapterSeg, rest);
+    if (!ch) return null;
+    const summary = joinLines(byKey('summary')?.lines);
+    if (!summary) return null;
+    const { actions } = parseLedgerLines(joinLines(byKey('ledgerActions')?.lines), 'actions');
+    const volumeSummary = joinLines(byKey('volumeSummary')?.lines);
+    return {
+      kind: 'continue',
+      bookId: bookIdRaw,
+      ...(chapterSeg.claimedIndex ? { claimedIndex: chapterSeg.claimedIndex } : {}),
+      title: ch.title,
+      content: ch.content,
+      summary,
+      characterUpdates: parseCharUpdates(joinLines(byKey('charUpdates')?.lines)),
+      ledgerActions: actions,
+      timelineAppend: parseTimelineLines(joinLines(byKey('timeline')?.lines)),
+      detailedAppend: parseDetailed(joinLines(byKey('nextDetailed')?.lines)),
+      ...(volumeSummary ? { volumeSummary } : {}),
+    };
+  }
+
+  return null;
+}

@@ -10,6 +10,7 @@ import { WORKSHOP_SKILL as XHS, CRON as XHS_CRON, CRON_KEY as XHS_CRON_KEY } fro
 import { WORKSHOP_SKILL as WECHAT_MP } from './wechat_mp/skill';
 import { WORKSHOP_SKILL as ZHIHU } from './zhihu/skill';
 import { WORKSHOP_SKILL as WEIBO } from './weibo/skill';
+import { WORKSHOP_SKILL as NOVEL } from './novel/skill';
 import { WORKSHOP_SKILL_DOUYIN, WORKSHOP_SKILL_BILIBILI } from './video/skill';
 import { WORKSHOP_SKILL as EMAIL_TRIAGE } from './email_triage/skill';
 import { WORKSHOP_SKILL as WEEKLY } from './weekly/skill';
@@ -37,6 +38,7 @@ const WORKSHOP_SKILLS: Record<WorkshopId, WorkshopSkill> = {
   wechat_mp: WECHAT_MP,
   zhihu: ZHIHU,
   weibo: WEIBO,
+  novel: NOVEL,
   video_douyin: WORKSHOP_SKILL_DOUYIN,
   video_bilibili: WORKSHOP_SKILL_BILIBILI,
   email_triage: EMAIL_TRIAGE,
@@ -54,6 +56,7 @@ export const WORKSHOPS: WorkshopDef[] = [
   WORKSHOP_SKILLS.wechat_mp.meta,
   WORKSHOP_SKILLS.zhihu.meta,
   WORKSHOP_SKILLS.weibo.meta,
+  WORKSHOP_SKILLS.novel.meta,
   WORKSHOP_SKILLS.video_douyin.meta,
   WORKSHOP_SKILLS.video_bilibili.meta,
   WORKSHOP_SKILLS.email_triage.meta,

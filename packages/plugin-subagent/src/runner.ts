@@ -118,6 +118,12 @@ export interface SubagentEngineConfig {
   whitelist?: readonly string[];
   /** MCP 服务器白名单(双钥匙的人工钥匙);默认空 = 子 agent 不使用任何 MCP 工具 */
   mcpServers?: readonly string[];
+  /**
+   * 逐用户解析 MCP 服务器白名单(宿主注入,如 web 按「已连接 ∩ 目录已标记」动态计算)。
+   * 每次 run 以 session.userId 调用;返回数组(含空数组)即整体替代静态 mcpServers,
+   * 返回 undefined 回退静态配置 —— env 显式设置/关闭语义由宿主决定是否注入本回调。
+   */
+  resolveMcpServers?: (userId: string | undefined) => readonly string[] | undefined;
   /** MCP 工具名前缀逃生口(人工担责,不受 readOnly 限制);默认空 */
   mcpAllowTools?: readonly string[];
   /** per-call 模型覆盖(不动 router 全局档位,spec §4.2) */
@@ -224,9 +230,19 @@ export class SubagentEngine {
     if (!model) return fail('模型服务不可用(plugin-model 未挂载?)', 'internal-error');
 
     // 工具解析:双层白名单 + MCP 双钥匙 → requiredEnv 过滤(缺 Key 的壳工具不挂,与主循环同款语义)
+    // MCP 人工钥匙:宿主注入 resolveMcpServers 时按当前用户逐次解析(web = 已连接 ∩ 目录已标记),
+    // 返回 undefined 回退静态 mcpServers(env/内置默认);回调异常同样回退,不击穿「永不 throw」契约
+    let mcpServers = this.cfg.mcpServers;
+    if (this.cfg.resolveMcpServers) {
+      try {
+        mcpServers = this.cfg.resolveMcpServers(session.userId) ?? mcpServers;
+      } catch {
+        // 宿主解析失败(如 user-store 读盘异常)→ 回退静态配置
+      }
+    }
     const resolved = resolveReadonlyTools(this.deps.listTools(), {
       whitelist: this.cfg.whitelist,
-      mcpServers: this.cfg.mcpServers,
+      mcpServers,
       mcpAllowTools: this.cfg.mcpAllowTools,
     });
     const { mounted } = filterToolsByEnv(resolved, session.env);

@@ -128,5 +128,5 @@ flowchart TD
 | `AGTPILOT_SUBAGENT_PROVIDER` / `_MODEL` | 继承 `AGTPILOT_FAST_*` | 子 agent 专用模型（per-call 覆盖，不动 router 全局档位） |
 | `AGTPILOT_SUBAGENT_REPORT_LIMIT` | 8000 | final report 字符上限，超限截断并标 `truncated` |
 | `AGTPILOT_SUBAGENT_WHITELIST` | 内置名单 | 只读白名单覆盖（逗号分隔；仍受注册表 `readOnly` 声明硬校验） |
-| `AGTPILOT_SUBAGENT_MCP_SERVERS` | `github_mcp,huggingface,openalex,alphaxiv,deepwiki` | MCP 服务器白名单（人工钥匙）；与 `annotations.readOnlyHint` 只读声明构成双钥匙；`off` = 子 agent 不使用任何 MCP 工具；行情类连接器依红线不入默认名单 |
+| `AGTPILOT_SUBAGENT_MCP_SERVERS` | `github_mcp,huggingface,openalex,alphaxiv,deepwiki` | MCP 服务器白名单（人工钥匙）；与 `annotations.readOnlyHint` 只读声明构成双钥匙；`off` = 子 agent 不使用任何 MCP 工具；行情类连接器依红线不入默认名单。**web 宿主未显式设置时改走目录标记**：按用户注入「已连接 ∩ `McpServerDef.subagentOpen`」（`mcp-connectors.ts` 目录级评审，新连接器必填表态；红线回归 `mcp-connectors-subagent.test.ts`） |
 | `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` | `mcp_deepwiki_,mcp_newsnow_` | MCP 工具名前缀逃生口（无注解服务器，不要求 readOnly 声明）；默认项以 2026-10-14 `annotations-report.mjs` 实测记录为背书；`off` = 全关 |

@@ -486,3 +486,65 @@ describe('杂项', () => {
     expect(SUBAGENT_SYSTEM_PROMPT).toContain('不得执行');
   });
 });
+
+// ---- 9. resolveMcpServers 逐用户注入(目录标记方案,2026-10-14)----
+
+describe('resolveMcpServers(逐用户动态人工钥匙)', () => {
+  const mcpRegistry = [
+    mkTool('search_web', { readOnly: true }),
+    mkTool('mcp_zhihu_hot_fetch', { readOnly: true }),
+    mkTool('mcp_github_mcp_search_repositories', { readOnly: true }),
+    mkTool('mcp_tushare_daily', { readOnly: true }),
+  ];
+
+  function loopToolNames(calls: AgentLoopOptions[]): string[] {
+    return (calls[calls.length - 1].tools ?? []).map((t) => t.name);
+  }
+
+  it('resolver 结果按 session.userId 决定 MCP 白名单', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, mcpRegistry, {
+      resolveMcpServers: (uid) => (uid === 'u-zhihu' ? ['zhihu_hot'] : ['github_mcp']),
+    });
+
+    await engine.run({ query: 'q' }, { ...baseSession, userId: 'u-zhihu' });
+    expect(loopToolNames(calls.loop)).toContain('mcp_zhihu_hot_fetch');
+    expect(loopToolNames(calls.loop)).not.toContain('mcp_github_mcp_search_repositories');
+
+    await engine.run({ query: 'q' }, { ...baseSession, userId: 'u-gh' });
+    expect(loopToolNames(calls.loop)).toContain('mcp_github_mcp_search_repositories');
+    expect(loopToolNames(calls.loop)).not.toContain('mcp_zhihu_hot_fetch');
+  });
+
+  it('红线服务器即使自身声明 readOnly,resolver 不列也进不了子 agent(人工钥匙优先)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, mcpRegistry, {
+      resolveMcpServers: () => ['zhihu_hot'],
+    });
+    await engine.run({ query: 'q' }, baseSession);
+    expect(loopToolNames(calls.loop)).not.toContain('mcp_tushare_daily');
+  });
+
+  it('resolver 返回 undefined → 回退静态 mcpServers(env/内置默认语义)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, mcpRegistry, {
+      mcpServers: ['github_mcp'],
+      resolveMcpServers: () => undefined,
+    });
+    await engine.run({ query: 'q' }, baseSession);
+    expect(loopToolNames(calls.loop)).toContain('mcp_github_mcp_search_repositories');
+  });
+
+  it('resolver 抛异常 → 回退静态 mcpServers,run 仍成功(永不 throw 契约)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, mcpRegistry, {
+      mcpServers: ['zhihu_hot'],
+      resolveMcpServers: () => {
+        throw new Error('user-store down');
+      },
+    });
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(loopToolNames(calls.loop)).toContain('mcp_zhihu_hot_fetch');
+  });
+});

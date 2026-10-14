@@ -93,6 +93,12 @@ export interface SubagentPluginConfig {
   whitelist?: string[];
   /** MCP 服务器白名单(双钥匙的人工钥匙);缺省 env AGTPILOT_SUBAGENT_MCP_SERVERS → 内置检索连接器名单 */
   mcpServers?: string[];
+  /**
+   * 逐用户解析 MCP 服务器白名单(宿主注入)。web 宿主按「用户已连接 ∩ 连接器目录
+   * subagentOpen 标记」动态计算(mcp-connectors.ts buildUserSubagentMcpServers);
+   * env AGTPILOT_SUBAGENT_MCP_SERVERS 显式设置时宿主不注入,env 语义优先。
+   */
+  resolveMcpServers?: (userId: string | undefined) => readonly string[] | undefined;
   /** MCP 工具名前缀逃生口;缺省 env AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS → 内置名单(deepwiki/newsnow,实测背书) */
   mcpAllowTools?: string[];
   maxSteps?: number;
@@ -124,6 +130,7 @@ class SubagentService extends Service {
         reportLimit: config.reportLimit ?? REPORT_LIMIT,
         whitelist,
         mcpServers: config.mcpServers ?? MCP_SERVERS,
+        resolveMcpServers: config.resolveMcpServers,
         mcpAllowTools: config.mcpAllowTools ?? MCP_ALLOW_TOOLS,
         // per-call 覆盖,不写 router 全局档位(spec §4.2)
         configOverride: { activeModelId: PROVIDER, modelName: MODEL },

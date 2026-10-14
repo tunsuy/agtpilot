@@ -16,6 +16,16 @@ import { UserMcpOAuthProvider } from './mcp-oauth-provider';
 export interface McpServerDef {
   /** 服务器别名（工具名前缀：mcp_{alias}_{tool}），同一连接器多服务器时区分 */
   name: string;
+  /**
+   * 子 agent 开放标记（双钥匙的人工钥匙，目录级评审、版本化可审计）。
+   * true = 该用户已连接本服务器时，宿主自动把它注入子 agent MCP 白名单
+   * （仍需服务器 annotations 只读声明放行具体工具；无注解服务器须另经
+   * AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS 逃生口 + 实测背书）。
+   * 标记原则：检索/查询类且性质只读 → true；含写操作/现实副作用/按量计费成本/
+   * 行情数字（红线：报告依据数字必须主循环直拉）→ false。
+   * 必填字段 = 新增连接器不显式表态就过不了编译（CI 强制同 PR 评审）。
+   */
+  subagentOpen: boolean;
   /** 端点 URL；token 类可为模板函数（凭证拼进 query 或 header）。http/sse 必填，stdio 忽略 */
   url?: string | ((cred: string) => string);
   transport?: 'http' | 'sse' | 'stdio';
@@ -70,7 +80,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["notion"],
     quickAuthUrl: 'https://www.notion.so/help/notion-mcp',
-    servers: [{ name: 'notion', url: 'https://mcp.notion.com/mcp', label: 'Notion 全量' }],
+    servers: [{ name: 'notion', subagentOpen: false, url: 'https://mcp.notion.com/mcp', label: 'Notion 全量' }], // 读写页面/数据库 → 不开放
   },
   {
     id: 'dida365',
@@ -81,7 +91,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     authType: 'oauth',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["滴答清单", "dida365", "待办"],
-    servers: [{ name: 'dida365', url: 'https://mcp.dida365.com' }],
+    servers: [{ name: 'dida365', subagentOpen: false, url: 'https://mcp.dida365.com' }], // 创建/完成待办 = 写操作
   },
   {
     id: 'openalex',
@@ -92,7 +102,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     authType: 'oauth',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["openalex", "学术文献", "论文检索", "引用关系"],
-    servers: [{ name: 'openalex', url: 'https://mcp.openalex.org/mcp' }],
+    servers: [{ name: 'openalex', subagentOpen: true, url: 'https://mcp.openalex.org/mcp' }], // 学术文献检索,只读
   },
   {
     id: 'qcc',
@@ -104,7 +114,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["企查查", "工商信息", "公司背景", "企业风险"],
     scope: 'mcp:tools',
-    servers: [{ name: 'qcc', url: 'https://agent.qcc.com/mcp/company/stream', label: '企业工商' }],
+    servers: [{ name: 'qcc', subagentOpen: true, url: 'https://agent.qcc.com/mcp/company/stream', label: '企业工商' }], // 工商信息查询,只读
   },
   {
     id: 'ardot',
@@ -116,7 +126,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["ardot", "腾讯设计", "设计稿", "设计系统"],
     docUrl: 'https://docs.ardot.tencent.com/ardot-mcp/introduction.html',
-    servers: [{ name: 'ardot', url: 'https://ardot.tencent.com/mcp' }],
+    servers: [{ name: 'ardot', subagentOpen: false, url: 'https://ardot.tencent.com/mcp' }], // 设计稿读写 → 不开放
   },
   {
     id: 'atlassian_mcp',
@@ -133,6 +143,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'atlassian',
+        subagentOpen: false, // Jira 工单流转 / Confluence 页面写入 → 不开放
         // v2 端点(2026-02 GA;v1/SSE 2026-06-30 停用)。tools=all 返回全量工具(默认是精选子集)
         url: 'https://mcp.atlassian.com/v2/mcp?tools=all',
         label: 'Jira + Confluence',
@@ -154,7 +165,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     quickAuthUrl: 'https://console.amap.com/dev/key/app',
     authHint: '在高德开放平台创建「Web 服务」类型 Key，复制后粘贴到下方',
     docUrl: 'https://lbs.amap.com/api/mcp-server/gettingstarted',
-    servers: [{ name: 'amap', url: (cred) => `https://mcp.amap.com/mcp?key=${encodeURIComponent(cred)}` }],
+    servers: [{ name: 'amap', subagentOpen: true, url: (cred) => `https://mcp.amap.com/mcp?key=${encodeURIComponent(cred)}` }], // 地理/POI/路线/天气查询,只读
   },
   {
     id: 'baidu_map',
@@ -169,7 +180,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     quickAuthUrl: 'https://lbs.baidu.com/apiconsole/key',
     authHint: '在百度地图开放平台创建「服务端」应用获取 AK，并启用 MCP 服务，复制后粘贴到下方',
     docUrl: 'https://lbsyun.baidu.com/faq/api?title=mcpserver/quickstart',
-    servers: [{ name: 'baidu_map', url: (cred) => `https://mcp.map.baidu.com/mcp?ak=${encodeURIComponent(cred)}` }],
+    servers: [{ name: 'baidu_map', subagentOpen: true, url: (cred) => `https://mcp.map.baidu.com/mcp?ak=${encodeURIComponent(cred)}` }], // 地点/地理编码/路线查询,只读
   },
   {
     id: 'tencent_docs',
@@ -187,6 +198,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'tencent_docs',
+        subagentOpen: false, // 创建/编辑文档 = 写操作
         url: 'https://docs.qq.com/openapi/mcp',
         // 腾讯文档要求 Authorization 头直接放原始 token（不带 Bearer 前缀）
         headers: (cred) => ({ Authorization: cred }),
@@ -208,6 +220,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'tencent_meeting',
+        subagentOpen: false, // 会议管理含创建/录制等写操作
         url: 'https://mcp.meeting.tencent.com/mcp/wemeet-open/v1',
         headers: (cred) => ({ 'X-Tencent-Meeting-Token': cred, 'X-Skill-Version': 'v1.0.1' }),
       },
@@ -227,7 +240,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     quickAuthUrl: 'https://mcp.didichuxing.com',
     authHint: '打开滴滴开发者控制台登录并激活个人 MCP Key，复制后粘贴到下方',
     docUrl: 'https://mcp.didichuxing.com/api',
-    servers: [{ name: 'didi', url: (cred) => `https://mcp.didichuxing.com/mcp-servers?key=${encodeURIComponent(cred)}` }],
+    servers: [{ name: 'didi', subagentOpen: false, url: (cred) => `https://mcp.didichuxing.com/mcp-servers?key=${encodeURIComponent(cred)}` }], // 叫车 = 现实副作用,永不开放
   },
   {
     id: 'tencent_weiyun',
@@ -245,6 +258,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'tencent_weiyun',
+        subagentOpen: false, // 网盘上传/分享/目录整理 = 写操作
         url: 'https://www.weiyun.com/api/v3/mcpserver',
         headers: (cred) => ({ WyHeader: `mcp_token=${normalizeWeiyunToken(cred)}` }),
       },
@@ -266,6 +280,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'tencent_lexiang',
+        subagentOpen: false, // 含知识库创建/文档管理,写面未评审
         url: 'https://mcp.lexiang-app.com/mcp?preset=meta',
         headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
       },
@@ -287,6 +302,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'youdao_note',
+        subagentOpen: false, // 笔记创建/整理 = 写操作
         transport: 'sse',
         url: 'https://open.mail.163.com/api/ynote/mcp/sse',
         headers: (cred) => ({ 'x-api-key': cred }),
@@ -312,6 +328,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'github_mcp',
+        subagentOpen: true, // 官方 annotations 齐全,双钥匙只会放行自报只读的查询/搜索工具
         url: 'https://api.githubcopilot.com/mcp/',
         headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
       },
@@ -335,6 +352,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'zhihu_search',
+        subagentOpen: true, // 站内搜索,只读
         transport: 'sse',
         url: 'https://developer.zhihu.com/api/mcp/zhihu_search/v1/sse',
         headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
@@ -342,6 +360,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
       },
       {
         name: 'zhihu_global',
+        subagentOpen: true, // 全网聚合搜索,只读
         transport: 'sse',
         url: 'https://developer.zhihu.com/api/mcp/global_search/v1/sse',
         headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
@@ -349,6 +368,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
       },
       {
         name: 'zhihu_hot',
+        subagentOpen: true, // 实时热榜,只读
         transport: 'sse',
         url: 'https://developer.zhihu.com/api/mcp/hot_list/v1/sse',
         headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
@@ -367,7 +387,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     authType: 'none',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["deepwiki", "代码知识库"],
-    servers: [{ name: 'deepwiki', url: 'https://mcp.deepwiki.com/mcp' }],
+    servers: [{ name: 'deepwiki', subagentOpen: true, url: 'https://mcp.deepwiki.com/mcp' }], // 仓库问答,实测全只读(逃生口背书)
   },
   {
     id: 'browser_auto',
@@ -385,6 +405,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'browser_auto',
+        subagentOpen: false, // 点击/填表/导航 = 写动作,与内置 browser 排除同理
         transport: 'stdio',
         command: 'npx',
         args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated'],
@@ -411,6 +432,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'tushare',
+        subagentOpen: false, // 行情数字红线:报告依据必须主循环直拉
         // 官方端点把 token 拼在 URL 路径里（非 header）
         url: (cred) => `https://api.tushare.pro/mcp/token=${encodeURIComponent(cred)}`,
         label: '投研数据',
@@ -435,6 +457,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'alphavantage',
+        subagentOpen: false, // 行情数字红线:报告依据必须主循环直拉
         // 官方端点用 query 参数传 API Key
         url: (cred) => `https://mcp.alphavantage.co/mcp?apikey=${encodeURIComponent(cred)}`,
       },
@@ -453,7 +476,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     optIn: true,
     tokenEnvVar: 'MCP_COINGECKO_OPTIN',
     docUrl: 'https://docs.coingecko.com/ai-integration/mcp-server',
-    servers: [{ name: 'coingecko', url: 'https://mcp.api.coingecko.com/mcp' }],
+    servers: [{ name: 'coingecko', subagentOpen: false, url: 'https://mcp.api.coingecko.com/mcp' }], // 行情数字红线:报告依据必须主循环直拉
   },
   {
     id: 'a_stock',
@@ -471,6 +494,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'a_stock',
+        subagentOpen: false, // 行情数字红线:报告依据必须主循环直拉
         transport: 'stdio',
         command: 'python3',
         args: ['-m', 'a_stock_mcp_server'],
@@ -497,6 +521,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'alphaxiv',
+        subagentOpen: true, // 论文语义检索/全文问答,只读
         url: 'https://api.alphaxiv.org/mcp/v1',
         headers: (cred) => ({ Authorization: `Bearer ${cred}` }),
       },
@@ -515,7 +540,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     optIn: true,
     tokenEnvVar: 'MCP_HUGGINGFACE_OPTIN',
     docUrl: 'https://huggingface.co/docs/hub/en/agents-mcp',
-    servers: [{ name: 'huggingface', url: 'https://huggingface.co/mcp' }],
+    servers: [{ name: 'huggingface', subagentOpen: true, url: 'https://huggingface.co/mcp' }], // 官方 4/4 工具带只读注解(2026-10-14 实测)
   },
   {
     id: 'deepl_mcp',
@@ -528,7 +553,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["deepl", "翻译", "润色"],
     docUrl: 'https://developers.deepl.com/docs/mcp',
-    servers: [{ name: 'deepl', url: 'https://mcp.deepl.com/v1/mcp' }],
+    servers: [{ name: 'deepl', subagentOpen: true, url: 'https://mcp.deepl.com/v1/mcp' }], // 翻译/润色性质只读;术语表管理类靠双钥匙拦(须服务器自报只读才放行)
   },
 
   // ---- 官方 stdio MCP（本地子进程，凭证按用户注入 env/args，绝不进 process.env）----
@@ -550,6 +575,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'lark_suite',
+        subagentOpen: false, // 办公全家桶:发消息/写文档/建日程 = 写操作
         transport: 'stdio',
         command: 'npx',
         args: (cred) => {
@@ -577,6 +603,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'dingtalk_mcp',
+        subagentOpen: false, // 待办/群消息 = 写操作
         transport: 'stdio',
         command: 'npx',
         // 凭证经 env 注入（不出现在命令行，避免进程列表泄露）
@@ -611,6 +638,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'yuque',
+        subagentOpen: false, // 知识库/文档读写含创建 = 写操作
         transport: 'stdio',
         command: 'npx',
         // 凭证经 env 注入（不出现在命令行，避免进程列表泄露）
@@ -637,6 +665,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'newsnow',
+        subagentOpen: true, // 聚合热榜,实测只读(逃生口 mcp_newsnow_ 背书)
         transport: 'stdio',
         command: 'npx',
         args: ['-y', 'newsnow-mcp-server'],
@@ -664,6 +693,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [
       {
         name: 'twitterapi_io',
+        subagentOpen: false, // 按量计费($0.15/千条),子 agent 批量检索产生真实费用,未评审
         transport: 'stdio',
         command: 'npx',
         // 凭证经 env 注入（不出现在命令行，避免进程列表泄露）；用官方新包名（@kaitoinfra 旧包已废弃）
@@ -778,6 +808,24 @@ function connectedServerDefs(userId: string): Array<{ def: McpConnectorDef; serv
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 子 agent MCP 白名单(双钥匙的人工钥匙)按用户动态解析:
+ * 「该用户当前已连接的服务器」∩「目录 subagentOpen 标记」。
+ * 由 agent-backend 注入 plugin-subagent 的 resolveMcpServers —— 用户在连接器页
+ * 新配一台已标记的连接器,子 agent 下一次派发即可用,无需改 env/重启。
+ * 连接判定与 buildUserMcpServers 完全一致(同一 connectedServerDefs);
+ * env AGTPILOT_SUBAGENT_MCP_SERVERS 显式设置时宿主不注入本函数,env 语义优先。
+ */
+export function buildUserSubagentMcpServers(userId: string): string[] {
+  const names: string[] = [];
+  for (const { servers: defs } of connectedServerDefs(userId)) {
+    for (const s of defs) {
+      if (s.subagentOpen) names.push(s.name);
+    }
+  }
+  return names;
 }
 
 /**

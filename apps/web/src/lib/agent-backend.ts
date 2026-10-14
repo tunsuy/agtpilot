@@ -149,7 +149,18 @@ class AgentBackend {
         ]);
       const runtime = await createAgentRuntime({
         skill: { store: webSkillStore(), cards: webCardStore(), tokenize },
-        subagent: { appendTranscript: appendSubagentTranscript },
+        subagent: {
+          appendTranscript: appendSubagentTranscript,
+          // 子 agent MCP 人工钥匙逐用户解析:「已连接 ∩ 目录 subagentOpen 标记」自动注入,
+          // 用户新配一台已标记连接器,子 agent 下次派发即可用(无需改 env/重启)。
+          // env AGTPILOT_SUBAGENT_MCP_SERVERS 显式设置(含 off)时不注入,env 语义优先。
+          resolveMcpServers: process.env.AGTPILOT_SUBAGENT_MCP_SERVERS?.trim()
+            ? undefined
+            : (userId: string | undefined) => {
+                const { buildUserSubagentMcpServers } = require('@/lib/mcp-connectors');
+                return buildUserSubagentMcpServers(userId ?? 'default');
+              },
+        },
       });
       this.ctx = runtime.ctx;
       this.agentService = runtime.agent;

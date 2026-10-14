@@ -3,6 +3,7 @@
  */
 import { Newspaper } from 'lucide-react';
 import { buildWechatMpWorkshopPrompt } from './context';
+import { buildWechatMpDraftReplyText } from './draft';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 
@@ -22,7 +23,16 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     ],
     note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议。满意的一篇点「投草稿箱」——经你逐次审批后写入公众号草稿箱(每日有次数上限),最终发布由你在公众平台后台人工完成,Agent 不碰任何发布/群发接口。凭证(AppID:AppSecret,需已认证公众号 + IP 白名单)在连接器页「微信公众号(草稿箱直连)」卡片配置,表单内可查看状态并测试连接。',
     profileSlot: 'wechat_mp',
-    artifacts: [{ kind: 'article-package', label: '公众号文章包' }],
+    artifacts: [
+      {
+        kind: 'article-package',
+        label: '公众号文章包',
+        draft: {
+          label: '投草稿箱(经我审批后写入,发布由我在后台人工完成)',
+          build: buildWechatMpDraftReplyText,
+        },
+      },
+    ],
   },
   run: (params, ctx) => {
     const style = str(params.style, '深度长文');

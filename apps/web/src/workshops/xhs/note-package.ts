@@ -1,8 +1,9 @@
 /**
- * 小红书笔记包解析器(docs/design/workshop-scenario-loop.md §3)
+ * 小红书笔记包格式契约(docs/design/workshop-scenario-loop.md §3,归 xhs 工坊包)
  *
- * 「格式即契约」:buildXhsWorkshopPrompt 约定 Agent 按【字段头】+ `---` 分隔输出笔记包,
+ * 「格式即契约」:本工坊 prompt 模板约定 Agent 按【字段头】+ `---` 分隔输出笔记包,
  * 本模块把该 markdown 解析回结构化;解析失败(packages 为空)时调用方降级为普通文本渲染。
+ * 投递指令(调哪个平台存草稿工具)是工域知识,归本包 draft.ts。
  * 纯函数,无 React/浏览器依赖,便于以固定样例做契约测试。
  */
 
@@ -168,23 +169,4 @@ export function buildNotePackageCopyText(pkg: NotePackage, titleIndex = 0): stri
   const title = pkg.titles[Math.min(Math.max(titleIndex, 0), pkg.titles.length - 1)] || '';
   const tags = pkg.tags.map((t) => `#${t}`).join(' ');
   return [title, pkg.body, tags].filter(Boolean).join('\n\n');
-}
-
-/**
- * 存草稿箱续聊指令:复用公众号「投草稿箱」的闭环模式 —— 续聊本 mission,
- * 指示 Agent 调 xhs_save_note_draft(dangerLevel high → 编排器审批门,
- * 用户逐次确认);终点是草稿箱,发布永远由用户在小红书 App 人工完成。
- */
-export function buildNotePackageDraftReplyText(pkg: NotePackage, titleIndex = 0): string {
-  const title = pkg.titles[Math.min(Math.max(titleIndex, 0), pkg.titles.length - 1)] || '';
-  // 工具契约:tags 至多 10 个、不带 #(上限在工具 schema,xhs-managed 侧也有每日频控)
-  const tags = pkg.tags.slice(0, 10).join(',');
-  return `请把下面这篇小红书笔记存入草稿箱:调用 xhs_save_note_draft 工具(title/body/tags 严格按下文填写,标签不带 #)。调用前需经我审批确认;终点是草稿箱,绝不发布,不要触碰任何发布相关的按钮或接口。
-
-title:${title}
-
-body:
-${pkg.body}
-
-tags:${tags}`;
 }

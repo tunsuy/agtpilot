@@ -15,7 +15,7 @@ import {
   buildTopicPickReplyText,
   type TopicPick,
   type TopicPickParseResult,
-} from '../../lib/topic-picks';
+} from '../../workshops/xhs/topic-picks';
 
 function TopicPickCard({
   pick,

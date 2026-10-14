@@ -51,14 +51,15 @@ import {
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { ActivityFeedView } from './ActivityFeedView';
 import { NotePackageList } from './workshops/NotePackageCard';
-import { parseNotePackages } from '../lib/note-package';
+import { parseNotePackages } from '../workshops/xhs/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
-import { parseArticlePackages } from '../lib/article-package';
+import { parseArticlePackages } from '../workshops/shared/article-package';
 import { TopicPickList } from './workshops/TopicPickCard';
-import { parseTopicPicks } from '../lib/topic-picks';
+import { parseTopicPicks } from '../workshops/xhs/topic-picks';
 import { OssOpportunityList } from './workshops/OssOpportunityCard';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
-import { parseOssOpportunities } from '../lib/oss-opportunities';
+import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
+import { resolveArtifactDraft } from '../workshops/registry';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
 import { sourcesForAnswer } from '../lib/search-sources';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
@@ -214,6 +215,12 @@ export function CockpitView({
   const currentMission = activeMissionId
     ? (missions.find((m) => m.id === activeMissionId) || null)
     : null;
+
+  // 投递目标按任务来源工坊路由(工坊包声明驱动,不嗅探任务标题):知乎工坊的
+  // 文章包走知乎托管存草稿,其余文章包走公众号草稿箱;笔记包格式仅 xhs 产出。
+  // 托管门(zhihu/xhs)由连接器页 opt-in 状态决定,无门工坊(公众号凭证内置)恒开。
+  const articleDraft = resolveArtifactDraft(currentMission?.workshopId, 'article-package');
+  const noteDraft = resolveArtifactDraft(currentMission?.workshopId, 'note-package');
 
   // 任务进入 ACTIVE（新任务 / 续聊 / 选中运行中会话）时自动切到「执行动态」：
   // 用户第一眼看到 agent 正在做什么；浏览中不再被视口更新抢走焦点（见 page.tsx 粘性规则）
@@ -873,15 +880,14 @@ export function CockpitView({
                                 <OssOpportunityList result={ossResult} />
                               ) : st.answer && articleResult ? (
                                 /* 文章包:先于笔记包判定(【摘要】互斥锚);投草稿走续聊 + 审批门。
-                                   投递目标按任务标题判定(知乎专栏工坊 → zhihu,其余 → 公众号) */
+                                   投递目标按 mission.workshopId 经工坊包声明路由(zhihu 工坊 →
+                                   知乎托管,其余 → 公众号) */
                                 <ArticlePackageList
                                   result={articleResult}
                                   missionId={activeMissionId || currentMission?.id}
                                   onRunMission={onRunMission}
-                                  draftTarget={
-                                    (currentMission?.title || '').startsWith('知乎') ? 'zhihu' : 'wechat_mp'
-                                  }
-                                  draftEnabled={zhihuDraftEnabled}
+                                  draft={articleDraft}
+                                  draftEnabled={articleDraft?.managedGate !== 'zhihu' || zhihuDraftEnabled}
                                 />
                               ) : st.answer && noteResult ? (
                                 /* 小红书笔记包:字段级可复制卡片 + 开启托管写操作后的「存草稿箱」(续聊 + 审批门) */
@@ -889,7 +895,8 @@ export function CockpitView({
                                   result={noteResult}
                                   missionId={activeMissionId || currentMission?.id}
                                   onRunMission={onRunMission}
-                                  draftEnabled={xhsDraftEnabled}
+                                  draft={noteDraft}
+                                  draftEnabled={noteDraft?.managedGate !== 'xhs' || xhsDraftEnabled}
                                 />
                               ) : (
                                 st.answer && (

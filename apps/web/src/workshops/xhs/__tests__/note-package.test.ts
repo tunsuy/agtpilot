@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseNotePackages, buildNotePackageCopyText, buildNotePackageDraftReplyText } from '../note-package';
-import { parseArticlePackages } from '../article-package';
+import { parseNotePackages, buildNotePackageCopyText } from '../note-package';
+import { parseArticlePackages } from '../../shared/article-package';
 
 const LONG_BODY = '这篇正文要超过五十字才能被判定为有效笔记包,所以这里写得长一点。'.repeat(3);
 
@@ -187,27 +187,5 @@ describe('buildNotePackageCopyText', () => {
 
   it('索引越界回落到末位标题', () => {
     expect(buildNotePackageCopyText(pkg, 99).startsWith('通勤ootd这样穿')).toBe(true);
-  });
-});
-
-describe('buildNotePackageDraftReplyText(存草稿箱续聊指令)', () => {
-  const pkg = parseNotePackages(singlePackage).packages[0];
-
-  it('含工具名/审批确认/绝不发布,以及逐字内嵌的 title/body/tags', () => {
-    const text = buildNotePackageDraftReplyText(pkg, 0);
-    expect(text).toContain('xhs_save_note_draft');
-    expect(text).toContain('审批确认');
-    expect(text).toContain('绝不发布');
-    expect(text).toContain('title:平价通勤穿搭合集');
-    expect(text).toContain(`body:\n${LONG_BODY}`);
-    // 标签不带 #、逗号分隔(对齐工具 schema 契约)
-    expect(text).toContain('tags:通勤穿搭,平价穿搭,ootd');
-    expect(text).not.toContain('#通勤');
-  });
-
-  it('可指定标题索引;索引越界回落到末位标题', () => {
-    expect(buildNotePackageDraftReplyText(pkg, 1).startsWith('请把下面')).toBe(true);
-    expect(buildNotePackageDraftReplyText(pkg, 1)).toContain('title:打工人早八三分钟出门');
-    expect(buildNotePackageDraftReplyText(pkg, 99)).toContain('title:通勤ootd这样穿');
   });
 });

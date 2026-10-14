@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parseOssOpportunities, buildOssOpportunityCopyText } from '../oss-opportunities';
-import { parseArticlePackages } from '../article-package';
-import { parseNotePackages } from '../note-package';
-import { parseTopicPicks } from '../topic-picks';
+import { parseOssOpportunities, buildOssOpportunityCopyText } from '../opportunities';
+import { parseArticlePackages } from '../../shared/article-package';
+import { parseNotePackages } from '../../xhs/note-package';
+import { parseTopicPicks } from '../../xhs/topic-picks';
 
 /** 标准两条机会清单(契约格式:【机会 N】+ 八字段头 + --- 分隔) */
 const standard = `【机会 1】

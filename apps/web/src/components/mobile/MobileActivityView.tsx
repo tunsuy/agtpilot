@@ -20,7 +20,7 @@ import {
 import { ApprovalRequest, ConnectorSuggestion, Mission, TerminalLog } from '../../types/agent';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
-import { parseTopicPicks } from '../../lib/topic-picks';
+import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
 
 interface MobileActivityViewProps {
   missions: Mission[];

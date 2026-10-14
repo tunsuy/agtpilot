@@ -1,5 +1,5 @@
 /**
- * 小红书每周选题解析器(docs/design/workshop-scenario-loop.md §4.1,scenario-loop P1)。
+ * 小红书每周选题格式契约(docs/design/workshop-scenario-loop.md §4.1,归 xhs 工坊包)。
  *
  * 「格式即契约」:buildXhsWeeklyTopicsPrompt 约定 Agent 按【选题 N】+ 六字段头 + `---` 分隔
  * 输出选题清单,本模块把该 markdown 解析回结构化;解析失败(picks 为空)时调用方降级为

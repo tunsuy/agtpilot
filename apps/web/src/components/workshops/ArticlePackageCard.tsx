@@ -1,27 +1,31 @@
 'use client';
 
 /**
- * 文章包卡片(公众号草稿箱直投 / 知乎浏览器托管存草稿)
+ * 文章包卡片(工坊无关的通用渲染)
  *
  * 把 parseArticlePackages 的结构化结果渲染成「字段级可复制」卡片:
  * 新格式交付物是成品——标题为 Agent 拍板的唯一终版(直接展示);历史记录的
  * 多候选标题保留点选交互。摘要/正文独立复制、一键整卡复制。
- * 底部投草稿按钮 → 续聊同一 mission,按 draftTarget 指示 Agent 调
- * wechat_mp_create_draft / zhihu_save_article_draft
- * (dangerLevel high → 编排器审批门,用户逐次确认);发布永远人工,卡片不碰发布。
- * 知乎目标下 draftEnabled=false(托管模式未开)时不给按钮,只给引导提示
- * ——与 NotePackageList 的小红书托管门同款规则。
+ * 底部投草稿按钮 → 续聊同一 mission;调哪个存草稿工具、按钮文案、托管门
+ * 引导全部来自工坊包声明的 draft spec(CockpitView 按 mission.workshopId
+ * 经 resolveArtifactDraft 解析后传入)——卡片自身不持任何工域知识。
+ * 工具为 dangerLevel high → 编排器审批门;发布永远人工,卡片不碰发布。
  */
 import React, { useState } from 'react';
 import { Copy, Check, FileText, ChevronDown, SendHorizonal } from 'lucide-react';
 import { copyToClipboard } from '../../utils/nativeBridge';
 import {
   buildArticlePackageCopyText,
-  buildArticlePackageReplyText,
-  type ArticleDraftTarget,
   type ArticlePackage,
   type ArticlePackageParseResult,
-} from '../../lib/article-package';
+} from '../../workshops/shared/article-package';
+
+/** 卡片侧的投递声明形状(来自工坊包 ArtifactDraftSpec,结构兼容即可) */
+export interface ArticleDraftSpecProp {
+  label: string;
+  build: (pkg: ArticlePackage, titleIndex: number) => string;
+  disabledHint?: string;
+}
 
 /** 单字段复制按钮:成功打勾、失败明示,不静默假成功 */
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -57,14 +61,15 @@ function ArticlePackageCard({
   pkg,
   missionId,
   onRunMission,
-  draftTarget = 'wechat_mp',
+  draft,
   draftEnabled = true,
 }: {
   pkg: ArticlePackage;
   missionId?: string | null;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
-  draftTarget?: ArticleDraftTarget;
-  /** 仅知乎目标使用:false = 托管模式未开,不出按钮只出引导(公众号走凭证内置引导,不经过此门) */
+  /** 工坊包声明的投递指令(未解析到 = 只读卡,不出按钮) */
+  draft?: ArticleDraftSpecProp;
+  /** 托管写操作门已开启(无门工坊恒 true);未开启且声明了 disabledHint 时给引导 */
   draftEnabled?: boolean;
 }) {
   const [selectedTitle, setSelectedTitle] = useState(0);
@@ -77,12 +82,13 @@ function ArticlePackageCard({
     setTimeout(() => setCopyState('idle'), 2000);
   };
 
-  /** 存草稿:续聊同一 mission,Agent 按目标平台调存草稿工具(需我审批) */
+  /** 存草稿:续聊同一 mission,Agent 按工坊声明的投递指令调存草稿工具(需我审批) */
   const handleDraft = () => {
-    onRunMission(buildArticlePackageReplyText(pkg, selectedTitle, draftTarget), undefined, missionId || undefined);
+    if (!draft) return;
+    onRunMission(draft.build(pkg, selectedTitle), undefined, missionId || undefined);
   };
 
-  const canDraft = draftTarget !== 'zhihu' || draftEnabled;
+  const canDraft = Boolean(draft) && draftEnabled;
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
@@ -208,23 +214,21 @@ function ArticlePackageCard({
           </div>
         )}
 
-        {/* 存草稿:续聊本 mission → Agent 按目标调存草稿工具(high 审批门);发布永远人工 */}
-        {canDraft ? (
+        {/* 存草稿:续聊本 mission → Agent 按工坊声明调存草稿工具(high 审批门);发布永远人工 */}
+        {canDraft && draft ? (
           <button
             type="button"
             onClick={handleDraft}
             className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition shadow-xs"
           >
             <SendHorizonal className="h-3.5 w-3.5" />
-            {draftTarget === 'zhihu'
-              ? '存入知乎草稿(经我审批后填入,发布由我在知乎人工完成)'
-              : '投草稿箱(经我审批后写入,发布由我在后台人工完成)'}
+            {draft.label}
           </button>
-        ) : (
+        ) : draft && draft.disabledHint ? (
           <p className="px-3 py-2 rounded-xl bg-zinc-50 border border-zinc-200 text-[11px] text-zinc-500 leading-relaxed">
-            想直接存进知乎草稿箱?到连接器页「知乎」卡片扫码登录并开启托管模式后,这里就会出现「存入知乎草稿」按钮;现在可以先「复制全文」手动粘贴。
+            {draft.disabledHint}
           </p>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -235,13 +239,13 @@ export function ArticlePackageList({
   result,
   missionId,
   onRunMission,
-  draftTarget = 'wechat_mp',
+  draft,
   draftEnabled = true,
 }: {
   result: ArticlePackageParseResult;
   missionId?: string | null;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
-  draftTarget?: ArticleDraftTarget;
+  draft?: ArticleDraftSpecProp;
   draftEnabled?: boolean;
 }) {
   const [showFallback, setShowFallback] = useState(false);
@@ -254,7 +258,7 @@ export function ArticlePackageList({
           pkg={pkg}
           missionId={missionId}
           onRunMission={onRunMission}
-          draftTarget={draftTarget}
+          draft={draft}
           draftEnabled={draftEnabled}
         />
       ))}

@@ -1,5 +1,5 @@
 import { normalizeTaskPack, renderHandoffPack, type RunnerTaskPack } from '@agtpilot/protocol';
-import type { OssOpportunity } from './oss-opportunities';
+import type { OssOpportunity } from '../workshops/oss_radar/opportunities';
 
 /**
  * 机会卡 →「派发到本地」任务包构建(纯函数,vitest 直测)。

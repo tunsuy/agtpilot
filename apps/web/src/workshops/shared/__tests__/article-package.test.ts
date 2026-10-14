@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseArticlePackages, buildArticlePackageCopyText, buildArticlePackageReplyText } from '../article-package';
-import { parseNotePackages } from '../note-package';
+import { parseArticlePackages, buildArticlePackageCopyText } from '../article-package';
+import { parseNotePackages } from '../../xhs/note-package';
 
 const LONG_BODY = '这是一篇关于大模型落地实践的深度长文正文,讨论工程化路径与真实收益,内容必须超过一百字才能被判定为有效的文章包,所以这里把正文写得足够长以便通过有效性校验。'.repeat(
   2
@@ -196,53 +196,5 @@ describe('buildArticlePackageCopyText', () => {
   it('可指定标题索引;索引越界回落末位', () => {
     expect(buildArticlePackageCopyText(pkg, 1).startsWith('从 demo 到生产的三道坎')).toBe(true);
     expect(buildArticlePackageCopyText(pkg, 99).startsWith('工程化视角看 LLM')).toBe(true);
-  });
-});
-
-describe('buildArticlePackageReplyText(投草稿箱续聊指令)', () => {
-  const pkg = parseArticlePackages(singlePackage).packages[0];
-
-  it('含工具名/审批确认/人工发布,以及逐字内嵌的 title/digest/markdown', () => {
-    const text = buildArticlePackageReplyText(pkg, 0);
-    expect(text).toContain('wechat_mp_create_draft');
-    expect(text).toContain('审批确认');
-    expect(text).toContain('人工完成');
-    expect(text).toContain('title:大模型落地:别再谈概念了');
-    expect(text).toContain('digest:大模型落地的关键不在模型本身,而在工程化路径的选择。');
-    expect(text).toContain(`markdown:\n${LONG_BODY}`);
-    // 不传 cover_url 的指示(封面自动生成)
-    expect(text).toContain('不传 cover_url');
-  });
-
-  it('titleIndex 选中哪条标题,内嵌的就是哪条', () => {
-    expect(buildArticlePackageReplyText(pkg, 2)).toContain('title:工程化视角看 LLM');
-  });
-
-  it('缺省 target 仍是公众号(旧调用方零改动)', () => {
-    expect(buildArticlePackageReplyText(pkg, 0)).toBe(buildArticlePackageReplyText(pkg, 0, 'wechat_mp'));
-  });
-});
-
-describe('buildArticlePackageReplyText · 知乎目标(浏览器托管存草稿)', () => {
-  const pkg = parseArticlePackages(singlePackage).packages[0];
-
-  it('含知乎工具名/审批确认/人工发布围栏,以及逐字内嵌的 title/body', () => {
-    const text = buildArticlePackageReplyText(pkg, 0, 'zhihu');
-    expect(text).toContain('zhihu_save_article_draft');
-    expect(text).toContain('审批确认');
-    expect(text).toContain('人工完成');
-    expect(text).toContain('title:大模型落地:别再谈概念了');
-    expect(text).toContain(`body:\n${LONG_BODY}`);
-    // 纯文本填入口径 + 发布禁令
-    expect(text).toContain('纯文本填入');
-    expect(text).toContain('不要点击任何发布按钮');
-    // 知乎走托管编辑器,不带公众号的 digest/markdown 参数键
-    expect(text).not.toContain('digest:');
-    expect(text).not.toContain('markdown:');
-    expect(text).not.toContain('wechat_mp_create_draft');
-  });
-
-  it('titleIndex 选中哪条标题,内嵌的就是哪条', () => {
-    expect(buildArticlePackageReplyText(pkg, 1, 'zhihu')).toContain('title:从 demo 到生产的三道坎');
   });
 });

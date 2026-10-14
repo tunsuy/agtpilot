@@ -19,7 +19,7 @@ import {
   buildOssOpportunityCopyText,
   type OssOpportunity,
   type OssOpportunityParseResult,
-} from '../../lib/oss-opportunities';
+} from '../../workshops/oss_radar/opportunities';
 import { handoffPackFor, pickIssueUrl, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { DispatchRunnerModal } from './DispatchRunnerModal';
 

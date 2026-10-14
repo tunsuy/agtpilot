@@ -1,11 +1,12 @@
 /**
- * 公众号文章包解析器(scenario-loop §3 同构,格式即契约)
+ * 文章包格式契约(wechat_mp / zhihu 两工坊共享,「格式即契约」)
  *
- * buildWechatMpWorkshopPrompt 约定 Agent 按【字段头】+ `---` 分隔输出文章包,
+ * 两工坊的 prompt 模板都约定 Agent 按【字段头】+ `---` 分隔输出文章包,
  * 本模块把该 markdown 解析回结构化;解析失败(packages 为空)时调用方降级为普通文本渲染。
+ * 投递指令(调哪个平台存草稿工具)是工域知识,归各工坊包的 draft.ts,不在本共享层。
  * 纯函数,无 React/浏览器依赖,便于以固定样例做契约测试。
  *
- * 与 note-package.ts 的互斥:文章包必命中【摘要】(笔记包字段头里没有摘要键,永不误判);
+ * 与 xhs/note-package.ts 的互斥:文章包必命中【摘要】(笔记包字段头里没有摘要键,永不误判);
  * 反向不成立——文章包的四头(标题候选/封面建议/正文/发布建议)全命中 parseNotePackages,
  * 所以渲染顺序必须 article 先于 note(CockpitView 固化,测试反证锚定)。
  */
@@ -154,36 +155,4 @@ export function parseArticlePackages(text: string): ArticlePackageParseResult {
 export function buildArticlePackageCopyText(pkg: ArticlePackage, titleIndex = 0): string {
   const title = pkg.titles[Math.min(Math.max(titleIndex, 0), pkg.titles.length - 1)] || '';
   return [title, pkg.digest, pkg.body].filter(Boolean).join('\n\n');
-}
-
-/** 文章包「存草稿」的投递目标(公众号官方 API / 知乎浏览器托管) */
-export type ArticleDraftTarget = 'wechat_mp' | 'zhihu';
-
-/**
- * 「投草稿箱」续聊回复文本:指示 Agent 调用目标平台的存草稿工具,
- * 参数逐字内嵌(零漂移,不依赖上下文回读)。
- * 工具为 dangerLevel high → 编排器审批门,用户逐次确认后才真正写入。
- */
-export function buildArticlePackageReplyText(
-  pkg: ArticlePackage,
-  titleIndex = 0,
-  target: ArticleDraftTarget = 'wechat_mp'
-): string {
-  const title = pkg.titles[Math.min(Math.max(titleIndex, 0), pkg.titles.length - 1)] || '';
-  if (target === 'zhihu') {
-    return `请把下面这篇文章存入我的知乎草稿:调用 zhihu_save_article_draft 工具(title/body 严格按下文填写;正文以纯文本填入知乎专栏编辑器,Markdown 记号不排版,复杂格式我接管后调整)。调用前需经我审批确认;发布仍由我在知乎草稿箱人工完成,不要点击任何发布按钮或调用发布类接口。
-
-title:${title}
-
-body:
-${pkg.body}`;
-  }
-  return `请把下面这篇公众号文章投入我的草稿箱:调用 wechat_mp_create_draft 工具(title/digest/markdown 严格按下文填写,不传 cover_url,封面自动生成)。调用前需经我审批确认;发布仍由我在公众平台后台人工完成,不要调用任何发布/群发类接口。
-
-title:${title}
-
-digest:${pkg.digest}
-
-markdown:
-${pkg.body}`;
 }

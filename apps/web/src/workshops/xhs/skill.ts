@@ -5,6 +5,7 @@
  */
 import { Share2 } from 'lucide-react';
 import { buildXhsWorkshopPrompt, buildXhsWeeklyTopicsPrompt } from './context';
+import { buildXhsDraftReplyText } from './draft';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill, CronScenarioSpec } from '../types';
 
@@ -38,7 +39,19 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     ],
     note: 'Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布。已连接热榜/搜索类连接器时选题走实时热点。',
     profileSlot: 'xhs',
-    artifacts: [{ kind: 'note-package', label: '小红书笔记包' }],
+    artifacts: [
+      {
+        kind: 'note-package',
+        label: '小红书笔记包',
+        draft: {
+          label: '存入草稿箱(经我审批后写入,发布由我在小红书 App 完成)',
+          build: buildXhsDraftReplyText,
+          managedGate: 'xhs',
+          disabledHint:
+            '想直接存进小红书草稿箱?到连接器页「小红书创作者服务」开启托管写操作(需已扫码登录),这里就会出现一键存草稿按钮。',
+        },
+      },
+    ],
   },
   run: (params, ctx) => {
     const style = str(params.style, '种草推荐');

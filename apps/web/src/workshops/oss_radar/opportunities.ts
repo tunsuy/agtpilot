@@ -1,5 +1,5 @@
 /**
- * 开源贡献机会解析器(格式即契约,与 topic-picks.ts 同构)。
+ * 开源贡献机会格式契约(格式即契约,归 oss_radar 工坊包,与 xhs/topic-picks.ts 同构)。
  *
  * buildOssRadarPrompt 约定 Agent 按【机会 N】+ 字段头 + `---` 分隔输出贡献机会清单,
  * 本模块把该 markdown 解析回结构化;解析失败(opportunities 为空)时调用方降级为

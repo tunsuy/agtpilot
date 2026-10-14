@@ -9,6 +9,8 @@
  */
 import type { LucideIcon } from 'lucide-react';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
+import type { ArticlePackage } from './shared/article-package';
+import type { NotePackage } from './xhs/note-package';
 
 export type WorkshopId =
   | 'xhs'
@@ -35,11 +37,28 @@ export interface WorkshopDep {
   required?: boolean;
 }
 
-/** 工坊交付物声明(P0 仅声明性;渲染按输出解析驱动,此处为 P1 交付库注册预留) */
-export interface ArtifactSpec {
-  kind: 'note-package' | 'article-package';
+/**
+ * 存草稿投递声明:结构化交付物 → 平台存草稿工具的续聊指令(工域知识,归工坊包)。
+ * 卡片按 mission 的 workshopId 经注册表解析到这里,不再按任务标题嗅探目标平台。
+ */
+export interface ArtifactDraftSpec<Pkg> {
+  /** 按钮文案(含平台特定的审批/发布提示) */
   label: string;
+  /**
+   * 续聊指令 builder(纯函数):选中标题索引 → 指令文本。参数逐字内嵌(零漂移),
+   * 且必须带纯执行边界句(调研与标题已定稿,勿重复调研/生成新候选)——
+   * 生产实例(2026-10-11):只约束参数挡不住模型对上轮工作流的模式补全。
+   */
+  build: (pkg: Pkg, titleIndex: number) => string;
+  /** 托管写操作门:依赖的托管连接器 id;未声明 = 凭证内置,按钮恒可用 */
+  managedGate?: 'xhs' | 'zhihu';
+  /** managedGate 未开启时的引导文案(替代按钮) */
+  disabledHint?: string;
 }
+
+export type ArtifactSpec =
+  | { kind: 'article-package'; label: string; draft?: ArtifactDraftSpec<ArticlePackage> }
+  | { kind: 'note-package'; label: string; draft?: ArtifactDraftSpec<NotePackage> };
 
 export interface WorkshopDef {
   id: WorkshopId;

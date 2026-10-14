@@ -15,7 +15,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, MonitorSmartphone, Send, Copy, Check, ChevronDown, TriangleAlert, GitFork } from 'lucide-react';
 import { renderHandoffPack } from '@agtpilot/protocol';
 import { copyToClipboard } from '../../utils/nativeBridge';
-import type { OssOpportunity } from '../../lib/oss-opportunities';
+import type { OssOpportunity } from '../../workshops/oss_radar/opportunities';
 import { buildTaskPackFromOpportunity, issueNoFromUrl, pickIssueUrl } from '../../lib/runner-dispatch';
 
 interface DeviceRow {

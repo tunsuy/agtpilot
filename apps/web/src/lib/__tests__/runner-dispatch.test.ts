@@ -6,7 +6,7 @@ import {
   handoffPackFor,
   newRunnerTaskId,
 } from '../runner-dispatch';
-import type { OssOpportunity } from '../oss-opportunities';
+import type { OssOpportunity } from '../../workshops/oss_radar/opportunities';
 
 const opp: OssOpportunity = {
   number: 1,

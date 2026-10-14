@@ -14,7 +14,7 @@ import {
   findLatestTopicPicks,
   hasRunningTopicMission,
   type TopicPicksMissionLike,
-} from '../../../lib/topic-picks';
+} from '@/workshops/xhs/topic-picks';
 import { openAppScheme, isNativePlatform } from '../../../utils/nativeBridge';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { CronJobItem, Mission } from '../../../types/agent';

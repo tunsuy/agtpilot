@@ -3,6 +3,7 @@
  */
 import { PenLine } from 'lucide-react';
 import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES } from './context';
+import { buildZhihuDraftReplyText } from './draft';
 import { str, num } from '../shared/params';
 import type { WorkshopSkill } from '../types';
 
@@ -22,7 +23,19 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     ],
     note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议(含话题)。满意的一篇点「存入知乎草稿」——经你逐次审批后填进知乎专栏编辑器并停在草稿箱(每日有次数上限,跨端可见),最终发布由你在知乎草稿箱人工完成,Agent 不碰任何发布动作。无需凭证:到连接器页「知乎」卡片扫码登录网页版并开启托管模式即可;知乎官方 MCP(搜索/热榜)可选配,用于选题调研。',
     profileSlot: 'zhihu',
-    artifacts: [{ kind: 'article-package', label: '知乎文章包' }],
+    artifacts: [
+      {
+        kind: 'article-package',
+        label: '知乎文章包',
+        draft: {
+          label: '存入知乎草稿(经我审批后填入,发布由我在知乎人工完成)',
+          build: buildZhihuDraftReplyText,
+          managedGate: 'zhihu',
+          disabledHint:
+            '想直接存进知乎草稿箱?到连接器页「知乎」卡片扫码登录并开启托管模式后,这里就会出现「存入知乎草稿」按钮;现在可以先「复制全文」手动粘贴。',
+        },
+      },
+    ],
   },
   run: (params, ctx) => {
     const style = str(params.style, ZHIHU_ARTICLE_STYLES[0]);

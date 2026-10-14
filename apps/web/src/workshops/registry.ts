@@ -26,7 +26,10 @@ import type {
   WorkshopRunContext,
   WorkshopRunPayload,
   CronScenarioSpec,
+  ArtifactDraftSpec,
 } from './types';
+import type { ArticlePackage } from './shared/article-package';
+import type { NotePackage } from './xhs/note-package';
 
 /** id → skill 包(类型键全覆盖,新增工坊漏配会在编译期报错) */
 const WORKSHOP_SKILLS: Record<WorkshopId, WorkshopSkill> = {
@@ -79,6 +82,33 @@ export function buildWorkshopRun(
   return WORKSHOP_SKILLS[id].run(params, ctx);
 }
 
+/** 交付物 kind → 其包格式对应的结构类型(解析结果的 pkg) */
+type ArtifactPkg<K extends 'article-package' | 'note-package'> =
+  K extends 'article-package' ? ArticlePackage : NotePackage;
+
+/**
+ * 按任务来源工坊 + 交付物 kind 解析存草稿投递声明(工域知识路由的统一出口)。
+ *
+ * 工坊已为该交付物声明 draft → 用它自己的投递指令(知乎文章包走知乎托管存草稿,
+ * 公众号走草稿箱直连)。任务无 workshopId 或来源工坊不产出该格式(手输任务/历史任务)
+ * 时按格式缺省路由:文章包 → 公众号(格式为两工坊共享,公众号是缺省投递目标),
+ * 笔记包 → 小红书(格式仅 xhs 工坊产出)。不靠任务标题嗅探,投递目标永远出自声明。
+ */
+export function resolveArtifactDraft<K extends 'article-package' | 'note-package'>(
+  workshopId: string | undefined,
+  kind: K
+): ArtifactDraftSpec<ArtifactPkg<K>> | undefined {
+  const fromWorkshop =
+    workshopId && (workshopId as WorkshopId) in WORKSHOP_SKILLS
+      ? (WORKSHOP_SKILLS[workshopId as WorkshopId].meta.artifacts || []).find((a) => a.kind === kind)?.draft
+      : undefined;
+  if (fromWorkshop) return fromWorkshop as ArtifactDraftSpec<ArtifactPkg<K>>;
+  const fallbackId: WorkshopId = kind === 'note-package' ? 'xhs' : 'wechat_mp';
+  return (WORKSHOP_SKILLS[fallbackId].meta.artifacts || []).find((a) => a.kind === kind)?.draft as
+    | ArtifactDraftSpec<ArtifactPkg<K>>
+    | undefined;
+}
+
 /**
  * cron 订阅场景声明(从各包清单汇总;cron-scenario.ts 按此分发,不再硬编码场景)。
  * 新增订阅场景 = 在包的 skill.ts 里声明 cron + 在这里加一行;CronScenarioKey union 由此派生。
@@ -105,4 +135,5 @@ export {
   type WorkshopAccent,
   type WorkshopDep,
   type ArtifactSpec,
+  type ArtifactDraftSpec,
 } from './types';

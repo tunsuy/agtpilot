@@ -295,7 +295,8 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   ctx.agent.registerTool({
     name: 'search_web',
     readOnly: true, // 只读并行门控:纯检索,无副作用
-    description: '在互联网上搜索指定关键词或问题，自动在 Exa 神经语义搜索、Tavily Agent 搜索以及零 Key 多源聚合(Bing 国际区真实摘要 + Google News RSS 时效新闻 + Wikipedia)间进行多层级路由与容灾降级。零 Key 层返回真实内容摘要,多数情况下无需再逐个打开网页',
+    description:
+      '在互联网上搜索指定关键词或问题，自动在 Exa 神经语义搜索、Tavily Agent 搜索以及零 Key 多源聚合(Bing 国际区真实摘要 + Google News RSS 时效新闻 + Wikipedia)间进行多层级路由与容灾降级。零 Key 层返回真实内容摘要,多数情况下无需再逐个打开网页。基于检索结果作答时,在相应结论句末以 markdown 链接标注依据来源,链接用该条结果的原始 url(前端会渲染成可点的角标,读者直达原文)',
     dangerLevel: 'low',
     parameters: {
       type: 'object',

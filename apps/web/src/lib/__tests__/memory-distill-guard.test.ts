@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { distillMissionMemories } from '@/lib/memory-service';
+import { distillMissionMemories, distillAgentExperience } from '@/lib/memory-service';
 
 /**
  * 工坊任务的记忆蒸馏守卫(生产实例驱动):
@@ -99,6 +99,55 @@ describe('distillMissionMemories · 工坊表单参数防误沉淀', () => {
       messages: [{ role: 'user', content: '你好' }],
       missionId: 'm4',
       workshopId: 'wechat_mp',
+    });
+    expect(calls.length).toBe(0);
+  });
+});
+
+describe('distillAgentExperience · 环境状态防绝对断言(生产实例:Firecrawl 未配置)', () => {
+  const mission = {
+    id: 'm5',
+    steps: [
+      {
+        tool: 'browser_firecrawl_scrape',
+        role: 'tool',
+        status: 'FAILED',
+        output: '未配置 FIRECRAWL_API_KEY',
+      },
+      { tool: 'browser_navigate', role: 'tool', status: 'DONE', output: '已打开 openai.com' },
+      { tool: 'search_web', role: 'tool', status: 'DONE', output: 'ok' },
+    ],
+  };
+
+  it('环境状态必须条件式 + 失效条件;轨迹矛盾时必须更新旧经验', async () => {
+    const { ctx, calls } = buildCtx();
+    await distillAgentExperience(ctx, {
+      userId: 'usr_test',
+      goal: '抓取网页正文',
+      mission,
+      efficiency: { stepsCount: 3, toolCalls: 3, failedCalls: 1, skippedCalls: 0, effectiveRate: 0.67 },
+      missionId: 'm5',
+    });
+    expect(calls.length).toBe(1);
+    // 条件式书写规则(密钥未配置会随用户配置改变,严禁绝对断言)
+    expect(calls[0].system).toContain('条件式');
+    expect(calls[0].system).toContain('失效条件');
+    expect(calls[0].system).toContain('严禁绝对断言');
+    // 自我纠偏:轨迹与旧环境事实矛盾 → 必须更新/删除
+    expect(calls[0].system).toContain('矛盾');
+    expect(calls[0].system).toContain('必须更新或删除');
+    // 轨迹照常进摘录(失败优先可见)
+    expect(calls[0].userMessage).toContain('browser_firecrawl_scrape');
+    expect(calls[0].userMessage).toContain('FIRECRAWL_API_KEY');
+  });
+
+  it('纯闲聊任务(工具调用不足且无失败)不调模型', async () => {
+    const { ctx, calls } = buildCtx();
+    await distillAgentExperience(ctx, {
+      userId: 'usr_test',
+      goal: 'g',
+      mission: { id: 'm6', steps: [{ tool: 'search_web', role: 'tool', status: 'DONE', output: 'ok' }] },
+      missionId: 'm6',
     });
     expect(calls.length).toBe(0);
   });

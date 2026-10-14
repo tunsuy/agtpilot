@@ -1673,6 +1673,9 @@ export async function distillAgentExperience(
       '- 工具教训(rule/preference):某工具在某场景的坑与正确用法(如某站点 browser 超时应先 search、某接口要先校验 token);\n' +
       '- 流程策略(project/preference):被验证有效的任务路径(如发布走草稿箱最稳)。\n' +
       '不要把"用户本人的偏好与背景"写进本通道(那属于用户画像通道)。\n' +
+      '环境状态类事实(密钥是否配置/工具是否可用/沙箱装了什么)是时点性状态,会随用户配置而改变:\n' +
+      '- 必须写成条件式并附失效条件,如「若 FIRECRAWL_API_KEY 仍未配置,firecrawl 会报错,此时改用 browser_navigate」,严禁绝对断言「未配置/不可用」;\n' +
+      '- 本次轨迹若与【现有经验】里的环境事实矛盾(先前"缺"的东西现已可用,或反之),必须更新或删除那条旧经验 —— 环境变了,旧经验就从资产变误导。\n' +
       '从失败与绕路中提炼教训优先级最高;成功路径仅在可复用且非显而易见时记录。\n' +
       CRUD_OP_SPEC,
     userMessage: `【现有经验】\n${formatExistingBrief(subjectExisting)}\n\n【本次任务执行轨迹】\n${transcript}`,

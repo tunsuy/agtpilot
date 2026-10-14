@@ -80,6 +80,10 @@ describe('distillMissionMemories · 工坊表单参数防误沉淀', () => {
     expect(calls[0].userMessage).toContain('表单参数');
     expect(calls[0].userMessage).toContain('不是用户的长期定位或偏好');
     expect(calls[0].userMessage).toContain('严禁');
+    // 模板正文防照抄:工坊模板以第一人称书写,流程/格式/红线会被当成用户约束
+    expect(calls[0].userMessage).toContain('工坊模板');
+    expect(calls[0].userMessage).toContain('输出格式/只读红线/发布规则');
+    expect(calls[0].userMessage).toContain('严禁沉淀');
   });
 
   it('不带 workshopId:无工坊标注(手输任务的用户原话不受影响)', async () => {
@@ -107,6 +111,9 @@ describe('distillMissionMemories · 工坊表单参数防误沉淀', () => {
       });
       expect(calls[0].system).toContain('单次任务的参数化选择');
       expect(calls[0].system).toContain('不是用户的长期定位或偏好');
+      // 普适防线也覆盖模板规则防照抄(不带 workshopId 的手动任务同样受益)
+      expect(calls[0].system).toContain('模板自带的流程编排');
+      expect(calls[0].system).toContain('严禁把任务提示词里的规则性内容当成用户约束');
     }
   });
 

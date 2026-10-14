@@ -63,11 +63,14 @@ describe('buildOssRadarPrompt · 格式契约(与 oss-opportunities.ts 解析器
     expect(prompt).toContain('good first issue');
   });
 
-  it('广域网页调研引导派只读检索子 agent(并行派发 + 连接器检索留主循环)', () => {
+  it('广域网页调研引导派只读检索子 agent(并行派发 + 连接器按白名单条件开放)', () => {
     expect(prompt).toContain('research_subagent');
     expect(prompt).toContain('只读检索子 agent');
     expect(prompt).toContain('并行派发');
-    expect(prompt).toContain('连接器检索不对子 agent 开放');
+    // MCP 双钥匙落地后:连接器是否可交给子 agent 取决于白名单,关键信息仍需主循环复核
+    expect(prompt).toContain('加入子 agent 白名单');
+    expect(prompt).toContain('由你直接复核');
+    expect(prompt).not.toContain('连接器检索不对子 agent 开放');
   });
 
   it('收尾提醒:链接直达 Issue、起草文本发送前逐条审批、写代码由用户本地完成', () => {

@@ -62,6 +62,19 @@ export function sanitizeToolName(name: string): string {
   return s || 'tool';
 }
 
+/**
+ * MCP annotations → 只读声明(spec §4.3 双钥匙的「机器钥匙」)。
+ * 规范语义:MCPToolAnnotations 的 hint 是服务器自报提示而非契约,且「未注解 = 保守视为写」
+ * (readOnlyHint 缺省 false、destructiveHint 缺省 true)。这里同样保守:
+ * 仅当 readOnlyHint === true 且 destructiveHint 未声明为 true 时才判定只读。
+ * 注:只影响 ToolDefinition.readOnly(子 agent 白名单信号 + 主循环只读并行门);
+ * dangerLevel 维持 'medium' 不变 —— 审批语义(HITL 只拦 high)不受影响。
+ */
+export function mcpToolReadOnly(annotations: unknown): boolean {
+  const a = annotations as { readOnlyHint?: unknown; destructiveHint?: unknown } | undefined;
+  return a?.readOnlyHint === true && a?.destructiveHint !== true;
+}
+
 /** 判断是否为「连接已断」类错误（值得重连重试一次），区别于业务/权限错误 */
 function isConnectionError(err: any): boolean {
   const msg = String(err?.message || err || '').toLowerCase();
@@ -290,6 +303,9 @@ class UserConnection {
         description: `[MCP连接器: ${serverName}] ${tool.description || originalName}`,
         parameters: (tool.inputSchema as any) || { type: 'object', properties: {} },
         dangerLevel: 'medium',
+        // 只读声明来自服务器 annotations(保守判定,见 mcpToolReadOnly);
+        // 未声明只读的工具保持现状(不带 readOnly 字段,主循环走独占门、子 agent 不可见)
+        ...(mcpToolReadOnly(tool.annotations) ? { readOnly: true } : {}),
         execute: async (args: any) => {
           this.onEvent({
             type: 'tool_call',

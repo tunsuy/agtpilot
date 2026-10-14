@@ -1,7 +1,7 @@
 # plugin-subagent 功能职责与接口规范
 
 - 日期: 2026-10-13
-- 状态: **已过审**(2026-10-13 负责人批准开发);**M1 已实施**:`packages/plugin-subagent`(骨架+SubagentEngine+双层白名单+三重预算闸+单测 29 例)+ app-kit 接线 + `.env.example`/`ARCHITECTURE.md` 变量表。**M2 已实施**(2026-10-14):web transcript JSONL 落盘适配器(`apps/web/src/lib/subagent-transcript.ts`,经 `CreateAgentOptions.subagent` 注入)+ oss_radar/invest/edu 三工坊 Prompt 接入(广度网页调研派 research_subagent,连接器检索留主循环)+ 单测 14 例;子步骤 UI 转发(可选项)未做。§9 集成验收(token 降幅 ≥30%)待真实 run 数据。M3 按 §10 分期
+- 状态: **已过审**(2026-10-13 负责人批准开发);**M1 已实施**:`packages/plugin-subagent`(骨架+SubagentEngine+双层白名单+三重预算闸+单测 29 例)+ app-kit 接线 + `.env.example`/`ARCHITECTURE.md` 变量表。**M2 已实施**(2026-10-14):web transcript JSONL 落盘适配器(`apps/web/src/lib/subagent-transcript.ts`,经 `CreateAgentOptions.subagent` 注入)+ oss_radar/invest/edu 三工坊 Prompt 接入(广度网页调研派 research_subagent)+ 单测 14 例;子步骤 UI 转发(可选项)未做。**MCP 双钥匙已实施**(2026-10-14,负责人批准,原 M3 项提前):plugin-mcp 按 `annotations.readOnlyHint` 注册 `readOnly` 声明 + 子 agent `AGTPILOT_SUBAGENT_MCP_SERVERS` 服务器白名单(双钥匙 AND)+ `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` 前缀逃生口(人工担责);默认全空 = 行为同 M2。§9 集成验收(token 降幅 ≥30%)待真实 run 数据。M3 余下:续聊唤醒、router specialist 档位
 - 前置阅读: `docs/design/multi-agent-landscape-insights.md` §2(Claude Code 边界设计)/§6.1(本插件的原始裁定)、`docs/design/decision-plugin-spec.md`(格式模板)、`ARCHITECTURE.md` §分层铁律 + 新增插件检查单
 - 代码(规划): `packages/plugin-subagent/src/{index.ts, runner.ts, whitelist.ts}`;装配点: `packages/app-kit/src/index.ts`
 
@@ -106,7 +106,8 @@ export interface SubagentModel {
 | `git_status` / `git_diff` / `codebase_search_symbols` | plugin-git:34,59,224 |
 | `memory_recall` / `memory_list` | plugin-memory:158,191 |
 
-- **明确排除**:MCP 工具(plugin-mcp:275-292 一律 `dangerLevel: 'medium'` 且不带 readOnly,无法靠字段识别;M2 再议"宿主按服务器粒度提供前缀白名单")、`browser_stagehand_*`(操作共享浏览器会话)、一切写工具、`research_subagent` 自身(防递归,§6)。
+- **MCP 工具(2026-10-14 起按「双钥匙」条件放行)**:plugin-mcp 注册时解析 MCP 协议 `annotations`——`readOnlyHint === true && destructiveHint !== true` 才声明 `readOnly: true`(`mcpToolReadOnly()`,dangerLevel 维持 medium,主循环审批语义不变)。子 agent 侧:工具进入内部工具集需同时满足 ① 服务器名在 `AGTPILOT_SUBAGENT_MCP_SERVERS` 白名单(人工钥匙,默认空 = 不放行任何 MCP)② 注册表 `readOnly === true`(机器钥匙,来自服务器注解)。另设逃生口 `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS`(工具名前缀,如 `mcp_newsnow_`):用于无注解服务器,命中前缀不要求 readOnly 声明,由部署者人工确认只读并担责。普通白名单里写 `mcp_` 名字一律无效。注解是服务器自报提示而非契约(MCP 官方立场),故双钥匙 AND + 默认空白名单是硬要求,不是可选加固。
+- **明确排除**:`browser_stagehand_*`(操作共享浏览器会话)、一切写工具、`research_subagent` 自身(防递归,§6)。
 - **session 闭包**:`AgentLoopTool.execute(args)` 不带 session(contracts.ts:34-40;ToolSession 注入发生在编排器包装层 orchestrator.ts:240-246)。Runner 从父 session 取 `userId/env`,合成子 session `{ taskId: subTaskId, step, userId, env }` 闭包进每个内部工具;`step` 经 `onStepStart` 递增。
 - **内部结果截断**:内部工具直取注册表原始 execute,**绕过了编排器包装层的 16KB 截断**(orchestrator.ts:296-300)——Runner 必须自行复用 `core/src/text.ts` 的截断函数处理每条内部 tool result,否则单个网页全文就能撑爆子数组。
 - 编排器包装层的熔断/守卫(签名计数、连续失败)同样不在内部生效,由 §4.4 的三重预算闸替代。
@@ -141,7 +142,7 @@ export interface SubagentModel {
 
 ## 6. 安全红线
 
-1. **只读是硬底线**:内部工具必须同时满足"在配置白名单内"且"注册表声明 `readOnly: true`";任何写/medium/high 工具无法被挂入,无豁免开关。
+1. **只读是硬底线(信号来源扩展,2026-10-14)**:内置工具必须同时满足"在配置白名单内"且"注册表声明 `readOnly: true`"。MCP 工具的只读信号 = 服务器 `annotations` 声明(经 plugin-mcp 翻译为 `readOnly: true`)∩ `AGTPILOT_SUBAGENT_MCP_SERVERS` 人工白名单,双钥匙缺一不放行;唯一豁免通道是 `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` 前缀逃生口——它不降低"人工显式配置"门槛(部署者担责,配置即审计记录),且默认空。写工具与未声明只读的内置工具无豁免开关。
 2. **禁递归**:子 agent 的工具集永不含 `research_subagent`;深度固定为 1。
 3. **边界单向**:只有 final report(≤8000 字符)+ 小 meta 跨界;transcript 落盘后无任何自动回灌路径。
 4. **三重预算闸不可绕过**:步数/token/墙钟任一触顶必须收口;信号量上限防"一轮 spawn 几十个"的 token 爆炸(Anthropic 15x 教训)。
@@ -161,6 +162,8 @@ export interface SubagentModel {
 | `AGTPILOT_SUBAGENT_PROVIDER` / `_MODEL` | 继承 `AGTPILOT_FAST_*`(deepseek/deepseek-chat) | 子 agent 专用模型覆盖 |
 | `AGTPILOT_SUBAGENT_REPORT_LIMIT` | `8000` | final report 字符上限 |
 | `AGTPILOT_SUBAGENT_WHITELIST` | 内置名单(§4.3) | 逗号分隔覆盖;仍受 readOnly 声明硬校验 |
+| `AGTPILOT_SUBAGENT_MCP_SERVERS` | 空 | MCP 服务器白名单(逗号分隔服务器名);与 annotations 只读声明构成双钥匙,空 = 不放行任何 MCP 工具 |
+| `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` | 空 | MCP 工具名前缀逃生口(逗号分隔,如 `mcp_newsnow_`);不要求 readOnly 声明,部署者担责 |
 
 惯例:模块顶层读取 + 下限钳制(样板 plugin-decision:9-13);同步补 `.env.example` 与 `ARCHITECTURE.md:114-124` 变量表(铁律 5:文档与实现一致)。
 
@@ -170,6 +173,8 @@ export interface SubagentModel {
 export interface SubagentPluginConfig {
   getModel?: () => SubagentModel | undefined;   // 缺省 () => ctx.model
   whitelist?: string[];
+  mcpServers?: string[];                         // 缺省 env AGTPILOT_SUBAGENT_MCP_SERVERS
+  mcpAllowTools?: string[];                      // 缺省 env AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS
   maxConcurrent?: number;
   appendTranscript?: (entry: SubagentTranscript) => void;   // M2,宿主注入
 }
@@ -209,4 +214,4 @@ export interface SubagentPluginConfig {
 |---|---|---|
 | **M1 能跑** | 插件骨架 + `research_subagent` 工具 + 白名单双层过滤 + 三重预算闸 + 强制收敛 + 失败语义 + cordis 事件 + app-kit 接线 + 单测 1-8 | §9 单测全绿;CLI 里手工派一次真实调研跑通 |
 | **M2 好用** | 并发信号量调优 + transcript 落盘适配器(web JSONL)+ 子步骤 UI 转发(可选)+ oss_radar/invest/edu 三工坊 Prompt 接入(在 Prompt 中显式引导"多路检索时派 research_subagent") | §9 集成验收达标 |
-| **M3 可选** | 续聊唤醒(transcript 恢复)、router 按任务类型选 specialist 档位、MCP 只读前缀白名单 | 视 M2 数据再立项 |
+| **M3 可选** | 续聊唤醒(transcript 恢复)、router 按任务类型选 specialist 档位(~~MCP 只读前缀白名单~~ 已于 2026-10-14 提前实施,见状态行与 §4.3) | 视 M2 数据再立项 |

@@ -116,6 +116,10 @@ export interface SubagentEngineConfig {
   reportLimit: number;
   /** 白名单覆盖(仍受 readOnly 硬校验);缺省用 DEFAULT_READONLY_WHITELIST */
   whitelist?: readonly string[];
+  /** MCP 服务器白名单(双钥匙的人工钥匙);默认空 = 子 agent 不使用任何 MCP 工具 */
+  mcpServers?: readonly string[];
+  /** MCP 工具名前缀逃生口(人工担责,不受 readOnly 限制);默认空 */
+  mcpAllowTools?: readonly string[];
   /** per-call 模型覆盖(不动 router 全局档位,spec §4.2) */
   configOverride?: ModelConfigOverride;
   /** M2:宿主注入的 transcript 落盘适配器;缺失静默不落盘 */
@@ -219,8 +223,12 @@ export class SubagentEngine {
     const model = this.deps.getModel();
     if (!model) return fail('模型服务不可用(plugin-model 未挂载?)', 'internal-error');
 
-    // 工具解析:双层白名单 → requiredEnv 过滤(缺 Key 的壳工具不挂,与主循环同款语义)
-    const resolved = resolveReadonlyTools(this.deps.listTools(), this.cfg.whitelist);
+    // 工具解析:双层白名单 + MCP 双钥匙 → requiredEnv 过滤(缺 Key 的壳工具不挂,与主循环同款语义)
+    const resolved = resolveReadonlyTools(this.deps.listTools(), {
+      whitelist: this.cfg.whitelist,
+      mcpServers: this.cfg.mcpServers,
+      mcpAllowTools: this.cfg.mcpAllowTools,
+    });
     const { mounted } = filterToolsByEnv(resolved, session.env);
     if (mounted.length === 0) {
       return fail('无可用只读白名单工具(注册表未挂载或缺依赖 Key),子 agent 无法派发', 'internal-error');

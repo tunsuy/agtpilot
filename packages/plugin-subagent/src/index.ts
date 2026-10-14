@@ -31,6 +31,14 @@ function readInt(name: string, fallback: number, min: number, max: number): numb
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
+/** 逗号分隔 env → 去空白去空项的字符串数组(缺省/全空 → []) */
+function splitList(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 const MASTER_ENABLED = process.env.AGTPILOT_SUBAGENT !== '0';
 const MAX_STEPS = readInt('AGTPILOT_SUBAGENT_MAX_STEPS', 8, 2, 20);
 const MAX_TOKENS = readInt('AGTPILOT_SUBAGENT_MAX_TOKENS', 60000, 0, Number.MAX_SAFE_INTEGER);
@@ -41,10 +49,13 @@ const REPORT_LIMIT = readInt('AGTPILOT_SUBAGENT_REPORT_LIMIT', 8000, 500, 64000)
 const PROVIDER =
   process.env.AGTPILOT_SUBAGENT_PROVIDER || process.env.AGTPILOT_FAST_PROVIDER || 'deepseek';
 const MODEL = process.env.AGTPILOT_SUBAGENT_MODEL || process.env.AGTPILOT_FAST_MODEL || 'deepseek-chat';
-const WHITELIST_OVERRIDE = (process.env.AGTPILOT_SUBAGENT_WHITELIST ?? '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const WHITELIST_OVERRIDE = splitList(process.env.AGTPILOT_SUBAGENT_WHITELIST);
+// MCP 双钥匙(2026-10-14 提前落地,原 M3 项):
+// 服务器白名单 = 人工钥匙(默认空 = 子 agent 不用任何 MCP 工具);
+// 机器钥匙 = plugin-mcp 按服务器 annotations 注册的 readOnly 声明。两者同时满足才放行。
+const MCP_SERVERS = splitList(process.env.AGTPILOT_SUBAGENT_MCP_SERVERS);
+// 逃生口:人工列出 MCP 工具名前缀(如 mcp_newsnow_),用于无注解服务器,部署者自担只读责任
+const MCP_ALLOW_TOOLS = splitList(process.env.AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS);
 
 // ---- 插件配置(app-kit 装配时传入)----
 
@@ -55,6 +66,10 @@ export interface SubagentPluginConfig {
   listTools?: () => ToolDefinition[];
   /** 白名单覆盖(仍受注册表 readOnly 硬校验);缺省 env → 内置名单 */
   whitelist?: string[];
+  /** MCP 服务器白名单(双钥匙的人工钥匙);缺省 env AGTPILOT_SUBAGENT_MCP_SERVERS → 空 */
+  mcpServers?: string[];
+  /** MCP 工具名前缀逃生口;缺省 env AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS → 空 */
+  mcpAllowTools?: string[];
   maxSteps?: number;
   maxTokens?: number;
   timeoutMs?: number;
@@ -83,6 +98,8 @@ class SubagentService extends Service {
         maxConcurrent: config.maxConcurrent ?? MAX_CONCURRENT,
         reportLimit: config.reportLimit ?? REPORT_LIMIT,
         whitelist,
+        mcpServers: config.mcpServers ?? MCP_SERVERS,
+        mcpAllowTools: config.mcpAllowTools ?? MCP_ALLOW_TOOLS,
         // per-call 覆盖,不写 router 全局档位(spec §4.2)
         configOverride: { activeModelId: PROVIDER, modelName: MODEL },
         appendTranscript: config.appendTranscript,
@@ -161,4 +178,5 @@ export type {
   SubagentTranscript,
 } from './runner';
 export { SubagentEngine, SUBAGENT_SYSTEM_PROMPT, buildTaskPrompt, clampSteps } from './runner';
-export { resolveReadonlyTools } from './whitelist';
+export { resolveReadonlyTools, mcpServerPrefix } from './whitelist';
+export type { SubagentToolFilter } from './whitelist';

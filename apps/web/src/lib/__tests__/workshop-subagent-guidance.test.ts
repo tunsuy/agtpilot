@@ -18,6 +18,8 @@ describe('投研工坊:子 agent 引导注入', () => {
     expect(prompt).toContain('research_subagent');
     expect(prompt).toContain('只读检索子 agent');
     expect(prompt).toContain('并行派发');
+    // MCP 双钥匙:检索类连接器按白名单条件开放给子 agent
+    expect(prompt).toContain('加入子 agent 白名单');
     // 行情数字红线:不得以子 agent 转述为据
     expect(prompt).toContain('不得以子 agent 转述的行情数据作为报告依据');
   });
@@ -29,8 +31,10 @@ describe('教研工坊:子 agent 引导注入', () => {
     expect(prompt).toContain('research_subagent');
     expect(prompt).toContain('只读检索子 agent');
     expect(prompt).toContain('并行派发');
-    // 学术连接器检索留主循环
+    // 学术连接器检索按白名单条件开放,文献标识仍需主循环核验
     expect(prompt).toContain('学术连接器检索');
+    expect(prompt).toContain('加入子 agent 白名单');
+    expect(prompt).toContain('不得仅凭子 agent 转述');
   });
 
   it('备课/学习卡片(非广度调研)不注入子 agent 引导', () => {

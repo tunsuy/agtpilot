@@ -13,6 +13,7 @@ import {
   resolveMission,
 } from './live-steps';
 import { resolveCronPrompt, cronWorkshopId } from './cron-scenario';
+import { settleToolStep, upsertToolStep } from './tool-steps';
 import { accumulateMissionUsage, buildEfficiencyStepTitle } from './mission-efficiency';
 import { buildTaskSystemPrompt } from './task-system-prompt';
 
@@ -508,22 +509,16 @@ class AgentBackend {
           this.flushDeltas(mission.id);
           closeLiveStep(mission, { status: 'DONE' });
 
-          // 挂载到该任务的步骤（去重逻辑：如果最后一步是相同的处于 RUNNING 状态的工具，则复用更新参数，避免插件与核心双重广播导致的成对重复步骤）
-          const lastStep = mission.steps[mission.steps.length - 1];
-          if (lastStep && lastStep.tool === toolName && lastStep.status === 'RUNNING') {
-            lastStep.args = event.payload.args || event.payload;
-          } else {
-            const stepId = `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-            mission.steps.push({
-              id: stepId,
-              title: `执行工具: ${toolName}`,
-              tool: toolName,
-              role: 'tool',
-              status: 'RUNNING',
-              args: event.payload.args || event.payload,
-              startedAt: Date.now(),
-            });
-          }
+          // callId 关联(tool-steps.ts):同轮并行多工具 + 插件/编排器双广播下
+          // 按物理调用 id 幂等落地,不再按「工具名+末位位置」模糊去重 —— 那样
+          // 交错双广播会成对重复、真实结果落错步骤、原步骤挂「执行中」被路过的
+          // 无关 tool_result 误关(生产实例 2026-10-14,虚假百秒耗时+入参出参交叉)
+          upsertToolStep(mission, {
+            tool: toolName,
+            args: event.payload.args,
+            callId: event.payload.callId,
+            payload: event.payload,
+          });
           this.broadcast({ type: 'mission_updated', data: mission });
         }
         break;
@@ -546,19 +541,15 @@ class AgentBackend {
         // 按事件自带 taskId 归属（串台修复）
         const mission = this.resolveMissionFromEvent(event);
         if (mission && mission.steps.length > 0) {
-          // 找到最后处于 RUNNING 的该工具步骤并将其标记为完成
-          const targetStep = [...mission.steps].reverse().find((s) => s.status === 'RUNNING' && (!toolName || s.tool === toolName)) || mission.steps[mission.steps.length - 1];
-          if (targetStep && targetStep.status === 'RUNNING') {
-            targetStep.status = 'DONE';
-            targetStep.output = event.payload.output;
-            // 回滚把手随步骤快照落盘(治理不变量 I5:每个行动都留下
-            // 可撤销性声明,irreversible 的在前端/审计里显式可见)
-            if (event.payload.compensation) {
-              targetStep.compensation = event.payload.compensation;
-            }
-            // 真实耗时（工具广播与核心广播双写时取首次完成时间）
-            const elapsed = Date.now() - (targetStep.startedAt || Date.now());
-            targetStep.duration = `${elapsed < 0 ? 0 : elapsed}ms`;
+          // callId 精确收尾(tool-steps.ts):无关的并行同名工具事件不再误关;
+          // 浏览器插件层先到的无 output 收尾由内核权威事件补洞
+          const changed = settleToolStep(mission, {
+            tool: toolName,
+            output: event.payload.output,
+            compensation: event.payload.compensation,
+            callId: event.payload.callId,
+          });
+          if (changed) {
             this.broadcast({ type: 'mission_updated', data: mission });
           }
         }

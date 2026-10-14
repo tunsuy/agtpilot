@@ -173,6 +173,11 @@ export class OrchestratorService extends Service {
       parameters: toolDef.parameters, // 透传真实 JSON Schema，模型不再盲猜参数
       execute: async (args: any): Promise<any> => {
         const toolSignature = `${toolDef.name}:${JSON.stringify(stableStringify(args))}`;
+        // 物理调用 id:tool_call/tool_result 事件与 ToolSession 双通道携带。
+        // 前端步骤记录按它精确对应 —— 同轮并行多工具 + 插件层双广播下,
+        // 「工具名+末位位置」倒查会关错步骤/留孤儿「执行中」(生产实例
+        // 2026-10-14:重复步骤对、入参与出参交叉、虚假百秒耗时)
+        const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         // 只读工具结果复用：上下文压缩会抹掉早前的工具记录,模型「失忆」后重发
         // 同参数查询（生产实测:17 次调用里 5 对完全重复）。TTL 内直接复用:
         // 不重新执行、不计入 toolCalls、单独计 dedupedCalls,事件流照常广播
@@ -181,10 +186,10 @@ export class OrchestratorService extends Service {
           const hit = toolResultCache.get(toolSignature);
           if (hit && Date.now() - hit.at < TOOL_RESULT_CACHE_TTL_MS) {
             stats.dedupedCalls++;
-            broadcast({ type: 'tool_call', payload: { tool: toolDef.name, args }, timestamp: Date.now() });
+            broadcast({ type: 'tool_call', payload: { tool: toolDef.name, args, callId }, timestamp: Date.now() });
             broadcast({
               type: 'tool_result',
-              payload: { tool: toolDef.name, output: hit.output, deduplicated: true },
+              payload: { tool: toolDef.name, output: hit.output, deduplicated: true, callId },
               timestamp: Date.now(),
             });
             return hit.output;
@@ -267,7 +272,7 @@ export class OrchestratorService extends Service {
         // 广播工具执行开始
         broadcast({
           type: 'tool_call',
-          payload: { tool: toolDef.name, args },
+          payload: { tool: toolDef.name, args, callId },
           timestamp: Date.now(),
         });
 
@@ -281,6 +286,7 @@ export class OrchestratorService extends Service {
               env: options.taskEnv,
               userId: options.userId,
               sandbox: options.taskSandbox,
+              callId,
             });
           } catch (err: any) {
             return { error: err.message };
@@ -329,8 +335,8 @@ export class OrchestratorService extends Service {
         broadcast({
           type: 'tool_result',
           payload: toolDef.compensation
-            ? { tool: toolDef.name, output, compensation: toolDef.compensation }
-            : { tool: toolDef.name, output },
+            ? { tool: toolDef.name, output, compensation: toolDef.compensation, callId }
+            : { tool: toolDef.name, output, callId },
           timestamp: Date.now(),
         });
 

@@ -131,6 +131,12 @@ export interface PlannerNotifier {
 export interface ToolSession {
   taskId: string;
   step: number;
+  /**
+   * 本次物理工具调用 id(编排器逐调用生成):插件层自广播 tool_call/tool_result
+   * 时原样透传,前端步骤记录按它与内核事件精确对应/幂等合并 —— 并行多工具
+   * 轮次里按「工具名+末位位置」倒查会关错步骤(见 web 侧 lib/tool-steps.ts)。
+   */
+  callId?: string;
   env?: Record<string, string>;
   userId?: string;
   /**

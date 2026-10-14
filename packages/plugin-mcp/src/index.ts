@@ -307,10 +307,16 @@ class UserConnection {
           const cls = classifyToolReadOnly({ name: originalName, annotations: tool.annotations });
           return cls.readOnly ? { readOnly: true, readOnlyBasis: cls.basis as 'annotation' | 'heuristic' } : {};
         })(),
-        execute: async (args: any) => {
+        execute: async (args: any, session?: any) => {
           this.onEvent({
             type: 'tool_call',
-            payload: { tool: toolName, mcpServer: serverName, mcpTool: originalName, args },
+            payload: {
+              tool: toolName,
+              mcpServer: serverName,
+              mcpTool: originalName,
+              args,
+              callId: session?.callId,
+            },
             timestamp: Date.now(),
           });
           const call = async (client: Client) =>

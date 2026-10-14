@@ -293,7 +293,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     execute: async ({ url, offset = 0 }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'browser_navigate', url },
+        payload: { tool: 'browser_navigate', url, callId: session?.callId },
         timestamp: Date.now(),
       });
 
@@ -309,7 +309,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
 
         ctx.agent.emitEvent({
           type: 'tool_result',
-          payload: { tool: 'browser_navigate', success: true, url },
+          payload: { tool: 'browser_navigate', success: true, url, callId: session?.callId },
           timestamp: Date.now(),
         });
 
@@ -325,7 +325,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       } catch (err: any) {
         ctx.agent.emitEvent({
           type: 'tool_result',
-          payload: { tool: 'browser_navigate', success: false, url, error: err.message },
+          payload: { tool: 'browser_navigate', success: false, url, error: err.message, callId: session?.callId },
           timestamp: Date.now(),
         });
         // P4:失败分类 + 下一步指引(环境级故障别让模型盲诊空转)
@@ -448,7 +448,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     execute: async ({ instruction }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'browser_stagehand_act', instruction },
+        payload: { tool: 'browser_stagehand_act', instruction, callId: session?.callId },
         timestamp: Date.now(),
       });
 
@@ -575,7 +575,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
 
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'browser_firecrawl_scrape', url },
+        payload: { tool: 'browser_firecrawl_scrape', url, callId: session?.callId },
         timestamp: Date.now(),
       });
 
@@ -646,7 +646,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     execute: async ({ selector, value, mode = 'fill' }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'browser_fill', selector, mode },
+        payload: { tool: 'browser_fill', selector, mode, callId: session?.callId },
         timestamp: Date.now(),
       });
       try {
@@ -668,7 +668,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
         await emitViewport(page);
         ctx.agent.emitEvent({
           type: 'tool_result',
-          payload: { tool: 'browser_fill', success: true, selector, mode },
+          payload: { tool: 'browser_fill', success: true, selector, mode, callId: session?.callId },
           timestamp: Date.now(),
         });
         return {
@@ -681,7 +681,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       } catch (err: any) {
         ctx.agent.emitEvent({
           type: 'tool_result',
-          payload: { tool: 'browser_fill', success: false, selector, error: err.message },
+          payload: { tool: 'browser_fill', success: false, selector, error: err.message, callId: session?.callId },
           timestamp: Date.now(),
         });
         return {
@@ -718,7 +718,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     execute: async ({ text, selector, pressEnter }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'browser_type', hasSelector: !!selector },
+        payload: { tool: 'browser_type', hasSelector: !!selector, callId: session?.callId },
         timestamp: Date.now(),
       });
       try {
@@ -776,7 +776,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
     execute: async ({ selector, filePaths }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'browser_upload', count: Array.isArray(filePaths) ? filePaths.length : 0 },
+        payload: { tool: 'browser_upload', count: Array.isArray(filePaths) ? filePaths.length : 0, callId: session?.callId },
         timestamp: Date.now(),
       });
       try {

@@ -361,7 +361,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
 
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'sandbox_e2b_run_python', codeSnippet: code.slice(0, 100) },
+        payload: { tool: 'sandbox_e2b_run_python', codeSnippet: code.slice(0, 100), callId: session?.callId },
         timestamp: Date.now(),
       });
 

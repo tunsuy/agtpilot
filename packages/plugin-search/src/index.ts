@@ -313,7 +313,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     execute: async ({ query, maxResults = 5, recencyDays }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'search_web', query, maxResults, recencyDays },
+        payload: { tool: 'search_web', query, maxResults, recencyDays, callId: session?.callId },
         timestamp: Date.now(),
       });
 

@@ -80,6 +80,12 @@ export interface MissionStep {
    */
   queued?: boolean;
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  /**
+   * 物理工具调用 id(编排器逐调用生成,tool_call/tool_result 事件与 ToolSession
+   * 双通道携带):同轮并行多工具 + 插件/编排器双广播下,步骤按它一一对应、
+   * 幂等合并与精确收尾,不再按「工具名+末位位置」模糊倒查(详见 lib/tool-steps.ts)。
+   */
+  callId?: string;
   /** 工具步骤开始时间（用于计算真实耗时，替代旧的硬编码假值） */
   startedAt?: number;
   duration?: string;

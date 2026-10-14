@@ -24,7 +24,7 @@ import {
   type BrowserAuditEntry,
   type XhsManagedRecord,
 } from './user-store';
-import { XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES } from './browser-login';
+import { XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES, XHS_LOGIN_URL_HINT } from './browser-login';
 import { buildPlaceholderCover } from './xhs-cover';
 import { buildXhsReadGuardrail } from './xhs-read-guardrail';
 
@@ -305,6 +305,12 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
           );
           buildXhsReadGuardrail().record(missionId, userId);
 
+          // 登录态失效的服务端会话(cookie 尚存但已失效)表现为目标页重定向到
+          // /login:cookie 门拦不住,按未登录引导扫码,不把登录页当数据返回
+          if (XHS_LOGIN_URL_HINT.test(result.url || '')) {
+            return { success: false, page: target.label, error: NOT_LOGGED_IN_HINT };
+          }
+
           // ③ 读审计(复用 title 字段放页名/搜索词;不计入 countTodayDraftSaves——其按 tool 过滤)
           appendBrowserAudit(userId, {
             at: Date.now(),
@@ -408,7 +414,13 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
 
           // ② 打开发布页 & 登录态检查
           await page.goto(XHS_PUBLISH_SELECTORS.publishUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-          if (!(await browser.hasCookies(userId, XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES))) {
+          // cookie 门之外还要看落点 URL:服务端会话失效(cookie 尚存)会被重定向到
+          // /login,表单不渲染 —— 此时不查落点,后面 page.fill 会以 16-18s 控件
+          // 定位超时收场,把「该引导用户重登」误报成疑难杂症(生产记忆的来源)
+          if (
+            !(await browser.hasCookies(userId, XHS_CREATOR_HOME, XHS_LOGIN_COOKIE_NAMES)) ||
+            XHS_LOGIN_URL_HINT.test(page.url() || '')
+          ) {
             auditFailure('not_logged_in');
             return { success: false, error: NOT_LOGGED_IN_HINT };
           }

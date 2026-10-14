@@ -54,10 +54,18 @@ function writeRecord(uid: string, over: Partial<XhsManagedRecord>) {
  * landing(聚合页:入口卡在场)、imgTab(图文标签:上传控件在场、表单未解锁)。
  */
 function fakePublishPage(
-  opts: { tagInputFails?: boolean; autosaveFails?: boolean; mode?: 'editor' | 'landing' | 'imgTab' } = {}
+  opts: {
+    tagInputFails?: boolean;
+    autosaveFails?: boolean;
+    mode?: 'editor' | 'landing' | 'imgTab';
+    /** 落点 URL(默认发布页;传登录地址模拟服务端会话失效被重定向) */
+    finalUrl?: string;
+  } = {}
 ) {
   const state = { mode: opts.mode ?? 'editor', uploads: [] as string[] };
   const page = {
+    // ② 登录门检查落点 URL:cookie 尚存但服务端会话失效 → 重定向到 /login
+    url: vi.fn(() => opts.finalUrl ?? 'https://creator.xiaohongshu.com/publish/publish'),
     goto: vi.fn(async () => {}),
     fill: vi.fn(async () => {}),
     click: vi.fn(async (sel: string) => {
@@ -118,11 +126,15 @@ function fakePublishPage(
   return page;
 }
 
-function fakeBrowser(page: any, opts: { hasCookies?: boolean } = {}): XhsBrowserService {
+function fakeBrowser(
+  page: any,
+  opts: { hasCookies?: boolean; navigateLandsOnLogin?: boolean } = {}
+): XhsBrowserService {
   return {
     acquirePage: vi.fn(async () => page),
     navigateAndDistill: vi.fn(async (_u: string | undefined, url: string) => ({
-      url,
+      // navigateLandsOnLogin:模拟服务端会话失效,目标页被重定向到 /login
+      url: opts.navigateLandsOnLogin ? 'https://creator.xiaohongshu.com/login' : url,
       title: '创作中心',
       content: '昨日浏览 1234',
       totalLength: 100,
@@ -330,6 +342,26 @@ describe('xhs_save_note_draft execute 全链路(fake browser)', () => {
     expect(audit[0].error).toBe('not_logged_in');
   });
 
+  it('会话失效(cookie 尚存但落点重定向到 /login)→ 按未登录引导,不再烧 16-18s 控件超时', async () => {
+    const uid = 'xhs-t4c';
+    writeRecord(uid, { enabled: true, riskAckAt: Date.now(), lastLoginAt: Date.now() });
+    // cookie 门能过,但发布页被服务端重定向到登录页(生产实例:
+    // 该失效模式此前表现为 page.fill 等不到标题框的超时,被蒸馏成排查经验)
+    const page = fakePublishPage({ finalUrl: 'https://creator.xiaohongshu.com/login?source=publish' });
+    const writeTool = xm
+      .buildXhsManagedTools(uid, fakeBrowser(page))
+      .find((t) => t.name === 'xhs_save_note_draft')!;
+
+    const r = await writeTool.execute({ title: 't', body: 'x'.repeat(30) }, { taskId: 'm', step: 1 });
+    expect(r.success).toBe(false);
+    expect(r.error).toContain('扫码');
+    // 不进入填表链路
+    expect(page.fill).not.toHaveBeenCalled();
+    const audit = us.getBrowserAudit(uid);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].error).toBe('not_logged_in');
+  });
+
   it('Playwright 超时(页面改版) → 指引型失败:转向用户接管,而非裸报错(P4)', async () => {
     const uid = 'xhs-t4b';
     writeRecord(uid, { enabled: true, riskAckAt: Date.now(), lastLoginAt: Date.now() });
@@ -456,6 +488,19 @@ describe('xhs_read_creator_data execute', () => {
     expect(r.success).toBe(false);
     expect(r.error).toContain('扫码');
     expect((browser.navigateAndDistill as any).mock.calls.length).toBe(0);
+  });
+
+  it('会话失效(cookie 尚存但落点重定向到 /login)→ 按未登录引导,不把登录页当数据返回', async () => {
+    const uid = 'xhs-r2b';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const browser = fakeBrowser(fakePublishPage(), { navigateLandsOnLogin: true });
+    const readTool = xm.buildXhsManagedTools(uid, browser).find((t) => t.name === 'xhs_read_creator_data')!;
+
+    const r = await readTool.execute({ page: 'overview' }, { taskId: 'm', step: 1 });
+    expect(r.success).toBe(false);
+    expect(r.error).toContain('扫码');
+    // 不返回登录页蒸馏内容
+    expect(r.content).toBeUndefined();
   });
 });
 

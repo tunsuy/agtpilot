@@ -187,7 +187,7 @@ describe('distillAgentExperience · 环境状态防绝对断言(生产实例:Fir
     expect(calls.length).toBe(0);
   });
 
-  it('带 workshopId:系统提示词标注「工坊模板规则严禁照抄」', async () => {
+  it('带 workshopId:系统提示词标注「工坊模板规则严禁照抄」+ 工域知识路由到 skill 文档', async () => {
     const { ctx, calls } = buildCtx();
     await distillAgentExperience(ctx, {
       userId: 'usr_test',
@@ -199,6 +199,9 @@ describe('distillAgentExperience · 环境状态防绝对断言(生产实例:Fir
     expect(calls[0].system).toContain('xhs');
     expect(calls[0].system).toContain('工坊模板');
     expect(calls[0].system).toContain('严禁照抄');
+    // 工域路由:工坊工作流的坑归 skill 文档/工具层,通用库只收跨工坊经验
+    expect(calls[0].system).toContain('工坊 skill 文档');
+    expect(calls[0].system).toContain('跨任务类型可复用');
   });
 });
 

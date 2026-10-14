@@ -267,6 +267,31 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     servers: [{ name: 'didi', subagentOpen: false, url: (cred) => `https://mcp.didichuxing.com/mcp-servers?key=${encodeURIComponent(cred)}` }], // 叫车 = 现实副作用,永不开放
   },
   {
+    id: 'kuaidi100',
+    name: '快递100',
+    icon: 'Package',
+    category: 'Life',
+    description:
+      '包裹物流轨迹查询（覆盖 3000+ 国内外快递公司）、寄件运费预估比价、智能时效预估（物流行业首个官方 MCP，粘贴 Key 即用）。',
+    authType: 'token',
+    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
+    routeWords: ["快递", "包裹", "物流", "快递100", "kuaidi100", "运单", "查快递"],
+    tokenEnvVar: 'MCP_KUAIDI100_KEY',
+    quickAuthUrl: 'https://api.kuaidi100.com/',
+    authHint:
+      '注册/登录快递100「百递云·API 开放平台」→「实时查询与订阅推送」→「概览」→ 在「授权参数」处复制 key，粘贴到下方（新用户有免费额度）。',
+    docUrl: 'https://api.kuaidi100.com/document/mcp-summary',
+    servers: [
+      {
+        name: 'kuaidi100',
+        subagentOpen: false, // 按量计费(实时查询按次扣费),子 agent 批量检索产生真实费用,未评审开放(同 twitterapi_io 红线)
+        // 官方主推 Streamable HTTP（比 SSE 稳），key 走 query 参数
+        url: (cred) => `https://api.kuaidi100.com/mcp/streamable?key=${encodeURIComponent(cred)}`,
+        label: '快递物流',
+      },
+    ],
+  },
+  {
     id: 'tencent_weiyun',
     name: '腾讯微云',
     icon: 'Cloud',

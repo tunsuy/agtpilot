@@ -61,6 +61,7 @@ const CATALOG: RoutableTool[] = [
   mkTool('mcp_zhihu_global_search'),
   mkTool('mcp_newsnow_get_hottest'),
   mkTool('mcp_twitterapi_io_search_tweets'),
+  mkTool('mcp_kuaidi100_query_express'),
   mkTool('mcp_deepwiki_ask_question'),
   mkTool('mcp_connect_stdio'),
 ];
@@ -121,6 +122,8 @@ describe('MCP 工具路由：服务器粒度挂载', () => {
   it('未配置的连接器不注册路由：twitterapi_io（token 未配）不出现', () => {
     const routes = userRoutes(UID);
     expect(routes.some((r) => r.id === 'mcp_user_twitterapi_io')).toBe(false);
+    // 快递100（token 类）未配 key → 同样不注册
+    expect(routes.some((r) => r.id === 'mcp_user_kuaidi100')).toBe(false);
     // 已配置的按服务器粒度注册（知乎 3 个服务器 + newsnow）
     expect(routes.map((r) => r.id)).toEqual(
       expect.arrayContaining(['mcp_user_zhihu_search', 'mcp_user_zhihu_global', 'mcp_user_zhihu_hot', 'mcp_user_newsnow'])
@@ -143,6 +146,24 @@ describe('MCP 工具路由：服务器粒度挂载', () => {
     const a = userRoutes(UID);
     const b = userRoutes(UID);
     expect(a.map((r) => r.id)).toEqual(b.map((r) => r.id));
+  });
+
+  it('快递100：配 key 后注册服务器粒度路由，「快递/包裹」命中才挂载', () => {
+    const UID_KD = 'mcp-routing-user-kuaidi';
+    us.saveUserConnector(UID_KD, 'MCP_KUAIDI100_KEY', 'fake-key');
+    const routes = userRoutes(UID_KD);
+    const kd = routes.find((r) => r.id === 'mcp_user_kuaidi100');
+    expect(kd, '配置 key 后应注册 mcp_user_kuaidi100 路由').toBeDefined();
+    expect(kd!.prefixes).toEqual(['mcp_kuaidi100_']);
+    expect(kd!.test.test('我的快递到哪了')).toBe(true);
+    expect(kd!.test.test('查一下包裹物流')).toBe(true);
+    expect(kd!.test.test('今天吃什么')).toBe(false);
+
+    // 路由决策：点名「快递」→ 只挂快递100，不带知乎等未点名数据源
+    forceRouting();
+    const result = selectActiveTools('帮我查下快递单号 SF123456 的物流', CATALOG, [...pluginMcpRoutes(), ...routes]);
+    expect(result).toContain('mcp_kuaidi100_query_express');
+    expect(result).not.toContain('mcp_zhihu_hot_hot_list');
   });
 });
 

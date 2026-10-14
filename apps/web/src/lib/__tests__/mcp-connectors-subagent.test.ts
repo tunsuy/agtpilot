@@ -70,6 +70,7 @@ describe('红线:永不开放给子 agent', () => {
     'yuque',
     // 按量计费成本未评审
     'twitterapi_io',
+    'kuaidi100',
   ];
 
   it.each(NEVER_OPEN)('%s = false', (name) => {

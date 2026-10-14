@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRunner, updateDeviceMeta } from './runner-bridge';
+import { extractClientIp } from './client-ip';
 import {
   RUNNER_PROTOCOL_VERSION,
   isProtocolSupported,
@@ -11,9 +12,11 @@ import {
  * /api/runner/* 设备侧路由的统一认证入口(§4):
  * `X-Runner-Id` + `Authorization: Bearer <deviceSecret>` → 归属用户与设备。
  *
- * 顺带两件事:
+ * 顺带三件事:
  * - 心跳元信息:query 携带 hostname/platform/runnerVersion/protocolVersion/ghLogin
  *   时清洗后更新设备记录(runner 升级后版本自新;ghLogin = gh 公开登录名);
+ * - 来源 IP:云端从请求头观察(x-forwarded-for/x-real-ip),随 lastSeenAt 节流落盘
+ *   lastSeenIp —— 设备页展示用,runner 零改动,不作鉴权依据;
  * - 版本兼容治理(§9):存量设备协议版本不再受支持 → 426 + 升级提示,拒绝派发。
  */
 export type RunnerAuthResult =
@@ -25,7 +28,7 @@ export function authenticateRunnerRequest(req: NextRequest): RunnerAuthResult {
   const authHeader = req.headers.get('authorization');
   const bearer = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
 
-  const authed = authenticateRunner(runnerId, bearer);
+  const authed = authenticateRunner(runnerId, bearer, Date.now(), extractClientIp(req.headers));
   if (!authed) {
     return {
       ok: false,

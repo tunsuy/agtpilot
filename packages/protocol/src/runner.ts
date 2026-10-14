@@ -156,6 +156,12 @@ export interface RunnerDeviceInfo extends RunnerDeviceMeta {
   userId: string;
   createdAt: number;
   lastSeenAt: number;
+  /**
+   * 最近一次配对/心跳的请求来源 IP(云端侧记录,非 runner 上报;展示排障用)。
+   * 取自 x-forwarded-for / x-real-ip 头,无反代直连时可能缺省;
+   * 直连场景头可被伪造 —— 仅展示,不作任何安全决策依据。
+   */
+  lastSeenIp?: string;
   revoked?: boolean;
   secretEnc?: string;
 }

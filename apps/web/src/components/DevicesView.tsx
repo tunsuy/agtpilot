@@ -19,6 +19,8 @@ interface DeviceView {
   platform: string;
   runnerVersion: string;
   protocolVersion: number;
+  /** 最近来源 IP(云端从心跳请求头记录;直连无反代时可能缺省) */
+  lastSeenIp?: string;
   createdAt: number;
   lastSeenAt: number;
   online: boolean;
@@ -205,6 +207,7 @@ export function DevicesView() {
                   <div className="text-sm font-medium text-zinc-900 truncate">{d.hostname}</div>
                   <div className="text-[11px] text-zinc-500 mt-0.5">
                     {d.platform} · runner v{d.runnerVersion} · 协议 v{d.protocolVersion}
+                    {d.lastSeenIp ? ` · IP ${d.lastSeenIp}` : ''}
                     {' · '}
                     {d.revoked ? '已吊销' : d.online ? '在线' : `最近心跳 ${timeAgo(d.lastSeenAt)}`}
                   </div>

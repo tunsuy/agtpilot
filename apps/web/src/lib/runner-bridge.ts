@@ -131,11 +131,12 @@ export function createPairCode(userId: string, now: number = Date.now()): PairCo
 export type RedeemOk = { ok: true; userId: string; deviceId: string; deviceSecret: string };
 export type RedeemErr = { ok: false; error: 'invalid_code' | 'expired' | 'already_redeemed' | 'protocol_unsupported' };
 
-/** 核销配对码 → 注册设备,deviceSecret 只在此应答里出现一次 */
+/** 核销配对码 → 注册设备,deviceSecret 只在此应答里出现一次;clientIp 为云端记录的来源 IP(可缺省) */
 export function redeemPairCode(
   rawCode: unknown,
   meta: RunnerDeviceMeta,
-  now: number = Date.now()
+  now: number = Date.now(),
+  clientIp?: string | null
 ): RedeemOk | RedeemErr {
   if (!isProtocolSupportedLocal(meta.protocolVersion)) return { ok: false, error: 'protocol_unsupported' };
   if (!isValidPairCodeFormat(rawCode)) return { ok: false, error: 'invalid_code' };
@@ -165,6 +166,7 @@ export function redeemPairCode(
     ...(meta.ghLogin !== undefined ? { ghLogin: meta.ghLogin } : {}),
     createdAt: now,
     lastSeenAt: now,
+    ...(clientIp ? { lastSeenIp: clientIp } : {}),
     secretEnc: encryptSecret(deviceSecret),
   });
   writeDevices(rec.userId, devices);
@@ -184,12 +186,14 @@ function isProtocolSupportedLocal(v: number): boolean {
 /**
  * 设备密钥认证:X-Runner-Id + Bearer deviceSecret → { userId, device }。
  * 任何失败(未知设备/已吊销/密钥不符)一律 null(路由侧统一 401)。
- * 成功时顺带节流落盘 lastSeenAt(心跳)。
+ * 成功时顺带节流落盘 lastSeenAt(心跳);clientIp 为云端观察到的来源 IP,
+ * 随同一节流窗口落盘 lastSeenIp(展示用,非鉴权依据)。
  */
 export function authenticateRunner(
   runnerId: string | null,
   bearer: string | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  clientIp?: string | null
 ): { userId: string; device: RunnerDeviceInfo } | null {
   if (!runnerId || !bearer) return null;
   const userId = readDeviceIndex()[runnerId];
@@ -207,6 +211,7 @@ export function authenticateRunner(
 
   if (now - device.lastSeenAt >= LAST_SEEN_THROTTLE_MS) {
     device.lastSeenAt = now;
+    if (clientIp) device.lastSeenIp = clientIp;
     writeDevices(userId, devices);
   }
   return { userId, device };
@@ -220,6 +225,8 @@ export interface RunnerDeviceView {
   protocolVersion: number;
   /** gh 公开登录名:undefined = 未上报(旧版 runner),null = 已上报未登录 */
   ghLogin?: string | null;
+  /** 最近来源 IP(云端记录;直连无反代时可能缺省) */
+  lastSeenIp?: string;
   createdAt: number;
   lastSeenAt: number;
   online: boolean;
@@ -235,6 +242,7 @@ export function listDevices(userId: string, now: number = Date.now()): RunnerDev
     runnerVersion: d.runnerVersion,
     protocolVersion: d.protocolVersion,
     ...(d.ghLogin !== undefined ? { ghLogin: d.ghLogin } : {}),
+    ...(d.lastSeenIp ? { lastSeenIp: d.lastSeenIp } : {}),
     createdAt: d.createdAt,
     lastSeenAt: d.lastSeenAt,
     online: !d.revoked && now - d.lastSeenAt < ONLINE_WINDOW_MS,

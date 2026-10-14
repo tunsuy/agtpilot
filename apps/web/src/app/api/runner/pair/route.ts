@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { redeemPairCode } from '@/lib/runner-bridge';
+import { extractClientIp } from '@/lib/client-ip';
 import { normalizeDeviceMeta } from '@agtpilot/protocol';
 
 /**
@@ -18,7 +19,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    const result = redeemPairCode(body?.code, meta);
+    const result = redeemPairCode(body?.code, meta, Date.now(), extractClientIp(req.headers));
     if (!result.ok) {
       const status =
         result.error === 'invalid_code'

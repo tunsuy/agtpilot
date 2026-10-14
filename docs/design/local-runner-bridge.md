@@ -88,7 +88,7 @@ T0(纯手工交接包:卡片一键复制任务包,用户粘贴进本地 claude �
 1. 驾驶舱「设备」页点「配对新 runner」→ 云端生成**一次性配对码**(8 位字符,5 分钟过期,绑定当前登录用户);
 2. 用户本地执行 `agtpilot-runner pair --server https://<部署地址> --code XXXXXXXX`;
 3. runner POST 配对码 + 设备元信息(hostname/platform/版本/**ghLogin 公开登录名**)→ 云端核销配对码,生成 `deviceSecret`(256-bit 随机):
-   - 云端侧:secret-box 加密存 user-store `devices.json`(deviceId/secret 密文/元信息/lastSeenAt/状态);
+   - 云端侧:secret-box 加密存 user-store `devices.json`(deviceId/secret 密文/元信息/lastSeenAt/lastSeenIp/状态);lastSeenIp 为云端从配对及心跳请求头(x-forwarded-for/x-real-ip)观察到的来源 IP,随 lastSeenAt 同一 30s 节流落盘,设备页展示排障用(直连无反代时可能缺省;头可伪造,不作鉴权依据);
    - runner 侧:`~/.agtpilot/runner/credentials.json`(0600),含 server URL(配对时固定,防任务来源漂移)+ deviceId + deviceSecret;
 4. 后续所有 /api/runner/* 调用带 `X-Runner-Id` + `Authorization: Bearer <deviceSecret>`;
 5. 设备页可**吊销**(删除 secret → 轮询 401,runner 本地自毁凭据并提示重新配对);一个用户可配多台(家用台式机/工作机),**派发时选设备**:弹窗设备区单选(仅在线未吊销设备可选,默认第一台在线),任务记录绑定 `targetDeviceId`,只有该设备能领取;无绑定任务(存量/直接调 API 缺省)保持任意在线设备 FIFO。目标设备校验不通过(不存在/已吊销/非本用户)→ 拒绝入队,不静默降级。

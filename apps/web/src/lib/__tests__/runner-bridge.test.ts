@@ -137,6 +137,31 @@ describe('配对与设备管理', () => {
     expect(updateDeviceMeta(USER_A, r.deviceId, { ...meta, runnerVersion: '0.0.2' })).toBe(true);
     expect(listDevices(USER_A, T0)[0].runnerVersion).toBe('0.0.2');
   });
+
+  it('来源 IP:配对时记录,心跳随 lastSeenAt 节流刷新,listDevices 出口暴露', () => {
+    const { code } = createPairCode(USER_A, T0);
+    const r = redeemPairCode(code, meta, T0, '203.0.113.7');
+    if (!r.ok) throw new Error('pair failed');
+    expect(listDevices(USER_A, T0)[0].lastSeenIp).toBe('203.0.113.7');
+
+    // 节流窗口内不落盘:IP 与 lastSeenAt 同批更新(30s)
+    authenticateRunner(r.deviceId, r.deviceSecret, T0 + 5000, '203.0.113.8');
+    expect(listDevices(USER_A, T0)[0].lastSeenIp).toBe('203.0.113.7');
+    authenticateRunner(r.deviceId, r.deviceSecret, T0 + 60_000, '203.0.113.9');
+    expect(listDevices(USER_A, T0)[0].lastSeenIp).toBe('203.0.113.9');
+
+    // 拿不到 IP(直连无头)→ 不覆盖存量值
+    authenticateRunner(r.deviceId, r.deviceSecret, T0 + 120_000, null);
+    expect(listDevices(USER_A, T0)[0].lastSeenIp).toBe('203.0.113.9');
+  });
+
+  it('来源 IP 可缺省:配对/心跳都不带 → 出口无 lastSeenIp 字段', () => {
+    const r = pairDevice(USER_A);
+    expect(listDevices(USER_A, T0)[0].lastSeenIp).toBeUndefined();
+    expect('lastSeenIp' in listDevices(USER_A, T0)[0]).toBe(false);
+    authenticateRunner(r.deviceId, r.deviceSecret, T0 + 60_000);
+    expect(listDevices(USER_A, T0)[0].lastSeenIp).toBeUndefined();
+  });
 });
 
 describe('任务队列', () => {

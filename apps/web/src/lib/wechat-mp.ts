@@ -561,7 +561,7 @@ export function buildWechatMpTools(
   const createDraft: ToolDefinition = {
     name: 'wechat_mp_create_draft',
     description:
-      '把一篇 Markdown 文章经公众号排版(四套主题可选:微信绿/科技蓝/暖橙/极简黑白,内联样式 HTML)+ 封面处理(可传图片 URL;不传则按 cover_keywords 检索 Wikimedia Commons 免版权真实配图并叠加标题排版,检索不到回退标题/摘要排版封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限,达到上限会收到拒绝提示。需要用户先在连接器页「微信公众号(草稿箱直连)」卡片配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
+      '把一篇 Markdown 文章经公众号排版(四套主题可选:微信绿/科技蓝/暖橙/极简黑白,内联样式 HTML)+ 封面处理(可传图片 URL;不传则按 cover_keywords 检索 Wikimedia Commons 免版权真实配图并叠加标题排版,检索不到回退标题/摘要排版封面)后,通过微信官方草稿箱接口写入用户公众号的草稿箱。写入后必须由用户在公众平台后台人工审核发布——本工具不会也不能直接发布。调用前需用户审批确认。每次调用计入每日上限(本工具自带的客户端限频,默认 3 次/天,管理员可调,非微信平台配额),每次调用后会反馈今日已用次数,达上限会收到拒绝提示。需要用户先在连接器页「微信公众号(草稿箱直连)」卡片配置 AppID:AppSecret(已认证公众号 + IP 白名单)。',
     dangerLevel: 'high',
     compensation: {
       kind: 'partially-reversible',

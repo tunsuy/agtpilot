@@ -82,14 +82,17 @@ function subagentLine(app: McpConnectorInfo): { text: string; cls: string } | nu
         text: `子 agent:可用 —— 实测评审放行,全部 ${app.toolCount ?? 0} 个工具开放`,
         cls: 'text-emerald-600',
       };
-    case 'ready':
+    case 'ready': {
+      const hc = sa.heuristicReadOnlyCount ?? 0;
+      const base = `子 agent:可用 —— ${sa.readOnlyCount ?? 0}/${app.toolCount ?? 0} 个工具判定只读(双钥匙放行)`;
       return {
-        text: `子 agent:可用 —— ${sa.readOnlyCount ?? 0}/${app.toolCount ?? 0} 个工具已声明只读(双钥匙放行)`,
+        text: hc > 0 ? `${base},其中 ${hc} 个由名称判定` : base,
         cls: 'text-emerald-600',
       };
+    }
     case 'needs-measurement':
       return {
-        text: `子 agent:已标记开放,待只读实测评审后启用(服务器未声明只读注解,共 ${app.toolCount ?? 0} 工具)`,
+        text: `子 agent:已标记开放,但工具未能自动判定只读(注解缺失且名称含糊,共 ${app.toolCount ?? 0} 工具),待实测评审放行`,
         cls: 'text-amber-600',
       };
     default:

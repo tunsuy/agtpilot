@@ -154,6 +154,12 @@ export interface ToolDefinition {
    */
   readOnly?: boolean;
   /**
+   * 只读判定依据(仅当 readOnly=true 时有意义,审计/展示用):
+   * 'annotation' = 服务器 MCP annotations 自报只读;'heuristic' = 注解沉默时按工具名动词 default-deny 判定
+   * (见 plugin-mcp/src/classify.ts)。子 agent 双钥匙的机器钥匙信号来源,主循环并行门不区分此字段。
+   */
+  readOnlyBasis?: 'annotation' | 'heuristic';
+  /**
    * 副作用补偿声明(持久状态治理不变量 I5:每个行动都要留下可回滚的「把手」)。
    * 编排器在 tool_result 事件里透传给上层,由持久化层随任务步骤快照落盘 ——
    * reversible 支持事后撤销,irreversible 在事前就明确告知(配合审批门)。

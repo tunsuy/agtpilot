@@ -64,16 +64,13 @@ export function sanitizeToolName(name: string): string {
 
 /**
  * MCP annotations → 只读声明(spec §4.3 双钥匙的「机器钥匙」)。
- * 规范语义:MCPToolAnnotations 的 hint 是服务器自报提示而非契约,且「未注解 = 保守视为写」
- * (readOnlyHint 缺省 false、destructiveHint 缺省 true)。这里同样保守:
- * 仅当 readOnlyHint === true 且 destructiveHint 未声明为 true 时才判定只读。
- * 注:只影响 ToolDefinition.readOnly(子 agent 白名单信号 + 主循环只读并行门);
- * dangerLevel 维持 'medium' 不变 —— 审批语义(HITL 只拦 high)不受影响。
+ * 定义已迁至 ./classify(与 default-deny 名称分类器同源,避免循环依赖);此处 re-export 保持外部引用不变。
+ * 完整的只读分类(注解 → 名称动词启发 → default-deny)见 classifyToolReadOnly。
  */
-export function mcpToolReadOnly(annotations: unknown): boolean {
-  const a = annotations as { readOnlyHint?: unknown; destructiveHint?: unknown } | undefined;
-  return a?.readOnlyHint === true && a?.destructiveHint !== true;
-}
+export { mcpToolReadOnly, classifyToolReadOnly, heuristicReadOnly, tokenizeToolName } from './classify';
+export type { ReadOnlyBasis, ToolClassification } from './classify';
+import { classifyToolReadOnly } from './classify';
+
 
 /** 判断是否为「连接已断」类错误（值得重连重试一次），区别于业务/权限错误 */
 function isConnectionError(err: any): boolean {
@@ -303,9 +300,13 @@ class UserConnection {
         description: `[MCP连接器: ${serverName}] ${tool.description || originalName}`,
         parameters: (tool.inputSchema as any) || { type: 'object', properties: {} },
         dangerLevel: 'medium',
-        // 只读声明来自服务器 annotations(保守判定,见 mcpToolReadOnly);
-        // 未声明只读的工具保持现状(不带 readOnly 字段,主循环走独占门、子 agent 不可见)
-        ...(mcpToolReadOnly(tool.annotations) ? { readOnly: true } : {}),
+        // 只读分类(default-deny,见 classify.ts):① 服务器注解权威 → ② 注解沉默时按名称动词启发 → ③ 拿不准拒绝。
+        // 判只读才带 readOnly(子 agent 白名单信号 + 主循环只读并行门);其余保持现状(不带 readOnly,主循环走独占门、子 agent 不可见)。
+        // readOnlyBasis 记录判定依据(annotation/heuristic),供详情页「名称判定」拆档与审计。
+        ...(() => {
+          const cls = classifyToolReadOnly({ name: originalName, annotations: tool.annotations });
+          return cls.readOnly ? { readOnly: true, readOnlyBasis: cls.basis as 'annotation' | 'heuristic' } : {};
+        })(),
         execute: async (args: any) => {
           this.onEvent({
             type: 'tool_call',
@@ -455,16 +456,29 @@ export class MCPService extends Service {
     return removed;
   }
 
-  /** 某用户当前连接状态(管理界面展示用;readOnlyCount = annotations 声明只读的工具数,子 agent 可用性展示用) */
-  listUserServers(userId: string): Array<{ name: string; toolsCount: number; readOnlyCount: number; error?: string }> {
+  /**
+   * 某用户当前连接状态(管理界面展示用)。
+   * readOnlyCount = 判为只读的工具总数(注解 + 名称启发,子 agent 可用性展示用);
+   * heuristicReadOnlyCount = 其中由名称动词启发判定的数量(注解沉默),供详情页拆「N 个只读(其中 M 个名称判定)」。
+   */
+  listUserServers(
+    userId: string,
+  ): Array<{ name: string; toolsCount: number; readOnlyCount: number; heuristicReadOnlyCount: number; error?: string }> {
     const prefix = `${userId}::`;
-    const out: Array<{ name: string; toolsCount: number; readOnlyCount: number; error?: string }> = [];
+    const out: Array<{
+      name: string;
+      toolsCount: number;
+      readOnlyCount: number;
+      heuristicReadOnlyCount: number;
+      error?: string;
+    }> = [];
     for (const [key, conn] of this.userClients) {
       if (key.startsWith(prefix)) {
         out.push({
           name: conn.config.name,
           toolsCount: conn.tools.length,
           readOnlyCount: conn.tools.filter((t) => t.readOnly === true).length,
+          heuristicReadOnlyCount: conn.tools.filter((t) => t.readOnly === true && t.readOnlyBasis === 'heuristic').length,
           error: conn.lastError || undefined,
         });
       }

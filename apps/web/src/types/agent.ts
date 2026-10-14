@@ -58,6 +58,8 @@ export interface McpConnectorInfo {
     availability: 'ready' | 'escape' | 'needs-measurement' | 'closed';
     /** 已声明只读的工具数(已连接时) */
     readOnlyCount?: number;
+    /** 其中由名称动词启发判定的数量(注解沉默,default-deny 分类;已连接时) */
+    heuristicReadOnlyCount?: number;
   };
 }
 

@@ -60,7 +60,7 @@ import { OssOpportunityList } from './workshops/OssOpportunityCard';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
 import { resolveArtifactDraft } from '../workshops/registry';
-import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt } from '../lib/cockpit-blocks';
+import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs } from '../lib/cockpit-blocks';
 import { sourcesForAnswer } from '../lib/search-sources';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
 import {
@@ -699,6 +699,41 @@ export function CockpitView({
                   const turnStreaming = turn.items.some(
                     (b) => b.type === 'assistant' && b.step.status === 'RUNNING'
                   );
+                  // 整轮过程折叠:最终回复正文首字一出(或历史轮已带最终答复),
+                  // 本轮全部过程(工具行 + 中间思考)收成一行「任务过程 · N 项」
+                  // 摘要 —— 块与块的先后顺序不变,收起只发生在轮内过程区,最终
+                  // 答复块始终可见;未手动操作前默认值随 finalIdx 翻转,手动后
+                  // 尊重用户选择(与思考过程折叠同一 expandedTools 字典范式)
+                  const finalIdx = renderable.findIndex(
+                    (b) => b.type === 'assistant' && Boolean(b.step.answer)
+                  );
+                  const processBlocks = finalIdx >= 0 ? renderable.slice(0, finalIdx) : renderable;
+                  const finalBlocks = finalIdx >= 0 ? renderable.slice(finalIdx) : [];
+                  const turnOpen = expandedTools[turn.key] ?? finalIdx < 0;
+                  // 摘要行计数:工具块数真实动作行,思考块计 1;
+                  // 耗时取首步开始 → 末步结束的墙钟时间(思考/检索间隙也计入)
+                  const processCount = processBlocks.reduce(
+                    (n, b) =>
+                      n +
+                      (b.type === 'tools'
+                        ? b.steps.filter((s) => s.tool || s.status === 'FAILED').length
+                        : 1),
+                    0
+                  );
+                  const processFailed = processBlocks.reduce(
+                    (n, b) =>
+                      n +
+                      (b.type === 'tools'
+                        ? b.steps.filter((s) => s.status === 'FAILED').length
+                        : 0),
+                    0
+                  );
+                  const elapsedLabel = (() => {
+                    const ms = processElapsedMs(
+                      processBlocks.flatMap((b) => (b.type === 'tools' ? b.steps : [b.step]))
+                    );
+                    return ms !== undefined ? formatActivityDuration(`${ms}ms`) : undefined;
+                  })();
                   return (
                     <div key={turn.key} className="space-y-2.5">
                       {/* 轮首标记:轻量「谁在说话」锚(流式时蓝点亮起) */}
@@ -719,13 +754,40 @@ export function CockpitView({
                           turnStreaming ? 'border-blue-300/70' : 'border-zinc-200/80'
                         }`}
                       >
-                        {renderable.map((block) => {
-                  // ================= 2a. 工具活动时间线(逐行叙述,无统计头/入参出参) =================
+                        {/* 整轮过程折叠开关:最终回复开始流式输出时,本轮全部
+                            过程(工具行 + 中间思考)自动收成这一行,点开原地
+                            展开回看完整时间线 */}
+                        {finalIdx > 0 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedTools((prev) => ({
+                                ...prev,
+                                [turn.key]: !turnOpen,
+                              }))
+                            }
+                            className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 select-none py-0.5"
+                          >
+                            <Wrench className="h-3 w-3 text-zinc-400" />
+                            <span>任务过程 · {processCount} 项</span>
+                            {elapsedLabel && (
+                              <span className="text-[10px] text-zinc-400 font-mono">{elapsedLabel}</span>
+                            )}
+                            {processFailed > 0 && (
+                              <span className="text-red-500">· {processFailed} 项失败</span>
+                            )}
+                            <ChevronDown
+                              className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
+                                turnOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </button>
+                        )}
+                        {(turnOpen ? processBlocks : []).concat(finalBlocks).map((block) => {
+                  // ================= 2a. 工具活动时间线(逐行叙述,无入参出参) =================
                   // Claude Code 式:每个动作一行,行内是用户可读的行动语言(与右侧
-                  // 「动态」tab 同源 narrateStep)。聚合统计头(「已完成 N 项任务
-                  // 活动」)与入参出参 JSON 详情不再进会话流 —— 统计条在轮次边界
-                  // 跳变观感割裂,原始详情的唯一展示位是动态区;失败行红显,
-                  // 执行异常在对话上下文里可见,不只沉在右侧
+                  // 「动态」tab 同源 narrateStep);失败行红显,执行异常在对话上下文
+                  // 里可见,不只沉在右侧。原始工具名与入参出参的唯一展示位是动态区
                   if (block.type === 'tools') {
                     const rows = block.steps.filter((s) => s.tool || s.status === 'FAILED');
                     return (
@@ -784,9 +846,11 @@ export function CockpitView({
                     const st = block.step;
                     // 流式中的 live step（打字机卡片）：shimmer 占位 / 打字光标 / 思考过程块
                     const isStreaming = st.status === 'RUNNING' && st.role === 'assistant';
-                    // 思考过程折叠态复用 expandedTools（流式期间默认展开，结束后可收起）
+                    // 思考过程折叠态复用 expandedTools(流式期间默认展开,正文
+                    // 开始输出后随工具过程一起默认收起,避免顶到正在打字的答复;
+                    // 手动展开/收起后尊重用户选择,收尾后默认保持收起)
                     const reasoningKey = `${st.id}_reasoning`;
-                    const reasoningOpen = expandedTools[reasoningKey] ?? isStreaming;
+                    const reasoningOpen = expandedTools[reasoningKey] ?? (isStreaming && !st.answer);
                     // 笔记包(scenario-loop §3):流式期间不解析(文本不完整),流结束一次性切换,
                     // 避免原始 markdown → 卡片的闪烁;解析失败则保持普通 markdown 渲染
                     const parsedNote = st.answer && !isStreaming ? parseNotePackages(st.answer) : null;
@@ -812,6 +876,16 @@ export function CockpitView({
                       st.messageKind === 'final' && st.answer && !isStreaming && answerIndex >= 0
                         ? sourcesForAnswer(currentMission.steps, answerIndex)
                         : [];
+                    // 内联角标来源:流式期间即取(来源来自答复之前的步骤,已稳定;
+                    // 模型被要求以 markdown 链接引用检索结果,按 URL 匹配渲染成
+                    // 角标)。序号与收尾后的来源卡同一顺序,药丸即图例
+                    const inlineSources =
+                      (st.messageKind === 'final' || (isStreaming && st.role === 'assistant')) &&
+                      st.answer &&
+                      answerIndex >= 0
+                        ? sourcesForAnswer(currentMission.steps, answerIndex)
+                        : [];
+                    const inlineSourceIndex = new Map(inlineSources.map((s, i) => [s.url, i + 1]));
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
@@ -901,7 +975,36 @@ export function CockpitView({
                               ) : (
                                 st.answer && (
                                   <div className="prose prose-zinc prose-chat max-w-none break-words">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                                    <ReactMarkdown
+                                      remarkPlugins={[remarkGfm, remarkBreaks]}
+                                      components={{
+                                        /* 内联引用角标:模型以 markdown 链接引用检索
+                                           结果(search_web 工具描述要求),URL 命中本
+                                           轮来源集合时收成上标角标 [n](n 与底部来源
+                                           药丸同序);其余链接按普通外链渲染 */
+                                        a: ({ href, children }) => {
+                                          const num = href ? inlineSourceIndex.get(href) : undefined;
+                                          if (num !== undefined) {
+                                            return (
+                                              <a
+                                                href={href}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                title={inlineSources[num - 1].title}
+                                                className="no-underline text-blue-600 hover:text-blue-700 text-[10px] align-super"
+                                              >
+                                                [{num}]
+                                              </a>
+                                            );
+                                          }
+                                          return (
+                                            <a href={href} target="_blank" rel="noopener noreferrer">
+                                              {children}
+                                            </a>
+                                          );
+                                        },
+                                      }}
+                                    >
                                       {st.answer}
                                     </ReactMarkdown>
                                     {isStreaming && (
@@ -912,8 +1015,10 @@ export function CockpitView({
                               )
                             )}
 
-                            {/* 搜索来源卡(ChatGPT 式):编号药丸 + favicon + 域名,
-                                新标签直达原始网页;无搜索结果或流式中不渲染 */}
+                            {/* 搜索来源卡(ChatGPT 式):编号药丸 + favicon + 页面标题,
+                                新标签直达原始网页;无搜索结果或流式中不渲染。
+                                展示标题而非域名 —— 同域多结果(如一页页知乎)不再
+                                长得一模一样;域名靠 favicon + hover 提示呈现 */}
                             {searchSources.length > 0 && (
                               <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                                 {searchSources.map((src, idx) => (
@@ -922,8 +1027,8 @@ export function CockpitView({
                                     href={src.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    title={src.title}
-                                    className="flex items-center gap-1.5 max-w-[180px] px-2 py-0.5 rounded-full border border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50 text-[11px] text-zinc-600 hover:text-zinc-800 transition shadow-2xs"
+                                    title={`${src.title} · ${src.host}`}
+                                    className="flex items-center gap-1.5 max-w-[240px] px-2 py-0.5 rounded-full border border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50 text-[11px] text-zinc-600 hover:text-zinc-800 transition shadow-2xs"
                                   >
                                     {/* eslint-disable-next-line @next/next/no-img-element -- 站点 favicon 走外部域名,无需 next/image 优化 */}
                                     <img
@@ -935,7 +1040,7 @@ export function CockpitView({
                                       }}
                                     />
                                     <span className="text-zinc-400 font-mono text-[9px] flex-shrink-0">{idx + 1}</span>
-                                    <span className="truncate">{src.host}</span>
+                                    <span className="truncate">{src.title}</span>
                                   </a>
                                 ))}
                               </div>

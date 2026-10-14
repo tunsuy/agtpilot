@@ -4,6 +4,7 @@ import {
   groupBlocksIntoTurns,
   findRetryPrompt,
   isEfficiencyStep,
+  processElapsedMs,
   EFFICIENCY_STEP_PREFIX,
 } from '../cockpit-blocks';
 import type { MissionStep } from '../../types/agent';
@@ -381,5 +382,39 @@ describe('findRetryPrompt · 失败重试取词', () => {
     expect(findRetryPrompt(byTitle, 'a1')).toBe('标题即问题');
     const blank = [userStep('u1', '   '), userStep('u2', '有效问题'), finalAnswer('a1', '答')];
     expect(findRetryPrompt(blank, 'a1')).toBe('有效问题');
+  });
+});
+
+describe('processElapsedMs · 轮过程耗时(整轮折叠摘要行)', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('墙钟口径:首步开始 → 末步结束,间隙计入(t1→t2 中间空档 8s 也在结果里)', () => {
+    const steps = [
+      step({ id: 't1', tool: 'web_search', startedAt: NOW, duration: '2000ms' }),
+      // t2 比 t1 晚 10s 开始,组内 gap = 8s
+      step({ id: 't2', tool: 'browser_open', startedAt: NOW + 10_000, duration: '4000ms' }),
+    ];
+    expect(processElapsedMs(steps, NOW)).toBe(14_000);
+  });
+
+  it('运行中的步骤以 now 兜底:流式收起瞬间也能给出实时读数', () => {
+    const steps = [
+      step({ id: 't1', tool: 'web_search', startedAt: NOW, duration: '1500ms' }),
+      step({ id: 't2', tool: 'sandbox_exec', startedAt: NOW + 2_000, status: 'RUNNING' }),
+    ];
+    expect(processElapsedMs(steps, NOW + 6_000)).toBe(6_000);
+  });
+
+  it('全组缺 startedAt 时退回 duration 求和', () => {
+    const steps = [
+      step({ id: 't1', tool: 'web_search', duration: '2000ms' }),
+      step({ id: 't2', tool: 'browser_open', duration: '3000ms' }),
+    ];
+    expect(processElapsedMs(steps, NOW)).toBe(5_000);
+  });
+
+  it('无任何时间数据 → undefined(摘要行不显示耗时段)', () => {
+    expect(processElapsedMs([toolStep('t1', 'web_search')], NOW)).toBeUndefined();
+    expect(processElapsedMs([], NOW)).toBeUndefined();
   });
 });

@@ -30,6 +30,39 @@ export function isEfficiencyStep(step: MissionStep): boolean {
   return Boolean(step.id?.startsWith(EFFICIENCY_STEP_PREFIX));
 }
 
+/** duration("3200ms") → 毫秒数;无或非法返回 undefined(与 formatActivityDuration 同解析口径) */
+function parseDurationMs(duration?: string): number | undefined {
+  if (!duration) return undefined;
+  const ms = Number.parseInt(String(duration).replace(/[^\d]/g, ''), 10);
+  return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+}
+
+/**
+ * 整轮过程折叠摘要行的耗时:首步 startedAt → 末步结束的墙钟时间 —— 思考、
+ * 检索间隙都计入,比逐行 duration 求和更贴近用户体感;运行中的步骤取
+ * now 兜底,流式收起瞬间也能给出实时读数。全组缺 startedAt 时退回
+ * duration 求和,再无数据返回 undefined(摘要行不显示耗时段)。
+ */
+export function processElapsedMs(steps: MissionStep[], now = Date.now()): number | undefined {
+  const withStart = steps.filter((s) => typeof s.startedAt === 'number');
+  if (withStart.length === 0) {
+    const summed = steps.reduce((n, s) => n + (parseDurationMs(s.duration) ?? 0), 0);
+    return summed > 0 ? summed : undefined;
+  }
+  let start = Infinity;
+  let end = -Infinity;
+  for (const s of steps) {
+    if (typeof s.startedAt !== 'number') continue;
+    start = Math.min(start, s.startedAt);
+    const ms = parseDurationMs(s.duration);
+    const stepEnd =
+      ms !== undefined ? s.startedAt + ms : s.status === 'RUNNING' ? Math.max(s.startedAt, now) : s.startedAt;
+    end = Math.max(end, stepEnd);
+  }
+  const elapsed = end - start;
+  return Number.isFinite(elapsed) && elapsed > 0 ? elapsed : undefined;
+}
+
 export function splitStepsIntoBlocks(steps: MissionStep[]): CockpitBlocks {
   const blocks: CockpitBlock[] = [];
   const effNotes: string[] = [];

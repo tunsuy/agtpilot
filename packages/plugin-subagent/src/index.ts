@@ -50,12 +50,37 @@ const PROVIDER =
   process.env.AGTPILOT_SUBAGENT_PROVIDER || process.env.AGTPILOT_FAST_PROVIDER || 'deepseek';
 const MODEL = process.env.AGTPILOT_SUBAGENT_MODEL || process.env.AGTPILOT_FAST_MODEL || 'deepseek-chat';
 const WHITELIST_OVERRIDE = splitList(process.env.AGTPILOT_SUBAGENT_WHITELIST);
-// MCP 双钥匙(2026-10-14 提前落地,原 M3 项):
-// 服务器白名单 = 人工钥匙(默认空 = 子 agent 不用任何 MCP 工具);
-// 机器钥匙 = plugin-mcp 按服务器 annotations 注册的 readOnly 声明。两者同时满足才放行。
-const MCP_SERVERS = splitList(process.env.AGTPILOT_SUBAGENT_MCP_SERVERS);
-// 逃生口:人工列出 MCP 工具名前缀(如 mcp_newsnow_),用于无注解服务器,部署者自担只读责任
-const MCP_ALLOW_TOOLS = splitList(process.env.AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS);
+
+// ---- MCP 双钥匙(2026-10-14 提前落地,原 M3 项;负责人要求默认开放工坊检索连接器)----
+// 机器钥匙 = plugin-mcp 按服务器 annotations 注册的 readOnly 声明;
+// 人工钥匙 = 下面的服务器白名单。两者同时满足才放行。
+// 默认名单 = 工坊调研链涉及的检索类连接器;行情类(tushare/alphavantage/coingecko/a_stock)
+// 依红线默认不开(数字必须主循环直拉)。env 设置即整体覆盖;设 off/none = 全关。
+export const DEFAULT_MCP_SERVERS: readonly string[] = [
+  'github_mcp',
+  'huggingface',
+  'openalex',
+  'alphaxiv',
+  'deepwiki',
+];
+// 逃生口默认项(不要求 readOnly 声明,人工担责)——以 2026-10-14 annotations-report.mjs
+// 实测记录为背书:deepwiki 全部 3 个工具(ask/read 类)、newsnow 全部 1 个工具(拉热榜)均为只读,
+// 但两台服务器都不带 annotations,双钥匙机器钥匙缺席,只能走前缀放行。
+export const DEFAULT_MCP_ALLOW_TOOLS: readonly string[] = ['mcp_deepwiki_', 'mcp_newsnow_'];
+
+/** env 列表解析:未设置 → 内置默认;off/none → 空(全关);其余 → 逗号分隔覆盖 */
+function listWithDefault(raw: string | undefined, defaults: readonly string[]): string[] {
+  const v = (raw ?? '').trim();
+  if (v === '') return [...defaults];
+  if (/^(off|none)$/i.test(v)) return [];
+  return splitList(raw);
+}
+
+const MCP_SERVERS = listWithDefault(process.env.AGTPILOT_SUBAGENT_MCP_SERVERS, DEFAULT_MCP_SERVERS);
+const MCP_ALLOW_TOOLS = listWithDefault(
+  process.env.AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS,
+  DEFAULT_MCP_ALLOW_TOOLS,
+);
 
 // ---- 插件配置(app-kit 装配时传入)----
 
@@ -66,9 +91,9 @@ export interface SubagentPluginConfig {
   listTools?: () => ToolDefinition[];
   /** 白名单覆盖(仍受注册表 readOnly 硬校验);缺省 env → 内置名单 */
   whitelist?: string[];
-  /** MCP 服务器白名单(双钥匙的人工钥匙);缺省 env AGTPILOT_SUBAGENT_MCP_SERVERS → 空 */
+  /** MCP 服务器白名单(双钥匙的人工钥匙);缺省 env AGTPILOT_SUBAGENT_MCP_SERVERS → 内置检索连接器名单 */
   mcpServers?: string[];
-  /** MCP 工具名前缀逃生口;缺省 env AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS → 空 */
+  /** MCP 工具名前缀逃生口;缺省 env AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS → 内置名单(deepwiki/newsnow,实测背书) */
   mcpAllowTools?: string[];
   maxSteps?: number;
   maxTokens?: number;

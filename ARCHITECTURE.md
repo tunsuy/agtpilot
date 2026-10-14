@@ -128,5 +128,5 @@ flowchart TD
 | `AGTPILOT_SUBAGENT_PROVIDER` / `_MODEL` | 继承 `AGTPILOT_FAST_*` | 子 agent 专用模型（per-call 覆盖，不动 router 全局档位） |
 | `AGTPILOT_SUBAGENT_REPORT_LIMIT` | 8000 | final report 字符上限，超限截断并标 `truncated` |
 | `AGTPILOT_SUBAGENT_WHITELIST` | 内置名单 | 只读白名单覆盖（逗号分隔；仍受注册表 `readOnly` 声明硬校验） |
-| `AGTPILOT_SUBAGENT_MCP_SERVERS` | 空 | MCP 服务器白名单（逗号分隔服务器名）；双钥匙 = 白名单服务器 ∩ `annotations.readOnlyHint` 只读声明；空 = 子 agent 不使用任何 MCP 工具 |
-| `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` | 空 | MCP 工具名前缀逃生口（如 `mcp_newsnow_`）；用于无注解服务器，不要求 readOnly 声明，部署者担责 |
+| `AGTPILOT_SUBAGENT_MCP_SERVERS` | `github_mcp,huggingface,openalex,alphaxiv,deepwiki` | MCP 服务器白名单（人工钥匙）；与 `annotations.readOnlyHint` 只读声明构成双钥匙；`off` = 子 agent 不使用任何 MCP 工具；行情类连接器依红线不入默认名单 |
+| `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` | `mcp_deepwiki_,mcp_newsnow_` | MCP 工具名前缀逃生口（无注解服务器，不要求 readOnly 声明）；默认项以 2026-10-14 `annotations-report.mjs` 实测记录为背书；`off` = 全关 |

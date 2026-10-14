@@ -820,7 +820,7 @@ export function ConnectorsView({
                         ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
                         : 'bg-zinc-900 hover:bg-zinc-800 text-white'
                     }`}
-                    title="在服务方页面输一次码即完成授权,token 不过期(推荐)"
+                    title="在服务方页面输一次码即完成授权,token 自动续期(推荐)"
                   >
                     <Smartphone className="h-3 w-3" />
                     <span>{app.status === 'connected' ? '重新设备码授权' : '设备码授权'}</span>
@@ -1294,7 +1294,7 @@ export function ConnectorsView({
         </div>
       )}
 
-      {/* 设备码授权弹窗（OAuth 2.0 Device Grant）：输一次码即授权,token 不过期 */}
+      {/* 设备码授权弹窗（OAuth 2.0 Device Grant）：输一次码即授权,token 自动续期 */}
       {deviceAuth && (
         <div className="fixed inset-0 z-[80] bg-black/30 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
           <div className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white border border-zinc-200 p-5 sm:p-6 shadow-xl animate-fadeIn space-y-4 max-h-[92dvh] overflow-y-auto mb-[env(safe-area-inset-bottom,0px)]">
@@ -1305,7 +1305,7 @@ export function ConnectorsView({
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-zinc-900">授权 {deviceAuth.connectorName}</h3>
-                  <p className="text-xs text-zinc-500 mt-0.5">设备码授权：token 不过期，免换 key</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">设备码授权：token 自动续期，免换 key</p>
                 </div>
               </div>
               <button onClick={closeDeviceAuth} className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md">
@@ -1379,7 +1379,7 @@ export function ConnectorsView({
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-zinc-900">授权成功，工具已挂载</p>
-                  <p className="text-xs text-zinc-500 mt-1">OAuth token 默认不过期，无需再换 key</p>
+                  <p className="text-xs text-zinc-500 mt-1">OAuth token 自动续期，无需再换 key</p>
                 </div>
                 <button
                   onClick={closeDeviceAuth}

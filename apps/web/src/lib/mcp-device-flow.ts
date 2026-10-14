@@ -1,5 +1,5 @@
-import { getMcpAuth, saveMcpAuth, saveUserConnector } from './user-store';
-import type { McpConnectorDef } from './mcp-connectors';
+import { getMcpAuth, saveMcpAuth, saveUserConnector, getUserConnectors } from './user-store';
+import { MCP_CONNECTOR_DEFS, type McpConnectorDef } from './mcp-connectors';
 
 /**
  * MCP 连接器「设备码授权」通道（OAuth 2.0 Device Grant, RFC 8628）
@@ -149,6 +149,9 @@ export async function pollDeviceFlow(
   if (typeof body.access_token === 'string' && body.access_token) {
     saveUserConnector(userId, def.tokenEnvVar!, body.access_token);
     clearDeviceFlow(userId, def.id);
+    // 新建 OAuth App 默认短期 token(2026-08-14 起 access 8h):响应带 refresh_token 时
+    // 落续期状态,ensureDeviceTokenFresh 负责临期静默换新;长效 token 无此字段,自动 no-op
+    saveRefreshState(userId, def.id, body);
     const t: string = body.access_token;
     return { status: 'success', keyMasked: t.length > 8 ? `****${t.slice(-4)}` : '****' };
   }
@@ -190,4 +193,164 @@ function clearDeviceFlow(userId: string, connectorId: string): void {
   if (!record?.deviceFlow) return;
   const { deviceFlow: _drop, ...rest } = record;
   saveMcpAuth(userId, connectorId, { ...rest, updatedAt: Date.now() });
+}
+
+// ---- 短期 token 自动续期（GitHub 新建 OAuth App 默认 access 8h + refresh 6 个月单次轮换）----
+
+/** access token 剩余有效期低于该值时,在任务派发等热路径上提前静默换新 */
+const REFRESH_MARGIN_MS = 30 * 60 * 1000;
+/** 响应缺 expires_in 时的保守回退(GitHub 短期 token 固定 8h) */
+const DEFAULT_EXPIRES_IN_S = 8 * 3600;
+/** 同一用户+连接器的在途刷新;refresh token 单次轮换,并发双刷会让第二个必失败 */
+const refreshLocks = new Map<string, Promise<RefreshResult>>();
+
+export interface RefreshResult {
+  /** 本次调用是否真的换发了新 access token(写入 configs,fingerprint 变化触发重连) */
+  refreshed: boolean;
+  error?: string;
+}
+
+/** token 响应带 refresh_token/expires_in → 落续期状态;长效 token(无字段)则清掉旧状态 */
+function saveRefreshState(userId: string, connectorId: string, body: any): void {
+  const record = getMcpAuth(userId, connectorId) || {};
+  if (typeof body.refresh_token === 'string' && body.refresh_token) {
+    const expiresIn = Number(body.expires_in) > 0 ? Number(body.expires_in) : DEFAULT_EXPIRES_IN_S;
+    saveMcpAuth(userId, connectorId, {
+      ...record,
+      tokenRefresh: {
+        accessToken: String(body.access_token),
+        refreshToken: body.refresh_token,
+        expiresAt: Date.now() + expiresIn * 1000,
+      },
+      updatedAt: Date.now(),
+    });
+    return;
+  }
+  if (record.tokenRefresh) {
+    const { tokenRefresh: _drop, ...rest } = record;
+    saveMcpAuth(userId, connectorId, { ...rest, updatedAt: Date.now() });
+  }
+}
+
+/**
+ * 临期则静默续期设备码换来的 token。设计要点:
+ * - 无 tokenRefresh(长效 token / 粘贴的 PAT)→ 零出站请求直接返回;
+ * - 凭证漂移检测:configs 里的值已不是本记录签发的 access token(用户改贴了 PAT /
+ *   重新走过授权)→ 清掉续期状态,绝不覆盖用户手动配置的凭证;
+ * - 刷新成功:新 access token 写入 tokenEnvVar 键(消费链路零改动),新 refresh token
+ *   轮换落盘;MCP 连接 fingerprint 含 header 哈希,下次 syncUserServers 自动重建连接;
+ * - refresh token 已死(单次轮换被用掉/6 个月未用过期):清续期状态,保留现有 access
+ *   token 到自然过期,连接报错浮出 lastError,用户重新设备码授权即可;
+ * - 网络抖动:保留状态下次再试(临期窗口 30min,任务派发频次内有多次机会)。
+ */
+export async function ensureDeviceTokenFresh(
+  userId: string,
+  def: McpConnectorDef,
+  fetchImpl: FetchLike = fetch
+): Promise<RefreshResult> {
+  if (!def.deviceFlow || !def.tokenEnvVar) return { refreshed: false };
+  const record = getMcpAuth(userId, def.id);
+  const tr = record?.tokenRefresh;
+  if (!tr?.refreshToken) return { refreshed: false };
+
+  // 凭证漂移:configs 当前值不是本记录签发的 token → 用户已换凭证,放弃续期权
+  const current = (getUserConnectors(userId).configs[def.tokenEnvVar] || '').trim();
+  if (current !== tr.accessToken) {
+    const { tokenRefresh: _drop, ...rest } = record!;
+    saveMcpAuth(userId, def.id, { ...rest, updatedAt: Date.now() });
+    return { refreshed: false };
+  }
+
+  if (tr.expiresAt - Date.now() > REFRESH_MARGIN_MS) return { refreshed: false };
+
+  const lockKey = `${userId}::${def.id}`;
+  const inflight = refreshLocks.get(lockKey);
+  if (inflight) return inflight;
+  const run = doRefresh(userId, def, tr, fetchImpl).finally(() => {
+    if (refreshLocks.get(lockKey) === run) refreshLocks.delete(lockKey);
+  });
+  refreshLocks.set(lockKey, run);
+  return run;
+}
+
+async function doRefresh(
+  userId: string,
+  def: McpConnectorDef,
+  tr: NonNullable<import('./user-store').McpAuthRecord['tokenRefresh']>,
+  fetchImpl: FetchLike
+): Promise<RefreshResult> {
+  const df = def.deviceFlow!;
+  let clientId: string;
+  let clientSecret: string;
+  try {
+    ({ clientId, clientSecret } = readEnv(def));
+  } catch (e: any) {
+    // env 被摘掉:保留状态(可能只是暂时缺失),报错给日志
+    return { refreshed: false, error: e?.message || String(e) };
+  }
+  let body: any;
+  try {
+    body = await postForm(
+      df.tokenUrl,
+      {
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'refresh_token',
+        refresh_token: tr.refreshToken,
+      },
+      fetchImpl
+    );
+  } catch (e: any) {
+    return { refreshed: false, error: `网络异常,保留状态待下次重试: ${e?.message || e}` };
+  }
+
+  if (typeof body.access_token === 'string' && body.access_token) {
+    saveUserConnector(userId, def.tokenEnvVar!, body.access_token);
+    const expiresIn = Number(body.expires_in) > 0 ? Number(body.expires_in) : DEFAULT_EXPIRES_IN_S;
+    const rec = getMcpAuth(userId, def.id) || {};
+    saveMcpAuth(userId, def.id, {
+      ...rec,
+      tokenRefresh: {
+        accessToken: body.access_token,
+        // GitHub 轮换制:响应必带新 refresh_token;防御性回退旧值
+        refreshToken: String(body.refresh_token || tr.refreshToken),
+        expiresAt: Date.now() + expiresIn * 1000,
+      },
+      updatedAt: Date.now(),
+    });
+    return { refreshed: true };
+  }
+
+  const err = String(body.error || '');
+  if (err) {
+    // bad_refresh_token / unauthorized_client 等:续期链已死,清状态防止每次任务空转;
+    // 现有 access token 保留(可能还没过期),真过期后连接错误自然浮出,引导重新授权
+    const rec = getMcpAuth(userId, def.id);
+    if (rec?.tokenRefresh) {
+      const { tokenRefresh: _drop, ...rest } = rec;
+      saveMcpAuth(userId, def.id, { ...rest, updatedAt: Date.now() });
+    }
+    return { refreshed: false, error: `refresh 失败(${err}),已清续期状态,需重新设备码授权` };
+  }
+  return { refreshed: false, error: 'refresh 响应异常(无 access_token 且无 error)' };
+}
+
+/**
+ * 任务派发/重启预热/手动重连前的统一入口:遍历该用户所有设备码连接器临期续期。
+ * 永不 throw(热路径上续期失败不阻断任务,连接错误走既有 lastError 通道浮出)。
+ */
+export async function ensureDeviceTokensFresh(userId: string, fetchImpl: FetchLike = fetch): Promise<void> {
+  for (const def of MCP_CONNECTOR_DEFS) {
+    if (!def.deviceFlow || !def.tokenEnvVar) continue;
+    try {
+      const r = await ensureDeviceTokenFresh(userId, def, fetchImpl);
+      if (r.refreshed) {
+        console.info(`[mcp-device-flow] ${def.id} access token 已自动续期(用户 ${userId})`);
+      } else if (r.error) {
+        console.warn(`[mcp-device-flow] ${def.id} 续期未完成: ${r.error}`);
+      }
+    } catch (e: any) {
+      console.warn(`[mcp-device-flow] ${def.id} 续期异常: ${e?.message || e}`);
+    }
+  }
 }

@@ -51,8 +51,15 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
     if (def.authType === 'token') {
       const cred = (configs[def.tokenEnvVar!] || '').trim();
       connected = Boolean(cred);
-      // gho_ 前缀 = 设备码授权换来的 OAuth token（不过期）；其余按普通粘贴凭证掩码
-      if (cred) keyMasked = cred.startsWith('gho_') ? `设备码已授权 ${maskSecret(cred)}` : maskSecret(cred);
+      // gho_ 前缀 = 设备码授权换来的 OAuth token(短期 token 会自动续期);其余按普通粘贴凭证掩码
+      if (cred) {
+        if (cred.startsWith('gho_')) {
+          const autoRenew = Boolean(getMcpAuth(userId, def.id)?.tokenRefresh?.refreshToken);
+          keyMasked = `设备码已授权 ${maskSecret(cred)}${autoRenew ? ' · 自动续期' : ''}`;
+        } else {
+          keyMasked = maskSecret(cred);
+        }
+      }
     } else if (def.authType === 'oauth') {
       const record = getMcpAuth(userId, def.id);
       connected = Boolean(record?.tokens?.access_token);
@@ -122,6 +129,9 @@ async function resyncUserServers(userId: string) {
     await backend.whenReady();
     const mcpSvc = backend.mcp;
     if (mcpSvc?.syncUserServers) {
+      // 手动重连前也过一遍续期(临期的设备码 token 先换新再建连)
+      const { ensureDeviceTokensFresh } = await import('@/lib/mcp-device-flow');
+      await ensureDeviceTokensFresh(userId);
       const { buildUserMcpServers } = await import('@/lib/mcp-connectors');
       const servers = buildUserMcpServers(userId);
       await mcpSvc.syncUserServers(userId, servers);

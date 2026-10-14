@@ -233,11 +233,14 @@ class AgentBackend {
     try {
       const { getAllUsersData } = require('@/lib/user-store');
       const { buildUserMcpServers } = require('@/lib/mcp-connectors');
+      const { ensureDeviceTokensFresh } = require('@/lib/mcp-device-flow');
       const mcpSvc = this.mcp;
       if (!mcpSvc?.syncUserServers) return;
       let ready = 0;
       let failed = 0;
       for (const user of getAllUsersData()) {
+        // 重启后先续期临期的设备码 token(长效 token/无记录时零开销 no-op)
+        await ensureDeviceTokensFresh(user.userId);
         const servers = buildUserMcpServers(user.userId);
         if (servers.length === 0) continue;
         try {
@@ -1413,6 +1416,10 @@ class AgentBackend {
             const mcpSvc = this.mcp;
 
             if (mcpSvc?.syncUserServers) {
+              // 短期 token 惰性续期:设备码换的 access token(GitHub 新 App 默认 8h)临期
+              // 先静默换新 → 下面 buildUserMcpServers 读到新值 → fingerprint 变化自动重连
+              const { ensureDeviceTokensFresh } = await import('@/lib/mcp-device-flow');
+              await ensureDeviceTokensFresh(uid);
               const servers = buildUserMcpServers(uid);
               // 按服务器粒度注册 MCP 工具路由：prompt 点名的数据源（"知乎热榜"、
               // "热榜"、"推特"…）只挂对应服务器，替代旧版"多源检索"一网打尽

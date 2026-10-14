@@ -206,6 +206,20 @@ export interface McpAuthRecord {
     /** 轮询间隔(s);GitHub slow_down 时 +5 并回写 */
     interval: number;
   };
+  /**
+   * 设备码/OAuth token 的续期状态。GitHub 自 2026-08-14 起对**新建** OAuth App 默认签发
+   * 短期 token(access 8h + refresh 6 个月单次轮换,需 scope 带 offline_access);
+   * 老 App/关闭 expiring tokens 的 App 仍发长效 token(响应无 refresh_token,此字段为空)。
+   * ensureDeviceTokenFresh 在 access 临期时用 refresh_token 静默换新并轮换存储。
+   */
+  tokenRefresh?: {
+    /** 当前 access token 原文(加密记录内);用于检测凭证是否已被用户手动替换(如改贴 PAT) */
+    accessToken: string;
+    /** 单次轮换的 refresh token(ghr_);用过即废,新值随响应回写 */
+    refreshToken: string;
+    /** 当前 access token 过期时间戳(ms) */
+    expiresAt: number;
+  };
   updatedAt?: number;
 }
 

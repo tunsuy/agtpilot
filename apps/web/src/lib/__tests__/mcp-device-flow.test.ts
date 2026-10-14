@@ -77,6 +77,8 @@ describe('目录配置回归(github_mcp)', () => {
     // scope 默认对齐官方 github-mcp-server README 的 code+devinfo 组合
     expect(df.scope).toContain('repo');
     expect(df.scope).toContain('read:org');
+    // GitHub 2026-08-14 起新建 App 默认短期 token(8h),offline_access 换 refresh token 供自动续期
+    expect(df.scope).toContain('offline_access');
   });
 
   it('client_secret 不出现在目录任何字段(只允许 env 变量名)', () => {
@@ -234,6 +236,8 @@ describe('pollDeviceFlow(轮询换 token)', () => {
     const cred = us.getUserConnectors(UID).configs['MCP_GITHUB_PAT'];
     expect(cred).toBe('gho_AAAAAAAAAAAAAAAAAAAA9999');
     expect(us.getMcpAuth(UID, 'github_mcp')?.deviceFlow).toBeUndefined();
+    // 长效 token(响应无 refresh_token)→ 不落续期状态
+    expect(us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh).toBeUndefined();
 
     // 出站:token 端点 + device_code grant + secret 只在服务端出站体里
     expect(fetchCalls[0].url).toBe('https://github.com/login/oauth/access_token');
@@ -304,5 +308,171 @@ describe('cancelDeviceFlow(用户关弹窗)', () => {
   it('无中间态时调用为无害 no-op', () => {
     us.deleteMcpAuth(UID, 'github_mcp');
     expect(() => dfl.cancelDeviceFlow(UID, 'github_mcp')).not.toThrow();
+  });
+});
+
+/**
+ * 短期 token 自动续期。GitHub 2026-08-14 起对新建 OAuth App 默认签发
+ * access 8h + refresh 6 个月单次轮换(需 offline_access);长效 token 无 refresh_token,
+ * 续期逻辑必须自动 no-op(零出站请求)。
+ */
+describe('短期 token 自动续期(ensureDeviceTokenFresh)', () => {
+  beforeAll(() => {
+    process.env[ENV_ID] = 'iv1.test-id';
+    process.env[ENV_SECRET] = 'test-secret';
+  });
+
+  /** 布置「设备码已换到 token」的落盘态:configs 存 access,记录存续期状态 */
+  function seed(opts?: { accessToken?: string; refreshToken?: string; expiresAt?: number }) {
+    const accessToken = opts?.accessToken ?? 'gho_CUR1CUR1CUR1CUR10001';
+    us.saveUserConnector(UID, 'MCP_GITHUB_PAT', accessToken);
+    us.saveMcpAuth(UID, 'github_mcp', {
+      tokenRefresh: {
+        accessToken,
+        refreshToken: opts?.refreshToken ?? 'ghr_ROTATE1',
+        expiresAt: opts?.expiresAt ?? Date.now() + 60_000, // 临期(<30min 阈值)
+      },
+    });
+  }
+
+  it('poll success 响应带 refresh_token/expires_in → 落续期状态', async () => {
+    us.saveMcpAuth(UID, 'github_mcp', {
+      deviceFlow: { deviceCode: 'DC-R', userCode: 'R-1', verificationUri: 'https://github.com/login/device', expiresAt: Date.now() + 600_000, interval: 5 },
+    });
+    resetMock();
+    fetchQueue.push({ body: { access_token: 'gho_SHORT1111', refresh_token: 'ghr_R1', expires_in: 28800, token_type: 'bearer' } });
+    const r = await dfl.pollDeviceFlow(UID, githubDef(), mockFetch);
+    expect(r.status).toBe('success');
+    const tr = us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh;
+    expect(tr?.refreshToken).toBe('ghr_R1');
+    expect(tr?.accessToken).toBe('gho_SHORT1111');
+    expect(tr!.expiresAt).toBeGreaterThan(Date.now() + 28_000 * 1000);
+    expect(us.getMcpAuth(UID, 'github_mcp')?.deviceFlow).toBeUndefined();
+  });
+
+  it('重新授权拿到长效 token(无 refresh_token)→ 旧续期状态被清掉', async () => {
+    seed();
+    us.saveMcpAuth(UID, 'github_mcp', {
+      tokenRefresh: us.getMcpAuth(UID, 'github_mcp')!.tokenRefresh,
+      deviceFlow: { deviceCode: 'DC-L', userCode: 'L-1', verificationUri: 'https://github.com/login/device', expiresAt: Date.now() + 600_000, interval: 5 },
+    });
+    resetMock();
+    fetchQueue.push({ body: { access_token: 'gho_LONGLIVED0001', token_type: 'bearer' } });
+    const r = await dfl.pollDeviceFlow(UID, githubDef(), mockFetch);
+    expect(r.status).toBe('success');
+    expect(us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh).toBeUndefined();
+  });
+
+  it('无续期状态(长效 token / 粘贴 PAT)→ no-op 且零出站请求', async () => {
+    us.deleteMcpAuth(UID, 'github_mcp');
+    us.saveUserConnector(UID, 'MCP_GITHUB_PAT', 'github_pat_11ABCD');
+    resetMock();
+    const r = await dfl.ensureDeviceTokenFresh(UID, githubDef(), mockFetch);
+    expect(r).toEqual({ refreshed: false });
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  it('未临期(剩余 > 30min)→ no-op 且零出站请求', async () => {
+    seed({ expiresAt: Date.now() + 4 * 3600 * 1000 });
+    resetMock();
+    const r = await dfl.ensureDeviceTokenFresh(UID, githubDef(), mockFetch);
+    expect(r).toEqual({ refreshed: false });
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  it('临期 → refresh grant 换新:新 access 写入 MCP_GITHUB_PAT,refresh token 轮换落盘', async () => {
+    seed();
+    resetMock();
+    fetchQueue.push({ body: { access_token: 'gho_NEW2NEW2NEW20002', refresh_token: 'ghr_ROTATE2', expires_in: 28800, token_type: 'bearer' } });
+    const r = await dfl.ensureDeviceTokenFresh(UID, githubDef(), mockFetch);
+    expect(r).toEqual({ refreshed: true });
+
+    // 消费链路零改动:新 token 就在粘贴凭证同一个键里(fingerprint 变化 → sync 自动重连)
+    expect(us.getUserConnectors(UID).configs['MCP_GITHUB_PAT']).toBe('gho_NEW2NEW2NEW20002');
+    const tr = us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh;
+    expect(tr?.refreshToken).toBe('ghr_ROTATE2');
+    expect(tr?.accessToken).toBe('gho_NEW2NEW2NEW20002');
+
+    // 出站:refresh grant + client_secret 只在服务端出站体;返回值不含任何 token 原文
+    expect(fetchCalls[0].url).toBe('https://github.com/login/oauth/access_token');
+    const bodyStr = String(fetchCalls[0].init.body);
+    expect(bodyStr).toContain('grant_type=refresh_token');
+    expect(bodyStr).toContain('refresh_token=ghr_ROTATE1');
+    expect(bodyStr).toContain('client_secret=test-secret');
+    expect(JSON.stringify(r)).not.toContain('gho_');
+    expect(JSON.stringify(r)).not.toContain('ghr_');
+  });
+
+  it('刷新响应未带新 refresh_token → 防御性沿用旧值(GitHub 轮换制下理论不发生)', async () => {
+    seed();
+    resetMock();
+    fetchQueue.push({ body: { access_token: 'gho_NEW3NEW3NEW30003', expires_in: 28800 } });
+    const r = await dfl.ensureDeviceTokenFresh(UID, githubDef(), mockFetch);
+    expect(r.refreshed).toBe(true);
+    expect(us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh?.refreshToken).toBe('ghr_ROTATE1');
+  });
+
+  it('凭证漂移(用户改贴 PAT)→ 清续期状态、零出站、绝不覆盖用户凭证', async () => {
+    seed(); // 记录里 accessToken 是 gho_CUR1...
+    us.saveUserConnector(UID, 'MCP_GITHUB_PAT', 'github_pat_USER_OWNS'); // 用户手动换贴 PAT
+    resetMock();
+    const r = await dfl.ensureDeviceTokenFresh(UID, githubDef(), mockFetch);
+    expect(r).toEqual({ refreshed: false });
+    expect(fetchCalls).toHaveLength(0);
+    expect(us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh).toBeUndefined();
+    expect(us.getUserConnectors(UID).configs['MCP_GITHUB_PAT']).toBe('github_pat_USER_OWNS');
+  });
+
+  it('refresh 链已死(bad_refresh_token)→ 清续期状态,现有 access token 保留到自然过期', async () => {
+    seed();
+    resetMock();
+    fetchQueue.push({ body: { error: 'bad_refresh_token', error_description: 'refresh token expired' } });
+    const r = await dfl.ensureDeviceTokenFresh(UID, githubDef(), mockFetch);
+    expect(r.refreshed).toBe(false);
+    expect(r.error).toContain('bad_refresh_token');
+    expect(us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh).toBeUndefined();
+    expect(us.getUserConnectors(UID).configs['MCP_GITHUB_PAT']).toBe('gho_CUR1CUR1CUR1CUR10001');
+  });
+
+  it('网络抖动 → 保留状态待下次重试(临期窗口内任务派发有多次机会)', async () => {
+    seed();
+    resetMock();
+    fetchQueue.push({ reject: true });
+    const r = await dfl.ensureDeviceTokenFresh(UID, githubDef(), mockFetch);
+    expect(r.refreshed).toBe(false);
+    expect(r.error).toContain('网络异常');
+    expect(us.getMcpAuth(UID, 'github_mcp')?.tokenRefresh?.refreshToken).toBe('ghr_ROTATE1');
+  });
+
+  it('并发调用去重:refresh token 单次轮换,双刷会让第二个必失败 → 只出站一次', async () => {
+    seed();
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    const calls: string[] = [];
+    const gatedFetch = (async (url: string) => {
+      calls.push(String(url));
+      await gate;
+      return { ok: true, status: 200, json: async () => ({ access_token: 'gho_LOCK1', refresh_token: 'ghr_LOCK2', expires_in: 28800 }) };
+    }) as any;
+    const p1 = dfl.ensureDeviceTokenFresh(UID, githubDef(), gatedFetch);
+    const p2 = dfl.ensureDeviceTokenFresh(UID, githubDef(), gatedFetch);
+    release();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(calls).toHaveLength(1);
+    expect(r1.refreshed).toBe(true);
+    expect(r2.refreshed).toBe(true); // 共享同一在途结果
+  });
+
+  it('ensureDeviceTokensFresh(任务派发/预热统一入口)→ 遍历目录完成续期,永不 throw', async () => {
+    seed();
+    resetMock();
+    fetchQueue.push({ body: { access_token: 'gho_WRAP1WRAP10004', refresh_token: 'ghr_WRAP2', expires_in: 28800 } });
+    await dfl.ensureDeviceTokensFresh(UID, mockFetch);
+    expect(us.getUserConnectors(UID).configs['MCP_GITHUB_PAT']).toBe('gho_WRAP1WRAP10004');
+    // 无续期状态的用户调用为无害 no-op
+    us.deleteMcpAuth(UID, 'github_mcp');
+    resetMock();
+    await expect(dfl.ensureDeviceTokensFresh(UID, mockFetch)).resolves.toBeUndefined();
+    expect(fetchCalls).toHaveLength(0);
   });
 });

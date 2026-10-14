@@ -340,7 +340,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     icon: 'Github',
     category: 'Engineering',
     description:
-      'GitHub 官方托管 MCP：仓库/Issue/PR 查询与操作、代码搜索、Actions 状态。推荐「设备码授权」（github.com/login/device 输一次码,token 不过期,免换 key）；也支持粘贴 Fine-grained PAT（注意 PAT 有强制到期日）。',
+      'GitHub 官方托管 MCP：仓库/Issue/PR 查询与操作、代码搜索、Actions 状态。推荐「设备码授权」（github.com/login/device 输一次码,token 自动续期,免换 key）；也支持粘贴 Fine-grained PAT（注意 PAT 有强制到期日）。',
     authType: 'token',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["github"],
@@ -353,14 +353,16 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
       tokenUrl: 'https://github.com/login/oauth/access_token',
       clientIdEnv: 'AGTPILOT_GITHUB_OAUTH_CLIENT_ID',
       clientSecretEnv: 'AGTPILOT_GITHUB_OAUTH_SECRET',
-      // 官方 github-mcp-server README 设备码示例的 code+devinfo 组合
-      scope: 'repo read:org read:user user:email workflow',
+      // 官方 github-mcp-server README 设备码示例的 code+devinfo 组合;offline_access 用于
+      // 新建 OAuth App 的默认短期 token(2026-08-14 起 access 8h)换取 refresh token(6 个月轮换),
+      // 由 ensureDeviceTokenFresh 自动续期。未启用 expiring tokens 的 App 会忽略该 scope。
+      scope: 'repo read:org read:user user:email workflow offline_access',
       scopeEnv: 'AGTPILOT_GITHUB_OAUTH_SCOPE',
       verificationUri: 'https://github.com/login/device',
     },
     quickAuthUrl: 'https://github.com/settings/personal-access-tokens/new',
     authHint:
-      '推荐用「设备码授权」：点按钮后把页面显示的 8 位码填到 github.com/login/device（手机/电脑均可），确认即完成，token 不过期。备用方式——Fine-grained PAT：GitHub → Settings → Developer settings → Fine-grained personal access tokens → Generate new token，按需勾选仓库与权限（读取选 Contents: Read / Issues: Read / Pull requests: Read，需写操作再勾选 Write），生成后粘贴到下方；注意 GitHub 强制 PAT 带到期日（最长 1 年），到期需重新生成。',
+      '推荐用「设备码授权」：点按钮后把页面显示的 8 位码填到 github.com/login/device（手机/电脑均可），确认即完成，token 自动续期、无需再换 key。备用方式——Fine-grained PAT：GitHub → Settings → Developer settings → Fine-grained personal access tokens → Generate new token，按需勾选仓库与权限（读取选 Contents: Read / Issues: Read / Pull requests: Read，需写操作再勾选 Write），生成后粘贴到下方；注意 GitHub 强制 PAT 带到期日（最长 1 年），到期需重新生成。',
     docUrl: 'https://github.com/github/github-mcp-server',
     servers: [
       {

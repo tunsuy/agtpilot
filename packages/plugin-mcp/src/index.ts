@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 
 export const name = 'agtpilot-plugin-mcp';
@@ -37,6 +38,29 @@ export type {
  * - url 内嵌 query key（如高德 ?key= / 百度 ?ak=）—— 同样走「粘贴 Token」。
  */
 
+/**
+ * 一次出站 HTTP 请求的快照（逐请求签名函数入参）。
+ * headers 键归一为小写；body 为请求体文本（GET/无体 → 空串）。
+ */
+export interface SignableRequest {
+  method: string;
+  url: string;
+  body: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * 逐请求动态签名钩子：返回要附加/覆盖到本次请求的头。
+ * 用于「签名网关型」远程 MCP（如飞猪 flyai：每请求现算 HMAC-SHA256 签名头），
+ * 静态 headers 表达不了「逐请求变化」的签名，故单开此扩展点。
+ *
+ * 约束（docs/design/mcp-request-signing.md §5）：签名器应是纯函数——无 IO、
+ * 不读 process.env（凭证经闭包注入）、只产出附加头，拿不到 fetch/socket 控制权。
+ */
+export type RequestSigner = (
+  req: SignableRequest
+) => Record<string, string> | Promise<Record<string, string>>;
+
 export interface MCPServerConfig {
   name: string;
   /** http = Streamable HTTP（首选）；sse = 旧式 SSE；stdio = 本地子进程 */
@@ -49,6 +73,12 @@ export interface MCPServerConfig {
   headers?: Record<string, string>;
   /** MCP 标准 OAuth provider；http/sse 有效，SDK 自动处理 token 附加与刷新 */
   authProvider?: OAuthClientProvider;
+  /**
+   * 逐请求动态签名钩子；http/sse 有效，stdio 忽略。与 headers 叠加：静态头先入，
+   * 签名头后置覆盖同名项。存在时 plugin-mcp 用自定义 fetch 包装 SDK transport，
+   * 每次请求先算签名再发送（见 buildSignedFetch）。
+   */
+  signRequest?: RequestSigner;
 }
 
 export interface MCPPluginConfig {
@@ -176,16 +206,48 @@ function buildMCPTransport(
   }
   if (!c.url) throw new Error(`${c.transport} 类型的 MCP Server 必须提供 url 参数。`);
   const url = assertSafeUrl(c.url);
+  const signedFetch = c.signRequest ? buildSignedFetch(c.signRequest) : undefined;
   if (c.transport === 'http') {
     return new StreamableHTTPClientTransport(url, {
       authProvider: c.authProvider,
       requestInit: c.headers ? { headers: { ...c.headers } } : undefined,
+      fetch: signedFetch,
     });
   }
   return new SSEClientTransport(url, {
     authProvider: c.authProvider,
     requestInit: c.headers ? { headers: { ...c.headers } } : undefined,
+    // 签名器覆盖 SSE 的 POST 与通用请求；开流 GET(EventSource)如需签名再经
+    // eventSourceInit.fetch 注入 —— 现无 SSE 签名连接器,留待需要时补。
+    fetch: signedFetch,
   });
+}
+
+/**
+ * 把逐请求签名器包成自定义 fetch(SDK transport 的 `fetch` 选项)。
+ *
+ * 每次出站请求:归一出 method/body/headers(小写键快照,含 SDK 已并入的静态
+ * Authorization)→ 调签名器算附加头 → 合并进 Headers(签名头覆盖同名)→ 转发。
+ * SDK 主链路(initialize/tools/*)是纯 POST,body 为 JSON-RPC 文本、Authorization
+ * 已由 _commonHeaders() 并入 init.headers —— 正是 HMAC canonical 所需全部输入。
+ *
+ * 只增强「附加头」,不改 URL/body/method;真实 fetch 仍是全局 fetch(最小权限)。
+ */
+export function buildSignedFetch(sign: RequestSigner, baseFetch: FetchLike = fetch): FetchLike {
+  return async (url, init) => {
+    const method = String(init?.method || 'GET').toUpperCase();
+    const rawBody = init?.body;
+    const body =
+      typeof rawBody === 'string' ? rawBody : rawBody == null ? '' : String(rawBody);
+    const outHeaders = new Headers(init?.headers as HeadersInit | undefined);
+    const headerSnapshot: Record<string, string> = {};
+    outHeaders.forEach((v, k) => {
+      headerSnapshot[k.toLowerCase()] = v;
+    });
+    const extra = (await sign({ method, url: String(url), body, headers: headerSnapshot })) || {};
+    for (const [k, v] of Object.entries(extra)) outHeaders.set(k, v);
+    return baseFetch(url, { ...init, headers: outHeaders });
+  };
 }
 
 /** 单条用户级连接：持有 client，支持断线自动重连一次 */

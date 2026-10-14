@@ -133,3 +133,43 @@ describe('buildUserSubagentMcpServers = 已连接 ∩ 已标记', () => {
     expect(got).not.toContain('tushare');
   });
 });
+
+describe('subagentAvailability(详情页展示判定)', () => {
+  it('逃生口前缀命中 → escape(免只读注解,实测背书)', () => {
+    expect(mc.subagentAvailability('deepwiki', { flagged: true, toolCount: 3, readOnlyCount: 0 })).toBe('escape');
+    expect(mc.subagentAvailability('newsnow', { flagged: true, toolCount: 1, readOnlyCount: 0 })).toBe('escape');
+  });
+
+  it('已标记 + 有只读声明 → ready', () => {
+    expect(mc.subagentAvailability('huggingface', { flagged: true, toolCount: 4, readOnlyCount: 4 })).toBe('ready');
+  });
+
+  it('已标记 + 已连接但零注解 → needs-measurement(待实测)', () => {
+    expect(mc.subagentAvailability('github_mcp', { flagged: true, toolCount: 10, readOnlyCount: 0 })).toBe(
+      'needs-measurement'
+    );
+  });
+
+  it('未标记 → closed(即使工具全部只读,人工钥匙优先)', () => {
+    expect(mc.subagentAvailability('tushare', { flagged: false, toolCount: 5, readOnlyCount: 5 })).toBe('closed');
+  });
+
+  it('未连接(toolCount=0)+ 已标记 → ready(UI 结合连接状态显示「连接后可用」)', () => {
+    expect(mc.subagentAvailability('github_mcp', { flagged: false, toolCount: 0, readOnlyCount: 0 })).toBe('closed');
+    expect(mc.subagentAvailability('openalex', { flagged: true, toolCount: 0, readOnlyCount: 0 })).toBe('ready');
+  });
+
+  it('env 显式设置优先:off 全关 / 名单覆盖目录标记(与插件同语义)', () => {
+    process.env.AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS = 'off';
+    process.env.AGTPILOT_SUBAGENT_MCP_SERVERS = 'off';
+    try {
+      expect(mc.subagentAvailability('deepwiki', { flagged: true, toolCount: 3, readOnlyCount: 3 })).toBe('closed');
+      process.env.AGTPILOT_SUBAGENT_MCP_SERVERS = 'tushare';
+      expect(mc.subagentAvailability('tushare', { flagged: false, toolCount: 5, readOnlyCount: 5 })).toBe('ready');
+      expect(mc.subagentAvailability('github_mcp', { flagged: true, toolCount: 5, readOnlyCount: 5 })).toBe('closed');
+    } finally {
+      delete process.env.AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS;
+      delete process.env.AGTPILOT_SUBAGENT_MCP_SERVERS;
+    }
+  });
+});

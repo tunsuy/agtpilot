@@ -1,5 +1,6 @@
 import type { MCPServerConfig } from '@agtpilot/plugin-mcp';
 import type { ToolRoute } from '@agtpilot/core';
+import { DEFAULT_MCP_ALLOW_TOOLS } from '@agtpilot/plugin-subagent';
 import { getUserConnectors, getMcpAuth } from './user-store';
 import { UserMcpOAuthProvider } from './mcp-oauth-provider';
 
@@ -826,6 +827,46 @@ export function buildUserSubagentMcpServers(userId: string): string[] {
     }
   }
   return names;
+}
+
+// ---- 子 agent 可用性(连接器详情页展示用,2026-10-14 目录标记方案) ----
+
+/**
+ * 单台服务器对子 agent 的可用状态:
+ * - escape:命中逃生口前缀(实测背书,免服务器只读注解)→ 可用
+ * - ready:人工钥匙通过(env 显式设置时以 env 名单优先,否则看目录 subagentOpen),
+ *   且服务器有工具声明只读(或未连接,UI 按连接状态显示「连接后可用」)→ 可用
+ * - needs-measurement:有人工钥匙但已连接服务器零只读注解 → 需一次性实测评估后启用
+ * - closed:无人工钥匙 → 不开放
+ */
+export type SubagentAvailability = 'ready' | 'escape' | 'needs-measurement' | 'closed';
+
+/** 逃生口前缀(与 plugin-subagent 同语义:env 显式设置含 off 优先,否则内置默认;调用时读取,可测) */
+function subagentEscapePrefixes(): string[] {
+  const v = (process.env.AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS ?? '').trim();
+  if (v === '') return [...DEFAULT_MCP_ALLOW_TOOLS];
+  if (/^(off|none)$/i.test(v)) return [];
+  return v.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/** 人工钥匙(与宿主注入口径一致:env AGTPILOT_SUBAGENT_MCP_SERVERS 显式设置含 off 优先,否则目录标记) */
+function subagentServerWhitelisted(serverName: string, flagged: boolean): boolean {
+  const v = (process.env.AGTPILOT_SUBAGENT_MCP_SERVERS ?? '').trim();
+  if (v === '') return flagged;
+  if (/^(off|none)$/i.test(v)) return false;
+  return v.split(',').map((s) => s.trim()).includes(serverName);
+}
+
+export function subagentAvailability(
+  serverName: string,
+  opts: { flagged: boolean; toolCount: number; readOnlyCount: number }
+): SubagentAvailability {
+  // 工具名前缀与 plugin-mcp 命名规则一致(mcp_{server}_{tool};目录服务器名均为干净 ASCII)
+  const prefix = `mcp_${serverName}_`;
+  if (subagentEscapePrefixes().some((p) => prefix.startsWith(p))) return 'escape';
+  if (!subagentServerWhitelisted(serverName, opts.flagged)) return 'closed';
+  if (opts.toolCount > 0 && opts.readOnlyCount === 0) return 'needs-measurement';
+  return 'ready';
 }
 
 /**

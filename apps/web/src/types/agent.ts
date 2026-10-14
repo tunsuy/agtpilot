@@ -50,6 +50,15 @@ export interface McpConnectorInfo {
   toolCount?: number;
   /** 最近一次连接失败原因（排障用） */
   lastError?: string;
+  /** 子 agent 可用性（目录 subagentOpen 标记 × 活连接的只读注解状态,详情页展示用） */
+  subagent?: {
+    /** 目录标记:任一服务器 subagentOpen=true */
+    open: boolean;
+    /** ready/escape=可用;needs-measurement=已标记但服务器无只读注解,待实测;closed=不开放 */
+    availability: 'ready' | 'escape' | 'needs-measurement' | 'closed';
+    /** 已声明只读的工具数(已连接时) */
+    readOnlyCount?: number;
+  };
 }
 
 export interface MissionStep {

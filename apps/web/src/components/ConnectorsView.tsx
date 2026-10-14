@@ -62,6 +62,41 @@ import { XhsWebLoginModal } from './XhsWebLoginModal';
 import { loginBadgeInfo } from '../lib/browser-login';
 import type { XhsManagedRecord } from '../lib/user-store';
 
+/**
+ * 子 agent 可用性一行文案(2026-10-14 目录标记方案):
+ * 数据来自 API 聚合的 McpConnectorInfo.subagent(目录 subagentOpen 标记 × 活连接只读注解)。
+ * closed 用中性措辞(不向普通用户暴露内部红线条目);未连接时提示「连接后可用」。
+ */
+function subagentLine(app: McpConnectorInfo): { text: string; cls: string } | null {
+  const sa = app.subagent;
+  if (!sa) return null;
+  if (sa.availability === 'closed') {
+    return { text: '子 agent:不开放(该连接器含写操作或敏感数据,仅主对话可用)', cls: 'text-zinc-400' };
+  }
+  if (app.status !== 'connected') {
+    return { text: '子 agent:已标记开放,连接后可用', cls: 'text-zinc-500' };
+  }
+  switch (sa.availability) {
+    case 'escape':
+      return {
+        text: `子 agent:可用 —— 实测评审放行,全部 ${app.toolCount ?? 0} 个工具开放`,
+        cls: 'text-emerald-600',
+      };
+    case 'ready':
+      return {
+        text: `子 agent:可用 —— ${sa.readOnlyCount ?? 0}/${app.toolCount ?? 0} 个工具已声明只读(双钥匙放行)`,
+        cls: 'text-emerald-600',
+      };
+    case 'needs-measurement':
+      return {
+        text: `子 agent:已标记开放,待只读实测评审后启用(服务器未声明只读注解,共 ${app.toolCount ?? 0} 工具)`,
+        cls: 'text-amber-600',
+      };
+    default:
+      return null;
+  }
+}
+
 function renderMcpIcon(id: string, className = 'h-5 w-5') {
   switch (id) {
     case 'notion_mcp':
@@ -553,6 +588,12 @@ export function ConnectorsView({
                   连接异常: {app.lastError}
                 </p>
               )}
+              {(() => {
+                const line = subagentLine(app);
+                return line ? (
+                  <p className={`text-[10px] leading-relaxed mb-2 ${line.cls}`}>{line.text}</p>
+                ) : null;
+              })()}
 
               {/* 知乎专属:网页版登录徽标 + 托管模式状态(浏览器托管存草稿,与 MCP 凭证互不依赖) */}
               {app.id === 'zhihu' && (

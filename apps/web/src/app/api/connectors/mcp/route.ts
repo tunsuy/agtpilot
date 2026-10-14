@@ -5,6 +5,8 @@ import {
   MCP_CONNECTOR_DEFS,
   MCP_TOKEN_ENV_VARS,
   getMcpConnectorDef,
+  subagentAvailability,
+  type SubagentAvailability,
 } from '@/lib/mcp-connectors';
 import { getAgentBackend } from '@/lib/agent-backend';
 import { resolveConnectorAuth } from '@/lib/connector-bridge';
@@ -23,8 +25,8 @@ function maskSecret(val: string): string {
 function buildStatusList(userId: string): McpConnectorInfo[] {
   const { configs } = getUserConnectors(userId);
 
-  // 运行中后端的用户级 MCP 连接状态（工具数/错误），后端未就绪时为空
-  let liveServers: Array<{ name: string; toolsCount: number; error?: string }> = [];
+  // 运行中后端的用户级 MCP 连接状态（工具数/只读数/错误），后端未就绪时为空
+  let liveServers: Array<{ name: string; toolsCount: number; readOnlyCount?: number; error?: string }> = [];
   try {
     const mcpSvc = getAgentBackend().mcp;
     if (mcpSvc?.listUserServers) {
@@ -55,15 +57,26 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
       connected = true; // 免凭证直连，永远可用
     }
 
-    // 工具数与最近错误取自运行中的用户级连接
+    // 工具数/只读数与最近错误取自运行中的用户级连接;子 agent 可用性逐服务器判定后合并
     let toolCount = 0;
+    let readOnlyCount = 0;
     let lastError: string | undefined;
+    const RANK: Record<SubagentAvailability, number> = {
+      escape: 3,
+      ready: 2,
+      'needs-measurement': 1,
+      closed: 0,
+    };
+    let availability: SubagentAvailability = 'closed';
     for (const s of def.servers) {
       const live = liveByName.get(s.name);
-      if (live) {
-        toolCount += live.toolsCount;
-        if (live.error) lastError = live.error;
-      }
+      const tc = live?.toolsCount ?? 0;
+      const rc = live?.readOnlyCount ?? 0;
+      toolCount += tc;
+      readOnlyCount += rc;
+      if (live?.error) lastError = live.error;
+      const a = subagentAvailability(s.name, { flagged: s.subagentOpen, toolCount: tc, readOnlyCount: rc });
+      if (RANK[a] > RANK[availability]) availability = a;
     }
 
     return {
@@ -81,6 +94,11 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
       docUrl: def.docUrl,
       toolCount: toolCount > 0 ? toolCount : undefined,
       lastError: connected ? lastError : undefined,
+      subagent: {
+        open: def.servers.some((s) => s.subagentOpen),
+        availability,
+        readOnlyCount: toolCount > 0 ? readOnlyCount : undefined,
+      },
     };
   });
 }

@@ -455,13 +455,18 @@ export class MCPService extends Service {
     return removed;
   }
 
-  /** 某用户当前连接状态（管理界面展示用） */
-  listUserServers(userId: string): Array<{ name: string; toolsCount: number; error?: string }> {
+  /** 某用户当前连接状态(管理界面展示用;readOnlyCount = annotations 声明只读的工具数,子 agent 可用性展示用) */
+  listUserServers(userId: string): Array<{ name: string; toolsCount: number; readOnlyCount: number; error?: string }> {
     const prefix = `${userId}::`;
-    const out: Array<{ name: string; toolsCount: number; error?: string }> = [];
+    const out: Array<{ name: string; toolsCount: number; readOnlyCount: number; error?: string }> = [];
     for (const [key, conn] of this.userClients) {
       if (key.startsWith(prefix)) {
-        out.push({ name: conn.config.name, toolsCount: conn.tools.length, error: conn.lastError || undefined });
+        out.push({
+          name: conn.config.name,
+          toolsCount: conn.tools.length,
+          readOnlyCount: conn.tools.filter((t) => t.readOnly === true).length,
+          error: conn.lastError || undefined,
+        });
       }
     }
     return out;

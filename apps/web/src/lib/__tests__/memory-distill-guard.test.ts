@@ -159,6 +159,9 @@ describe('distillAgentExperience · 环境状态防绝对断言(生产实例:Fir
     expect(calls[0].system).toContain('条件式');
     expect(calls[0].system).toContain('失效条件');
     expect(calls[0].system).toContain('严禁绝对断言');
+    // 可用性不是经验:工具列表运行时可见,严禁「已验证可用/响应约Ns」证词
+    expect(calls[0].system).toContain('严禁记录「X已验证可用');
+    expect(calls[0].system).toContain('不含可用性与速度证词');
     // 自我纠偏:轨迹与旧环境事实矛盾 → 必须更新/删除
     expect(calls[0].system).toContain('矛盾');
     expect(calls[0].system).toContain('必须更新或删除');

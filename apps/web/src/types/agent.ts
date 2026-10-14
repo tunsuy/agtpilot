@@ -41,6 +41,8 @@ export interface McpConnectorInfo {
   authType: 'oauth' | 'token' | 'none';
   /** opt-in 免凭证连接器（如浏览器自动化）：需用户显式启用后才挂载本地子进程 */
   optIn?: boolean;
+  /** token 类的一键公共试用（如飞猪）：卡片显示「启用公共试用」按钮，手动启用而非默认常连 */
+  publicTrial?: boolean;
   status: 'connected' | 'unconfigured';
   keyMasked?: string;
   /** 设备码授权通道（OAuth Device Grant）：available=部署侧已配 client_id/secret，UI 据此显隐按钮 */

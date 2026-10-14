@@ -676,7 +676,7 @@ export function ConnectorsView({
                             : 'bg-amber-50 text-amber-600 border border-amber-200'
                         }`}
                       >
-                        {app.authType === 'oauth' ? '一键授权' : app.optIn ? '手动启用' : app.authType === 'none' ? '免凭证直连' : app.deviceFlow?.available ? '设备码授权' : '粘贴凭证'}
+                        {app.authType === 'oauth' ? '一键授权' : app.optIn || app.publicTrial ? '手动启用' : app.authType === 'none' ? '免凭证直连' : app.deviceFlow?.available ? '设备码授权' : '粘贴凭证'}
                       </span>
                     </div>
                   </div>
@@ -692,10 +692,10 @@ export function ConnectorsView({
                   {app.status === 'connected'
                     ? app.toolCount
                       ? `已挂载 ${app.toolCount} 工具`
-                      : app.optIn
+                      : app.optIn || app.publicTrial
                       ? '已启用'
                       : '已连接'
-                    : app.optIn
+                    : app.optIn || app.publicTrial
                     ? '未启用'
                     : '未配置'}
                 </span>
@@ -834,6 +834,19 @@ export function ConnectorsView({
                   </button>
                 )}
 
+                {/* 一键公共试用(如飞猪):手动启用,存哨兵 '1';未连接时显示主按钮 */}
+                {app.authType === 'token' && app.publicTrial && app.status !== 'connected' && (
+                  <button
+                    onClick={() => mcpPost({ action: 'saveToken', connectorId: app.id, token: '1' })}
+                    disabled={mcpSaving}
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                    title="手动启用内置公共试用通道(共享额度,人多可能被限流);也可改用粘贴自有 Key"
+                  >
+                    {mcpSaving ? <RotateCw className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                    <span>启用公共试用</span>
+                  </button>
+                )}
+
                 {app.authType === 'token' && (
                   <button
                     onClick={() => {
@@ -842,12 +855,20 @@ export function ConnectorsView({
                       setMcpNotice('');
                     }}
                     className={`shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium transition ${
-                      app.deviceFlow?.available
+                      app.deviceFlow?.available || app.publicTrial
                         ? 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
                         : 'bg-zinc-900 hover:bg-zinc-800 text-white shadow-2xs'
                     }`}
                   >
-                    {app.status === 'connected' ? '更新凭证' : app.deviceFlow?.available ? '改用粘贴凭证' : '打开授权页'}
+                    {app.status === 'connected'
+                      ? app.publicTrial
+                        ? '改用自有 Key'
+                        : '更新凭证'
+                      : app.deviceFlow?.available
+                      ? '改用粘贴凭证'
+                      : app.publicTrial
+                      ? '粘贴自有 Key'
+                      : '打开授权页'}
                   </button>
                 )}
 

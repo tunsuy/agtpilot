@@ -4,7 +4,7 @@ import type { ToolRoute } from '@agtpilot/core';
 import { DEFAULT_MCP_ALLOW_TOOLS } from '@agtpilot/plugin-subagent';
 import { getUserConnectors, getMcpAuth } from './user-store';
 import { UserMcpOAuthProvider } from './mcp-oauth-provider';
-import { flyaiSigner, resolveFlyaiKey, FLYAI_PUBLIC_TRIAL_KEY } from './flyai-sign';
+import { flyaiSigner, resolveFlyaiKey } from './flyai-sign';
 
 /**
  * MCP 连接器目录（自研连接器体系 · 一期首批）
@@ -67,13 +67,15 @@ export interface McpConnectorDef {
   /** token 类凭证 / optIn 开关在 user-store connectors 里的存储键 */
   tokenEnvVar?: string;
   /**
-   * token 类的**缺省凭证**(仅 authType='token' 有效):用户未在连接器里粘贴自己的
-   * key 时,用此缺省值直连;用户一旦粘贴自有 key(configs[tokenEnvVar] 非空)则**优先用户的**。
-   * 用于「开箱即用」的公共试用通道(如飞猪 flyai 内置官方公共试用 API Key)。
-   * 注意:缺省凭证通常是**共享身份**,可能被服务方限流/吊销,规模化使用应引导用户配自有 key
-   * (见 authHint);绝不用于放用户私有凭证。连接判定/状态展示/buildUserMcpServers 三处一致消费本字段。
+   * 一键公共试用开关(仅 authType='token' 有效):置真则连接器卡片显示「启用公共试用」按钮,
+   * 用户点一下即把哨兵 '1' 存进 tokenEnvVar 完成**手动启用**(而非对所有人默认常连)。
+   * server 定义的凭证解析(如飞猪 resolveFlyaiKey)负责把哨兵 '1'/空串映射为内置公共试用凭证,
+   * 用户粘贴的自有 key 一律优先。**手动启用而非默认常连**:避免所有用户共享同一试用身份被限流/吊销。
+   * 连接判定(configs[tokenEnvVar] 非空即连)、状态展示(哨兵 '1' 显「公共试用通道」)、
+   * 卡片 UI(publicTrial → 显启用按钮)三处一致消费本字段。公共试用凭证本身是共享身份,
+   * 规模化应引导用户配自有 key(见 authHint);绝不用于放用户私有凭证。
    */
-  defaultCred?: string;
+  publicTrial?: boolean;
   /** OAuth scope（如企查查 mcp:tools） */
   scope?: string;
   /**
@@ -314,20 +316,21 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     icon: 'Plane',
     category: 'Travel',
     description:
-      '飞猪官方 MCP：机票/火车票/酒店/景点/门票搜索与详情（AI 语义搜索 + 极速搜索）。内置公共试用通道，免配置即用；粘贴自有 API Key 后优先用你的 Key。',
+      '飞猪官方 MCP：机票/火车票/酒店/景点/门票搜索与详情（AI 语义搜索 + 极速搜索）。点一下启用内置公共试用通道；粘贴自有 API Key 后优先用你的 Key。',
     authType: 'token',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["飞猪", "机票", "航班", "酒店", "火车票", "景点", "门票", "旅行", "flyai"],
     tokenEnvVar: 'MCP_FLYAI_API_KEY',
     /**
-     * 缺省凭证 = 官方公共试用 API Key（负责人 2026-10-14 拍板「默认公共key 用户配置了用用户的」）。
-     * 裸用户免配置直连；用户在下方粘贴自有 Key 后 buildUserMcpServers 以用户 Key 覆盖本缺省。
-     * 共享试用身份可能被飞猪限流/吊销，规模化使用请引导用户配自有 Key（见 authHint）。
+     * 一键公共试用(负责人 2026-10-14 拍板「默认公共key 用户配置了用用户的」→「改吧」= 手动启用):
+     * 卡片「启用公共试用」把哨兵 '1' 存进 MCP_FLYAI_API_KEY 完成手动启用,resolveFlyaiKey('1')
+     * 映射为官方公共试用 Key;用户粘贴自有 Key 则一律优先。手动启用而非对所有人默认常连 ——
+     * 避免所有用户共享同一试用身份被飞猪限流/吊销(规模化引导配自有 Key,见 authHint)。
      */
-    defaultCred: FLYAI_PUBLIC_TRIAL_KEY,
+    publicTrial: true,
     quickAuthUrl: 'https://flyai.open.fliggy.com/',
     authHint:
-      '免配置即可用（走内置公共试用通道）。若你有飞猪 flyai 自有 API Key（经飞猪开放平台/官方 CLI @fly-ai/flyai-cli 分发），粘贴到下方即优先用你的 Key（独立额度、不受公共试用限流）。签名密钥为协议公共常量已内置，无需填写。',
+      '点「启用公共试用」即用内置公共试用通道(共享额度,人多可能被限流)。若你有飞猪 flyai 自有 API Key(经飞猪开放平台/官方 CLI @fly-ai/flyai-cli 分发),粘贴到下方即优先用你的 Key(独立额度、不受公共试用限流)。签名密钥为协议公共常量已内置,无需填写。',
     docUrl: 'https://www.npmjs.com/package/@fly-ai/flyai-cli',
     servers: [
       {
@@ -339,7 +342,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
         url: 'https://flyai.open.fliggy.com/mcp',
         transport: 'http',
         // 静态凭证头:Bearer <apiKey>(SDK 并入 init.headers,签名器据此算 sha256(auth))。
-        // resolveFlyaiKey:用户 Key 优先,缺省回退公共试用 Key(defaultCred 已保证 cred 非空,此为双保险)。
+        // resolveFlyaiKey:用户 Key 优先;哨兵 '1'(手动启用)/空串回退公共试用 Key。
         headers: (cred) => ({ Authorization: `Bearer ${resolveFlyaiKey(cred)}` }),
         // 逐请求 HMAC-SHA256 签名(方案 a 扩展点);apiKey 经闭包注入,签名密钥走协议常量
         sign: (cred) => flyaiSigner({ apiKey: resolveFlyaiKey(cred) }),
@@ -900,16 +903,17 @@ function serverConfigFromDef(
  * 依据用户已配置的凭证，构建该用户当前应连接的 MCP Server 清单。
  * - none（非 optIn）：无条件直连；
  * - none + optIn：用户显式启用（configs[key]==='1'）才连；
- * - token：已保存凭证才连；未保存但配了 defaultCred(缺省公共凭证)也连(开箱即用)（URL 模板 / 静态头注入 / stdio args+env 注入）；
+ * - token：已保存凭证(含哨兵 '1'=手动启用公共试用)才连（URL 模板 / 静态头注入 / stdio args+env 注入）；
  * - oauth：已完成一键授权才连（挂 OAuthClientProvider，SDK 自动带 token + 401 刷新）。
  */
 export function buildUserMcpServers(userId: string): MCPServerConfig[] {
   const servers: MCPServerConfig[] = [];
   for (const { def, servers: defs } of connectedServerDefs(userId)) {
     if (def.authType === 'token') {
-      // 用户粘贴的 key 优先;未配置时回退连接器缺省凭证(defaultCred,如飞猪公共试用 key)
-      const cred =
-        (getUserConnectors(userId).configs[def.tokenEnvVar!] || '').trim() || (def.defaultCred || '');
+      // cred = 已存值(用户粘贴的自有 key,或哨兵 '1'=在卡片手动启用公共试用);server 定义自行解析
+      // (如飞猪 resolveFlyaiKey 把 '1'/空映射为公共试用 key,用户 key 优先)。裸用户未启用 → cred 空,
+      // 但 connectedServerDefs 已跳过未保存凭证的 token 连接器,故此处 cred 恒非空。
+      const cred = (getUserConnectors(userId).configs[def.tokenEnvVar!] || '').trim();
       for (const s of defs) servers.push(serverConfigFromDef(s, cred));
     } else if (def.authType === 'oauth') {
       for (const s of defs) {
@@ -929,8 +933,8 @@ function connectedServerDefs(userId: string): Array<{ def: McpConnectorDef; serv
   const out: Array<{ def: McpConnectorDef; servers: McpServerDef[] }> = [];
   for (const def of MCP_CONNECTOR_DEFS) {
     if (def.authType === 'token') {
-      // 已保存用户凭证 → 连;否则若有缺省凭证(defaultCred,如飞猪公共试用 key)→ 也连(开箱即用)
-      if (!(configs[def.tokenEnvVar!] || '').trim() && !def.defaultCred) continue;
+      // 已保存凭证才连:用户自有 key,或哨兵 '1'(在卡片「启用公共试用」手动启用);裸用户未启用 → 不连
+      if (!(configs[def.tokenEnvVar!] || '').trim()) continue;
     } else if (def.authType === 'oauth') {
       const record = getMcpAuth(userId, def.id);
       if (!record?.tokens?.access_token) continue;

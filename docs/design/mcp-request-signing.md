@@ -84,11 +84,12 @@ interface McpServerDef {
 1. **凭证零硬编码**:签名算法可含「协议级公共常量」(如飞猪的 signSecret,
    MIT CLI 内置、须与服务端一致、对所有客户端同值),但**用户私有凭证
    (自备 API key / token)一律不入库**,走连接器 token 通道由用户自备。
-   - 例外(负责人拍板 2026-10-14「默认公共key 用户配置了用用户的」):连接器可
-     内置**官方公共试用 key** 作 `defaultCred` 缺省(如飞猪 flyai,官方 MIT CLI
-     随包公开分发、非私有密钥),让用户零配置即用;用户一旦粘贴自有 key 则**一律
-     优先用户的**。公共试用 key 是共享身份,可能被限流/吊销,规模化应引导用户配
-     自有 key(见连接器 authHint)。此例外只针对「公开分发的官方试用凭证」,不放宽
+   - 例外(负责人拍板 2026-10-14「默认公共key 用户配置了用用户的」;后「改吧」= 手动启用):
+     连接器可内置**官方公共试用 key**(如飞猪 flyai,官方 MIT CLI 随包公开分发、
+     非私有密钥),但**不再对所有人默认常连**,而是卡片「启用公共试用」由用户**手动
+     启用**(存哨兵 `'1'`)——避免所有用户共享同一试用身份被限流/吊销。启用后走公共
+     试用通道;用户一旦粘贴自有 key 则**一律优先用户的**。规模化应引导用户配自有
+     key(见连接器 authHint)。此例外只针对「公开分发的官方试用凭证」,不放宽
      「用户私有凭证不入库」红线。
 2. **签名器是纯函数**:无 IO、无副作用、不读 process.env(凭证经闭包注入),
    vitest 直测(含对服务端实测向量做回归)。
@@ -114,13 +115,15 @@ interface McpServerDef {
 - `signSecret` = 协议级公共常量(源码注释标注来源 + 可被 `FLYAI_SIGN_SECRET`
   覆盖)。
 - `FLYAI_API_KEY`(用户身份凭证):连接器为 `authType: 'token'` +
-  `defaultCred: FLYAI_PUBLIC_TRIAL_KEY`(官方 CLI 出厂公共试用 key,负责人拍板
-  2026-10-14「默认公共key 用户配置了用用户的」而内置)。裸用户免配置即以公共试用
-  通道直连;在连接器页粘贴自有 key 后,`buildUserMcpServers` 以用户 key 覆盖缺省。
-  `resolveFlyaiKey(cred)` 收敛该回退(用户 key 优先,空 / 哨兵 '1' → 公共试用 key)。
-  连接判定(`connectedServerDefs`)、UI 状态(`api/connectors/mcp` 展示「公共试用
-  通道」)、Agent 就绪判定(`connector-bridge.isConnectorConfigured`)三处一致消费
-  `defaultCred`,保证「默认已连接」在路由/展示/中途授权各链路语义统一。
+  `publicTrial: true`(一键公共试用标记,负责人拍板 2026-10-14「默认公共key 用户
+  配置了用用户的」,后「改吧」改为**手动启用**)。**不再对所有人默认常连**:裸用户
+  未保存凭证 → `connectedServerDefs` 跳过(不连、不注册工具路由);卡片「启用公共
+  试用」按钮把哨兵 `'1'` 存进 `MCP_FLYAI_API_KEY` 完成手动启用,用户也可粘贴自有 key。
+  `resolveFlyaiKey(cred)` 收敛凭证(用户 key 优先,空 / 哨兵 '1' → `FLYAI_PUBLIC_TRIAL_KEY`)。
+  连接判定(`connectedServerDefs`:非空才连)、UI 状态(`api/connectors/mcp`:哨兵
+  '1' 显「公共试用通道」,否则掩码 key)、Agent 就绪判定
+  (`connector-bridge.isConnectorConfigured`:非空才就绪)三处一致消费
+  `configs[MCP_FLYAI_API_KEY]`,保证「手动启用后才连」在路由/展示/中途授权各链路语义统一。
 
 ## 7. 测试
 
@@ -129,6 +132,6 @@ interface McpServerDef {
 - web:flyai 签名纯函数单测——对固定 ts/nonce/body/key/secret 的 canonical 与
   HMAC 做已知向量回归(向量取自对服务端实测通过的请求);`resolveFlyaiKey`
   回退单测(用户 key 优先、空/哨兵 '1' → 公共试用 key)。
-- 目录回归:flyai 进 NEVER_OPEN;routing 触发词命中;裸用户经 `defaultCred`
-  默认直连(公共试用 key)、用户粘贴自有 key 后 `buildUserMcpServers` 覆盖为
-  用户 key(Authorization 头断言)。
+- 目录回归:flyai 进 NEVER_OPEN;routing 触发词命中;裸用户**不默认连接**(不注册
+  路由)、手动启用(哨兵 '1')后以公共试用 key 直连、用户粘贴自有 key 后
+  `buildUserMcpServers` 覆盖为用户 key(Authorization 头断言)。

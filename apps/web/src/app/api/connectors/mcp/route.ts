@@ -50,19 +50,16 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
 
     if (def.authType === 'token') {
       const cred = (configs[def.tokenEnvVar!] || '').trim();
-      if (cred) {
-        connected = true;
-        // gho_ 前缀 = 设备码授权换来的 OAuth token(短期 token 会自动续期);其余按普通粘贴凭证掩码
-        if (cred.startsWith('gho_')) {
-          const autoRenew = Boolean(getMcpAuth(userId, def.id)?.tokenRefresh?.refreshToken);
-          keyMasked = `设备码已授权 ${maskSecret(cred)}${autoRenew ? ' · 自动续期' : ''}`;
-        } else {
-          keyMasked = maskSecret(cred);
-        }
-      } else if (def.defaultCred) {
-        // 用户未配自有 key,但连接器内置缺省公共凭证(如飞猪公共试用 key)→ 开箱即用
-        connected = true;
+      connected = Boolean(cred);
+      if (cred === '1' && def.publicTrial) {
+        // 哨兵 '1' = 用户在卡片手动启用了公共试用通道(非用户私有 key,不掩码)
         keyMasked = '公共试用通道';
+      } else if (cred.startsWith('gho_')) {
+        // gho_ 前缀 = 设备码授权换来的 OAuth token(短期 token 会自动续期);其余按普通粘贴凭证掩码
+        const autoRenew = Boolean(getMcpAuth(userId, def.id)?.tokenRefresh?.refreshToken);
+        keyMasked = `设备码已授权 ${maskSecret(cred)}${autoRenew ? ' · 自动续期' : ''}`;
+      } else if (cred) {
+        keyMasked = maskSecret(cred);
       }
     } else if (def.authType === 'oauth') {
       const record = getMcpAuth(userId, def.id);
@@ -108,6 +105,7 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
       description: def.description,
       authType: def.authType,
       optIn: def.optIn,
+      publicTrial: def.publicTrial,
       status: connected ? 'connected' : 'unconfigured',
       keyMasked,
       deviceFlow: def.deviceFlow ? { available: deviceFlowAvailable(def) } : undefined,

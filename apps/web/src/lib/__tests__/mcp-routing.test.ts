@@ -136,28 +136,32 @@ describe('MCP 工具路由：服务器粒度挂载', () => {
     expect(zhihuHot.test.test('今天吃什么')).toBe(false);
   });
 
-  it('一个连接器都没配的用户 → 仅默认直连类注册路由（flyai 公共试用 + deepwiki 免凭证）', () => {
+  it('一个连接器都没配的用户 → 仅默认直连类注册路由（deepwiki 免凭证）', () => {
     const routes = userRoutes(UID_BARE);
-    // flyai 是 authType token 但配了 defaultCred(公共试用 key):裸用户开箱即用 → 注册路由;
+    // flyai 是 authType token + publicTrial,但**需手动启用**(裸用户未点「启用公共试用」)→ 不注册路由;
     // deepwiki 是 authType none 且非 optIn:对所有人常连 → 注册路由。
-    // def 顺序 flyai(在前) → deepwiki(在后),toEqual 顺序敏感。
-    expect(routes.map((r) => r.id)).toEqual(['mcp_user_flyai', 'mcp_user_deepwiki']);
+    expect(routes.map((r) => r.id)).toEqual(['mcp_user_deepwiki']);
   });
 
-  it('flyai：裸用户默认公共试用 key 直连;用户粘贴自有 key 则覆盖(优先用户的)', () => {
-    // 裸用户:buildUserMcpServers 用 defaultCred(公共试用 key)
-    const bareServers = mc.buildUserMcpServers(UID_BARE);
-    const bareFlyai = bareServers.find((s) => s.name === 'flyai');
-    expect(bareFlyai, '裸用户应默认连接 flyai(公共试用通道)').toBeDefined();
-    expect(bareFlyai!.headers?.Authorization).toBe(`Bearer ${FLYAI_PUBLIC_TRIAL_KEY}`);
+  it('flyai：裸用户不默认连接;手动启用(哨兵 1)后公共试用 key 直连;用户粘自有 key 则优先', () => {
+    // 裸用户未手动启用 → buildUserMcpServers 不含 flyai(不再对所有人默认常连)
+    expect(mc.buildUserMcpServers(UID_BARE).find((s) => s.name === 'flyai')).toBeUndefined();
+    expect(userRoutes(UID_BARE).some((r) => r.id === 'mcp_user_flyai')).toBe(false);
 
-    // 用户配自有 key:优先用户的 key
+    // 手动启用公共试用:存哨兵 '1' → 连接,Authorization 用公共试用 key,并注册服务器粒度路由
+    const UID_TRIAL = 'mcp-routing-user-flyai-trial';
+    us.saveUserConnector(UID_TRIAL, 'MCP_FLYAI_API_KEY', '1');
+    const trialFlyai = mc.buildUserMcpServers(UID_TRIAL).find((s) => s.name === 'flyai');
+    expect(trialFlyai, '手动启用后应连接 flyai(公共试用通道)').toBeDefined();
+    expect(trialFlyai!.headers?.Authorization).toBe(`Bearer ${FLYAI_PUBLIC_TRIAL_KEY}`);
+    expect(typeof trialFlyai!.signRequest).toBe('function'); // 逐请求签名器已挂载(方案 a 扩展点)
+    expect(userRoutes(UID_TRIAL).some((r) => r.id === 'mcp_user_flyai')).toBe(true);
+
+    // 用户配自有 key:优先用户的 key(覆盖公共试用)
     const UID_FLY = 'mcp-routing-user-flyai';
     us.saveUserConnector(UID_FLY, 'MCP_FLYAI_API_KEY', 'sk-user-own-key');
-    const userServers = mc.buildUserMcpServers(UID_FLY);
-    const userFlyai = userServers.find((s) => s.name === 'flyai');
+    const userFlyai = mc.buildUserMcpServers(UID_FLY).find((s) => s.name === 'flyai');
     expect(userFlyai!.headers?.Authorization).toBe('Bearer sk-user-own-key');
-    // signRequest 逐请求签名器已挂载(方案 a 扩展点)
     expect(typeof userFlyai!.signRequest).toBe('function');
   });
 

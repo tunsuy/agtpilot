@@ -112,4 +112,6 @@ export interface CronScenarioSpec {
   defaultCount: number;
   /** (count, profile) => prompt;档案读取由调用方注入,保持纯可测 */
   build: (count: number, profile: ScenarioProfile | undefined) => string;
+  /** 派发来源工坊 id:随任务记录透传,记忆蒸馏层据此不把表单参数沉淀为长期定位 */
+  workshopId: string;
 }

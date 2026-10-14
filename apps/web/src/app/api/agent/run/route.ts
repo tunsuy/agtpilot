@@ -40,6 +40,9 @@ export async function POST(req: NextRequest) {
       title: finalTitle,
       userId: session.user.id,
       missionId,
+      // 工坊标识贯穿到任务记录:记忆蒸馏层据此把首条消息识别为表单参数,
+      // 不把单次选择(文章类型/风格等)沉淀为用户的长期定位
+      workshopId: typeof workshop?.id === 'string' ? workshop.id : undefined,
     });
 
     return NextResponse.json({

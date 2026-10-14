@@ -22,6 +22,7 @@ export const CRON: CronScenarioSpec = {
   countMax: 10,
   defaultCount: 5,
   build: (count, profile) => buildOssRadarPrompt({ count, profile }),
+  workshopId: 'oss_radar',
 };
 
 export const WORKSHOP_SKILL: WorkshopSkill = {

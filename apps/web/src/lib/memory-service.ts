@@ -1530,6 +1530,8 @@ export async function distillMissionMemories(
     goal: string;
     messages: Array<{ role: string; content: any }>;
     missionId?: string;
+    /** 派发来源工坊 id:首条 user 消息是表单参数拼装的提示词,非用户亲口自述 */
+    workshopId?: string;
     configOverride?: any;
   }
 ): Promise<DistillOutcome> {
@@ -1549,9 +1551,15 @@ export async function distillMissionMemories(
   const userChars = userTexts.reduce((acc, t) => acc + t.length, 0);
   if (userChars < 12) return { added: [], updated: [], deletedIds: [] }; // 太短(寒暄),无偏好可提炼
 
+  // 工坊任务:首条 user 消息是表单参数渲染的提示词(文章类型/风格/主题/数量都是
+  // 单次任务配置)。没有标识就无法与用户亲口自述区分 —— 单次选择曾被蒸馏成
+  // 「用户的公众号定位是X」并持续召回 10 次(生产实例),必须显式排除。
+  const workshopNote = opts.workshopId
+    ? `\n(注:本任务派发自「${opts.workshopId}」工坊,首条用户消息是表单参数拼装的提示词。其中文章类型/风格/主题/数量等是单次任务配置,不是用户的长期定位或偏好,严禁据此新增或更新记忆;只有用户在追问中亲口说的内容才算用户原话)`
+    : '';
   const transcriptParts = [
     `【任务目标】${opts.goal.slice(0, 200)}`,
-    '【用户原话】',
+    `【用户原话】${workshopNote}`,
     ...userTexts.map((t) => `- ${t}`),
   ];
   if (assistantTexts.length > 0) {
@@ -1578,6 +1586,7 @@ export async function distillMissionMemories(
       '你是用户记忆管理器。对照【现有记忆】与【最新对话】,对用户的长期画像记忆(偏好/背景/约束)执行维护决策。\n' +
       '只维护"关于用户本人"的持久信息:语言/格式偏好、工具与流程习惯、技术栈选型、业务约束、用户纠正过的错误做法。\n' +
       '不要把"Agent 自己学到的环境/工具经验"写进本通道(那属于 Agent 经验通道)。\n' +
+      '单次任务的参数化选择(文章类型/风格/主题/数量/格式等)不是用户的长期定位或偏好,除非用户明确说"以后都/一直/我的定位是"这样的持久表述,否则不要沉淀或更新画像记忆。\n' +
       CRUD_OP_SPEC,
     userMessage: `【现有记忆】\n${formatExistingBrief(subjectExisting)}${protectedNote}\n\n【对话记录】\n${transcript}`,
     configOverride: opts.configOverride,

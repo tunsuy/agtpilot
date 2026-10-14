@@ -19,6 +19,7 @@ export const CRON: CronScenarioSpec = {
   countMax: 10,
   defaultCount: 7,
   build: (count, profile) => buildXhsWeeklyTopicsPrompt({ count, profile }),
+  workshopId: 'xhs',
 };
 
 export const WORKSHOP_SKILL: WorkshopSkill = {

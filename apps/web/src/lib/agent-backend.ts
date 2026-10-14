@@ -12,7 +12,7 @@ import {
   finalizeWithAnswer,
   resolveMission,
 } from './live-steps';
-import { resolveCronPrompt } from './cron-scenario';
+import { resolveCronPrompt, cronWorkshopId } from './cron-scenario';
 import { accumulateMissionUsage, buildEfficiencyStepTitle } from './mission-efficiency';
 import { buildTaskSystemPrompt } from './task-system-prompt';
 
@@ -1149,7 +1149,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1251,6 +1251,7 @@ class AgentBackend {
           },
         ],
         conversationMessages: [],
+        workshopId: options.workshopId,
       };
 
       this.state.missions.unshift(targetMission);
@@ -1675,6 +1676,7 @@ class AgentBackend {
                     goal,
                     messages: targetMission.conversationMessages || [],
                     missionId: targetMission.id,
+                    workshopId: targetMission.workshopId,
                     configOverride: userConfigOverride,
                   });
                   // Agent 通道自带信息量门槛(纯闲聊任务不跑,省一次模型调用)
@@ -1937,6 +1939,7 @@ class AgentBackend {
         await this.runMission(prompt, {
           title: `【自动巡航】${jobInfo.name}`,
           userId,
+          workshopId: cronWorkshopId(jobInfo),
         });
       } catch (err: any) {
         this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);
@@ -1988,6 +1991,7 @@ class AgentBackend {
       await this.runMission(prompt, {
         title: `【自动巡航】${jobInfo.name}`,
         userId,
+        workshopId: cronWorkshopId(jobInfo),
       });
     } catch (err: any) {
       this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);

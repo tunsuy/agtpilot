@@ -47,3 +47,9 @@ export function resolveCronPrompt(
   const spec = CRON_SCENARIOS[scenario.key];
   return spec.build(scenario.count ?? spec.defaultCount, getProfile(spec.profileSlot));
 }
+
+/** 场景标记 → 派发来源工坊 id(随任务记录透传给记忆蒸馏层,防表单参数被沉淀为长期定位) */
+export function cronWorkshopId(job: { scenario?: CronScenario | null }): string | undefined {
+  const scenario = normalizeCronScenario(job.scenario);
+  return scenario ? CRON_SCENARIOS[scenario.key].workshopId : undefined;
+}

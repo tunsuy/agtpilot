@@ -105,6 +105,9 @@ export interface Mission {
   startedAt: number;
   steps: MissionStep[];
   conversationMessages?: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }>;
+  /** 派发来源工坊 id(/api/agent/run 服务端渲染时带上):
+   *  记忆蒸馏层据此识别「首条消息是工坊表单参数拼装」,不把单次选择沉淀为长期定位 */
+  workshopId?: string;
   /** 任务级累计 token 用量（多轮追问续跑时逐次累加；成本可观测） */
   usage?: { promptTokens: number; completionTokens: number };
   viewport?: ViewportState;

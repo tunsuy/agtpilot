@@ -180,6 +180,7 @@ export interface MemoryAuditEntry {
     | 'restore'
     | 'purge'
     | 'write-rejected'
+    | 'dedup-blocked'
     | 'authority-revoked';
   memoryId?: string;
   connectorId?: string;
@@ -729,7 +730,7 @@ function getAuditFilePath(userId: string): string {
 /**
  * 追加记忆审计日志(append-only jsonl,与用户数据文件分离):
  * 所有 add/update/supersede/soft-delete/restore/purge/write-rejected/
- * authority-revoked 操作都留痕 —— 回答「谁在何时对哪条状态做了什么」。
+ * dedup-blocked/authority-revoked 操作都留痕 —— 回答「谁在何时对哪条状态做了什么」。
  */
 export function appendMemoryAudit(userId: string, entry: MemoryAuditEntry) {
   try {

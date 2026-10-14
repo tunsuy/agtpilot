@@ -631,6 +631,36 @@ function computeRelevance(query: string, memories: UserMemory[]): Map<string, nu
   return scores;
 }
 
+// ---- 语义近重复判定(add 兜底) ----
+
+/**
+ * 语义近重复拦截阈值:Dice 系数 2×|A∩B| / (|A|+|B|)。
+ * 标定依据(中文双字分词):同规则换措辞 ≈0.49-0.57,同领域不同规则 ≈0.15,
+ * 两侧留有余量;且对称性保证短记忆嵌在长查询里不会误判(交集受小集合封顶)。
+ */
+const SEMANTIC_DUP_THRESHOLD = 0.45;
+
+/**
+ * 在候选记忆里找与 query(新记忆的标题+内容)语义高度重合的条目(add 前拦截)。
+ * 用 token 集合 Dice 系数而非召回层的 TF-IDF 余弦:余弦惩罚双方各自独有的
+ * 措辞,近义改写只能得 ~0.5;判「是不是同一件事」看词面重合度才对。
+ * 返回超阈值里得分最高的条目。
+ */
+function findSemanticDuplicate(query: string, candidates: UserMemory[]): UserMemory | undefined {
+  const qTokens = new Set(tokenize(query));
+  if (qTokens.size === 0 || candidates.length === 0) return undefined;
+  let best: { m: UserMemory; s: number } | undefined;
+  for (const m of candidates) {
+    const mTokens = new Set([...tokenize(m.title), ...tokenize(m.content)]);
+    if (mTokens.size === 0) continue;
+    let inter = 0;
+    for (const t of mTokens) if (qTokens.has(t)) inter++;
+    const dice = (2 * inter) / (mTokens.size + qTokens.size);
+    if (dice >= SEMANTIC_DUP_THRESHOLD && (!best || dice > best.s)) best = { m, s: dice };
+  }
+  return best?.m;
+}
+
 /**
  * 关键词召回:TF-IDF 余弦排序,子串包含兜底加成(标题/内容直接包含查询串)。
  * subject 可选限定记忆主体(user/agent)。
@@ -1289,13 +1319,23 @@ function messageText(content: any): string {
   }
 }
 
-/** 列出某通道的现有记忆(带 id 与保护标记),供决策 prompt 引用 */
+/**
+ * 列出某通道的现有记忆(带 id 与保护标记),供决策 prompt 引用。
+ * 内容截到 160 字符:截太短(旧值 80)时模型看不出两条记忆语义等价,是近重复新增的主要诱因。
+ * 按类目聚簇排列,让等价条目在清单里相邻,更容易被识别为同一件事。
+ */
 function formatExistingBrief(memories: UserMemory[]): string {
   if (memories.length === 0) return '(该通道记忆为空)';
-  return memories
+  const CATEGORY_ORDER: readonly MemoryCategory[] = ['preference', 'project', 'fact', 'rule'];
+  const rank = (m: UserMemory) => {
+    const i = CATEGORY_ORDER.indexOf(m.category);
+    return i >= 0 ? i : CATEGORY_ORDER.length;
+  };
+  return [...memories]
+    .sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title))
     .map(
       (m) =>
-        `- id=${m.id} [${m.category}]${isProtectedMemory(m) ? '🔒' : ''} ${m.title}: ${m.content.slice(0, 80)}`
+        `- id=${m.id} [${m.category}]${isProtectedMemory(m) ? '🔒' : ''} ${m.title}: ${m.content.slice(0, 160)}`
     )
     .join('\n');
 }
@@ -1378,6 +1418,22 @@ async function runMemoryDecision(
           (normTitle.length >= 8 && (n.title.includes(normTitle) || normTitle.includes(n.title)))
       );
       if (duplicate) continue;
+
+      // 语义近重复拦截:精确匹配拦不住「同一件事换个说法」(生产里已发生:
+      // 同一规则以不同措辞被重复沉淀)。用词面重合度(Dice)对全量记忆
+      // (含对方通道)再查一遍,高分 → 判定等价,跳过 add 并记审计。
+      // 模型侧已要求「等价必须 update」;这里是代码兜底,阈值标定见常量注释。
+      const semanticDup = findSemanticDuplicate(`${title} ${content}`, [...allExisting, ...outcome.added]);
+      if (semanticDup) {
+        appendMemoryAudit(input.userId, {
+          at: Date.now(),
+          actor: 'auto-distill',
+          op: 'dedup-blocked',
+          memoryId: semanticDup.id,
+          detail: `add「${title}」与现有「${semanticDup.title}」语义高度重合,已拦截(模型侧应改为 update)`,
+        });
+        continue;
+      }
 
       const now = Date.now();
       const record: UserMemory = {
@@ -1516,6 +1572,7 @@ const CRUD_OP_SPEC =
   '{"op":"delete","id":"现有记忆id"} —— 现有记忆被明确推翻,不再成立(系统执行软删除,保留期内可恢复,并自动处理衍生记忆)\n' +
   '判定原则:\n' +
   '- update/delete 必须有明确依据,不确定时宁可不操作 —— 错误删除比漏记更糟;\n' +
+  '- 【现有记忆】里已有语义等价或高度重叠的条目时,必须用 update 维护它,严禁 add 新增近重复条目(系统也会在代码侧拦截高相似 add);\n' +
   '- 不要提炼一次性任务细节、临时性内容;\n' +
   '只输出 JSON,不要任何其他文字。';
 
@@ -1607,6 +1664,7 @@ export async function distillAgentExperience(
     goal: string;
     mission: {
       id?: string;
+      workshopId?: string;
       steps?: Array<{ tool?: string; args?: any; output?: any; status?: string; duration?: string; role?: string; answer?: string; title?: string }>;
     };
     efficiency?: { stepsCount?: number; toolCalls?: number; failedCalls?: number; skippedCalls?: number; effectiveRate?: number };
@@ -1662,6 +1720,12 @@ export async function distillAgentExperience(
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, DISTILL_EXISTING_LIMIT);
 
+  // 工坊任务守卫:工坊模板每次派发都会带上自己的规则(只读红线/输出格式/
+  // 流程编排),照抄进经验库是纯噪音 —— 生产里发生过整段模板规则被复述沉淀。
+  const workshopNote = opts.mission?.workshopId
+    ? `\n本任务派发自「${opts.mission.workshopId}」工坊:工坊模板内置的规则(只读红线/输出格式/流程编排/产出条数)每次派发都会自动附带,严禁照抄进经验库。只有工具执行中实际踩到的坑、环境反常、模板之外的绕路教训才值得记。\n`
+    : '';
+
   return runMemoryDecision(ctx, {
     userId: opts.userId,
     subject: 'agent',
@@ -1677,6 +1741,7 @@ export async function distillAgentExperience(
       '- 必须写成条件式并附失效条件,如「若 FIRECRAWL_API_KEY 仍未配置,firecrawl 会报错,此时改用 browser_navigate」,严禁绝对断言「未配置/不可用」;\n' +
       '- 本次轨迹若与【现有经验】里的环境事实矛盾(先前"缺"的东西现已可用,或反之),必须更新或删除那条旧经验 —— 环境变了,旧经验就从资产变误导。\n' +
       '从失败与绕路中提炼教训优先级最高;成功路径仅在可复用且非显而易见时记录。\n' +
+      workshopNote +
       CRUD_OP_SPEC,
     userMessage: `【现有经验】\n${formatExistingBrief(subjectExisting)}\n\n【本次任务执行轨迹】\n${transcript}`,
     configOverride: opts.configOverride,

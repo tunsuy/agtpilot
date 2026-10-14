@@ -57,6 +57,7 @@ import {
   ShieldAlert,
   Copy,
   Package,
+  Plane,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform, copyToClipboard } from '../utils/nativeBridge';
@@ -126,6 +127,8 @@ function renderMcpIcon(id: string, className = 'h-5 w-5') {
       return <Car className={`${className} text-orange-600`} />;
     case 'kuaidi100':
       return <Package className={`${className} text-amber-600`} />;
+    case 'flyai':
+      return <Plane className={`${className} text-orange-500`} />;
     case 'tencent_weiyun':
       return <Cloud className={`${className} text-sky-500`} />;
     case 'tencent_lexiang':
@@ -222,7 +225,7 @@ const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'office', label: '办公协作', ids: ['notion_mcp', 'lark_suite', 'dingtalk_mcp', 'atlassian_mcp', 'yuque', 'dida365', 'tencent_docs', 'tencent_meeting', 'youdao_note', 'tencent_weiyun', 'tencent_lexiang', 'ardot'] },
   { key: 'invest', label: '投资理财', ids: ['tushare', 'alphavantage_mcp', 'coingecko_mcp', 'a_stock'] },
   { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki'] },
-  { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi'] },
+  { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi', 'flyai'] },
   { key: 'life', label: '生活服务', ids: ['kuaidi100'] },
   { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'zhihu'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },

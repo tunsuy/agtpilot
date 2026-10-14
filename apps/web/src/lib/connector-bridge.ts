@@ -85,7 +85,8 @@ function isConnectorConfigured(userId: string, connectorId: string): boolean {
   if (def.authType === 'none') return true;
   if (def.authType === 'token') {
     const { configs } = getUserConnectors(userId);
-    return Boolean((configs[def.tokenEnvVar!] || '').trim());
+    // 用户凭证或连接器缺省凭证(defaultCred,如飞猪公共试用 key)任一就绪即视为已配置
+    return Boolean((configs[def.tokenEnvVar!] || '').trim()) || Boolean(def.defaultCred);
   }
   const record = getMcpAuth(userId, def.id);
   return Boolean(record?.tokens?.access_token);

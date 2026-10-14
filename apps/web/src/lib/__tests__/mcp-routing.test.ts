@@ -5,6 +5,7 @@ import * as path from 'path';
 import { selectActiveTools } from '@agtpilot/core';
 import type { RoutableTool, ToolRoute } from '@agtpilot/core';
 import { apply as applyPluginMcp } from '@agtpilot/plugin-mcp';
+import { FLYAI_PUBLIC_TRIAL_KEY } from '../flyai-sign';
 
 /**
  * 工具路由按服务器粒度挂载 MCP 工具（loop 执行优化 P2）：
@@ -135,10 +136,29 @@ describe('MCP 工具路由：服务器粒度挂载', () => {
     expect(zhihuHot.test.test('今天吃什么')).toBe(false);
   });
 
-  it('一个连接器都没配的用户 → 无服务器路由（deepwiki 免凭证直连类除外仍注册）', () => {
+  it('一个连接器都没配的用户 → 仅默认直连类注册路由（flyai 公共试用 + deepwiki 免凭证）', () => {
     const routes = userRoutes(UID_BARE);
-    // deepwiki 是 authType none 且非 optIn：对所有人常连，路由仍在
-    expect(routes.map((r) => r.id)).toEqual(['mcp_user_deepwiki']);
+    // flyai 是 authType token 但配了 defaultCred(公共试用 key):裸用户开箱即用 → 注册路由;
+    // deepwiki 是 authType none 且非 optIn:对所有人常连 → 注册路由。
+    // def 顺序 flyai(在前) → deepwiki(在后),toEqual 顺序敏感。
+    expect(routes.map((r) => r.id)).toEqual(['mcp_user_flyai', 'mcp_user_deepwiki']);
+  });
+
+  it('flyai：裸用户默认公共试用 key 直连;用户粘贴自有 key 则覆盖(优先用户的)', () => {
+    // 裸用户:buildUserMcpServers 用 defaultCred(公共试用 key)
+    const bareServers = mc.buildUserMcpServers(UID_BARE);
+    const bareFlyai = bareServers.find((s) => s.name === 'flyai');
+    expect(bareFlyai, '裸用户应默认连接 flyai(公共试用通道)').toBeDefined();
+    expect(bareFlyai!.headers?.Authorization).toBe(`Bearer ${FLYAI_PUBLIC_TRIAL_KEY}`);
+
+    // 用户配自有 key:优先用户的 key
+    const UID_FLY = 'mcp-routing-user-flyai';
+    us.saveUserConnector(UID_FLY, 'MCP_FLYAI_API_KEY', 'sk-user-own-key');
+    const userServers = mc.buildUserMcpServers(UID_FLY);
+    const userFlyai = userServers.find((s) => s.name === 'flyai');
+    expect(userFlyai!.headers?.Authorization).toBe('Bearer sk-user-own-key');
+    // signRequest 逐请求签名器已挂载(方案 a 扩展点)
+    expect(typeof userFlyai!.signRequest).toBe('function');
   });
 
   it('路由触发词随配置变化刷新：同 id 幂等、新配置即时生效', () => {

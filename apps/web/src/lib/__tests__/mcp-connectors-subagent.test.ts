@@ -53,6 +53,7 @@ describe('红线:永不开放给子 agent', () => {
     'alphavantage',
     'coingecko',
     'a_stock',
+    'flyai', // 机票/酒店/火车票实时价格 = 行情数字,且涉购买决策上下文
     // 写操作 / 现实副作用
     'notion',
     'dida365',

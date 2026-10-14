@@ -59,6 +59,29 @@ export interface McpConnectorDef {
   tokenEnvVar?: string;
   /** OAuth scope（如企查查 mcp:tools） */
   scope?: string;
+  /**
+   * 设备码授权通道（OAuth 2.0 Device Grant, RFC 8628）——「粘贴凭证」之外的第二种获取方式。
+   * 适用:授权服务器不支持 DCR(如 GitHub)、或部署在 http/内网无法走浏览器回跳的场景。
+   * 用户在服务方页面输一次 user_code,后端轮询换 token,**无回调地址、不要求 https 部署**。
+   * 换到的 token 写入 tokenEnvVar 指向的键,复用粘贴凭证的全部消费链路(连接/掩码/断开)。
+   * clientIdEnv/clientSecretEnv 两个环境变量齐备时本通道才可用(UI 据此显隐按钮)。
+   */
+  deviceFlow?: {
+    /** 设备码申请端点（如 https://github.com/login/device/code） */
+    deviceUrl: string;
+    /** token 交换端点（如 https://github.com/login/oauth/access_token） */
+    tokenUrl: string;
+    /** OAuth App client_id 的环境变量名（值本身绝不进代码/前端） */
+    clientIdEnv: string;
+    /** OAuth App client_secret 的环境变量名（仅服务端使用） */
+    clientSecretEnv: string;
+    /** 默认 scope（空格分隔）；scopeEnv 设置时优先 */
+    scope?: string;
+    /** scope 覆盖环境变量名 */
+    scopeEnv?: string;
+    /** 用户输码页（前端展示引导链接；缺省时用服务端返回的 verification_uri） */
+    verificationUri?: string;
+  };
   /** 「打开授权页」引导链接（获取 Token/Key 的官方页面） */
   quickAuthUrl?: string;
   /** 弹窗内的引导文案 */
@@ -317,14 +340,27 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     icon: 'Github',
     category: 'Engineering',
     description:
-      'GitHub 官方托管 MCP：仓库/Issue/PR 查询与操作、代码搜索、Actions 状态（粘贴 Fine-grained Personal Access Token 即用）。',
+      'GitHub 官方托管 MCP：仓库/Issue/PR 查询与操作、代码搜索、Actions 状态。推荐「设备码授权」（github.com/login/device 输一次码,token 不过期,免换 key）；也支持粘贴 Fine-grained PAT（注意 PAT 有强制到期日）。',
     authType: 'token',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["github"],
     tokenEnvVar: 'MCP_GITHUB_PAT',
+    // 设备码通道:GitHub 授权服务器无 DCR(registration_endpoint 缺失,2026-10-14 实测),
+    // 走不通 authType:'oauth' 的 SDK 自动注册流;官方 README 指引设备码为无回跳客户端的授权方式,
+    // 换到的 gho_ token 实测可直连 api.githubcopilot.com/mcp/(initialize+tools/list 全通)。
+    deviceFlow: {
+      deviceUrl: 'https://github.com/login/device/code',
+      tokenUrl: 'https://github.com/login/oauth/access_token',
+      clientIdEnv: 'AGTPILOT_GITHUB_OAUTH_CLIENT_ID',
+      clientSecretEnv: 'AGTPILOT_GITHUB_OAUTH_SECRET',
+      // 官方 github-mcp-server README 设备码示例的 code+devinfo 组合
+      scope: 'repo read:org read:user user:email workflow',
+      scopeEnv: 'AGTPILOT_GITHUB_OAUTH_SCOPE',
+      verificationUri: 'https://github.com/login/device',
+    },
     quickAuthUrl: 'https://github.com/settings/personal-access-tokens/new',
     authHint:
-      'GitHub → Settings → Developer settings → Fine-grained personal access tokens → Generate new token：按需勾选仓库与权限（读取选 Contents: Read / Issues: Read / Pull requests: Read，需写操作再勾选 Write），生成后粘贴到下方。',
+      '推荐用「设备码授权」：点按钮后把页面显示的 8 位码填到 github.com/login/device（手机/电脑均可），确认即完成，token 不过期。备用方式——Fine-grained PAT：GitHub → Settings → Developer settings → Fine-grained personal access tokens → Generate new token，按需勾选仓库与权限（读取选 Contents: Read / Issues: Read / Pull requests: Read，需写操作再勾选 Write），生成后粘贴到下方；注意 GitHub 强制 PAT 带到期日（最长 1 年），到期需重新生成。',
     docUrl: 'https://github.com/github/github-mcp-server',
     servers: [
       {
@@ -735,6 +771,18 @@ export const MCP_TOKEN_ENV_VARS = new Set(
     (d) => d.tokenEnvVar!
   )
 );
+
+/**
+ * 设备码授权通道是否可用：目录配了 deviceFlow **且** 部署侧 client_id/client_secret
+ * 两个环境变量都已设置。未配置时 UI 隐藏「设备码授权」按钮,粘贴凭证通道不受影响。
+ */
+export function deviceFlowAvailable(def: McpConnectorDef): boolean {
+  if (!def.deviceFlow || !def.tokenEnvVar) return false;
+  return Boolean(
+    (process.env[def.deviceFlow.clientIdEnv] || '').trim() &&
+      (process.env[def.deviceFlow.clientSecretEnv] || '').trim()
+  );
+}
 
 /** 把 McpServerDef 按凭证展开成 plugin-mcp 的 MCPServerConfig（http/sse 拼 url+headers，stdio 拼 command/args/env） */
 function serverConfigFromDef(

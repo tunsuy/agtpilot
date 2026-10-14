@@ -5,6 +5,7 @@ import {
   MCP_CONNECTOR_DEFS,
   MCP_TOKEN_ENV_VARS,
   getMcpConnectorDef,
+  deviceFlowAvailable,
   subagentAvailability,
   type SubagentAvailability,
 } from '@/lib/mcp-connectors';
@@ -50,7 +51,8 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
     if (def.authType === 'token') {
       const cred = (configs[def.tokenEnvVar!] || '').trim();
       connected = Boolean(cred);
-      if (cred) keyMasked = maskSecret(cred);
+      // gho_ 前缀 = 设备码授权换来的 OAuth token（不过期）；其余按普通粘贴凭证掩码
+      if (cred) keyMasked = cred.startsWith('gho_') ? `设备码已授权 ${maskSecret(cred)}` : maskSecret(cred);
     } else if (def.authType === 'oauth') {
       const record = getMcpAuth(userId, def.id);
       connected = Boolean(record?.tokens?.access_token);
@@ -97,6 +99,7 @@ function buildStatusList(userId: string): McpConnectorInfo[] {
       optIn: def.optIn,
       status: connected ? 'connected' : 'unconfigured',
       keyMasked,
+      deviceFlow: def.deviceFlow ? { available: deviceFlowAvailable(def) } : undefined,
       quickAuthUrl: def.quickAuthUrl,
       authHint: def.authHint,
       docUrl: def.docUrl,

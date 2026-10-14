@@ -43,6 +43,8 @@ export interface McpConnectorInfo {
   optIn?: boolean;
   status: 'connected' | 'unconfigured';
   keyMasked?: string;
+  /** 设备码授权通道（OAuth Device Grant）：available=部署侧已配 client_id/secret，UI 据此显隐按钮 */
+  deviceFlow?: { available: boolean };
   quickAuthUrl?: string;
   authHint?: string;
   docUrl?: string;

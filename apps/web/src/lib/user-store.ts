@@ -192,6 +192,20 @@ export interface McpAuthRecord {
   tokens?: any; // OAuthTokens（access/refresh/expires/issuer）
   clientInfo?: any; // DCR 动态注册获得的客户端信息
   codeVerifier?: string; // PKCE verifier（start → callback 之间短暂存在）
+  /**
+   * 设备码授权（OAuth 2.0 Device Grant, RFC 8628）进行中状态（start → poll 之间短暂存在）。
+   * device_code 是服务端机密,绝不下发前端;前端只见 user_code(展示)与轮询状态。
+   * 换到 token 后整体清除,token 走 connectors 配置通道（与粘贴凭证同链路加密存储）。
+   */
+  deviceFlow?: {
+    deviceCode: string;
+    userCode: string;
+    verificationUri: string;
+    /** 设备码过期时间戳(ms);过期后 poll 直接返回 expired */
+    expiresAt: number;
+    /** 轮询间隔(s);GitHub slow_down 时 +5 并回写 */
+    interval: number;
+  };
   updatedAt?: number;
 }
 

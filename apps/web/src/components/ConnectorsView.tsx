@@ -55,9 +55,10 @@ import {
   QrCode,
   MonitorPlay,
   ShieldAlert,
+  Copy,
 } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
-import { openAppScheme, isNativePlatform } from '../utils/nativeBridge';
+import { openAppScheme, isNativePlatform, copyToClipboard } from '../utils/nativeBridge';
 import { XhsWebLoginModal } from './XhsWebLoginModal';
 import { loginBadgeInfo } from '../lib/browser-login';
 import type { XhsManagedRecord } from '../lib/user-store';
@@ -278,6 +279,22 @@ export function ConnectorsView({
   const [mcpSaving, setMcpSaving] = useState(false);
   const [mcpNotice, setMcpNotice] = useState('');
 
+  // 设备码授权弹窗（OAuth 2.0 Device Grant）：展示 user_code,后端按 interval 轮询换 token。
+  // tick 自增驱动轮询 effect 重新排定下一次 setTimeout;phase 离开 polling 即停。
+  const [deviceAuth, setDeviceAuth] = useState<{
+    connectorId: string;
+    connectorName: string;
+    userCode: string;
+    verificationUri: string;
+    interval: number;
+    expiresAt: number;
+    tick: number;
+    phase: 'polling' | 'success' | 'expired' | 'denied' | 'error';
+    error?: string;
+  } | null>(null);
+  // 用户码「已复制」反馈（2s 自动复位）
+  const [copiedUserCode, setCopiedUserCode] = useState(false);
+
   const loadMcpConnectors = async () => {
     try {
       const res = await fetch('/api/connectors/mcp');
@@ -360,6 +377,98 @@ export function ConnectorsView({
       setMcpConfiguring(null);
       setMcpTokenInput('');
     }
+  };
+
+  // ---- 设备码授权（OAuth Device Grant,gh CLI 同款;无回调、不要求 https 部署）----
+  const startDeviceAuth = async (connectorId: string, connectorName: string) => {
+    setMcpSaving(true);
+    setMcpNotice('');
+    try {
+      const res = await fetch('/api/connectors/mcp/device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', connectorId }),
+      });
+      const data = await res.json();
+      if (!data.success || !data.device) {
+        setMcpNotice(data.error || '发起设备码授权失败');
+        return;
+      }
+      setDeviceAuth({
+        connectorId,
+        connectorName,
+        userCode: data.device.userCode,
+        verificationUri: data.device.verificationUri,
+        interval: Math.max(3, Number(data.device.interval) || 5),
+        expiresAt: Date.now() + (Number(data.device.expiresIn) || 900) * 1000,
+        tick: 0,
+        phase: 'polling',
+      });
+    } catch (e: any) {
+      setMcpNotice(e?.message || '网络错误');
+    } finally {
+      setMcpSaving(false);
+    }
+  };
+
+  // 轮询:phase=polling 时按 interval 排下一次;pending/slow_down 用 tick 自增重新进入本 effect
+  useEffect(() => {
+    if (!deviceAuth || deviceAuth.phase !== 'polling') return;
+    if (Date.now() > deviceAuth.expiresAt) {
+      setDeviceAuth((d) => (d ? { ...d, phase: 'expired' } : d));
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch('/api/connectors/mcp/device', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'poll', connectorId: deviceAuth.connectorId }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!data.success) {
+          setDeviceAuth((d) => (d ? { ...d, phase: 'error', error: data.error || '轮询失败' } : d));
+          return;
+        }
+        if (data.status === 'success') {
+          setDeviceAuth((d) => (d ? { ...d, phase: 'success' } : d));
+          setMcpNotice(`✅ 「${deviceAuth.connectorName}」设备码授权成功，工具已挂载（OAuth token，无到期换 key 烦恼）。`);
+          loadMcpConnectors();
+        } else if (data.status === 'pending' || data.status === 'slow_down') {
+          setDeviceAuth((d) =>
+            d ? { ...d, interval: data.interval ? Math.max(3, Number(data.interval)) : d.interval, tick: d.tick + 1 } : d
+          );
+        } else if (data.status === 'expired') {
+          setDeviceAuth((d) => (d ? { ...d, phase: 'expired' } : d));
+        } else if (data.status === 'denied') {
+          setDeviceAuth((d) => (d ? { ...d, phase: 'denied' } : d));
+        } else {
+          setDeviceAuth((d) => (d ? { ...d, phase: 'error', error: data.error || '授权失败' } : d));
+        }
+      } catch {
+        // 网络抖动:算一次 tick 继续轮询（设备码过期时间是天然兜底）
+        if (!cancelled) setDeviceAuth((d) => (d ? { ...d, tick: d.tick + 1 } : d));
+      }
+    }, deviceAuth.interval * 1000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [deviceAuth]);
+
+  const closeDeviceAuth = () => {
+    if (deviceAuth?.phase === 'polling') {
+      // 通知后端清中间态（fire-and-forget,失败无害:设备码 15 分钟自然过期）
+      fetch('/api/connectors/mcp/device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel', connectorId: deviceAuth.connectorId }),
+      }).catch(() => {});
+    }
+    setDeviceAuth(null);
   };
 
   // ---- 小红书网页版登录 + 托管模式(scenario-loop P2 模块 1/2) ----
@@ -560,7 +669,7 @@ export function ConnectorsView({
                             : 'bg-amber-50 text-amber-600 border border-amber-200'
                         }`}
                       >
-                        {app.authType === 'oauth' ? '一键授权' : app.optIn ? '手动启用' : app.authType === 'none' ? '免凭证直连' : '粘贴凭证'}
+                        {app.authType === 'oauth' ? '一键授权' : app.optIn ? '手动启用' : app.authType === 'none' ? '免凭证直连' : app.deviceFlow?.available ? '设备码授权' : '粘贴凭证'}
                       </span>
                     </div>
                   </div>
@@ -702,6 +811,22 @@ export function ConnectorsView({
                   </a>
                 )}
 
+                {app.authType === 'token' && app.deviceFlow?.available && (
+                  <button
+                    onClick={() => startDeviceAuth(app.id, app.name)}
+                    disabled={mcpSaving}
+                    className={`flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium transition shadow-2xs ${
+                      app.status === 'connected'
+                        ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                        : 'bg-zinc-900 hover:bg-zinc-800 text-white'
+                    }`}
+                    title="在服务方页面输一次码即完成授权,token 不过期(推荐)"
+                  >
+                    <Smartphone className="h-3 w-3" />
+                    <span>{app.status === 'connected' ? '重新设备码授权' : '设备码授权'}</span>
+                  </button>
+                )}
+
                 {app.authType === 'token' && (
                   <button
                     onClick={() => {
@@ -709,9 +834,13 @@ export function ConnectorsView({
                       setMcpTokenInput('');
                       setMcpNotice('');
                     }}
-                    className="shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition shadow-2xs"
+                    className={`shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-xs font-medium transition ${
+                      app.deviceFlow?.available
+                        ? 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
+                        : 'bg-zinc-900 hover:bg-zinc-800 text-white shadow-2xs'
+                    }`}
                   >
-                    {app.status === 'connected' ? '更新凭证' : '打开授权页'}
+                    {app.status === 'connected' ? '更新凭证' : app.deviceFlow?.available ? '改用粘贴凭证' : '打开授权页'}
                   </button>
                 )}
 
@@ -1161,6 +1290,132 @@ export function ConnectorsView({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 设备码授权弹窗（OAuth 2.0 Device Grant）：输一次码即授权,token 不过期 */}
+      {deviceAuth && (
+        <div className="fixed inset-0 z-[80] bg-black/30 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white border border-zinc-200 p-5 sm:p-6 shadow-xl animate-fadeIn space-y-4 max-h-[92dvh] overflow-y-auto mb-[env(safe-area-inset-bottom,0px)]">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shadow-2xs">
+                  {renderMcpIcon(deviceAuth.connectorId, 'h-4 w-4')}
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-900">授权 {deviceAuth.connectorName}</h3>
+                  <p className="text-xs text-zinc-500 mt-0.5">设备码授权：token 不过期，免换 key</p>
+                </div>
+              </div>
+              <button onClick={closeDeviceAuth} className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {deviceAuth.phase === 'polling' && (
+              <div className="space-y-3.5">
+                <div className="px-3 py-2.5 rounded-xl bg-zinc-50 border border-zinc-200 text-xs text-zinc-600 leading-relaxed space-y-2">
+                  <p className="flex items-start gap-2">
+                    <span className="shrink-0 h-4 w-4 rounded-full bg-zinc-900 text-white text-[10px] flex items-center justify-center font-semibold mt-px">1</span>
+                    <span>
+                      打开{' '}
+                      <a
+                        href={deviceAuth.verificationUri}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-zinc-900 underline underline-offset-2"
+                      >
+                        {deviceAuth.verificationUri.replace(/^https?:\/\//, '')}
+                      </a>
+                      （手机或电脑浏览器均可）
+                    </span>
+                  </p>
+                  <p className="flex items-start gap-2">
+                    <span className="shrink-0 h-4 w-4 rounded-full bg-zinc-900 text-white text-[10px] flex items-center justify-center font-semibold mt-px">2</span>
+                    <span>输入下方用户码并确认授权</span>
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (await copyToClipboard(deviceAuth.userCode)) {
+                      setCopiedUserCode(true);
+                      setTimeout(() => setCopiedUserCode(false), 2000);
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2.5 px-4 py-3.5 rounded-xl border-2 border-dashed border-zinc-300 bg-white hover:border-zinc-400 transition group"
+                  title="点击复制用户码"
+                >
+                  <span className="text-2xl font-mono font-bold tracking-[0.3em] text-zinc-900">
+                    {deviceAuth.userCode}
+                  </span>
+                  {copiedUserCode ? (
+                    <Check className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <Copy className="h-4 w-4 text-zinc-300 group-hover:text-zinc-500" />
+                  )}
+                </button>
+
+                <div className="flex items-center justify-center gap-2 text-xs text-zinc-500">
+                  <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                  <span>
+                    等待页面确认…（每 {deviceAuth.interval}s 自动查询，剩余{' '}
+                    {Math.max(0, Math.round((deviceAuth.expiresAt - Date.now()) / 60))} 分钟）
+                  </span>
+                </div>
+                <p className="text-[10px] text-zinc-400 flex items-center justify-center gap-1">
+                  <ShieldCheck className="h-3 w-3" />
+                  授权范围与权限以你在 GitHub 确认页看到的为准；token 加密存于你的个人空间
+                </p>
+              </div>
+            )}
+
+            {deviceAuth.phase === 'success' && (
+              <div className="py-4 text-center space-y-3">
+                <div className="mx-auto h-11 w-11 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center">
+                  <Check className="h-5 w-5 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-zinc-900">授权成功，工具已挂载</p>
+                  <p className="text-xs text-zinc-500 mt-1">OAuth token 默认不过期，无需再换 key</p>
+                </div>
+                <button
+                  onClick={closeDeviceAuth}
+                  className="px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium transition"
+                >
+                  完成
+                </button>
+              </div>
+            )}
+
+            {(deviceAuth.phase === 'expired' || deviceAuth.phase === 'denied' || deviceAuth.phase === 'error') && (
+              <div className="py-3 text-center space-y-3">
+                <p className="text-sm font-medium text-zinc-900">
+                  {deviceAuth.phase === 'expired'
+                    ? '设备码已过期'
+                    : deviceAuth.phase === 'denied'
+                    ? '授权已在页面上被拒绝'
+                    : '授权失败'}
+                </p>
+                {deviceAuth.error && <p className="text-xs text-red-600 break-all">{deviceAuth.error}</p>}
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    onClick={closeDeviceAuth}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+                  >
+                    关闭
+                  </button>
+                  <button
+                    onClick={() => startDeviceAuth(deviceAuth.connectorId, deviceAuth.connectorName)}
+                    className="px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium transition"
+                  >
+                    重新发起
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

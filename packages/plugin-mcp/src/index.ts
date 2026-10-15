@@ -314,6 +314,15 @@ class UserConnection {
     try {
       return await this.connecting;
     } catch (err: any) {
+      // 命令不存在(spawn ENOENT):裸报错对用户毫无操作性 —— 翻译成安装
+      // 指引(stdio 连接器需本机/镜像先装好命令,安装方式见连接器卡片说明)。
+      // SDK 把 Node 子进程错误透传为 message,code 未必保留,两种口径都认。
+      const cmd = (this.config as { command?: string }).command;
+      const isEnoent =
+        cmd && (err?.code === 'ENOENT' || new RegExp(`spawn ${cmd} ENOENT`).test(err?.message || ''));
+      if (isEnoent && err instanceof Error) {
+        err.message = `本机未安装命令 ${cmd} —— 该连接器为本地子进程型(stdio),需先在运行环境安装对应命令(安装方式见连接器卡片说明)`;
+      }
       // 子进程 stderr 尾部拼进错误信息：Connection closed 只说「进程死了」，
       // 死因（npm 缓存不可写 / 网络失败 / 命令不存在）在 stderr 里
       const tail = getStderrTail();

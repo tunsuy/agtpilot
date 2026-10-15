@@ -833,7 +833,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     icon: 'Radar',
     category: 'Content',
     description:
-      '开源 fanqie-radar(本地 stdio,免凭证):番茄小说公开榜单元数据(榜单/标签/热度)与选题调研分析,供网文选题参考。只读公开数据,项目自身红线即不抓章节正文(版权红线,本产品也不接正文抓取类连接器)。需本机安装:Python ≥ 3.10,`pip install .` 后提供 fanqie-radar 命令;本地子进程默认关闭,点「启用」后才为你的任务挂载。',
+      '开源 fanqie-radar(本地 stdio,免凭证):番茄小说公开榜单元数据(榜单/标签/热度)与选题调研分析,供网文选题参考。只读公开数据,项目自身红线即不抓章节正文(版权红线,本产品也不接正文抓取类连接器)。生产镜像已内置 /opt/fanqie venv(固定 commit),点「启用」即可用;本地开发需 Python ≥ 3.10,源码 `pip install .` 后提供 fanqie-radar 命令;本地子进程默认关闭,点「启用」后才为你的任务挂载。',
     authType: 'none',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["番茄榜单", "番茄小说", "网文选题", "fanqie"],

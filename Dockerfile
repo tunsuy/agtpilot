@@ -82,6 +82,21 @@ RUN node -e "fetch('https://codeload.github.com/hugohe3/ppt-master/tar.gz/b4efe3
     /opt/ppt-master/bin/python3 /opt/skills/ppt-master/scripts/attribution_guard.py && \
     /opt/ppt-master/bin/python3 -c "import yaml, pptx, xlsxwriter, pathops, uharfbuzz, PIL; print('ppt-master deps ok')"
 
+# 番茄小说榜单连接器(小说工坊 P2):stdio 命令 fanqie-radar,无 PyPI 包,
+# 从 GitHub 固定 commit 4a6bc83 源码安装(纯 Python 标准库,零 pip 依赖,
+# tarball 直接 pip install 可用,本机 venv 已验证)。独立 venv /opt/fanqie
+# 不与其它 venv 混装;PATH 顺序 A股 venv 仍居首(python3 解析契约,见上;
+# 两 venv 无命名冲突,fanqie 只贡献 fanqie-* 命令)。置于技能层之后只为
+# 保住上面两层的构建缓存。层尾门禁:真实 MCP initialize 握手冒烟
+# (手写 JSON-RPC stdio),响应含 serverInfo 才算构建成功。
+RUN node -e "fetch('https://codeload.github.com/WindXRan/fanqie-radar/tar.gz/4a6bc83ae98aaaccf9baf19ef3a36052473401bb').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()}).then(b=>require('node:fs').writeFileSync('/tmp/fanqie.tgz',Buffer.from(b)))" && \
+    python3 -m venv /opt/fanqie && \
+    /opt/fanqie/bin/pip install --no-cache-dir /tmp/fanqie.tgz && \
+    rm -f /tmp/fanqie.tgz && \
+    chmod -R a+rX /opt/fanqie && \
+    (echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"build-smoke","version":"0"}}}'; sleep 3) | timeout 10 /opt/fanqie/bin/fanqie-radar | grep -q 'fanqie-radar'
+ENV PATH="/opt/a-stock/bin:/opt/fanqie/bin:${PATH}"
+
 # ---- 业务代码（standalone 产物；变更只作废以下薄层）----
 
 # 复制公共静态资源与 standalone 产物

@@ -567,6 +567,11 @@ class AgentBackend {
           : this.state.missions.find((m) => m.id === this.state.activeMissionId);
         if (mission) {
             mission.title = plan.goal;
+            // 看板原结构挂到 mission(视图层看板卡数据源):比 steps 扁平合并
+            // 多保留 goal/currentTaskId;每次 plan 广播整体替换,重建看板
+            // 自动指向新计划。看板步骤此前在会话流被 tool 过滤规则丢弃
+            // (无 tool 字段),进度只在左侧会话徽标可见 —— 卡片补上这一层
+            mission.plan = plan;
             // 合并式同步：看板任务按 id 增量更新/追加，【不】整体覆盖 steps ——
             // 旧实现每次 planner_update_task 都会把用户提问、已执行的工具步骤
             // 全部抹掉，时间线反复闪烁且回溯不可见

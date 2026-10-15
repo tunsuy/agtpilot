@@ -210,3 +210,15 @@ export function findFinalAnswerIndex(blocks: CockpitBlock[]): number {
   }
   return idx;
 }
+
+/**
+ * 轮次是否创建了任务看板(过程块里含 planner_create_plan):视图层据此
+ * 在该轮钉挂看板卡。判定只认「创建/重建」动作 —— 看板卡钉在看板立起来
+ * 的那个轮次,不随后续续聊轮漂移(看板状态经 mission.plan 实时刷新,
+ * 卡片位置不变)。
+ */
+export function turnCreatesPlan(items: CockpitBlock[]): boolean {
+  return items.some(
+    (b) => b.type === 'tools' && b.steps.some((s) => s.tool === 'planner_create_plan')
+  );
+}

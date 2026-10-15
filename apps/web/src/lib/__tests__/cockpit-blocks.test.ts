@@ -6,6 +6,7 @@ import {
   isEfficiencyStep,
   processElapsedMs,
   findFinalAnswerIndex,
+  turnCreatesPlan,
   EFFICIENCY_STEP_PREFIX,
 } from '../cockpit-blocks';
 import type { MissionStep } from '../../types/agent';
@@ -485,5 +486,47 @@ describe('findFinalAnswerIndex · 整轮折叠边界(收起不完整修复)', ()
   it('无任何回复块 → -1(整轮保持展开)', () => {
     const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), toolStep('t1', 'web_search')]);
     expect(findFinalAnswerIndex(blocks)).toBe(-1);
+  });
+});
+
+describe('turnCreatesPlan · 看板卡钉挂轮判定', () => {
+  it('过程块含 planner_create_plan 的轮次 → 钉挂看板卡', () => {
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '调研并产出报告'),
+      toolStep('t1', 'planner_create_plan'),
+      toolStep('t2', 'web_search'),
+      finalAnswer('a1', '报告'),
+    ]);
+    const turns = groupBlocksIntoTurns(blocks);
+    const agentTurn = turns.find((t) => t.type === 'agent');
+    expect(turnCreatesPlan((agentTurn as { items: any[] }).items)).toBe(true);
+  });
+
+  it('普通工具轮 → 不钉挂(不出空壳卡)', () => {
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '查天气'),
+      toolStep('t1', 'web_search'),
+      finalAnswer('a1', '晴'),
+    ]);
+    const turns = groupBlocksIntoTurns(blocks);
+    const agentTurn = turns.find((t) => t.type === 'agent');
+    expect(turnCreatesPlan((agentTurn as { items: any[] }).items)).toBe(false);
+  });
+
+  it('续聊轮不含创建动作 → 不钉挂(卡片位置不漂移,状态靠 mission.plan 刷新)', () => {
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '调研'),
+      toolStep('t1', 'planner_create_plan'),
+      toolStep('t2', 'web_search'),
+      finalAnswer('a1', '中期结论'),
+      userStep('u2', '继续'),
+      toolStep('t3', 'web_search'),
+      finalAnswer('a2', '最终结论'),
+    ]);
+    const turns = groupBlocksIntoTurns(blocks);
+    const agentTurns = turns.filter((t) => t.type === 'agent');
+    expect(agentTurns).toHaveLength(2);
+    expect(turnCreatesPlan((agentTurns[0] as { items: any[] }).items)).toBe(true);
+    expect(turnCreatesPlan((agentTurns[1] as { items: any[] }).items)).toBe(false);
   });
 });

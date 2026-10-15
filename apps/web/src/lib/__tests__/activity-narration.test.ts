@@ -53,6 +53,13 @@ describe('narrateStep 工具映射', () => {
     expect(narrateStep(step({ tool: 'wechat_mp_create_draft' }))?.label).toBe('写入公众号草稿箱');
   });
 
+  it('planner_create_plan 带 goal 细节(看板创建行不再孤零零)', () => {
+    const n = narrateStep(step({ tool: 'planner_create_plan', args: { goal: '产出 3 条核验过的贡献机会' } }));
+    expect(n?.kind).toBe('planner');
+    expect(n?.label).toBe('创建任务看板');
+    expect(n?.detail).toBe('产出 3 条核验过的贡献机会');
+  });
+
   it('mcp_ 前缀归连接器,兜底归执行任务', () => {
     expect(narrateStep(step({ tool: 'mcp_notion__search' }))?.kind).toBe('connector');
     expect(narrateStep(step({ tool: 'some_unknown_tool' }))?.kind).toBe('generic');

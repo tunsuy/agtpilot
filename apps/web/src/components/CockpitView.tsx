@@ -62,7 +62,8 @@ import { parseNovelPackage } from '../workshops/novel/novel-package';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
 import { resolveArtifactDraft } from '../workshops/registry';
-import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs, findFinalAnswerIndex } from '../lib/cockpit-blocks';
+import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs, findFinalAnswerIndex, turnCreatesPlan } from '../lib/cockpit-blocks';
+import { KanbanPlanCard } from './KanbanPlanCard';
 import { sourcesForAnswer } from '../lib/search-sources';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
 import {
@@ -757,6 +758,14 @@ export function CockpitView({
                           turnStreaming ? 'border-blue-300/70' : 'border-zinc-200/80'
                         }`}
                       >
+                        {/* 任务看板卡:看板在本轮立起来(planner_create_plan 落在
+                            本轮过程块)即在本轮钉挂 —— 看板按提示词先于执行创建,
+                            顶部即其真实时间线位置。不参与整轮过程折叠:受控进展
+                            播报开始吐正文后过程区会收起,看板进度不能跟着消失;
+                            状态经 mission.plan 实时刷新,重建看板自动替换 */}
+                        {turnCreatesPlan(turn.items) && currentMission.plan && (
+                          <KanbanPlanCard plan={currentMission.plan} />
+                        )}
                         {/* 整轮过程折叠开关:最终回复开始流式输出时,本轮全部
                             过程(工具行 + 中间思考)自动收成这一行,点开原地
                             展开回看完整时间线 */}

@@ -92,7 +92,8 @@ function narrateTool(tool: string, args: any = {}): NarratedActivity {
     case 'artifact_render':
       return { kind: 'artifact', label: '生成交付文档', detail: title };
     case 'planner_create_plan':
-      return { kind: 'planner', label: '创建任务看板' };
+      // goal 作单行细节:会话流里这行不再是孤零零的「创建任务看板」
+      return { kind: 'planner', label: '创建任务看板', detail: clip(args?.goal, 60) };
     case 'planner_update_task':
       return { kind: 'planner', label: '推进任务看板' };
     case 'connector_authorize':

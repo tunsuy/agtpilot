@@ -1,4 +1,5 @@
 import type { CronScenario } from '../lib/cron-scenario';
+import type { PlanData } from '@agtpilot/protocol';
 
 export interface ConnectorApp {
   id: string;
@@ -120,6 +121,12 @@ export interface Mission {
   usage?: { promptTokens: number; completionTokens: number };
   viewport?: ViewportState;
   terminalLogs?: TerminalLog[];
+  /**
+   * 任务看板实时状态(planner 插件 'plan' 事件镜像):看板卡数据源,
+   * 保留 goal/currentTaskId 等结构(steps 合并只有扁平任务行)。重建
+   * 看板自动替换(planner 同 taskKey 旧计划作废);旧任务落盘无此字段。
+   */
+  plan?: PlanData;
   artifact?: ArtifactState | null;
 }
 

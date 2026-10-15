@@ -671,8 +671,8 @@ export function CockpitView({
                         <div
                           className={
                             isQueued
-                              ? 'max-w-[85%] rounded-2xl bg-zinc-100 text-zinc-400 border border-zinc-200 px-4 py-2.5 shadow-sm text-xs leading-relaxed italic selection:bg-zinc-200'
-                              : 'max-w-[85%] rounded-2xl bg-zinc-900 text-zinc-50 px-4 py-2.5 shadow-sm text-xs leading-relaxed selection:bg-zinc-700'
+                              ? 'max-w-[85%] rounded-2xl bg-zinc-100 text-zinc-400 border border-zinc-200 px-4 py-2.5 shadow-sm text-sm leading-relaxed italic selection:bg-zinc-200'
+                              : 'max-w-[85%] rounded-2xl bg-zinc-900 text-zinc-50 px-4 py-2.5 shadow-sm text-sm leading-relaxed selection:bg-zinc-700'
                           }
                         >
                           <p className="whitespace-pre-wrap font-normal">
@@ -927,7 +927,7 @@ export function CockpitView({
                     if (!st.answer && !st.reasoning && !isStreaming) return null;
 
                     return (
-                      <div key={st.id} className="group/ans relative text-xs text-zinc-800 leading-relaxed">
+                      <div key={st.id} className="group/ans relative text-sm text-zinc-800 leading-relaxed">
                             {/* 思考过程（推理模型 reasoning 流，可折叠；左竖线轻量样式，避免框中框）。
                                 整轮收起时不渲染 —— 最终答复的思考流已归入「任务过程」行 */}
                             {st.reasoning && reasoningInSection && (

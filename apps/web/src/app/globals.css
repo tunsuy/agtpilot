@@ -123,7 +123,8 @@ body {
 
 /* 会话回复紧凑排版：与聊天区 text-xs (12px) 基准对齐，行距收紧 */
 .prose-chat {
-  font-size: 0.75rem;
+  /* 对话层正文 14px:query/最终答复是「读」的内容,过程/工具行保持 12px(「扫」的层级) */
+  font-size: 0.875rem;
   line-height: 1.65;
 }
 
@@ -133,9 +134,9 @@ body {
   line-height: 1.4;
 }
 
-.prose-chat h1 { font-size: 0.9375rem; }
-.prose-chat h2 { font-size: 0.875rem; }
-.prose-chat h3, .prose-chat h4 { font-size: 0.8125rem; }
+.prose-chat h1 { font-size: 1.0625rem; }
+.prose-chat h2 { font-size: 1rem; }
+.prose-chat h3, .prose-chat h4 { font-size: 0.9375rem; }
 
 .prose-chat p {
   margin-top: 0.4em;
@@ -154,17 +155,17 @@ body {
 }
 
 .prose-chat pre {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   padding: 0.625rem;
   border-radius: 0.5rem;
 }
 
 .prose-chat code:not(pre code) {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
 }
 
 .prose-chat table {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   margin: 0.75rem 0;
 }
 

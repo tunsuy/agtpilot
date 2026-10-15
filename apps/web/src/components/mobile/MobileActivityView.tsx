@@ -426,7 +426,7 @@ export function MobileActivityView({
                                 );
                               }
                               return (
-                                <p className="mt-1.5 text-[12px] leading-5 text-zinc-600 whitespace-pre-wrap break-words bg-zinc-50 rounded-lg px-2.5 py-2">
+                                <p className="mt-1.5 text-[13px] leading-5 text-zinc-600 whitespace-pre-wrap break-words bg-zinc-50 rounded-lg px-2.5 py-2">
                                   {String(body).slice(0, 2000)}
                                 </p>
                               );

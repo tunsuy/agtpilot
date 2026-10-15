@@ -335,14 +335,15 @@ describe('工坊 golden 快照 · cron 场景重建', () => {
     expect(resolveCronPrompt({ scenario: { key: 'xhs_weekly_topics' } }, getHollow)).toMatchSnapshot();
   });
 
-  it('oss_radar_weekly · count 5 · 完整档案', () => {
-    expect(
+  it('oss_radar_weekly:requiresServerState(派发历史服务端现读)——纯函数路径诚实抛错,无 golden 快照', () => {
+    // 缺了派发历史的周扫 prompt 是假 prompt(会把已核实无需改动的 Issue 再推一遍),
+    // 服务端重建(档案 + 历史黑名单注入)的断言在 server-render.test.ts
+    expect(() =>
       resolveCronPrompt({ scenario: { key: 'oss_radar_weekly', count: 5 } }, getProfile)
-    ).toMatchSnapshot();
-  });
-
-  it('oss_radar_weekly · 缺省 count · 无档案', () => {
-    expect(resolveCronPrompt({ scenario: { key: 'oss_radar_weekly' } }, getNone)).toMatchSnapshot();
+    ).toThrow(/需要服务端现读状态/);
+    expect(() => resolveCronPrompt({ scenario: { key: 'oss_radar_weekly' } }, getNone)).toThrow(
+      /需要服务端现读状态/
+    );
   });
 
   it('非场景任务原样透传(不受重构影响)', () => {

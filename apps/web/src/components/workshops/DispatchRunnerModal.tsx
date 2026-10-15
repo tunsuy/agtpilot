@@ -29,6 +29,15 @@ interface DeviceRow {
   ghLogin?: string | null;
 }
 
+/** 派发防重冲突(路由 409 dispatch_conflict 回带;话术服务端拼好) */
+interface DispatchConflictInfo {
+  kind: 'no_action' | 'active';
+  taskId: string;
+  state: string;
+  message: string;
+  noAction?: { reason: string; label: string; evidence: string };
+}
+
 export function DispatchRunnerModal({
   opp,
   missionId,
@@ -50,6 +59,8 @@ export function DispatchRunnerModal({
   const [showPreview, setShowPreview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 同 Issue 已有「无需改动」结论或在途任务(409):摆出历史结论,用户明示后才 force 重派 */
+  const [conflict, setConflict] = useState<DispatchConflictInfo | null>(null);
   const [copied, setCopied] = useState(false);
   /** null = 跟随自动检测;用户手动勾选/取消后以手动为准(切换设备时重置) */
   const [viaForkOverride, setViaForkOverride] = useState<boolean | null>(null);
@@ -106,7 +117,7 @@ export function DispatchRunnerModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDispatch = async () => {
+  const handleDispatch = async (force = false) => {
     if (!pack || busy || !effectiveDeviceId) return;
     setBusy(true);
     setError(null);
@@ -114,9 +125,19 @@ export function DispatchRunnerModal({
       const r = await fetch('/api/runner/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pack, deviceId: effectiveDeviceId, ...(missionId ? { missionId } : {}) }),
+        // force=true 仅在冲突面板「仍要派发」时带上(用户看过历史结论后的明示旁路)
+        body: JSON.stringify({
+          pack,
+          deviceId: effectiveDeviceId,
+          ...(missionId ? { missionId } : {}),
+          ...(force ? { force: true } : {}),
+        }),
       });
       const j = await r.json();
+      if (r.status === 409 && j?.error === 'dispatch_conflict' && j.conflict) {
+        setConflict(j.conflict as DispatchConflictInfo);
+        return;
+      }
       if (!r.ok || !j?.success) {
         setError(String(j?.error || `派发失败(HTTP ${r.status})`));
         return;
@@ -305,6 +326,33 @@ export function DispatchRunnerModal({
                 (工具调用 / 阶段文本)实时滚动,完成后审批卡会出现在驾驶舱。
               </p>
 
+              {conflict && (
+                <div className="px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 space-y-2">
+                  <div className="flex items-start gap-2 text-xs text-amber-800 leading-relaxed">
+                    <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>{conflict.message}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDispatch(true)}
+                      disabled={busy}
+                      className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-40 text-white text-[11px] font-medium transition"
+                    >
+                      {busy ? '派发中…' : '仍要派发'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConflict(null)}
+                      disabled={busy}
+                      className="px-2.5 py-1 rounded-lg border border-amber-300 text-amber-800 text-[11px] font-medium hover:bg-amber-100 transition"
+                    >
+                      知道了,不派发
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {error && (
                 <div className="px-3 py-2 rounded-lg bg-rose-50 border border-rose-100 text-xs text-rose-700">{error}</div>
               )}
@@ -326,8 +374,8 @@ export function DispatchRunnerModal({
           )}
           <button
             type="button"
-            onClick={handleDispatch}
-            disabled={!pack || busy || !effectiveDeviceId}
+            onClick={() => handleDispatch(false)}
+            disabled={!pack || busy || !effectiveDeviceId || Boolean(conflict)}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium transition shadow-xs"
           >
             <Send className="h-3.5 w-3.5" />

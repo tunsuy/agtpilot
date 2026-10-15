@@ -299,6 +299,15 @@ export function MobileActivityView({
                         {RUNNER_RETRYABLE_LABEL}
                       </span>
                     )}
+                    {/* no-action 例外终态原因(悬停看证据;与桌面端徽章同源话术) */}
+                    {t.state === 'no_action' && t.noAction && (
+                      <span
+                        className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-teal-50 text-teal-700 border-teal-200 shrink-0"
+                        title={`证据:${t.noAction.evidence}`}
+                      >
+                        {t.noAction.label}
+                      </span>
+                    )}
                     <span className="text-xs font-mono text-zinc-900 truncate flex-1 min-w-0">{t.repo}</span>
                     {t.missionId && missions.some((m) => m.id === t.missionId) && (
                       <button

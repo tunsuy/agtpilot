@@ -11,6 +11,8 @@ import { getWorkshop, getWorkshopSkill, CRON_SCENARIOS, type WorkshopId } from '
 import { getWorkshopOverrides } from './overrides';
 import { getUserScenarioProfiles } from '@/lib/user-store';
 import { getNovelBook } from '@/lib/novel-store';
+import { getRunnerTasks } from '@/lib/runner-bridge';
+import { radarDispatchHistory } from '@/lib/runner-dispatch';
 import { normalizeCronScenario, resolveCronPrompt, type CronScenario } from '@/lib/cron-scenario';
 import type { WorkshopRun, WorkshopRunContext } from './types';
 
@@ -31,6 +33,11 @@ const STATE_LOADERS: Partial<Record<WorkshopId, (userId: string, params: Record<
     if (!book) throw new Error(`小说不存在或无权访问: ${bookId || '(缺 bookId)'}`);
     return { novelState: book };
   },
+  oss_radar: (userId) => ({
+    // 派发历史黑名单现读(周扫不重复推荐已派发/已核实无需改动的 Issue);
+    // 读任务记录失败 = 权威渲染拒绝,不静默降级成「无历史」的 prompt
+    ossDispatchHistory: radarDispatchHistory(getRunnerTasks(userId)),
+  }),
 };
 
 export interface ServerWorkshopRun extends WorkshopRun {
@@ -70,9 +77,10 @@ export function renderWorkshopRunServer(
 /**
  * cron 触发时的服务端权威 prompt 解析(agent-backend 调度回调专用):
  * - 普通任务:原样 job.prompt;
- * - 纯场景(xhs/oss_radar):委托 resolveCronPrompt(档案现读注入);
- * - requiresServerState 场景(novel 日更):复用 renderWorkshopRunServer 走
- *   novel loader 现读书库(书不存在/无权访问 → 抛错,任务失败可见,绝不静默)。
+ * - 纯场景(xhs):委托 resolveCronPrompt(档案现读注入);
+ * - requiresServerState 场景(novel 日更 / oss_radar 周扫):复用 renderWorkshopRunServer
+ *   走各工坊 loader 现读状态(书不存在/无权访问、任务记录读取失败 → 抛错,
+ *   任务失败可见,绝不静默)。
  * 失败一律抛错给调度器记录,不降级不吞。
  */
 export function resolveCronPromptServer(
@@ -86,19 +94,18 @@ export function resolveCronPromptServer(
   if (!spec.requiresServerState) {
     return resolveCronPrompt(job, (slot) => getUserScenarioProfiles(userId)[slot]);
   }
-  if (spec.workshopId !== 'novel') {
-    throw new Error(`场景 ${scenario.key} 声明 requiresServerState 但没有服务端解析路径(workshopId=${spec.workshopId})`);
+  let params: Record<string, unknown>;
+  if (spec.workshopId === 'novel') {
+    const bookId = scenario.bookId?.trim();
+    if (!bookId) {
+      throw new Error('小说日更场景缺少 bookId(订阅时没绑定书,无法续写)');
+    }
+    params = { mode: 'continue', bookId, ...(scenario.count ? { chapterWords: scenario.count } : {}) };
+  } else {
+    // 通用 serverState 场景(如 oss_radar 周扫):count 透传,状态由 loader 现读注入
+    params = { ...(scenario.count ? { count: scenario.count } : {}) };
   }
-  const bookId = scenario.bookId?.trim();
-  if (!bookId) {
-    throw new Error('小说日更场景缺少 bookId(订阅时没绑定书,无法续写)');
-  }
-  const run = renderWorkshopRunServer(
-    userId,
-    'novel',
-    { mode: 'continue', bookId, ...(scenario.count ? { chapterWords: scenario.count } : {}) },
-    opts
-  );
-  if (!run) throw new Error('novel 工坊未注册,无法解析日更场景');
+  const run = renderWorkshopRunServer(userId, spec.workshopId, params, opts);
+  if (!run) throw new Error(`工坊 ${spec.workshopId} 未注册,无法解析场景 ${scenario.key}`);
   return run.prompt;
 }

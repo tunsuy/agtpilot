@@ -116,8 +116,12 @@ describe('buildTaskPackFromOpportunity · viaFork(经 fork 派发)', () => {
 // ---------- 概览/时间线(mine + detail 路由与设备页任务列表的数据源) ----------
 
 import {
+  describeDispatchConflict,
   isRunnerTaskActive,
   latestTaskProgress,
+  noActionLabel,
+  RADAR_HISTORY_LIMIT,
+  radarDispatchHistory,
   runnerRetryable,
   runnerStateMeta,
   RUNNER_RETRYABLE_LABEL,
@@ -246,17 +250,20 @@ describe('taskEventTimeline(事件 → 展示时间线,旧→新,截最近 limit
 });
 
 describe('runnerStateMeta / isRunnerTaskActive(话术与在途判定共用)', () => {
-  it('9 态全覆盖;未知态 zinc 兜底不裸奔', () => {
-    for (const s of ['queued', 'dispatched', 'running', 'awaiting_approval', 'finishing', 'done', 'failed', 'cancelled', 'expired']) {
+  it('10 态全覆盖;未知态 zinc 兜底不裸奔', () => {
+    for (const s of ['queued', 'dispatched', 'running', 'awaiting_approval', 'finishing', 'done', 'failed', 'no_action', 'cancelled', 'expired']) {
       expect(runnerStateMeta(s).label.length).toBeGreaterThan(0);
     }
     expect(runnerStateMeta('mystery').label).toBe('mystery');
+    // no-action 例外终态:teal 中性收敛(不是失败 rose 误导,也不是完成 emerald)
+    expect(runnerStateMeta('no_action').label).toBe('无需改动');
+    expect(runnerStateMeta('no_action').cls).toContain('teal');
   });
 
-  it('终态四兄弟不在途,其余在途', () => {
+  it('终态五兄弟不在途,其余在途', () => {
     expect(isRunnerTaskActive('running')).toBe(true);
     expect(isRunnerTaskActive('awaiting_approval')).toBe(true);
-    for (const s of ['done', 'failed', 'cancelled', 'expired']) expect(isRunnerTaskActive(s)).toBe(false);
+    for (const s of ['done', 'failed', 'no_action', 'cancelled', 'expired']) expect(isRunnerTaskActive(s)).toBe(false);
   });
 });
 
@@ -290,5 +297,114 @@ describe('tasksForDevice(设备详情归属:领取绑定或派发指定)', () =>
     expect(tasksForDevice(asTasks, 'dev_2').map((t) => t.taskId)).toEqual(['c']);
     const orphan = [{ taskId: 'x' }] as RunnerTaskSummary[];
     expect(tasksForDevice(orphan, 'dev_1')).toEqual([]);
+  });
+});
+
+// ---------- no-action 例外终态话术 + 派发防重话术 + 雷达派发历史 ----------
+
+function mkTask(
+  taskId: string,
+  state: string,
+  issueUrl: string,
+  updatedAt: number,
+  extra: Partial<RunnerTaskRecord> = {}
+): RunnerTaskRecord {
+  return {
+    taskId,
+    userId: 'u1',
+    pack: {
+      taskId,
+      kind: 'oss_contribution',
+      repo: 'milvus-io/milvus',
+      issueUrl,
+      workBranch: 'contrib/x',
+      constraints: [],
+      acceptance: {},
+      prDraft: { title: 't', bodyTemplate: '' },
+      executor: { name: 'claude-code', maxTurns: 10, timeoutMinutes: 5 },
+    },
+    state,
+    createdAt: updatedAt,
+    updatedAt,
+    expiresAt: updatedAt + 1,
+    ...extra,
+  } as RunnerTaskRecord;
+}
+
+describe('noActionLabel / summarize noAction / describeDispatchConflict(结论与防重话术)', () => {
+  it('reason → 中文标签(protocol 同源词表);未知枚举兜底「无需改动」', () => {
+    expect(noActionLabel('already_fixed')).toBe('上游已修复');
+    expect(noActionLabel('not_reproducible')).toBe('无法复现');
+    expect(noActionLabel('out_of_scope')).toBe('不属于本仓库');
+    expect(noActionLabel('other')).toBe('无需改动(其它)');
+    expect(noActionLabel('mystery')).toBe('无需改动');
+  });
+
+  it('summarizeRunnerTask:带 noAction → 概览行含 reason/label/证据摘要(截 500);无标记不含键', () => {
+    const s = summarizeRunnerTask(
+      mkTask('rtask_1', 'no_action', 'https://github.com/milvus-io/milvus/issues/52049', 5, {
+        noAction: { reason: 'already_fixed', evidence: 'e'.repeat(900) },
+      })
+    );
+    expect(s.noAction!.reason).toBe('already_fixed');
+    expect(s.noAction!.label).toBe('上游已修复');
+    expect(s.noAction!.evidence).toHaveLength(500);
+    expect('noAction' in summarizeRunnerTask(mkTask('rtask_2', 'failed', 'u', 5))).toBe(false);
+  });
+
+  it('describeDispatchConflict:no_action 摆结论与证据摘要;无证据不带空尾巴;active 提醒并行', () => {
+    const noAct = describeDispatchConflict({
+      kind: 'no_action',
+      state: 'no_action',
+      noAction: { reason: 'already_fixed', evidence: 'commit d9bef57b8f 已在基线' },
+    });
+    expect(noAct).toContain('无需改动');
+    expect(noAct).toContain('上游已修复');
+    expect(noAct).toContain('d9bef57b8f');
+    expect(noAct).toContain('重复派发大概率再次得到同样结论');
+    expect(describeDispatchConflict({ kind: 'no_action', state: 'no_action' })).not.toContain('证据:');
+    const active = describeDispatchConflict({ kind: 'active', state: 'running' });
+    expect(active).toContain('本地执行中');
+    expect(active).toContain('并行执行两份');
+  });
+});
+
+describe('radarDispatchHistory(雷达去重黑名单数据源)', () => {
+  it('按 updatedAt 新→旧;同 issueUrl 只留最近一次;expired 不占名单', () => {
+    const tasks = [
+      mkTask('t1', 'failed', 'https://github.com/o/r/issues/1', 100),
+      mkTask('t2', 'no_action', 'https://github.com/o/r/issues/1', 300, {
+        noAction: { reason: 'already_fixed', evidence: 'e' },
+      }),
+      mkTask('t3', 'done', 'https://github.com/o/r/issues/2', 200),
+      mkTask('t4', 'expired', 'https://github.com/o/r/issues/3', 400),
+    ];
+    const h = radarDispatchHistory(tasks);
+    expect(h.map((e) => e.issueUrl)).toEqual([
+      'https://github.com/o/r/issues/1',
+      'https://github.com/o/r/issues/2',
+    ]);
+    expect(h[0].outcome).toContain('已核实无需改动');
+    expect(h[0].outcome).toContain('上游已修复');
+    expect(h[1].outcome).toBe('已派发并完成(PR 已发布)');
+  });
+
+  it('各状态结局话术:failed/cancelled/在途/no_action 缺标记兜底', () => {
+    expect(radarDispatchHistory([mkTask('a', 'failed', 'u1', 1)])[0].outcome).toBe('已派发但失败');
+    expect(radarDispatchHistory([mkTask('a', 'cancelled', 'u1', 1)])[0].outcome).toBe('已派发后被终止');
+    expect(radarDispatchHistory([mkTask('a', 'running', 'u1', 1)])[0].outcome).toBe('已派发,进行中');
+    expect(radarDispatchHistory([mkTask('a', 'no_action', 'u1', 1)])[0].outcome).toBe('已核实无需改动(无需改动(其它))');
+  });
+
+  it('空/缺 issueUrl 跳过;新→旧截断 limit(缺省 50)', () => {
+    expect(radarDispatchHistory([])).toEqual([]);
+    expect(radarDispatchHistory([mkTask('a', 'done', '', 1)])).toEqual([]);
+    const many = Array.from({ length: 80 }, (_, i) =>
+      mkTask(`t${i}`, 'done', `https://github.com/o/r/issues/${i}`, i)
+    );
+    const h = radarDispatchHistory(many);
+    expect(h).toHaveLength(RADAR_HISTORY_LIMIT);
+    expect(h[0].issueUrl).toBe('https://github.com/o/r/issues/79');
+    expect(radarDispatchHistory(many, 3)).toHaveLength(3);
   });
 });

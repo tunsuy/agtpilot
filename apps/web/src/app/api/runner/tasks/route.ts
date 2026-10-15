@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { claimNextTask, enqueueTask, getDeviceActions, getRunnerTasks } from '@/lib/runner-bridge';
+import { claimNextTask, enqueueTask, findDispatchConflict, getDeviceActions, getRunnerTasks } from '@/lib/runner-bridge';
+import { describeDispatchConflict, noActionLabel } from '@/lib/runner-dispatch';
 import { authenticateRunnerRequest } from '@/lib/runner-route-auth';
 
 /**
@@ -19,6 +20,8 @@ import { authenticateRunnerRequest } from '@/lib/runner-route-auth';
  * 缺省 = 任意在线设备 FIFO 领取(存量语义)。
  * body.missionId 可选:派发时所处的驾驶舱会话 id(设备任务 ↔ 会话互跳关联键;
  * 畸形 400,会话不存在不阻断 —— 删除过的会话只是跳转失效)。
+ * 派发防重:同 issueUrl 已有 no_action 结论或在途任务 → 409 dispatch_conflict
+ * (带历史结论供 UI 展示);body.force=true = 用户看过结论后仍要派发(明示旁路)。
  */
 export async function GET(req: NextRequest) {
   try {
@@ -62,17 +65,49 @@ export async function POST(req: NextRequest) {
     if (missionId !== undefined && (typeof missionId !== 'string' || missionId.length > 128 || missionId.length === 0)) {
       return NextResponse.json({ success: false, error: 'missionId 须为非空字符串(≤128 字符)' }, { status: 400 });
     }
+    const force = body?.force === true;
+    // 派发防重预检(精确 409,UI 据此展示历史结论 + 「仍要派发」明示旁路);
+    // enqueueTask 内部还有权威兜底(松散探测的 issueUrl 与协议清洗结果不一致时以清洗为准)
+    const packProbe = (body?.pack ?? body) as { issueUrl?: unknown } | null;
+    if (!force && typeof packProbe?.issueUrl === 'string' && packProbe.issueUrl) {
+      const conflict = findDispatchConflict(getRunnerTasks(session.user.id), packProbe.issueUrl);
+      if (conflict) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'dispatch_conflict',
+            conflict: {
+              kind: conflict.kind,
+              taskId: conflict.taskId,
+              state: conflict.state,
+              message: describeDispatchConflict(conflict),
+              ...(conflict.noAction
+                ? {
+                    noAction: {
+                      reason: conflict.noAction.reason,
+                      label: noActionLabel(conflict.noAction.reason),
+                      evidence: conflict.noAction.evidence.slice(0, 500),
+                    },
+                  }
+                : {}),
+            },
+          },
+          { status: 409 }
+        );
+      }
+    }
     const record = enqueueTask(session.user.id, body?.pack ?? body, Date.now(), {
       ...(deviceId ? { targetDeviceId: deviceId } : {}),
       ...(missionId ? { missionId } : {}),
+      ...(force ? { force: true } : {}),
     });
     if (!record) {
       return NextResponse.json(
         {
           success: false,
           error: deviceId
-            ? '任务包清洗失败、taskId 已存在,或目标设备无效(不存在/已吊销/不属于当前用户)'
-            : '任务包清洗失败(核心字段缺失/畸形)或 taskId 已存在',
+            ? '任务包清洗失败、taskId 已存在、同 Issue 已有在途/无需改动任务,或目标设备无效(不存在/已吊销/不属于当前用户)'
+            : '任务包清洗失败(核心字段缺失/畸形)、taskId 已存在,或同 Issue 已有在途/无需改动任务',
         },
         { status: 400 }
       );

@@ -46,6 +46,31 @@ export interface OssRadarInput {
   count?: number;
   /** 贡献者档案(scenarioKey='oss_radar');无档案或档案为空时不注入 */
   profile?: ScenarioProfile;
+  /**
+   * 派发历史(去重黑名单):已派发处理过 / 已核实无需改动的 Issue 清单,
+   * 由服务端(server-render oss_radar loader)现读任务记录注入;客户端预览缺省不注入。
+   */
+  dispatchHistory?: RadarDispatchHistoryEntry[];
+}
+
+/** 派发历史单条:Issue 链接 + 处置结果话术(runner-dispatch radarDispatchHistory 产出) */
+export interface RadarDispatchHistoryEntry {
+  issueUrl: string;
+  outcome: string;
+}
+
+/**
+ * 派发历史 → Prompt 注入段(无历史 → null,模板 {{#if}} 整段不渲染)。
+ * 生产背景:milvus #52049 修复已合并但 Issue 没人关,雷达每轮都再扫出来重复派发。
+ */
+export function buildDispatchHistorySection(entries?: RadarDispatchHistoryEntry[]): string | null {
+  const lines = (entries ?? [])
+    .filter((e) => e.issueUrl && e.outcome)
+    .map((e) => `- ${e.issueUrl} — ${e.outcome}`);
+  if (lines.length === 0) return null;
+  return `【派发历史】以下 Issue 此前已派发处理过、或已由本地 agent 核实无需改动,不要重复推荐(即使检索命中):
+${lines.join('\n')}
+若某项目扫出来的机会全在上面的名单里,换别的项目,不要硬凑。`;
 }
 
 /**
@@ -72,7 +97,7 @@ const interestName = (id: string): string | null =>
 const kindName = (id: string): string | null =>
   OSS_CONTRIB_KINDS.find((k) => k.id === id)?.name || null;
 
-export function buildOssRadarPrompt({ stack, interests, kinds, count, profile }: OssRadarInput): string {
+export function buildOssRadarPrompt({ stack, interests, kinds, count, profile, dispatchHistory }: OssRadarInput): string {
   const n = Math.min(7, Math.max(3, Math.round(count ?? 5) || 5));
   const profileSection = profile ? buildContributorProfileSection(profile) : null;
   const stackText =
@@ -82,6 +107,7 @@ export function buildOssRadarPrompt({ stack, interests, kinds, count, profile }:
   return renderTemplate(prompt, {
     count: n,
     profileSection: profileSection || '',
+    historySection: buildDispatchHistorySection(dispatchHistory) || '',
     stackText,
     interestNames: interestNames.length > 0 ? interestNames.join('、') : '不限,AI 领域均可',
     kindNames: kindNames.length > 0 ? kindNames.join('、') : '不限',

@@ -57,7 +57,7 @@ function difficultyClass(difficulty: string): string {
   return 'bg-zinc-50 text-zinc-600 border-zinc-200';
 }
 
-/** 任务状态徽章(M2 事件回流):状态机 9 态话术与设备页任务列表共用 runnerStateMeta */
+/** 任务状态徽章(M2 事件回流):状态机 10 态话术与设备页任务列表共用 runnerStateMeta */
 function TaskStateBadge({ task }: { task: RunnerTaskSummary }) {
   const meta = runnerStateMeta(task.state);
   const retryable = runnerRetryable(task);
@@ -65,7 +65,13 @@ function TaskStateBadge({ task }: { task: RunnerTaskSummary }) {
     <span className="inline-flex items-center gap-1 min-w-0">
       <span
         className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${meta.cls} min-w-0`}
-        title={task.state === 'failed' && task.error ? task.error : `任务 ${task.taskId} · 分支 ${task.workBranch}`}
+        title={
+          task.state === 'failed' && task.error
+            ? task.error
+            : task.state === 'no_action' && task.noAction
+              ? `agent 核实无需改动:${task.noAction.label}\n证据:${task.noAction.evidence}`
+              : `任务 ${task.taskId} · 分支 ${task.workBranch}`
+        }
       >
         <MonitorSmartphone className="h-3 w-3 shrink-0" />
         <span className="truncate">{meta.label}</span>
@@ -87,6 +93,15 @@ function TaskStateBadge({ task }: { task: RunnerTaskSummary }) {
           title={RUNNER_RETRYABLE_HINT}
         >
           {RUNNER_RETRYABLE_LABEL}
+        </span>
+      )}
+      {/* no-action 例外终态:teal 原因小徽章,悬停看完整证据(与可重试徽章同一模式) */}
+      {task.state === 'no_action' && task.noAction && (
+        <span
+          className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border shrink-0 bg-teal-50 text-teal-700 border-teal-200"
+          title={`证据:${task.noAction.evidence}`}
+        >
+          {task.noAction.label}
         </span>
       )}
     </span>

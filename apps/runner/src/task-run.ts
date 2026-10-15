@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { normalizeTaskPack, type RunnerEventType, type RunnerTaskPack } from '@agtpilot/protocol';
+import {
+  NO_ACTION_REASON_LABELS,
+  normalizeTaskPack,
+  type RunnerEventType,
+  type RunnerTaskPack,
+} from '@agtpilot/protocol';
 import type { ExecutorAdapter, ParsedStreamEvent } from './executor';
 import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } from './repo';
 
@@ -7,6 +12,8 @@ import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } 
  * 单个已领取任务的本地执行编排(M2,§6.1):
  * 状态事件(running)→ 仓库准备 → adapter.run(进度事件批量上行)→
  * 成功:phase1_result + awaiting_approval / 失败:error + failed /
+ * no-action(agent 带证据核实无需改动):error 带 noAction 标记 + failed(线上),
+ * 新云端识别标记升级 no_action 终态 /
  * 云端终止(用户止损,deps.abortSignal):杀进程后上报 cancelled(本地分支保留)。
  *
  * 设计约束:
@@ -50,7 +57,7 @@ export interface TaskRunDeps {
   abortSignal?: AbortSignal;
 }
 
-export type TaskRunOutcome = 'awaiting_approval' | 'failed' | 'cancelled';
+export type TaskRunOutcome = 'awaiting_approval' | 'no_action' | 'failed' | 'cancelled';
 
 export async function runTask(
   claimed: { taskId: string; pack: unknown },
@@ -194,6 +201,24 @@ export async function runTask(
       log(`任务 ${taskId} 被终止(用户止损,重试期间),已上报 cancelled`);
       return 'cancelled';
     }
+  }
+
+  // no-action 例外终态:agent 核实该 Issue 无需改动(上游已修复/无法复现/超出范围)
+  // 且带确凿证据(围栏 evidence 必填)。线上兼容(v1 字段只增期):state 仍上报
+  // failed + error 事件带 noAction 标记 —— 老云端按普通失败展示(消息文案含结论
+  // 与证据,人可读);新云端识别标记升级落 no_action 终态入库(雷达不重复推荐、
+  // 派发防重以此为准)。非失败:不标 retryable、不进审批、不自动重试。
+  if (result.ok && result.noAction) {
+    const { reason, evidence } = result.noAction;
+    const label = NO_ACTION_REASON_LABELS[reason] ?? '无需改动';
+    const message = `agent 核实无需改动:${label}。证据:${evidence.slice(0, 500)}`;
+    push('progress', { kind: 'system', summary: `no-action · ${label}(证据已回流云端)` });
+    push('error', { message, noAction: { reason, evidence } });
+    push('state', { state: 'failed' });
+    await flush();
+    audit({ kind: 'task_result', taskId, outcome: 'no_action', reason, evidence: evidence.slice(0, 500) });
+    log(`任务 ${taskId} no-action:${label}(证据 ${evidence.length} 字已上行,云端升级 no_action 终态)`);
+    return 'no_action';
   }
 
   if (result.ok) {

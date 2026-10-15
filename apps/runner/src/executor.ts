@@ -1,6 +1,12 @@
 import { spawn, execFile, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { promisify } from 'node:util';
-import { renderTaskPrompt, extractPrFinal, type RunnerTaskPack } from '@agtpilot/protocol';
+import {
+  renderTaskPrompt,
+  extractPrFinal,
+  extractNoActionFinal,
+  type NoActionFinal,
+  type RunnerTaskPack,
+} from '@agtpilot/protocol';
 import type { ExecAsync } from './repo';
 
 /**
@@ -24,6 +30,13 @@ export interface Phase1Result {
   testTail?: string;
   /** agent 按约定输出的 PR 终稿(可能为 null:不阻塞审批,人工可补) */
   prFinal?: { title: string; body: string } | null;
+  /**
+   * no-action 结论(例外终态):工作分支零 commit 但 agent 输出了带证据的
+   * no-action 围栏(上游已修复/无法复现/超出范围)→ ok:true + 本字段,
+   * task-run 据此走 no_action 上行而非「无产出」失败。有 commit 时本字段
+   * 恒缺省(commit 优先,两围栏并存不成立)。
+   */
+  noAction?: NoActionFinal;
   /** 任务被云端终止(用户止损):task-run 据此上报 cancelled 而非 failed */
   aborted?: boolean;
   error?: string;
@@ -313,8 +326,11 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     }
 
     const prFinal = agent.resultText ? extractPrFinal(agent.resultText) : null;
+    const noActionFinal = agent.resultText ? extractNoActionFinal(agent.resultText) : null;
 
     // ---- 2. git 校验:工作分支上必须有 agent 的本地 commit(§6.1 终态判据) ----
+    // 例外:零 commit 但 agent 输出了带证据的 no-action 围栏 → 合法终态(无需改动),
+    // 不再判「无产出」失败(生产背景:milvus #52049 已被上游修复,反复重派死循环)
     // 基线优先用 prepareRepo 实探结果(master 默认仓库的回落值);缺省退 pack
     const base = opts?.baseBranch || pack.baseBranch || 'main';
     let commitHash = '';
@@ -333,6 +349,9 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       }
     }
     if (ahead === 0) {
+      if (noActionFinal) {
+        return { ok: true, noAction: noActionFinal };
+      }
       return { ok: false, error: 'agent 结束但工作分支无本地 commit(没有产出)', prFinal };
     }
     if (ahead < 0) {

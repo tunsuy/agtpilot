@@ -490,7 +490,7 @@ export function CockpitView({
                           >
                             {isRunnerTaskActive(rt.state) && <Loader2 className="h-2.5 w-2.5 animate-spin shrink-0" />}
                             <span className="truncate">
-                              本地 · {rt.state === 'running' ? '执行中' : rt.state === 'awaiting_approval' ? '待审批' : rt.state === 'finishing' ? '发布中' : rt.state === 'done' ? '完成' : rt.state === 'failed' ? '失败' : rt.state === 'cancelled' ? '已终止' : rt.state === 'expired' ? '过期' : '排队'}
+                              本地 · {rt.state === 'running' ? '执行中' : rt.state === 'awaiting_approval' ? '待审批' : rt.state === 'finishing' ? '发布中' : rt.state === 'done' ? '完成' : rt.state === 'no_action' ? '无需改动' : rt.state === 'failed' ? '失败' : rt.state === 'cancelled' ? '已终止' : rt.state === 'expired' ? '过期' : '排队'}
                             </span>
                           </span>
                         )}

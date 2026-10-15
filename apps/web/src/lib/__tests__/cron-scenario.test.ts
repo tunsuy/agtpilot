@@ -14,18 +14,6 @@ const profile: ScenarioProfile = {
   updatedAt: Date.now(),
 };
 
-/** 贡献者档案(scenarioKey='oss_radar'):niche=主力技术栈,taboos=排除项 */
-const ossProfile: ScenarioProfile = {
-  scenarioKey: 'oss_radar',
-  version: 1,
-  positioning: { niche: 'Go / TypeScript', audience: 'LLM 基础设施、Agent 框架' },
-  persona: { toneSamples: [], taboos: ['不碰加密货币项目'] },
-  cadence: {},
-  insights: [],
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-};
-
 describe('CRON_SCENARIOS 注册表(场景单一事实源)', () => {
   it('场景声明齐全:三个订阅场景在注册表内', () => {
     expect(Object.keys(CRON_SCENARIOS).sort()).toEqual([
@@ -43,9 +31,10 @@ describe('CRON_SCENARIOS 注册表(场景单一事实源)', () => {
       expect(spec.defaultCount).toBeGreaterThanOrEqual(spec.countMin);
       expect(spec.defaultCount).toBeLessThanOrEqual(spec.countMax);
       if (spec.requiresServerState) {
-        // novel 日更:build 是诚实占位——纯函数调它必须抛错并指名服务端路径,
-        // 绝不静默产出假 prompt(触发时走 server-render.resolveCronPromptServer)
-        expect(spec.workshopId).toBe('novel');
+        // novel 日更(现读书库)与 oss_radar 周扫(现读派发历史):build 是诚实占位
+        // ——纯函数调它必须抛错并指名服务端路径,绝不静默产出假 prompt
+        // (触发时走 server-render.resolveCronPromptServer)
+        expect(['novel', 'oss_radar']).toContain(spec.workshopId);
         expect(() => spec.build(spec.defaultCount, undefined)).toThrow(/server-render/);
       } else {
         // 无档案可调(触发时档案可能缺失,绝不能抛)
@@ -138,23 +127,10 @@ describe('resolveCronPrompt', () => {
     expect(prompt).toContain('产出 7 条选题');
   });
 
-  it('oss_radar_weekly:用贡献者档案(oss_radar 槽位)重建扫描 prompt', () => {
+  it('oss_radar_weekly:requiresServerState(派发历史服务端现读),纯函数路径诚实抛错', () => {
     const job = { prompt: '旧快照', scenario: { key: 'oss_radar_weekly' as const, count: 5 } };
-    const prompt = resolveCronPrompt(job, (k) => (k === 'oss_radar' ? ossProfile : undefined));
-    expect(prompt).toContain('【开源贡献雷达 · 只读调研】');
-    expect(prompt).toContain('【贡献者档案】');
-    expect(prompt).toContain('主力技术栈:Go / TypeScript');
-    expect(prompt).toContain('排除项(一票否决,不要推荐):不碰加密货币项目');
-    expect(prompt).toContain('产出数量:5 条机会');
-    expect(prompt).not.toContain('旧快照');
-  });
-
-  it('oss_radar_weekly 无档案/无 count:仍重建,缺省 5 条、技术栈未指定', () => {
-    const job = { scenario: { key: 'oss_radar_weekly' as const } };
-    const prompt = resolveCronPrompt(job, () => undefined);
-    expect(prompt).toContain('产出数量:5 条机会');
-    expect(prompt).toContain('我的技术栈:未指定');
-    expect(prompt).not.toContain('贡献者档案');
+    expect(() => resolveCronPrompt(job, () => undefined)).toThrow(/需要服务端现读状态/);
+    // 服务端重建(档案 + 派发历史注入)的断言在 server-render.test.ts
   });
 
   it('普通任务:原样返回 job.prompt', () => {

@@ -10,6 +10,7 @@ import {
   normalizeTaskPack,
   normalizeRunnerEvent,
   normalizeDeviceMeta,
+  normalizeNoAction,
   type RunnerTaskState,
 } from './runner';
 
@@ -187,6 +188,36 @@ describe('normalizeDeviceMeta', () => {
   });
 });
 
+describe('normalizeNoAction(no-action 结论清洗:证据必填,脏输入降级)', () => {
+  it('合法结论原样通过;reason 枚举内四个值都认', () => {
+    expect(normalizeNoAction({ reason: 'already_fixed', evidence: '修复 commit d9bef57b8f 已在基线' })).toEqual({
+      reason: 'already_fixed',
+      evidence: '修复 commit d9bef57b8f 已在基线',
+    });
+    for (const r of ['already_fixed', 'not_reproducible', 'out_of_scope', 'other']) {
+      expect(normalizeNoAction({ reason: r, evidence: 'x' })!.reason).toBe(r);
+    }
+  });
+
+  it('未知 reason → 归 other(降级不拒绝)', () => {
+    expect(normalizeNoAction({ reason: 'fixed_maybe?', evidence: 'x' })!.reason).toBe('other');
+    expect(normalizeNoAction({ evidence: 'x' })!.reason).toBe('other');
+  });
+
+  it('evidence 缺失/空串/纯空白/非字符串 → null(无证据的 no-action 不成立)', () => {
+    expect(normalizeNoAction({ reason: 'already_fixed' })).toBeNull();
+    expect(normalizeNoAction({ reason: 'already_fixed', evidence: '' })).toBeNull();
+    expect(normalizeNoAction({ reason: 'already_fixed', evidence: '   ' })).toBeNull();
+    expect(normalizeNoAction({ reason: 'already_fixed', evidence: 42 })).toBeNull();
+  });
+
+  it('超长 evidence 截断 ≤8000(截断不拒绝);非对象/null → null', () => {
+    expect(normalizeNoAction({ reason: 'other', evidence: 'e'.repeat(9000) })!.evidence).toHaveLength(8000);
+    expect(normalizeNoAction(null)).toBeNull();
+    expect(normalizeNoAction('already_fixed')).toBeNull();
+  });
+});
+
 describe('状态机(§5.2)', () => {
   it('正向链路全通:queued→dispatched→running→awaiting_approval→finishing→done', () => {
     const chain: RunnerTaskState[] = ['queued', 'dispatched', 'running', 'awaiting_approval', 'finishing', 'done'];
@@ -200,11 +231,18 @@ describe('状态机(§5.2)', () => {
       expect(canTransitionRunnerTask(s, 'cancelled')).toBe(true);
       expect(isTerminalRunnerState(s)).toBe(false);
     }
-    for (const s of ['done', 'failed', 'cancelled', 'expired'] as RunnerTaskState[]) {
+    for (const s of ['done', 'failed', 'no_action', 'cancelled', 'expired'] as RunnerTaskState[]) {
       expect(isTerminalRunnerState(s)).toBe(true);
       expect(canTransitionRunnerTask(s, 'cancelled')).toBe(false);
       expect(canTransitionRunnerTask(s, 'running')).toBe(false);
     }
+  });
+
+  it('no_action 例外终态:running→no_action 合法(云端 ingest 升级);其余来源一律拒绝', () => {
+    expect(canTransitionRunnerTask('running', 'no_action')).toBe(true);
+    expect(canTransitionRunnerTask('queued', 'no_action')).toBe(false);
+    expect(canTransitionRunnerTask('dispatched', 'no_action')).toBe(false);
+    expect(canTransitionRunnerTask('awaiting_approval', 'no_action')).toBe(false);
   });
 
   it('越级跳跃拒绝:queued 直达 done / running 直达 finishing', () => {

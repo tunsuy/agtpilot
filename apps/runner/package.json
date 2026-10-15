@@ -1,6 +1,6 @@
 {
   "name": "@agtpilot/runner",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "type": "module",
   "description": "AgtPilot 本地薄 runner:接云端派发的贡献任务,调起本地 coding agent CLI(docs/design/local-runner-bridge.md)",
   "license": "MIT",

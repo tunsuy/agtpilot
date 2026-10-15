@@ -7,6 +7,7 @@
  *  - FAKE_CLAUDE_EXIT: 退出码(默认 0)
  *  - FAKE_CLAUDE_SLEEP_MS: 退出前睡眠(测超时终止)
  *  - FAKE_CLAUDE_NO_PR=1: result 不带 pr-final 围栏
+ *  - FAKE_CLAUDE_NO_ACTION=1: result 带 no-action 围栏(agent 核实无需改动的例外终态)
  *  - FAKE_CLAUDE_BAD_RESULT=1: result 为 is_error(max_turns)
  *  - FAKE_CLAUDE_NO_RESULT=1: 不输出 result 事件(流不完整)
  *  - FAKE_CLAUDE_STDERR: 自定义 stderr 内容(测瞬时错误指纹,默认「fake-claude stderr 备注」)
@@ -19,7 +20,9 @@ if (argsFile) writeFileSync(argsFile, JSON.stringify(process.argv.slice(2)));
 const sleepMs = Number(process.env.FAKE_CLAUDE_SLEEP_MS || 0);
 const exitCode = Number(process.env.FAKE_CLAUDE_EXIT || 0);
 
-const prBody = process.env.FAKE_CLAUDE_NO_PR === '1'
+const prBody = process.env.FAKE_CLAUDE_NO_ACTION === '1'
+  ? '核实完毕:该 Issue 已被上游修复,无需改动。\n\n```no-action\n{"reason":"already_fixed","evidence":"修复 commit d9bef57b8f(PR #52261)经 git merge-base 验证已在当前基线;复现测试矩阵(2^53+1/max int64/max uint64)全部通过,无精度丢失。"}\n```'
+  : process.env.FAKE_CLAUDE_NO_PR === '1'
   ? '完成,已本地 commit。'
   : '完成,已本地 commit。\n\n```pr-final\n{"title":"fix: 采样参数越界校验","body":"关联 #12345\\n\\n增加温度参数范围校验,补充单测。"}\n```';
 

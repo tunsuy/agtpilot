@@ -21,7 +21,19 @@ import {
 import { renderWorkshopRunServer, resolveCronPromptServer } from '../server-render';
 import { getUserScenarioProfiles, saveUserScenarioProfile } from '@/lib/user-store';
 import { createNovelBook, appendChapter } from '@/lib/novel-store';
+import {
+  createPairCode,
+  redeemPairCode,
+  enqueueTask,
+  claimNextTask,
+  recordRunnerEvents,
+  getRunnerTask,
+} from '@/lib/runner-bridge';
+import { RUNNER_PROTOCOL_VERSION, type RunnerDeviceMeta } from '@agtpilot/protocol';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
+
+// runner-bridge 的 secret-box 首次使用时解析(配对/事件回流要加密设备令牌),模块求值期设好即可
+process.env.AGTPILOT_SECRET_KEY = 'server-render-test-key';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'workshop-overrides-'));
 const dir = path.join(tmpRoot, 'overrides');
@@ -379,5 +391,109 @@ describe('resolveCronPromptServer(触发时服务端现读,P1 novel 日更)', ()
         'u-cron-novel3'
       )
     ).toThrow(/小说不存在或无权访问/);
+  });
+});
+
+describe('oss_radar 派发历史 loader(去重黑名单服务端现读,milvus #52049 重复派发修复)', () => {
+  // 用真实时钟:getRunnerTasks 缺省 now=Date.now() 会扫 TTL,过期任务进不了历史
+  const NOW = Date.now();
+  const MILVUS_52049 = 'https://github.com/milvus-io/milvus/issues/52049';
+
+  const deviceMeta: RunnerDeviceMeta = {
+    hostname: 'radar-test-mac',
+    platform: 'darwin',
+    runnerVersion: '0.0.1',
+    protocolVersion: RUNNER_PROTOCOL_VERSION,
+  };
+
+  function radarPack(taskId: string, issueUrl: string) {
+    return {
+      taskId,
+      kind: 'oss_contribution',
+      repo: 'milvus-io/milvus',
+      issueUrl,
+      workBranch: 'contrib/oss-radar-x',
+      constraints: ['只修这个 Issue'],
+      acceptance: { testCommand: 'pnpm test' },
+      prDraft: { title: 'fix: 修一个东西', bodyTemplate: '关联 Issue' },
+      executor: { name: 'claude-code' },
+    };
+  }
+
+  /** 走完整链路把一条任务打到 no_action 终态(线上 runner 事件流的同形状回放) */
+  function driveToNoAction(userId: string, taskId: string, issueUrl: string) {
+    const { code } = createPairCode(userId, NOW);
+    const d = redeemPairCode(code, deviceMeta, NOW);
+    if (!d.ok) throw new Error(`pair failed: ${d.error}`);
+    enqueueTask(userId, radarPack(taskId, issueUrl), NOW)!;
+    claimNextTask(userId, d.deviceId, NOW)!;
+    recordRunnerEvents(
+      userId,
+      d.deviceId,
+      [
+        { eventId: `${taskId}_run`, taskId, deviceId: d.deviceId, at: NOW + 1, type: 'state', payload: { state: 'running' } },
+        {
+          eventId: `${taskId}_err`,
+          taskId,
+          deviceId: d.deviceId,
+          at: NOW + 2,
+          type: 'error',
+          payload: { message: '无需改动', noAction: { reason: 'already_fixed', evidence: 'commit d9bef57b8f 已在基线' } },
+        },
+        { eventId: `${taskId}_fail`, taskId, deviceId: d.deviceId, at: NOW + 3, type: 'state', payload: { state: 'failed' } },
+      ],
+      NOW + 3
+    );
+    expect(getRunnerTask(userId, taskId, NOW + 4)!.state).toBe('no_action');
+  }
+
+  it('renderWorkshopRunServer:历史任务现读注入【派发历史】(no_action 结论 + 在途)', () => {
+    const userId = 'u-radar-a';
+    driveToNoAction(userId, 'rtask_radar_na', MILVUS_52049);
+    enqueueTask(userId, radarPack('rtask_radar_q', 'https://github.com/o/r/issues/7'), NOW)!;
+    const run = renderWorkshopRunServer(userId, 'oss_radar', { count: 5 });
+    expect(run).not.toBeNull();
+    expect(run!.prompt).toContain('【派发历史】');
+    expect(run!.prompt).toContain(`${MILVUS_52049} — 已核实无需改动(上游已修复)`);
+    expect(run!.prompt).toContain('https://github.com/o/r/issues/7 — 已派发,进行中');
+  });
+
+  it('无历史:不注入【派发历史】,模板占位符也不漏', () => {
+    const run = renderWorkshopRunServer('u-radar-empty', 'oss_radar', { count: 5 });
+    expect(run).not.toBeNull();
+    expect(run!.prompt).not.toContain('【派发历史】');
+    expect(run!.prompt).not.toContain('{{historySection}}');
+  });
+
+  it('用户隔离:别人的派发历史不串进我的 prompt', () => {
+    const run = renderWorkshopRunServer('u-radar-b', 'oss_radar', {});
+    expect(run!.prompt).not.toContain(MILVUS_52049);
+    expect(run!.prompt).not.toContain('【派发历史】');
+  });
+
+  it('resolveCronPromptServer 周扫:档案 + 派发历史同时注入,count 尊重 / 缺省 5', () => {
+    const userId = 'u-radar-cron';
+    saveUserScenarioProfile(userId, {
+      ...profile,
+      scenarioKey: 'oss_radar',
+      positioning: { niche: 'Go / TypeScript', audience: 'LLM 基础设施' },
+    });
+    driveToNoAction(userId, 'rtask_radar_cron', MILVUS_52049);
+
+    const prompt = resolveCronPromptServer(
+      { prompt: '旧快照', scenario: { key: 'oss_radar_weekly', count: 7 } },
+      userId
+    );
+    expect(prompt).not.toContain('旧快照');
+    expect(prompt).toContain('产出数量:7 条机会');
+    expect(prompt).toContain('【贡献者档案】');
+    expect(prompt).toContain('主力技术栈:Go / TypeScript');
+    expect(prompt).toContain('【派发历史】');
+    expect(prompt).toContain(MILVUS_52049);
+
+    // count 缺省 → defaultCount 5(订阅时没写条数也能重建)
+    const prompt2 = resolveCronPromptServer({ scenario: { key: 'oss_radar_weekly' } }, userId);
+    expect(prompt2).toContain('产出数量:5 条机会');
+    expect(prompt2).toContain('【派发历史】');
   });
 });

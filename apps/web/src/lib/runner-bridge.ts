@@ -14,9 +14,11 @@ import {
   canTransitionRunnerTask,
   isTerminalRunnerState,
   isValidPairCodeFormat,
+  normalizeNoAction,
   normalizeRunnerEvent,
   normalizeTaskPack,
   type ApprovalRequest,
+  type NoActionFinal,
   type RunnerApproval,
   type RunnerDeviceInfo,
   type RunnerDeviceAction,
@@ -287,19 +289,51 @@ export function updateDeviceMeta(userId: string, deviceId: string, meta: RunnerD
 const DEVICE_ID_RE = /^dev_[0-9a-f]{16}$/;
 
 /**
+ * 派发防重冲突(同一 issueUrl 的历史任务):
+ * - no_action:agent 已带证据核实「无需改动」(上游已修复/无法复现/不属于本仓库)——
+ *   重复派发大概率再烧一次执行窗口得到同样结论(生产背景:milvus #52049 同日 4 派);
+ * - active:已有在途任务(queued→finishing 非终态)——重复派发会并行跑两份。
+ * failed/done/cancelled/expired 不算冲突:失败重派、完成后再派都是合法人工动作。
+ */
+export interface DispatchConflict {
+  kind: 'no_action' | 'active';
+  taskId: string;
+  state: RunnerTaskState;
+  /** kind='no_action' 时的结论(原因 + 证据),路由侧透出给 UI 展示 */
+  noAction?: NoActionFinal;
+}
+
+/** 纯查询:任务记录里找同 issueUrl 的派发冲突(no_action 优先于 active;无 → null) */
+export function findDispatchConflict(tasks: RunnerTaskRecord[], issueUrl: string): DispatchConflict | null {
+  if (!issueUrl) return null;
+  const same = tasks.filter((t) => t.pack.issueUrl === issueUrl);
+  const noAction = same.find((t) => t.state === 'no_action');
+  if (noAction) {
+    return { kind: 'no_action', taskId: noAction.taskId, state: noAction.state, ...(noAction.noAction ? { noAction: noAction.noAction } : {}) };
+  }
+  const active = same.find((t) => !isTerminalRunnerState(t.state));
+  if (active) return { kind: 'active', taskId: active.taskId, state: active.state };
+  return null;
+}
+
+/**
  * 入队(派发在 M2 接 UI;协议清洗失败 → null,拒绝入队)。
  * targetDeviceId(派发时指定设备,§4):必须是本用户未吊销的配对设备,
  * 否则 null 拒绝入队;缺省 = 不绑定,任意在线设备 FIFO 领取(存量语义)。
  * missionId(关联会话):设备任务 ↔ 驾驶舱会话互跳的关联键,形状不合法 → null。
+ * force(派发防重旁路):同 issueUrl 已有 no_action 结论或在途任务时默认拒绝入队
+ * (findDispatchConflict);UI 明示历史结论并经用户确认后带 force 重发。
  */
 export function enqueueTask(
   userId: string,
   packInput: unknown,
   now: number = Date.now(),
-  opts: { targetDeviceId?: string; missionId?: string } = {}
+  opts: { targetDeviceId?: string; missionId?: string; force?: boolean } = {}
 ): RunnerTaskRecord | null {
   const pack = normalizeTaskPack(packInput);
   if (!pack) return null;
+  // 派发防重(权威闸,路由 409 预检之后仍兜底):no_action 结论/在途任务 → 拒绝,force 旁路
+  if (opts.force !== true && findDispatchConflict(readTasks(userId), pack.issueUrl)) return null;
   let targetDeviceId: string | undefined;
   if (opts.targetDeviceId !== undefined) {
     if (!DEVICE_ID_RE.test(opts.targetDeviceId)) return null;
@@ -447,7 +481,11 @@ export function recordRunnerEvents(
     }
 
     if (event.type === 'state') {
-      const to = event.payload?.state as RunnerTaskState | undefined;
+      let to = event.payload?.state as RunnerTaskState | undefined;
+      // no-action 升级(v1 线上兼容:runner 上报 failed + error 事件带 noAction 标记,
+      // 标记在同批次先落 task.noAction)→ failed 升级为 no_action 例外终态入库。
+      // running→no_action 在迁移表内;雷达去重与派发防重都以 no_action 记录为准。
+      if (to === 'failed' && task.noAction && canTransitionRunnerTask(task.state, 'no_action')) to = 'no_action';
       if (!to || isTerminalRunnerState(task.state) || !canTransitionRunnerTask(task.state, to)) {
         result.rejected++;
         continue;
@@ -471,6 +509,11 @@ export function recordRunnerEvents(
       // 加固 ②:瞬时 API/网关失败 → runner 在 error 事件带 retryable:true,落任务记录;
       // UI 据此把 failed 标成「可重试」(重派仍人工,不自动 requeue)。仅认显式 true。
       if (event.payload?.retryable === true) task.retryable = true;
+      // no-action 结论标记(例外终态):agent 核实无需改动且带证据 → 清洗落库;
+      // 随后的 state failed 事件据此升级 no_action(证据缺失/畸形 → normalizeNoAction
+      // 返回 null,任务保持普通 failed 语义,与旧 runner 行为一致)
+      const noAction = normalizeNoAction(event.payload?.noAction);
+      if (noAction) task.noAction = noAction;
       task.updatedAt = now;
     }
 

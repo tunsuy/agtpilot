@@ -12,6 +12,7 @@ import type { ScenarioProfile } from '@/lib/scenario-profile';
 import type { NovelBook } from '@/lib/novel-context';
 import type { ArticlePackage } from './shared/article-package';
 import type { NotePackage } from './xhs/note-package';
+import type { RadarDispatchHistoryEntry } from './oss_radar/context';
 
 export type WorkshopId =
   | 'xhs'
@@ -118,6 +119,12 @@ export interface WorkshopRunContext {
    * novel-store(状态永远以服务端为准,与档案现读同理)。
    */
   novelState?: NovelBook;
+  /**
+   * 雷达派发历史(去重黑名单):已派发处理过 / 已核实无需改动的 Issue 清单。
+   * 仅服务端权威渲染注入(server-render 的 oss_radar loader 现读任务记录);
+   * 客户端预览缺省不注入(buildOssRadarPrompt 无历史 → 模板段整体不渲染)。
+   */
+  ossDispatchHistory?: RadarDispatchHistoryEntry[];
 }
 
 /** 一个工坊 skill 包的完整装配:元数据 + 参数分发(+ 可选 cron 订阅场景声明) */

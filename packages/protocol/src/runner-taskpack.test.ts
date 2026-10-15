@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { renderTaskPrompt, renderHandoffPack, extractPrFinal, PR_FINAL_FENCE } from './runner-taskpack';
+import {
+  renderTaskPrompt,
+  renderHandoffPack,
+  extractPrFinal,
+  extractNoActionFinal,
+  PR_FINAL_FENCE,
+  NO_ACTION_FENCE,
+  NO_ACTION_REASON_LABELS,
+} from './runner-taskpack';
 import { normalizeTaskPack, type RunnerTaskPack } from './runner';
 
 const basePack = normalizeTaskPack({
@@ -93,6 +101,39 @@ describe('renderTaskPrompt · WIP 留痕与续跑模式(中断续作,git 记录 
   });
 });
 
+describe('renderTaskPrompt · no-action 例外出口(第 6 步,与 pr-final 二选一)', () => {
+  const prompt = renderTaskPrompt(basePack);
+
+  it('例外出口在场:围栏名 + 与第 5 步二选一 + reason 枚举骨架 + evidence 必填', () => {
+    expect(prompt).toContain('```' + NO_ACTION_FENCE);
+    expect(prompt).toContain('例外出口(与第 5 步二选一)');
+    expect(prompt).toContain('already_fixed | not_reproducible | out_of_scope');
+    expect(prompt).toContain('"evidence"');
+  });
+
+  it('反偷懒护栏:不要硬凑 commit + 仅确凿证据可用 + 不许当逃避出口', () => {
+    expect(prompt).toContain('不要硬凑 commit');
+    expect(prompt).toContain('仅在有确凿证据时使用');
+    expect(prompt).toContain('不许拿这个当逃避干活的出口');
+  });
+
+  it('三种合法情形点名:上游已修复 / 无法复现 / 不在本仓库', () => {
+    expect(prompt).toContain('已被上游修复(修复 commit/PR 已在当前基线)');
+    expect(prompt).toContain('按 Issue 描述无法复现');
+    expect(prompt).toContain('问题不在本仓库');
+  });
+
+  it('第 6 步不引入新 opts:缺省与空 opts 输出逐字节一致(additive)', () => {
+    expect(renderTaskPrompt(basePack)).toBe(renderTaskPrompt(basePack, {}));
+  });
+
+  it('NO_ACTION_REASON_LABELS:四个原因标签齐全非空(runner 日志与 web 任务卡同源)', () => {
+    for (const r of ['already_fixed', 'not_reproducible', 'out_of_scope', 'other'] as const) {
+      expect(NO_ACTION_REASON_LABELS[r].length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('renderHandoffPack(T0 离线交接包)', () => {
   const pack = renderHandoffPack(basePack);
 
@@ -135,6 +176,46 @@ describe('extractPrFinal(PR 终稿围栏提取)', () => {
     const long = 'x'.repeat(400);
     const r = extractPrFinal(`\`\`\`${PR_FINAL_FENCE}\n${JSON.stringify({ title: long, body: 'b' })}\n\`\`\``)!;
     expect(r.title).toHaveLength(300);
+  });
+});
+
+describe('extractNoActionFinal(no-action 围栏提取:证据必填,脏输入降级)', () => {
+  it('标准围栏提取 reason/evidence(围栏前后有闲话也能提取)', () => {
+    const text = `核实完毕:该 Issue 已被上游修复。\n\n\`\`\`${NO_ACTION_FENCE}\n{"reason":"already_fixed","evidence":"修复 commit d9bef57b8f(PR #52261)经 git merge-base 验证已在当前基线"}\n\`\`\`\n\n以上是结论。`;
+    expect(extractNoActionFinal(text)).toEqual({
+      reason: 'already_fixed',
+      evidence: '修复 commit d9bef57b8f(PR #52261)经 git merge-base 验证已在当前基线',
+    });
+  });
+
+  it('未知 reason / 缺 reason → 归 other(降级不拒绝)', () => {
+    expect(extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n{"reason":"fixed_maybe","evidence":"x"}\n\`\`\``)!.reason).toBe('other');
+    expect(extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n{"evidence":"x"}\n\`\`\``)!.reason).toBe('other');
+  });
+
+  it('evidence 缺失/空串/纯空白/非字符串 → null(无证据的 no-action 不成立,回落「无产出」失败)', () => {
+    expect(extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n{"reason":"already_fixed"}\n\`\`\``)).toBeNull();
+    expect(extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n{"reason":"already_fixed","evidence":""}\n\`\`\``)).toBeNull();
+    expect(extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n{"reason":"already_fixed","evidence":"   "}\n\`\`\``)).toBeNull();
+    expect(extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n{"reason":"already_fixed","evidence":42}\n\`\`\``)).toBeNull();
+  });
+
+  it('畸形 JSON / 无围栏 → null(不抛错)', () => {
+    expect(extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n{oops\n\`\`\``)).toBeNull();
+    expect(extractNoActionFinal('没有围栏的普通回复')).toBeNull();
+    expect(extractNoActionFinal('')).toBeNull();
+  });
+
+  it('超长 evidence 截断到 8000(截断不拒绝)', () => {
+    const long = 'e'.repeat(9000);
+    const r = extractNoActionFinal(`\`\`\`${NO_ACTION_FENCE}\n${JSON.stringify({ reason: 'other', evidence: long })}\n\`\`\``)!;
+    expect(r.evidence).toHaveLength(8000);
+  });
+
+  it('两围栏并存 → 各自独立提取(约定二选一;优先级裁决在 executor 层:有 commit 即 commit 赢)', () => {
+    const text = `\`\`\`${PR_FINAL_FENCE}\n{"title":"t","body":"b"}\n\`\`\`\n\n\`\`\`${NO_ACTION_FENCE}\n{"reason":"other","evidence":"x"}\n\`\`\``;
+    expect(extractPrFinal(text)!.title).toBe('t');
+    expect(extractNoActionFinal(text)!.evidence).toBe('x');
   });
 });
 

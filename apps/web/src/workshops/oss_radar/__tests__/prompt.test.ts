@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   buildOssRadarPrompt,
   buildContributorProfileSection,
+  buildDispatchHistorySection,
   OSS_INTERESTS,
   OSS_CONTRIB_KINDS,
+  type RadarDispatchHistoryEntry,
 } from '../context';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
 
@@ -173,5 +175,64 @@ describe('buildContributorProfileSection', () => {
   it('多个排除项用分号连接', () => {
     const p: ScenarioProfile = { ...profile, persona: { toneSamples: [], taboos: ['不碰前端样式', '不碰加密货币项目'] } };
     expect(buildContributorProfileSection(p)).toContain('排除项(一票否决,不要推荐):不碰前端样式;不碰加密货币项目');
+  });
+});
+
+// ---------- 派发历史注入(milvus #52049:修复已合并但 Issue 没人关,雷达每轮重复推荐重复派发) ----------
+
+describe('buildDispatchHistorySection(派发历史 → 去重黑名单段)', () => {
+  const entries: RadarDispatchHistoryEntry[] = [
+    { issueUrl: 'https://github.com/milvus-io/milvus/issues/52049', outcome: '已核实无需改动(上游已修复)' },
+    { issueUrl: 'https://github.com/o/r/issues/7', outcome: '已派发并完成(PR 已发布)' },
+  ];
+
+  it('有历史:段头点名「不要重复推荐」+ 逐条 url — 结局 + 收尾「换别的项目不硬凑」', () => {
+    const section = buildDispatchHistorySection(entries)!;
+    expect(section).toContain('【派发历史】');
+    expect(section).toContain('不要重复推荐(即使检索命中)');
+    expect(section).toContain('- https://github.com/milvus-io/milvus/issues/52049 — 已核实无需改动(上游已修复)');
+    expect(section).toContain('- https://github.com/o/r/issues/7 — 已派发并完成(PR 已发布)');
+    expect(section).toContain('换别的项目,不要硬凑');
+  });
+
+  it('空数组/缺省 → null(模板 {{#if}} 整段不渲染)', () => {
+    expect(buildDispatchHistorySection([])).toBeNull();
+    expect(buildDispatchHistorySection(undefined)).toBeNull();
+  });
+
+  it('脏条目过滤:url 或 outcome 为空不进名单;全脏 → null', () => {
+    const dirty: RadarDispatchHistoryEntry[] = [
+      { issueUrl: '', outcome: '已派发但失败' },
+      { issueUrl: 'https://github.com/o/r/issues/8', outcome: '' },
+    ];
+    expect(buildDispatchHistorySection(dirty)).toBeNull();
+    expect(buildDispatchHistorySection([...entries, ...dirty])!.split('\n')).toHaveLength(4); // 段头 + 2 条 + 收尾
+  });
+});
+
+describe('buildOssRadarPrompt · 派发历史注入与静默修复筛查', () => {
+  const history: RadarDispatchHistoryEntry[] = [
+    { issueUrl: 'https://github.com/milvus-io/milvus/issues/52049', outcome: '已核实无需改动(上游已修复)' },
+  ];
+
+  it('带历史:prompt 出现【派发历史】段与 url/结局;档案段与历史段共存互不挤占', () => {
+    const prompt = buildOssRadarPrompt({ count: 5, profile, dispatchHistory: history });
+    expect(prompt).toContain('【派发历史】');
+    expect(prompt).toContain('https://github.com/milvus-io/milvus/issues/52049');
+    expect(prompt).toContain('已核实无需改动(上游已修复)');
+    expect(prompt).toContain('【贡献者档案】');
+  });
+
+  it('无历史:不出现【派发历史】,也不漏模板占位符', () => {
+    const prompt = buildOssRadarPrompt({ count: 5 });
+    expect(prompt).not.toContain('【派发历史】');
+    expect(prompt).not.toContain('{{historySection}}');
+  });
+
+  it('筛选标准含「未被上游静默修复」:核查交叉引用/已合并修复 PR,拿不准的注明需先核实', () => {
+    const prompt = buildOssRadarPrompt({ count: 5 });
+    expect(prompt).toContain('未被上游静默修复');
+    expect(prompt).toContain('交叉引用');
+    expect(prompt).toContain('需先核实是否已修复');
   });
 });

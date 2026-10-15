@@ -172,6 +172,63 @@ describe('runTask(领取任务 → 本地执行 → 事件回流编排)', () => 
   });
 });
 
+describe('runTask · no-action 例外终态(agent 核实无需改动 + 证据)', () => {
+  const noActionResult: Phase1Result = {
+    ok: true,
+    noAction: {
+      reason: 'already_fixed',
+      evidence: '修复 commit d9bef57b8f(PR #52261)经 git merge-base 验证已在当前基线;复现测试矩阵全部通过。',
+    },
+  };
+
+  it('结局 no_action:progress + error(带 noAction 标记)+ 线上仍 state failed(老云端兼容),无 phase1_result', async () => {
+    const { deps, flat } = makeDeps({ adapter: fakeAdapter({ result: noActionResult }) });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('no_action');
+    const evs = flat();
+    expect(evs.map((e) => e.type)).toEqual(['state', 'progress', 'error', 'state']);
+    expect(evs[0].payload).toEqual({ state: 'running' });
+    // progress:系统提示(云端时间线可见),原因标签同源 protocol
+    expect((evs[1].payload as any).kind).toBe('system');
+    expect(String((evs[1].payload as any).summary)).toContain('no-action');
+    expect(String((evs[1].payload as any).summary)).toContain('上游已修复');
+    // error:消息含结论+证据(老云端按普通失败展示,人可读);payload.noAction 是新云端升级标记
+    const errPayload = evs[2].payload as any;
+    expect(String(errPayload.message)).toContain('无需改动');
+    expect(String(errPayload.message)).toContain('上游已修复');
+    expect(String(errPayload.message)).toContain('d9bef57b8f');
+    expect(errPayload.noAction).toEqual(noActionResult.noAction);
+    expect(errPayload.retryable).toBeUndefined(); // 非失败:不标可重试
+    // 线上兼容(v1 字段只增期):state 仍上报 failed —— 老云端落终态,新云端识别标记升级 no_action
+    expect(evs[3].payload).toEqual({ state: 'failed' });
+  });
+
+  it('不重试不进审批:执行器只调一次,无 task_retry 审计,无 phase1_result/awaiting_approval', async () => {
+    const adapter = fakeAdapter({ result: noActionResult });
+    const audited: Record<string, unknown>[] = [];
+    const { deps, flat } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0, audit: (e) => audited.push(e) });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('no_action');
+    expect(adapter.runCalled).toBe(1);
+    expect(audited.some((e) => e.kind === 'task_retry')).toBe(false);
+    expect(flat().some((e) => e.type === 'phase1_result')).toBe(false);
+    expect(flat().some((e) => e.type === 'state' && (e.payload as any).state === 'awaiting_approval')).toBe(false);
+  });
+
+  it('审计:task_result outcome=no_action + reason + evidence 截 500;上行 payload 带全量证据', async () => {
+    const longEvidence = 'e'.repeat(6000);
+    const audited: Record<string, unknown>[] = [];
+    const { deps, flat } = makeDeps({
+      adapter: fakeAdapter({ result: { ok: true, noAction: { reason: 'other', evidence: longEvidence } } }),
+      audit: (e) => audited.push(e),
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('no_action');
+    const last = audited.at(-1)!;
+    expect(last).toMatchObject({ kind: 'task_result', outcome: 'no_action', reason: 'other' });
+    expect(String(last.evidence)).toHaveLength(500); // 本地审计不留长文
+    const errPayload = flat().find((e) => e.type === 'error')!.payload as any;
+    expect(errPayload.noAction.evidence).toHaveLength(6000); // 上行不丢(protocol 已钳 ≤8000)
+  });
+});
+
 describe('runTask · 经 fork 派发(viaFork)', () => {
   it('phase1_result 携带 forkRepo(runner 实探账号 = 云端固化 head 的唯一事实源)', async () => {
     const { deps, flat } = makeDeps({

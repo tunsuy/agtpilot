@@ -35,18 +35,24 @@ export type RunnerTaskState =
   | 'finishing'
   | 'done'
   | 'failed'
+  | 'no_action'
   | 'cancelled'
   | 'expired';
 
 const TASK_TRANSITIONS: Record<RunnerTaskState, RunnerTaskState[]> = {
   queued: ['dispatched', 'cancelled', 'expired'],
   dispatched: ['running', 'failed', 'cancelled', 'expired'],
-  running: ['awaiting_approval', 'failed', 'cancelled', 'expired'],
+  // no_action:agent 核实「无需改动」(上游已修复/无法复现/超出范围)的例外终态。
+  // 线上兼容(v1 字段只增期):runner 仍上报 state=failed + error 事件带 noAction
+  // 标记,云端 ingest 识别标记后升级落 no_action —— 老云端看到普通 failed(消息
+  // 文案含结论),新云端得到干净语义,部署顺序零风险。
+  running: ['awaiting_approval', 'failed', 'no_action', 'cancelled', 'expired'],
   // 审批拒绝 → cancelled(本地分支保留,§6.2)
   awaiting_approval: ['finishing', 'cancelled', 'expired'],
   finishing: ['done', 'failed', 'cancelled'],
   done: [],
   failed: [],
+  no_action: [],
   cancelled: [],
   expired: [],
 };
@@ -98,6 +104,16 @@ export interface RunnerTaskPack {
   viaFork?: boolean;
 }
 
+/** no-action 原因枚举(agent 核实「无需改动」的例外出口;未知值归 other) */
+export type NoActionReason = 'already_fixed' | 'not_reproducible' | 'out_of_scope' | 'other';
+
+/** no-action 结构化结论(evidence 必填:无证据的 no-action 不成立,防偷懒出口) */
+export interface NoActionFinal {
+  reason: NoActionReason;
+  /** 确凿证据:修复 commit/PR 编号与验证方式、复现步骤与结果等(≤8000 字符) */
+  evidence: string;
+}
+
 /** 云端任务记录(TaskPack + 状态机字段;user-store 侧持久化) */
 export interface RunnerTaskRecord {
   taskId: string;
@@ -127,6 +143,13 @@ export interface RunnerTaskRecord {
    * 协议字段只增不改(v1 兼容):旧 runner 不上报 → 缺省 undefined,UI 回退普通「失败」。
    */
   retryable?: boolean;
+  /**
+   * no-action 结论(v1 增补字段):agent 核实该 Issue 无需改动(上游已修复/无法
+   * 复现/超出范围),runner 经 error 事件 payload.noAction 标记上行,云端 ingest
+   * 识别后升级落 no_action 终态并记录到这里。老 runner/无结论 → undefined。
+   * 雷达「不重复推荐」与派发防重以此为准 —— 一次核验的成本沉淀成永久结论。
+   */
+  noAction?: NoActionFinal;
   /**
    * 用户「终止任务」请求标记(执行中止损):dispatched/running 时置位,
    * 状态不动 —— getDeviceActions 据此下发 cancel 动作,由 runner 杀掉本地
@@ -329,6 +352,22 @@ export function normalizeRunnerEvent(
 
 /** GitHub 登录名形状(1-39 位字母数字与连字符,不以连字符开头/结尾) */
 const GH_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
+const NO_ACTION_REASONS: NoActionReason[] = ['already_fixed', 'not_reproducible', 'out_of_scope', 'other'];
+
+/**
+ * no-action 结论清洗(云端 ingest 与 runner 回流共用):evidence 必填非空
+ * (空/非字符串 → null,无证据的 no-action 不成立);超长截断不拒绝;
+ * 未知 reason 归 'other'(脏输入降级,不抛错 —— 与本协议清洗函数同风格)。
+ */
+export function normalizeNoAction(input: unknown): NoActionFinal | null {
+  if (!input || typeof input !== 'object') return null;
+  const o = input as Record<string, unknown>;
+  const evidence = typeof o.evidence === 'string' ? o.evidence.trim() : '';
+  if (!evidence) return null;
+  const reason = NO_ACTION_REASONS.includes(o.reason as NoActionReason) ? (o.reason as NoActionReason) : 'other';
+  return { reason, evidence: evidence.slice(0, 8000) };
+}
 
 /** 设备元信息清洗(配对与心跳共用)。ghLogin:null/'' = 明确未登录;
  *  合法字符串 = 登录名;缺省或畸形 = undefined(未知,路由侧回退存量值) */

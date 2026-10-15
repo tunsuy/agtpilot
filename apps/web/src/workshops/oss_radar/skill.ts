@@ -21,7 +21,13 @@ export const CRON: CronScenarioSpec = {
   countMin: 3,
   countMax: 10,
   defaultCount: 5,
-  build: (count, profile) => buildOssRadarPrompt({ count, profile }),
+  // 触发时要现读派发历史注入去重黑名单(同 novel 日更现读书库):缺了历史的
+  // prompt 是假 prompt(会把已核实无需改动的 Issue 再推一遍),纯函数调 build
+  // 直接抛错,必须走 server-render.resolveCronPromptServer
+  requiresServerState: true,
+  build: () => {
+    throw new Error('oss_radar 周扫场景需要服务端现读派发历史(server-render.resolveCronPromptServer),纯函数重建不可用');
+  },
   workshopId: 'oss_radar',
 };
 
@@ -54,6 +60,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         kinds: validIds(params.kinds, OSS_CONTRIB_KINDS.map((k) => k.id)),
         count,
         ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
+        ...(ctx?.ossDispatchHistory ? { dispatchHistory: ctx.ossDispatchHistory } : {}),
       }),
       title: `开源贡献雷达 · ${Math.min(7, Math.max(3, count))} 条机会`,
     };

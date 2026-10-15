@@ -109,6 +109,15 @@ function DeviceTaskItem({
             {RUNNER_RETRYABLE_LABEL}
           </span>
         )}
+        {/* no-action 例外终态原因(悬停看证据;与可重试徽章同一模式) */}
+        {task.state === 'no_action' && task.noAction && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border flex-shrink-0 bg-teal-50 text-teal-700 border-teal-200"
+            title={`证据:${task.noAction.evidence}`}
+          >
+            {task.noAction.label}
+          </span>
+        )}
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-medium font-mono text-zinc-900 truncate">{task.repo}</div>
           <div className="text-[11px] text-zinc-500 mt-0.5 truncate" title={task.latest?.text ?? task.error ?? task.workBranch}>
@@ -199,13 +208,24 @@ function DeviceTaskItem({
               <span className="truncate">来自会话:{missionTitle}(点击跳回)</span>
             </button>
           )}
-          {task.error && (
+          {/* no-action 例外终态:teal 结论块(证据全文悬停)替代 rose 失败块——
+              线上兼容路径下 task.error 也有值,但这里不是失败,不摆红色 */}
+          {task.state === 'no_action' && task.noAction ? (
             <div
-              className="text-[11px] text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-1.5 whitespace-pre-wrap break-words"
-              title={task.error}
+              className="text-[11px] text-teal-700 bg-teal-50 border border-teal-100 rounded-lg px-2.5 py-1.5 whitespace-pre-wrap break-words"
+              title={task.noAction.evidence}
             >
-              {task.error.slice(0, 400)}
+              无需改动:{task.noAction.label}。证据:{task.noAction.evidence.slice(0, 400)}
             </div>
+          ) : (
+            task.error && (
+              <div
+                className="text-[11px] text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-1.5 whitespace-pre-wrap break-words"
+                title={task.error}
+              >
+                {task.error.slice(0, 400)}
+              </div>
+            )
           )}
           {retryable && (
             <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">

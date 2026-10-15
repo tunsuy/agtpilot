@@ -54,7 +54,7 @@ function fakeGitExec(over?: { ahead?: string; testFail?: boolean; testOut?: stri
   };
 }
 
-const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT', 'FAKE_CLAUDE_STDERR'];
+const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_NO_ACTION', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT', 'FAKE_CLAUDE_STDERR'];
 afterEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
 });
@@ -345,6 +345,33 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec({ ahead: '0' }) }).run(pack, tmpDir());
     expect(r.ok).toBe(false);
     expect(r.error).toContain('无本地 commit');
+  }, 20_000);
+
+  it('no-action 例外终态:ahead=0 + 带证据围栏 → ok:true + noAction(不再判「无产出」);prompt 含第 6 步例外出口', async () => {
+    const dir = tmpDir();
+    process.env.FAKE_CLAUDE_NO_ACTION = '1';
+    process.env.FAKE_CLAUDE_ARGS_FILE = path.join(dir, 'argv.json');
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec({ ahead: '0' }) }).run(pack, dir);
+    expect(r.ok).toBe(true);
+    expect(r.noAction?.reason).toBe('already_fixed');
+    expect(r.noAction?.evidence).toContain('d9bef57b8f');
+    expect(r.commitHash).toBeUndefined(); // 零 commit 路径,无产出字段
+    expect(r.retryable).toBeUndefined(); // 非失败,不进重试语义
+
+    // agent 确实收到了例外出口指令(围栏约定随 prompt 下发)
+    const argv: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
+    const prompt = argv[argv.indexOf('-p') + 1];
+    expect(prompt).toContain('例外出口(与第 5 步二选一)');
+    expect(prompt).toContain('```no-action');
+    expect(prompt).toContain('不许拿这个当逃避干活的出口');
+  }, 20_000);
+
+  it('commit 优先:ahead>0 时即便回复带 no-action 围栏也走正常产出路径(noAction 恒缺省)', async () => {
+    process.env.FAKE_CLAUDE_NO_ACTION = '1';
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() }).run(pack, tmpDir());
+    expect(r.ok).toBe(true);
+    expect(r.commitHash).toBe('abc123def456');
+    expect(r.noAction).toBeUndefined(); // 既 commit 又宣称无需改动自相矛盾 → 只认 commit
   }, 20_000);
 
   it('opts.baseBranch(实探基线)→ git 基线校验走该分支(milvus master 场景,pack 缺省 main 不再误用)', async () => {

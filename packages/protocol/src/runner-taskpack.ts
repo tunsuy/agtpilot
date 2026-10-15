@@ -1,4 +1,4 @@
-import type { RunnerTaskPack } from './runner';
+import type { NoActionFinal, NoActionReason, RunnerTaskPack } from './runner';
 
 /**
  * 任务包渲染器(docs/design/local-runner-bridge.md §8「任务包格式」行;纯函数):
@@ -12,6 +12,22 @@ import type { RunnerTaskPack } from './runner';
 
 /** PR 终稿回传约定:agent 完成后在最终回复里输出该围栏 JSON 块,runner 解析回流 */
 export const PR_FINAL_FENCE = 'pr-final';
+
+/**
+ * no-action 围栏:agent 核实「无需改动」(上游已修复/无法复现/超出范围)时的
+ * 例外出口,与 pr-final 二选一。生产背景(2026-10-15 milvus #52049):修复 PR
+ * 已合并但 issue 没人关,agent 核验后正确地不产出 commit,却只能被判「无产出」
+ * 失败 → 云端反复重派同一 issue。有了结构化结论,一次核验沉淀成永久资产。
+ */
+export const NO_ACTION_FENCE = 'no-action';
+
+/** no-action 原因 → 展示文案(runner 日志/事件消息与 web 任务卡共用,同源不漂移) */
+export const NO_ACTION_REASON_LABELS: Record<NoActionReason, string> = {
+  already_fixed: '上游已修复',
+  not_reproducible: '无法复现',
+  out_of_scope: '不属于本仓库',
+  other: '无需改动(其它)',
+};
 
 /** renderTaskPrompt 可选项(additive:缺省行为与旧版逐字节一致) */
 export interface RenderTaskPromptOptions {
@@ -85,6 +101,14 @@ export function renderTaskPrompt(pack: RunnerTaskPack, opts?: RenderTaskPromptOp
     lines.push(`PR 草稿参考(以你按实际改动补全的终稿为准):标题「${pack.prDraft.title}」`);
     if (pack.prDraft.bodyTemplate) lines.push(`正文模板:\n${pack.prDraft.bodyTemplate}`);
   }
+  lines.push('');
+  lines.push(`6. 例外出口(与第 5 步二选一):若核实后确认该 Issue 无需改动本仓库——已被上游修复(修复 commit/PR 已在当前基线)、按 Issue 描述无法复现、或问题不在本仓库——**不要硬凑 commit**,改为在最终回复末尾输出 no-action 围栏,格式严格如下(围栏名不可改):`);
+  lines.push('');
+  lines.push('```' + NO_ACTION_FENCE);
+  lines.push(JSON.stringify({ reason: 'already_fixed | not_reproducible | out_of_scope', evidence: '确凿证据:修复 commit/PR 编号与验证方式,或复现步骤与结果' }, null, 2));
+  lines.push('```');
+  lines.push('');
+  lines.push('仅在有确凿证据时使用(如 git log 找到修复 commit 并用 merge-base 验证已在基线、写复现测试跑过确认不复现),证据写进 evidence;拿不准就如实说明情况——不许拿这个当逃避干活的出口。');
   return lines.join('\n');
 }
 
@@ -129,6 +153,28 @@ export function extractPrFinal(text: string): { title: string; body: string } | 
       return { title: parsed.title.trim().slice(0, 300), body: parsed.body.slice(0, 20000) };
     }
     return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 从 agent 最终回复里提取 ```no-action 围栏 JSON(容错同 extractPrFinal)。
+ * evidence 必填非空 —— 无证据的 no-action 不成立(返回 null,回落「无产出」失败);
+ * 未知 reason 归 'other';超长 evidence 截断(≤8000)。
+ */
+export function extractNoActionFinal(text: string): NoActionFinal | null {
+  const re = new RegExp('```' + NO_ACTION_FENCE + '\\s*\\n([\\s\\S]*?)```');
+  const m = text.match(re);
+  if (!m) return null;
+  try {
+    const parsed = JSON.parse(m[1]);
+    const evidence = typeof parsed?.evidence === 'string' ? parsed.evidence.trim() : '';
+    if (!evidence) return null;
+    const reason: NoActionReason = ['already_fixed', 'not_reproducible', 'out_of_scope'].includes(parsed?.reason)
+      ? parsed.reason
+      : 'other';
+    return { reason, evidence: evidence.slice(0, 8000) };
   } catch {
     return null;
   }

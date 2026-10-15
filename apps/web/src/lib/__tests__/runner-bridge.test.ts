@@ -12,6 +12,7 @@ import {
   enqueueTask,
   claimNextTask,
   recordRunnerEvents,
+  findDispatchConflict,
   getRunnerTasks,
   getRunnerTask,
   cancelRunnerTask,
@@ -172,24 +173,25 @@ describe('任务队列', () => {
     const t = enqueueTask(USER_A, validPack, T0)!;
     expect(t.state).toBe('queued');
     expect(t.expiresAt).toBe(T0 + RUNNER_TASK_TTL_MS);
-    expect(enqueueTask(USER_A, validPack, T0)).toBeNull();
+    // 换 issueUrl 只留 taskId 冲突一个变量(同 Issue 防重是另一条拒绝路径,专测见下)
+    expect(enqueueTask(USER_A, { ...validPack, issueUrl: 'https://github.com/owner/repo/issues/2' }, T0)).toBeNull();
   });
 
   it('关联会话(missionId):合法字符串落记录;畸形/超长拒绝入队', () => {
     const t = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m1' }, T0, { missionId: 'mission-abc' })!;
     expect(t.missionId).toBe('mission-abc');
-    // 缺省不落字段(工坊外派发/旧客户端语义)
-    const t2 = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m2' }, T0)!;
+    // 缺省不落字段(工坊外派发/旧客户端语义);issueUrl 各异,避开同 Issue 派发防重
+    const t2 = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m2', issueUrl: 'https://github.com/owner/repo/issues/2' }, T0)!;
     expect('missionId' in t2).toBe(false);
-    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m3' }, T0, { missionId: '' })).toBeNull();
-    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m4' }, T0, { missionId: 'x'.repeat(129) })).toBeNull();
-    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m5' }, T0, { missionId: 42 as unknown as string })).toBeNull();
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m3', issueUrl: 'https://github.com/owner/repo/issues/3' }, T0, { missionId: '' })).toBeNull();
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m4', issueUrl: 'https://github.com/owner/repo/issues/4' }, T0, { missionId: 'x'.repeat(129) })).toBeNull();
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m5', issueUrl: 'https://github.com/owner/repo/issues/5' }, T0, { missionId: 42 as unknown as string })).toBeNull();
   });
 
   it('领取 FIFO:先入先领,领后 dispatched 绑定设备,队列空返回 null', () => {
     const r = pairDevice(USER_A);
     enqueueTask(USER_A, validPack, T0);
-    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_0002' }, T0 + 1000);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_0002', issueUrl: 'https://github.com/owner/repo/issues/2' }, T0 + 1000);
 
     const first = claimNextTask(USER_A, r.deviceId, T0 + 2000)!;
     expect(first.taskId).toBe('rtask_0001');
@@ -367,8 +369,8 @@ describe('派发时指定设备(targetDeviceId:任务绑定,仅该设备可领�
   it('FIFO 与定向共存:跳过绑定给他机的更老任务,领取本机可领的', () => {
     const a = pairDevice(USER_A);
     const b = pairDevice(USER_A);
-    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_t_b' }, T0, { targetDeviceId: b.deviceId });
-    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_t_a' }, T0 + 1, { targetDeviceId: a.deviceId });
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_t_b', issueUrl: 'https://github.com/owner/repo/issues/2' }, T0, { targetDeviceId: b.deviceId });
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_t_a', issueUrl: 'https://github.com/owner/repo/issues/3' }, T0 + 1, { targetDeviceId: a.deviceId });
     expect(claimNextTask(USER_A, a.deviceId, T0 + 2)!.taskId).toBe('rtask_t_a');
     expect(claimNextTask(USER_A, b.deviceId, T0 + 3)!.taskId).toBe('rtask_t_b');
   });
@@ -388,6 +390,154 @@ describe('派发时指定设备(targetDeviceId:任务绑定,仅该设备可领�
     const a = pairDevice(USER_A);
     enqueueTask(USER_A, validPack, T0);
     expect(claimNextTask(USER_A, a.deviceId, T0 + 1)!.taskId).toBe(validPack.taskId);
+  });
+});
+
+describe('no-action 例外终态(ingest:error 事件识别 noAction 标记 → failed 升级 no_action)', () => {
+  function setupRunning() {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, validPack, T0)!;
+    claimNextTask(USER_A, r.deviceId, T0 + 10)!;
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_na_run', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+    return r;
+  }
+  const naEvidence = '修复 commit d9bef57b8f(PR #52261)经 git merge-base 验证已在当前基线,复现矩阵全过。';
+
+  it('同批 error(noAction 标记)+ state failed → 升级 no_action 终态,标记与消息落库', () => {
+    const r = setupRunning();
+    // runner 单次 flush 的事件序:progress → error(标记)→ state(failed),批内顺序处理
+    const res = recordRunnerEvents(
+      USER_A,
+      r.deviceId,
+      [
+        { eventId: 'ev_na_err', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'error', payload: { message: 'agent 核实无需改动:上游已修复。证据:' + naEvidence.slice(0, 50), noAction: { reason: 'already_fixed', evidence: naEvidence } } },
+        { eventId: 'ev_na_state', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'state', payload: { state: 'failed' } },
+      ],
+      T0 + 30
+    );
+    expect(res.accepted).toBe(2);
+    expect(res.stateChanges).toEqual([{ taskId: 'rtask_0001', from: 'running', to: 'no_action' }]);
+    const t = getRunnerTask(USER_A, 'rtask_0001', T0 + 31)!;
+    expect(t.state).toBe('no_action');
+    expect(t.noAction).toEqual({ reason: 'already_fixed', evidence: naEvidence });
+    expect(t.error).toContain('无需改动'); // error 消息照常落库(时间线人可读)
+    expect(t.retryable).toBeUndefined(); // 不是失败,不标可重试
+  });
+
+  it('无标记的 state failed → 普通 failed(旧版 runner 语义不变)', () => {
+    const r = setupRunning();
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_na_f1', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'error', payload: { message: '验收命令未通过' } },
+      { eventId: 'ev_na_f2', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'state', payload: { state: 'failed' } },
+    ], T0 + 30);
+    const t = getRunnerTask(USER_A, 'rtask_0001', T0 + 31)!;
+    expect(t.state).toBe('failed');
+    expect(t.noAction).toBeUndefined();
+  });
+
+  it('畸形标记(evidence 缺失/空白、非对象)不落库 → 仍 failed(证据强制)', () => {
+    for (const [i, bad] of [{ reason: 'already_fixed' }, { reason: 'already_fixed', evidence: '   ' }, 'yes', 42].entries()) {
+      const r = setupRunning();
+      recordRunnerEvents(USER_A, r.deviceId, [
+        { eventId: `ev_na_bad${i}_e`, taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'error', payload: { message: 'm', noAction: bad } },
+        { eventId: `ev_na_bad${i}_s`, taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'state', payload: { state: 'failed' } },
+      ], T0 + 30);
+      const t = getRunnerTask(USER_A, 'rtask_0001', T0 + 31)!;
+      expect(t.state, `case ${i}`).toBe('failed');
+      expect(t.noAction, `case ${i}`).toBeUndefined();
+    }
+  });
+
+  it('标记迟到(failed 已落终态后才到)→ 不追溯升级状态;no_action 后其它迁移一律拒绝', () => {
+    const r = setupRunning();
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_na_late_s', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'state', payload: { state: 'failed' } },
+    ], T0 + 30);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_na_late_e', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 40, type: 'error', payload: { message: 'm', noAction: { reason: 'other', evidence: 'e' } } },
+    ], T0 + 40);
+    expect(getRunnerTask(USER_A, 'rtask_0001', T0 + 41)!.state).toBe('failed'); // 终态不可逆
+  });
+
+  it('no_action 是终态:后续 state 事件拒绝,不悬挂', () => {
+    const r = setupRunning();
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_na_t_e', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'error', payload: { message: 'm', noAction: { reason: 'not_reproducible', evidence: '按 Issue 步骤在当前基线复现 3 次全部通过' } } },
+      { eventId: 'ev_na_t_s', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 30, type: 'state', payload: { state: 'failed' } },
+      { eventId: 'ev_na_t_s2', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 31, type: 'state', payload: { state: 'running' } },
+    ], T0 + 30);
+    const t = getRunnerTask(USER_A, 'rtask_0001', T0 + 32)!;
+    expect(t.state).toBe('no_action');
+    expect(t.noAction!.reason).toBe('not_reproducible');
+  });
+});
+
+describe('派发防重(findDispatchConflict + enqueueTask 权威闸 + force 明示旁路)', () => {
+  function driveToNoAction(taskId: string, issueUrl: string) {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId, issueUrl }, T0)!;
+    claimNextTask(USER_A, r.deviceId, T0 + 10)!;
+    recordRunnerEvents(
+      USER_A,
+      r.deviceId,
+      [
+        { eventId: `${taskId}_run`, taskId, deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+        { eventId: `${taskId}_err`, taskId, deviceId: r.deviceId, at: T0 + 21, type: 'error', payload: { message: 'm', noAction: { reason: 'already_fixed', evidence: 'commit d9bef57b8f 已在基线' } } },
+        { eventId: `${taskId}_fail`, taskId, deviceId: r.deviceId, at: T0 + 22, type: 'state', payload: { state: 'failed' } },
+      ],
+      T0 + 22
+    );
+    expect(getRunnerTask(USER_A, taskId, T0 + 23)!.state).toBe('no_action');
+  }
+
+  it('同 issueUrl 已有 no_action 结论 → 重复派发拒绝;force:true 明示旁路后可入队', () => {
+    driveToNoAction('rtask_na1', validPack.issueUrl);
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_na2' }, T0 + 100)).toBeNull();
+    const forced = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_na2' }, T0 + 100, { force: true });
+    expect(forced!.taskId).toBe('rtask_na2');
+    expect(forced!.state).toBe('queued');
+  });
+
+  it('同 issueUrl 有在途任务(queued)→ 拒绝;落终态(cancelled)后不再挡,人工重派合法', () => {
+    enqueueTask(USER_A, validPack, T0)!;
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_d2' }, T0 + 1)).toBeNull();
+    cancelRunnerTask(USER_A, 'rtask_0001', T0 + 2);
+    const again = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_d2' }, T0 + 3);
+    expect(again!.taskId).toBe('rtask_d2');
+  });
+
+  it('failed/done 终态不算冲突:同 Issue 修复失败后允许直接重派(不带 force)', () => {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, validPack, T0)!;
+    claimNextTask(USER_A, r.deviceId, T0 + 10)!;
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_dd_r', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+      { eventId: 'ev_dd_f', taskId: 'rtask_0001', deviceId: r.deviceId, at: T0 + 21, type: 'state', payload: { state: 'failed' } },
+    ], T0 + 21);
+    const retry = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_retry' }, T0 + 30);
+    expect(retry!.taskId).toBe('rtask_retry');
+  });
+
+  it('findDispatchConflict:no_action 结论优先于在途;不同 issueUrl / 空串 → null', () => {
+    driveToNoAction('rtask_fc1', validPack.issueUrl);
+    // force 再派一条在途同 Issue 任务:no_action 结论优先(它才是用户该先看到的)
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_fc2' }, T0 + 100, { force: true })!;
+    const c = findDispatchConflict(getRunnerTasks(USER_A, T0 + 101), validPack.issueUrl);
+    expect(c!.kind).toBe('no_action');
+    expect(c!.taskId).toBe('rtask_fc1');
+    expect(c!.noAction).toEqual({ reason: 'already_fixed', evidence: 'commit d9bef57b8f 已在基线' });
+
+    expect(findDispatchConflict(getRunnerTasks(USER_A, T0 + 101), 'https://github.com/owner/repo/issues/999')).toBeNull();
+    expect(findDispatchConflict(getRunnerTasks(USER_A, T0 + 101), '')).toBeNull();
+    expect(findDispatchConflict([], validPack.issueUrl)).toBeNull();
+  });
+
+  it('findDispatchConflict:仅在途任务 → kind active(带状态供话术)', () => {
+    enqueueTask(USER_A, validPack, T0)!;
+    const c = findDispatchConflict(getRunnerTasks(USER_A, T0 + 1), validPack.issueUrl);
+    expect(c).toEqual({ kind: 'active', taskId: 'rtask_0001', state: 'queued' });
   });
 });
 

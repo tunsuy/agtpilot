@@ -287,7 +287,7 @@ export function validateScriptSkill(raw: any): string | null {
       case 'goto':
         if (typeof s.url !== 'string' || !/^https:\/\//.test(s.url)) return `${at} goto.url 必须为 https`;
         if (s.params !== undefined) {
-          if (!Array.isArray(s.params) || s.params.some((p) => typeof p !== 'string' || !p)) {
+          if (!Array.isArray(s.params) || s.params.some((p: unknown) => typeof p !== 'string' || !p)) {
             return `${at} goto.params 必须是参数名字符串数组`;
           }
           for (const p of s.params) {

@@ -81,6 +81,20 @@ describe('buildTaskSystemPrompt', () => {
     expect(s).toContain('过程碎语');
   });
 
+  /**
+   * 存草稿发起边界(生产实测:模型写完笔记看到托管已开启,未经用户
+   * 要求直接调 xhs_save_note_draft,审批卡一弹用户顺手通过,草稿就
+   * 存了 —— 审批卡是执行确认,被当成了发起授权)。规则 9/10 补上
+   * 「谁发起」:用户明确要求/卡片按钮触发才调,交付成品时停在成品。
+   */
+  it('存草稿发起权在用户:明确要求才调,交付成品不主动存;审批卡≠发起授权', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('只在用户明确要求时');
+    expect(s).toContain('不要未经要求主动存草稿');
+    expect(s).toContain('不等于发起授权');
+    expect(s).toContain('不要未经要求主动写入'); // 公众号同款边界
+  });
+
   it('用户记忆块按需插值:有值时插入、缺省时无空占位', () => {
     const withMemory = buildTaskSystemPrompt('【用户记忆】偏好中文交付');
     expect(withMemory).toContain('【用户记忆】偏好中文交付');

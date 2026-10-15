@@ -5,12 +5,14 @@ import { PlannerService } from './index';
  * PlannerService 看板语义测试:
  * - 建板:首步 in_progress、其余 pending;同 taskKey 重建自动替换旧板
  *   (提示词现在明确引导「计划改向时重建看板」,替换语义是它的落地)
- * - 推进:真实工具成功 → 当前步完成 + 下一 pending 转 in_progress;
- *   failed 同样推进(否则看板冻结);元工具不推进
+ * - 滞后催促(2026-10 契约切换):看板进度由模型显式申报(planner_update_task
+ *   同批,业界 Claude Code TodoWrite / Codex update_plan 同款);模型忘了
+ *   申报时 boardLagNotice 给出带当前步骤上下文的催促文本。旧的
+ *   noteToolResult「工具成功自动推进」已废 —— 推断猜不准语义事件。
  * - 淘汰:>20 时优先逐出「全部完结且最久未更新」的,活跃看板宁超限不逐出
  *
- * 注:同轮并行调用「最多推进一次」的批处理在 core Orchestrator 的
- * prepareStep 结算(那里有轮边界,这里看不到),服务侧契约不变。
+ * 注:滞后计数/清零/注入在 core Orchestrator 的 prepareStep(那里有轮边界),
+ * 这里只测催促文本的取舍。
  */
 
 /** cordis Service 构造只依赖 reflect.provide;广播走 ctx.emit + agent.emitEvent */
@@ -50,24 +52,23 @@ describe('PlannerService 看板语义', () => {
     expect(rebuilt.goal).toBe('新目标');
   });
 
-  it('真实工具成功推进当前步骤并把下一 pending 转入进行中', () => {
+  it('滞后催促:有进行中步骤时给出带步骤上下文、指向同批申报的提醒文本', () => {
     const svc = newService();
     svc.createPlan('目标', steps(3), 'm1');
-    svc.noteToolResult('m1', 'search_web');
-    const plan = svc.getPlan('m1')!;
-    expect(plan.tasks[0].status).toBe('completed');
-    expect(plan.tasks[1].status).toBe('in_progress');
-    expect(plan.currentTaskId).toBe('step_2');
+    const notice = svc.boardLagNotice('m1', 2);
+    expect(notice).not.toBeNull();
+    expect(notice).toContain('2 轮');
+    expect(notice).toContain('步骤1'); // 当前进行中步骤的标题进上下文
+    expect(notice).toContain('同一批');
+    expect(notice).toContain('planner_update_task');
   });
 
-  it('元工具(看板/记忆/路由/观测)不推进 —— 调度类调用不该「完成」一个步骤', () => {
+  it('无看板 / 无进行中步骤(全完结)→ null,没有可催促的进度', () => {
     const svc = newService();
-    svc.createPlan('目标', steps(2), 'm1');
-    svc.noteToolResult('m1', 'planner_update_task');
-    svc.noteToolResult('m1', 'memory_store');
-    svc.noteToolResult('m1', 'router_select_tier');
-    svc.noteToolResult('m1', 'observability_trace');
-    expect(svc.getPlan('m1')!.tasks[0].status).toBe('in_progress');
+    expect(svc.boardLagNotice('nope', 2)).toBeNull();
+    svc.createPlan('目标', steps(1), 'm1');
+    svc.updateTask('step_1', 'completed', undefined, 'm1');
+    expect(svc.boardLagNotice('m1', 2)).toBeNull();
   });
 
   it('步骤标 failed 同样推进(failed 后 currentTaskId 不悬停,看板不冻结)', () => {
@@ -79,9 +80,9 @@ describe('PlannerService 看板语义', () => {
     expect(plan.tasks[1].status).toBe('in_progress');
   });
 
-  it('未知 taskKey / 未知步骤的推进与更新是安全空操作', () => {
+  it('未知 taskKey / 未知步骤的催促与更新是安全空操作', () => {
     const svc = newService();
-    expect(() => svc.noteToolResult('nope', 'search_web')).not.toThrow();
+    expect(svc.boardLagNotice('nope', 2)).toBeNull();
     svc.createPlan('目标', steps(2), 'm1');
     expect(svc.updateTask('step_9', 'completed', undefined, 'm1')).toBeNull();
   });

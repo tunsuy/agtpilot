@@ -74,7 +74,7 @@ function buildHarness(callSeq: string[]) {
   };
   ctx.reflect.provide('model', stubModel);
 
-  const stubPlanner: PlannerNotifier = { noteToolResult: () => {} };
+  const stubPlanner: PlannerNotifier = { boardLagNotice: () => null };
   ctx.reflect.provide('planner', stubPlanner);
 
   return {
@@ -195,7 +195,7 @@ function buildUsageHarness(opts: {
     }),
   };
   ctx.reflect.provide('model', stubModel);
-  ctx.reflect.provide('planner', { noteToolResult: () => {} } as PlannerNotifier);
+  ctx.reflect.provide('planner', { boardLagNotice: () => null } as PlannerNotifier);
 
   return {
     run: () => orch.runTask({ prompt: '测试任务', maxSteps: 20 }),

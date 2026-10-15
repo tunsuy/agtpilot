@@ -3,7 +3,7 @@
  *   npx tsx packages/core/src/smoke.ts
  * 验证 harness 三大能力：
  * 1. 滑动窗口熔断器能否抓住 A→B→A→B 交替空转（旧版"连续相同"检测器抓不住）
- * 2. 看板自动推进（工具成功即推进，模型零汇报调用）
+ * 2. 看板滞后催促（模型连续多轮真实工具成功但未申报看板 → 注入【看板同步提醒】）
  * 3. 会话压缩（超阈值历史 → 纪要替换旧工具消息，近期窗口保留）
  */
 import { Context } from '@deepseek-ai/cordis';
@@ -24,6 +24,7 @@ async function main() {
   let longOutputTruncated = false;
   let longOutputKeepsTail = false;
   let longOutputKeepsHead = false;
+  let boardReminders = 0;
   const stubModel: ModelGateway = {
     setPreferredModel: () => {},
     setBudget: () => {},
@@ -34,13 +35,20 @@ async function main() {
       const responseMessages: any[] = [];
       let loopMessages: any[] = [...opts.messages];
       while (round < seq.length) {
-        // 模拟 SDK：每步调用前触发 prepareStep，可重写本步消息（任务内压缩挂载点）
+        // 模拟 SDK：每步调用前触发 prepareStep，可重写本步消息（任务内压缩 / 看板提醒挂载点）
         const adjust = await opts.prepareStep?.({ stepNumber: round + 1, messages: loopMessages });
         if (adjust?.messages) {
-          midLoopCompacted = true;
-          midLoopMessagesBefore = loopMessages.length;
+          // 压缩 = 消息数收缩;看板提醒 = 追加一条(计数只取新增,消息会在循环状态里累积)
+          if (adjust.messages.length < loopMessages.length) {
+            midLoopCompacted = true;
+            midLoopMessagesBefore = loopMessages.length;
+            console.log(`   [in-loop] 第 ${round + 1} 步前触发压缩: ${midLoopMessagesBefore} -> ${adjust.messages.length} 条消息`);
+          }
+          const reminders = adjust.messages.filter(
+            (m: any) => typeof m?.content === 'string' && m.content.includes('【看板同步提醒】')
+          ).length;
+          if (reminders > boardReminders) boardReminders = reminders;
           loopMessages = adjust.messages;
-          console.log(`   [in-loop] 第 ${round + 1} 步前触发压缩: ${midLoopMessagesBefore} -> ${loopMessages.length} 条消息`);
         }
         const name = seq[round];
         const out = await find(name).execute({});
@@ -71,29 +79,15 @@ async function main() {
   // 以 'model' 服务名注册（内核经 ctx.reflect.get('model') 类型化读取）
   ctx.reflect.provide('model', stubModel);
 
-  // ---- stub 规划器（实现 PlannerNotifier 契约）：验证 noteToolResult 自动推进 ----
-  const plan = {
-    goal: 'g',
-    tasks: [
-      { id: 't1', title: 'a', status: 'in_progress' },
-      { id: 't2', title: 'b', status: 'pending' },
-      { id: 't3', title: 'c', status: 'pending' },
-    ],
-    currentTaskId: 't1',
-  };
-  let advances = 0;
+  // ---- stub 规划器（实现 PlannerNotifier 契约）：验证看板滞后催促注入 ----
+  // (模型连续多轮真实工具成功但未申报看板 → 内核注入【看板同步提醒】)
+  let lagNotices = 0;
+  let lastIdleRounds = 0;
   const stubPlanner: PlannerNotifier = {
-    noteToolResult: (_taskId: string, toolName: string) => {
-      const cur = plan.tasks.find((t: any) => t.id === plan.currentTaskId && t.status === 'in_progress');
-      if (cur) {
-        cur.status = 'completed';
-        const next = plan.tasks.find((t: any) => t.status === 'pending');
-        if (next) {
-          next.status = 'in_progress';
-          plan.currentTaskId = next.id;
-        }
-        advances++;
-      }
+    boardLagNotice: (_taskId: string, idleRounds: number) => {
+      lagNotices++;
+      lastIdleRounds = idleRounds;
+      return `看板已 ${idleRounds} 轮未随进度更新，请在同批工具调用里附带 planner_update_task 同步进度`;
     },
   };
   ctx.reflect.provide('planner', stubPlanner);
@@ -141,8 +135,8 @@ async function main() {
   console.log('   skippedCalls =', result.efficiency?.skippedCalls, '(期望 2：两工具各自第 4 次同签名出现时开始跳过)');
   console.log('   toolCalls =', result.efficiency?.toolCalls, '(期望 9，含 1 次超长输出)');
 
-  console.log('== 2. 看板自动推进 ==');
-  console.log('   advances =', advances, '(期望 3：3 个计划步骤全部由工具成功推进，模型 0 次 planner_update_task)');
+  console.log('== 2. 看板滞后催促（业界同款契约：进度由模型申报，内核只催不推）==');
+  console.log(`   lagNotices = ${lagNotices}, boardReminders = ${boardReminders}, lastIdleRounds = ${lastIdleRounds}`, '(期望 3/3/2：9 轮真实工具但零申报，第 3/5/7 轮注入提醒后计数清零；7、8 轮被熔断跳过不算推进)');
 
   console.log('== 3. 超长输出头尾混合截断（sandbox_ 类尾优先）==');
   console.log(
@@ -167,7 +161,8 @@ async function main() {
   const failures: string[] = [];
   if (result.efficiency?.skippedCalls !== 2) failures.push(`skippedCalls 期望 2，实际 ${result.efficiency?.skippedCalls}`);
   if (result.efficiency?.toolCalls !== 9) failures.push(`toolCalls 期望 9，实际 ${result.efficiency?.toolCalls}`);
-  if (advances !== 3) failures.push(`advances 期望 3，实际 ${advances}`);
+  if (lagNotices !== 3 || boardReminders !== 3 || lastIdleRounds !== 2)
+    failures.push(`看板滞后催促异常: notices=${lagNotices} reminders=${boardReminders} idle=${lastIdleRounds} (期望 3/3/2)`);
   if (!longOutputTruncated || !longOutputKeepsHead || !longOutputKeepsTail)
     failures.push(`头尾混合截断异常: 标记=${longOutputTruncated} 头=${longOutputKeepsHead} 尾=${longOutputKeepsTail}`);
   if (!midLoopCompacted) failures.push('任务内压缩未触发');

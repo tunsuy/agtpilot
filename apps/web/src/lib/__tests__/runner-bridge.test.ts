@@ -183,7 +183,7 @@ describe('任务队列', () => {
     expect('missionId' in t2).toBe(false);
     expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m3' }, T0, { missionId: '' })).toBeNull();
     expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m4' }, T0, { missionId: 'x'.repeat(129) })).toBeNull();
-    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m5' }, T0, { missionId: 42 })).toBeNull();
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m5' }, T0, { missionId: 42 as unknown as string })).toBeNull();
   });
 
   it('领取 FIFO:先入先领,领后 dispatched 绑定设备,队列空返回 null', () => {

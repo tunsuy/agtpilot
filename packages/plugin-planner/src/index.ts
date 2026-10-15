@@ -7,7 +7,7 @@ export const name = 'agtpilot-plugin-planner';
 export const inject = ['agent'];
 
 // Context.planner 的类型声明在 core（PlannerNotifier，依赖倒置）：
-// 内核只需要 noteToolResult；本服务的完整 API（createPlan 等）留在插件内部。
+// 内核只需要 boardLagNotice（滞后催促文本）；本服务的完整 API（createPlan 等）留在插件内部。
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
@@ -100,22 +100,24 @@ export class PlannerService extends Service implements PlannerNotifier {
   }
 
   /**
-   * 看板自动推进（由 core Orchestrator 在下一步 prepareStep 结算调用：
-   * 一轮内成功的真实工具批量结算、最多推进一次 —— 逐个即时推进会让同轮
-   * 并行的多个调用把后续步骤也误标完成）：
-   * 真实工具成功即视为当前 in_progress 步骤完成。模型不再需要为"汇报进度"
-   * 单独花一轮调用 planner_update_task —— 每个阶段一次汇报调用曾是步数
-   * 膨胀的最大来源。元工具（看板/记忆/路由/观测）不触发推进：
-   * 它们不产出任务交付物，router_select_tier 这类调度类调用不该"完成"一个步骤。
+   * 看板滞后提醒（由 core Orchestrator 在滞后达阈值时调用）：看板进度由
+   * 模型显式申报维护（planner_update_task 与实际工具调用同批发出 ——
+   * Claude Code TodoWrite / Codex update_plan 同款契约，2026-10 切换，
+   * 取代旧的「工具成功自动推进」推断：推断猜不准语义事件，纯写作步骤
+   * 永远推不动、并行轮跳步、审批冻结期整条冻结）。模型忘了申报时，这里
+   * 给出带当前步骤上下文的催促文本，注入下一轮让模型当轮补报 ——
+   * 「忘了」是一次性事件而不是静默漂移。
    */
-  noteToolResult(taskKey: string, toolName: string) {
-    if (/^(planner_|memory_|router_|observability_)/.test(toolName)) return;
+  boardLagNotice(taskKey: string, idleRounds: number): string | null {
     const plan = this.planFor(taskKey);
-    if (!plan) return;
+    if (!plan) return null;
     const current = plan.tasks.find((t) => t.id === plan.currentTaskId && t.status === 'in_progress');
-    if (current) {
-      this.updateTask(current.id, 'completed', `${current.title}（由工具 ${toolName} 完成推进）`, taskKey);
-    }
+    if (!current) return null; // 无进行中步骤(全完结/全失败):没有可同步的进度
+    return (
+      `看板已 ${idleRounds} 轮未随进度更新：当前步骤「${current.title}」仍为进行中，但真实工具已连续执行成功。` +
+      '请在本轮工具调用【同一批】里附带 planner_update_task 同步看板：已完成的步骤标 completed 并附一句话成果，新开始的步骤标 in_progress。' +
+      '不要为汇报单独花一轮。'
+    );
   }
 
   private planFor(taskKey?: string): (PlanData & { taskKey?: string }) | null {
@@ -175,18 +177,18 @@ export function apply(ctx: Context) {
         planId: plan.id,
         tasksCount: plan.tasks.length,
         currentTaskId: plan.currentTaskId,
-        message: `已创建包含 ${plan.tasks.length} 个步骤的任务看板。看板状态由系统随工具执行自动推进，无需另行汇报进度，请直接开始执行首步。`,
+        message: `已创建包含 ${plan.tasks.length} 个步骤的任务看板。看板状态由你维护：步骤完成的当轮在与实际工具调用同一批里调用 planner_update_task 标记 completed（附一句话成果），开始新步骤时同批标记 in_progress —— 不要为汇报单独花一轮。`,
       };
     },
   });
 
-  // 2. 修正看板状态 (planner_update_task) —— 正常推进无需调用；基线工具
+  // 2. 看板状态更新 (planner_update_task) —— 常规进度通道；基线工具
   ctx.agent.registerTool({
     name: 'planner_update_task',
     baseline: true,
     description:
-      '仅在需要显式修正看板状态时调用（如某步骤确认无法完成需标记 failed、或需回退状态）。' +
-      '看板会随工具执行成功【自动推进】，正常完成步骤、进入下一阶段都【不需要】调用本工具 —— 请直接执行下一步动作。' +
+      '看板进度的常规更新通道：一个步骤完成时【立即】标记 completed（附一句话成果），开始新步骤时标记 in_progress，一次保持恰好一个 in_progress、做完即勾不攒批。' +
+      '更新永远与当轮的实际工具调用【同一批】并行发出，严禁为汇报单独花一轮（这是步数膨胀的老路）。' +
       '计划需要整体改向或重排步骤时，直接用 planner_create_plan 重建看板（同任务自动替换），不要用本工具逐条搬移状态。',
     parameters: {
       type: 'object',

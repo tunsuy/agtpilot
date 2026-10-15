@@ -15,7 +15,7 @@ import {
 } from './routing';
 import { messageText, truncateToolOutput, TOOL_OUTPUT_LIMIT } from './text';
 import { compactConversationMessages } from './compaction';
-import { appendStepNotice, appendUserMessage } from './notice';
+import { appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
 import { ToolGate } from './tool-gate';
 import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
@@ -51,12 +51,15 @@ export function isEmptyToolOutput(out: any): boolean {
 /** 高危操作审批等待上限（毫秒），超时自动拒绝并释放任务，杜绝永久悬挂。0 = 永不超时 */
 const APPROVAL_TIMEOUT_MS = Math.max(0, Number(process.env.AGTPILOT_APPROVAL_TIMEOUT_MS) || 5 * 60_000);
 
+/** 看板滞后催促阈值：连续 N 轮「真实工具成功但模型未申报看板」时注入一条同步提醒 */
+const BOARD_LAG_THRESHOLD = 2;
+
 /** 缺省系统提示（CLI 单用户路径；Web 层传入自己的产品化提示） */
 export const DEFAULT_SYSTEM_PROMPT =
   '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用已接入的原子工具来完成任务。\n' +
   '涉及多个异构动作的复杂任务，先用 planner_create_plan 建立任务看板再开始执行；简单任务直接执行，不要建看板。\n' +
   '当缺少某个平台的专用工具或连接器未授权时，优先使用可用的网页浏览类工具直接在网页上完成操作作为兜底，而不是放弃任务。\n' +
-  '多个互相独立的工具调用请在同一轮并行发起。独立检索尤其如此：把主题拆成多个不同角度的关键词/信息源，一轮批量发出全部搜索，等结果齐了再汇总决定下一步 —— 每轮只发一个查询会成倍浪费模型往返与上下文重发；浏览多个互不依赖的网页同理。任务看板由系统随工具执行自动推进，无需调用 planner_update_task 汇报进度。';
+  '多个互相独立的工具调用请在同一轮并行发起。独立检索尤其如此：把主题拆成多个不同角度的关键词/信息源，一轮批量发出全部搜索，等结果齐了再汇总决定下一步 —— 每轮只发一个查询会成倍浪费模型往返与上下文重发；浏览多个互不依赖的网页同理。看板状态由你维护：步骤完成的当轮在与实际工具调用同一批里调用 planner_update_task 标记 completed（附一句话成果），开始新步骤时同批标记 in_progress；严禁为汇报进度单独花一轮。';
 
 export class OrchestratorService extends Service {
   private pendingApprovals: Map<string, (approved: boolean) => void> = new Map();
@@ -135,19 +138,22 @@ export class OrchestratorService extends Service {
     // 只读工具结果缓存：TTL 内同签名（工具名 + 归一化参数）直接复用,不重新执行。
     // 非只读工具绝不入缓存（两次 email_send 可能都是合法的）。
     const toolResultCache = new Map<string, { at: number; output: any }>();
-    // 看板推进批处理缓冲:本步(一轮模型调用)内执行成功的真实工具名。
-    // 推进延到下一步 prepareStep 才结算 —— 逐个即时推进有个实锤 bug:
-    // 同轮并行的 3 个搜索服务同一个计划步骤,第 1 个成功推进当前步骤后,
-    // 第 2、3 个成功会把【后续步骤】也误标完成(看板跳步)。批处理按
-    // 「一轮最多推进一次」结算,同轮并行调用天然归入同一步骤。
-    const roundToolSuccesses: string[] = [];
+    // 看板滞后检测状态(业界同款契约:看板进度由模型显式申报,内核只催不推):
+    // - roundRealToolSuccess:本轮是否有「真实工具成功且模型未申报看板」
+    //   (元工具 planner_/memory_/router_/observability_ 不算真实推进;
+    //   planner_ 系执行本身就是显式申报,直接把滞后清零);
+    // - boardLagRounds:连续滞后的轮数,达 BOARD_LAG_THRESHOLD 时在下一步
+    //   注入一条看板同步提醒(PlannerNotifier.boardLagNotice 取文本)并清零,
+    //   把「模型忘了申报」变成一轮内自愈的显式事件,而不是静默漂移。
+    let boardLagRounds = 0;
+    let roundRealToolSuccess = false;
     // 只读并行门控(读写锁,一次任务一把):SDK 对同轮全部工具调用是 Promise.all
     // 并发触发的 —— readOnly 工具保留并发红利,非只读工具经此收敛为独占串行
     const toolGate = new ToolGate();
     // 当前步序号（1-based，供工具会话上下文使用）
     let currentStep = 1;
 
-    // ---- 工具包装层：熔断 + 审批门 + 事件广播 + 结果截断 + 效率统计 + 看板自动推进 ----
+    // ---- 工具包装层：熔断 + 审批门 + 事件广播 + 结果截断 + 效率统计 + 看板滞后检测 ----
     // 全局注册工具 + 任务级附加工具（taskTools，如 MCP 用户连接器）；同名时任务级优先
     const globalTools = this.ctx.agent.getTools();
     const taskTools = options.taskTools || [];
@@ -321,12 +327,14 @@ export class OrchestratorService extends Service {
         } else {
           lastFailedTool = '';
           consecutiveFailures = 0;
-          // 看板自动推进(批处理):真实工具执行成功的工具名入队,下一步
-          // prepareStep 开头结算推进。模型不再需要为"汇报进度"单独花一轮
-          // 调用 planner_update_task —— 这是"本该 2 步的任务跑 6 步"的最大
-          // 膨胀源。失败(可能合法重试)、被熔断跳过、被审批拒绝的不入队。
-          if (!callSkippedOrRejected) {
-            roundToolSuccesses.push(toolDef.name);
+          // 看板滞后计数(替代旧的自动推进入队):真实工具成功但模型未申报
+          // 看板的轮数。planner_ 系工具执行本身就是显式申报 → 滞后清零;
+          // 元工具(memory_/router_/observability_)不产出任务交付物,不计;
+          // 失败/被熔断跳过/被审批拒绝/空返回不算真实推进。
+          if (/^planner_/.test(toolDef.name)) {
+            boardLagRounds = 0;
+          } else if (!callSkippedOrRejected && !callEmpty && !/^(memory_|router_|observability_)/.test(toolDef.name)) {
+            roundRealToolSuccess = true;
           }
         }
 
@@ -446,18 +454,6 @@ export class OrchestratorService extends Service {
         //    追加到本步消息末尾 —— 刻意放在压缩之后，保证提示不被蒸馏掉。
         prepareStep: async ({ stepNumber, messages }: { stepNumber: number; messages: Array<any> }) => {
           const adjust: { activeTools?: string[]; messages?: Array<any> } = {};
-          // 看板推进结算(先于本步一切调整):上一轮入队的成功调用在此一次性
-          // 推进看板。一轮最多推进一次 —— 上轮同批的并行调用(如 3 个角度的
-          // search)属于同一计划步骤,逐个推进会跳步。推进失败不影响主流程。
-          if (roundToolSuccesses.length > 0) {
-            const lastName = roundToolSuccesses[roundToolSuccesses.length - 1];
-            roundToolSuccesses.length = 0;
-            try {
-              this.ctx.reflect.get('planner')?.noteToolResult(taskId, lastName);
-            } catch {
-              // 看板推进失败不影响主流程
-            }
-          }
           if (routedTools) {
             const recentText = (messages || [])
               .slice(-8)
@@ -475,6 +471,26 @@ export class OrchestratorService extends Service {
             if (compacted) adjust.messages = compacted;
           } catch {
             // 压缩失败继续用原消息
+          }
+          // 看板滞后催促(压缩之后注入,与治理提示同点位防被蒸馏):上轮真实
+          // 工具成功而模型未申报看板 → 滞后轮数累计;达阈值注入一条同步提醒
+          // (文本由规划器给出,带当前步骤上下文)并清零计数 —— 防连环催促。
+          // 契约见 PlannerNotifier.boardLagNotice:看板进度由模型显式申报
+          // (业界同款),内核只负责把「忘了」变成一轮内自愈的催促。
+          if (roundRealToolSuccess) {
+            roundRealToolSuccess = false;
+            boardLagRounds++;
+          }
+          if (boardLagRounds >= BOARD_LAG_THRESHOLD) {
+            const idleRounds = boardLagRounds;
+            boardLagRounds = 0;
+            try {
+              const reminder = this.ctx.reflect.get('planner')?.boardLagNotice(taskId, idleRounds);
+              const withReminder = appendBoardReminder(adjust.messages ?? messages, reminder ?? null);
+              if (withReminder) adjust.messages = withReminder;
+            } catch {
+              // 看板提醒获取失败不影响主流程
+            }
           }
           if (options.getStepNotice) {
             try {

@@ -53,6 +53,24 @@ describe('buildTaskSystemPrompt', () => {
     expect(s.indexOf('【看板规划】')).toBeGreaterThan(s.indexOf('【步数经济】'));
   });
 
+  /**
+   * 看板契约切换(2026-10,对照 Claude Code TodoWrite / Codex update_plan):
+   * 进度从「工具成功自动推进」的服务器猜测改为模型显式申报 ——
+   * 完成立即同批打勾、单一 in_progress、严禁单独汇报轮(步数膨胀老路)。
+   * 旧文案的「自动推进/不要调用」必须清干净,防两套合同并存。
+   */
+  it('看板维护合同:显式申报、同批更新、立即打勾、禁单独汇报轮;旧的自动推进承诺已清除', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('看板状态由你维护');
+    expect(s).toContain('【同一批】');
+    expect(s).toContain('立即'); // 完成即勾不攒批
+    expect(s).toContain('恰好一个 in_progress');
+    expect(s).toContain('严禁为汇报进度单独花一轮');
+    // 旧合同反向断言:服务器自动推进的承诺不再出现
+    expect(s).not.toContain('自动推进');
+    expect(s).not.toContain('【不要】调用 planner_update_task');
+  });
+
   it('受控进展播报:开题确认 + 阶段报告两点位,正文通道,无逐工具碎语(原「安静执行」升级)', () => {
     const s = buildTaskSystemPrompt();
     expect(s).toContain('【受控进展播报】');

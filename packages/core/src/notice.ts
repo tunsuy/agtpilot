@@ -49,3 +49,23 @@ export function appendUserMessage(messages: any[], text?: string | null): any[] 
   const injected: StepNoticeMessage = { role: 'user', content: `${USER_MESSAGE_PREFIX}${content}` };
   return [...(messages || []), injected];
 }
+
+/**
+ * 看板同步提醒前缀:模型连续多轮真实工具成功但看板零更新(忘了同批申报
+ * 进度)时,内核在下一步注入的催促 —— Claude Code 检测到 todo 落后注入
+ * system-reminder 的同款机制。与治理提示同构:user 角色末尾追加,一次性
+ * 事件不改写常量 system,压缩之后注入防被蒸馏。
+ */
+export const BOARD_REMINDER_PREFIX = '【看板同步提醒】';
+
+/**
+ * 把一条看板同步提醒作为 user 消息追加到消息数组末尾(不改原数组)。
+ * - text 为空/纯空白时返回 null(调用方据此跳过,消息保持原样);
+ * - 返回新数组,末尾为 `{ role: 'user', content: 前缀 + text }`。
+ */
+export function appendBoardReminder(messages: any[], text?: string | null): any[] | null {
+  const content = typeof text === 'string' ? text.trim() : '';
+  if (!content) return null;
+  const injected: StepNoticeMessage = { role: 'user', content: `${BOARD_REMINDER_PREFIX}${content}` };
+  return [...(messages || []), injected];
+}

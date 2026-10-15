@@ -118,11 +118,16 @@ export interface ModelGateway {
 // ---- 规划器通知（由 plugin-planner 实现）----
 
 /**
- * 内核向规划器推送的最小接口：工具执行成功后自动推进看板。
- * 内核只依赖这个方法，planner 的完整 API（createPlan 等）留在插件内部。
+ * 内核向规划器查询的最小接口：看板滞后提醒。
+ * 看板进度由模型显式申报维护（planner_update_task 与实际工具调用同批
+ * 发出 —— Claude Code TodoWrite / Codex update_plan 同款契约）；模型忘了
+ * 申报时，内核累计「真实工具成功但看板零更新」的轮数，达到阈值时向
+ * 规划器取一条催促文本注入下一轮 —— 把「忘了」从静默漂移变成一轮内
+ * 可自愈的显式事件。内核不推断步骤完成（旧 noteToolResult 自动推进已废）。
  */
 export interface PlannerNotifier {
-  noteToolResult(taskKey: string, toolName: string): void;
+  /** 无看板 / 无进行中步骤（全完结或全失败）→ null；否则返回注入提醒文本 */
+  boardLagNotice(taskKey: string, idleRounds: number): string | null;
 }
 
 // ---- 工具契约 ----

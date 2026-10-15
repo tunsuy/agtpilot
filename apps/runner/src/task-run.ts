@@ -110,7 +110,7 @@ export async function runTask(
     if (queue.length >= threshold) void flush();
   };
 
-  const result = await deps.adapter.run(pack, repo.repoDir, onProgress);
+  const result = await deps.adapter.run(pack, repo.repoDir, onProgress, { baseBranch: repo.baseBranch });
   if (result.ok) {
     push('phase1_result', {
       commitHash: result.commitHash,
@@ -120,6 +120,9 @@ export async function runTask(
       // 经 fork 派发:实际克隆的 fork 全名回流,云端固化 PR head(owner:branch)与
       // Phase 2 发布目录以此为准(runner 实探的 gh 账号是唯一事实源)
       forkRepo: repo.forkRepo,
+      // 实探基线分支回流(master 默认仓库回落结果):云端固化 PR --base 以此为准,
+      // 派发包里没写 baseBranch 时不能拿缺省 'main' 去开 PR(上游根本没有该分支)
+      baseBranch: repo.baseBranch,
     });
     push('state', { state: 'awaiting_approval' });
     await flush();

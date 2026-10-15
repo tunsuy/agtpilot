@@ -47,7 +47,7 @@ function makeDeps(over: Partial<TaskRunDeps> = {}) {
     },
     adapter: fakeAdapter({}),
     workspaceRoot: '/ws',
-    prepare: async () => ({ repoDir: '/ws/vllm-project/vllm', mode: 'cloned' }),
+    prepare: async () => ({ repoDir: '/ws/vllm-project/vllm', mode: 'cloned', baseBranch: 'main' }),
     log: (l) => logs.push(l),
     now: () => 1000,
     newEventId: () => `ev_${n++}`,
@@ -78,7 +78,7 @@ describe('runTask(领取任务 → 本地执行 → 事件回流编排)', () => 
   it('pack 畸形或 taskId 不一致 → 直接 failed(不碰文件系统、不调执行器)', async () => {
     const adapter = fakeAdapter({});
     let prepared = false;
-    const { deps, flat } = makeDeps({ adapter, prepare: async () => { prepared = true; return { repoDir: '/x', mode: 'cloned' }; } });
+    const { deps, flat } = makeDeps({ adapter, prepare: async () => { prepared = true; return { repoDir: '/x', mode: 'cloned', baseBranch: 'main' }; } });
     expect(await runTask({ taskId: 'rtask_1', pack: { ...validPack, repo: '../evil' } }, deps)).toBe('failed');
     expect(await runTask({ taskId: 'rtask_X', pack: validPack }, deps)).toBe('failed');
     expect(prepared).toBe(false);
@@ -151,7 +151,7 @@ describe('runTask(领取任务 → 本地执行 → 事件回流编排)', () => 
 describe('runTask · 经 fork 派发(viaFork)', () => {
   it('phase1_result 携带 forkRepo(runner 实探账号 = 云端固化 head 的唯一事实源)', async () => {
     const { deps, flat } = makeDeps({
-      prepare: async () => ({ repoDir: '/ws/tunsuy/vllm', mode: 'cloned', forkRepo: 'tunsuy/vllm' }),
+      prepare: async () => ({ repoDir: '/ws/tunsuy/vllm', mode: 'cloned', baseBranch: 'main', forkRepo: 'tunsuy/vllm' }),
     });
     expect(await runTask({ taskId: 'rtask_1', pack: { ...validPack, viaFork: true } }, deps)).toBe('awaiting_approval');
     expect(flat()[1].payload).toMatchObject({ forkRepo: 'tunsuy/vllm', commitHash: 'abc123' });
@@ -161,5 +161,23 @@ describe('runTask · 经 fork 派发(viaFork)', () => {
     const { deps, flat } = makeDeps();
     await runTask({ taskId: 'rtask_1', pack: validPack }, deps);
     expect((flat()[1].payload as any).forkRepo).toBeUndefined();
+  });
+});
+
+describe('runTask · 实探基线分支回流(master 默认仓库)', () => {
+  it('prepareRepo 回落 master → phase1_result 携带 baseBranch,云端 PR --base 以此为准', async () => {
+    const { deps, flat } = makeDeps({
+      prepare: async () => ({ repoDir: '/ws/milvus-io/milvus', mode: 'cloned', baseBranch: 'master' }),
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(flat()[1].payload).toMatchObject({ baseBranch: 'master', commitHash: 'abc123' });
+  });
+
+  it('派发包显式 baseBranch 时回流该值(透传不丢)', async () => {
+    const { deps, flat } = makeDeps({
+      prepare: async () => ({ repoDir: '/ws/a/b', mode: 'updated', baseBranch: 'release-1.x' }),
+    });
+    await runTask({ taskId: 'rtask_1', pack: { ...validPack, baseBranch: 'release-1.x' } }, deps);
+    expect(flat()[1].payload).toMatchObject({ baseBranch: 'release-1.x' });
   });
 });

@@ -55,6 +55,9 @@ describe('prepareRepo(clone/fetch + 切工作分支,零 shell)', () => {
       args: ['clone', '--', 'https://github.com/vllm-project/vllm.git', r.repoDir],
     });
     expect(calls[1].args).toEqual(['-C', r.repoDir, 'checkout', '-B', 'contrib/fix-1', 'origin/main']);
+    // 基线命中 → 零额外探测调用,回流原值
+    expect(r.baseBranch).toBe('main');
+    expect(calls).toHaveLength(2);
   });
 
   it('已有 .git → fetch --prune 增量更新(不重复 clone)', async () => {
@@ -87,6 +90,75 @@ describe('prepareRepo(clone/fetch + 切工作分支,零 shell)', () => {
     const { calls: c2, exec: e2 } = recExec();
     await expect(prepareRepo({ ...pack, repo: '../evil' } as RunnerTaskPack, root, e2)).rejects.toThrow(WorkspaceFenceError);
     expect(c2).toHaveLength(0);
+  });
+});
+
+describe('prepareRepo · 基线分支解析(master 默认仓库,生产实测 milvus-io/milvus#52049)', () => {
+  const milvusPack = { ...pack, repo: 'milvus-io/milvus', workBranch: 'contrib/oss-radar-52049' };
+
+  /**
+   * 假 exec:'main' 基线(远程/本地)checkout 一律 fatal(复现生产报错);
+   * symbolic-ref / ls-remote 按注入场景返回或抛错。
+   */
+  function execNoMain(symbols: { symref?: string; lsRemote?: string }) {
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    const exec: ExecAsync = async (cmd, args) => {
+      calls.push({ cmd, args: [...args] });
+      const a = args.join(' ');
+      if (a.includes('checkout') && (a.endsWith('origin/main') || a.endsWith(' main'))) {
+        throw Object.assign(new Error('Command failed'), {
+          stderr: "fatal: 'main' is not a commit and a branch 'x' cannot be created from it",
+        });
+      }
+      if (a.includes('symbolic-ref')) {
+        if (symbols.symref === undefined) throw new Error('refname refs/remotes/origin/HEAD is not a symbolic ref');
+        return { stdout: `origin/${symbols.symref}\n`, stderr: '' };
+      }
+      if (a.includes('ls-remote')) {
+        if (symbols.lsRemote === undefined) throw new Error('network unreachable');
+        return { stdout: `ref: refs/heads/${symbols.lsRemote}\tHEAD\nrefs/heads/${symbols.lsRemote}\tabc123\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+    return { calls, exec };
+  }
+
+  it('main 不存在 → symbolic-ref 探测默认分支,checkout origin/master,回流 baseBranch=master', async () => {
+    const root = tmpRoot();
+    const { calls, exec } = execNoMain({ symref: 'master' });
+    const r = await prepareRepo(milvusPack, root, exec);
+    expect(r.baseBranch).toBe('master');
+    expect(calls.at(-1)!.args).toEqual([
+      '-C', r.repoDir, 'checkout', '-B', 'contrib/oss-radar-52049', 'origin/master',
+    ]);
+  });
+
+  it('symbolic-ref 失败 → ls-remote --symref 网络实探兜底(旧目录无 origin/HEAD)', async () => {
+    const root = tmpRoot();
+    const { calls, exec } = execNoMain({ lsRemote: 'master' });
+    const r = await prepareRepo(milvusPack, root, exec);
+    expect(r.baseBranch).toBe('master');
+    expect(calls.some((c) => c.args.includes('ls-remote'))).toBe(true);
+    expect(calls.at(-1)!.args.at(-1)).toBe('origin/master');
+  });
+
+  it('两档探测全失败 → 抛错明示基线不存在(不静默切错误分支)', async () => {
+    const root = tmpRoot();
+    const { exec } = execNoMain({});
+    await expect(prepareRepo(milvusPack, root, exec)).rejects.toThrow('基线分支 main 不存在');
+  });
+
+  it('探测的默认分支也无远程引用 → 退本地分支名', async () => {
+    const root = tmpRoot();
+    // origin/master checkout 也失败(极端:克隆残缺),本地 master 兜底
+    const { exec } = execNoMain({ symref: 'master' });
+    // 覆盖:让 origin/master 失败但本地 master 成功 —— 在 execNoMain 外再包一层
+    const wrapped: ExecAsync = async (cmd, args) => {
+      if (args.join(' ').endsWith('origin/master')) throw new Error('invalid ref');
+      return exec(cmd, args);
+    };
+    const r = await prepareRepo(milvusPack, root, wrapped);
+    expect(r.baseBranch).toBe('master');
   });
 });
 

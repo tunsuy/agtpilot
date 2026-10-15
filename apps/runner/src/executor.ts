@@ -37,7 +37,13 @@ export interface ExecutorAdapter {
   name: string;
   /** 本机探测:CLI 是否安装可用(派发前云端设备页可展示) */
   detect(): Promise<{ installed: boolean; version?: string }>;
-  run(pack: RunnerTaskPack, repoDir: string, onProgress?: (e: ParsedStreamEvent) => void): Promise<Phase1Result>;
+  /** opts.baseBranch = prepareRepo 实探基线(master 默认仓库的回落值),供 git 基线校验 */
+  run(
+    pack: RunnerTaskPack,
+    repoDir: string,
+    onProgress?: (e: ParsedStreamEvent) => void,
+    opts?: { baseBranch?: string }
+  ): Promise<Phase1Result>;
 }
 
 /** 固化的工具白名单(§6.1;验收命令另行拼入,见 buildClaudeArgs) */
@@ -208,7 +214,8 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
   async run(
     pack: RunnerTaskPack,
     repoDir: string,
-    onProgress?: (e: ParsedStreamEvent) => void
+    onProgress?: (e: ParsedStreamEvent) => void,
+    opts?: { baseBranch?: string }
   ): Promise<Phase1Result> {
     const prompt = renderTaskPrompt(pack);
     const args = buildClaudeArgs(pack, repoDir, prompt);
@@ -221,7 +228,8 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     const prFinal = agent.resultText ? extractPrFinal(agent.resultText) : null;
 
     // ---- 2. git 校验:工作分支上必须有 agent 的本地 commit(§6.1 终态判据) ----
-    const base = pack.baseBranch ?? 'main';
+    // 基线优先用 prepareRepo 实探结果(master 默认仓库的回落值);缺省退 pack
+    const base = opts?.baseBranch || pack.baseBranch || 'main';
     let commitHash = '';
     try {
       commitHash = (await this.exec('git', ['-C', repoDir, 'rev-parse', 'HEAD'])).stdout.trim();

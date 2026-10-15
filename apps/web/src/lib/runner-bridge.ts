@@ -467,6 +467,22 @@ function snapshotStr(p1: Record<string, unknown> | null, key: string, max: numbe
 }
 
 const REPO_FULL_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
+/** 分支名形状(实探回流防注入:git/gh 命令以数组传参,此处形状校验只做防御性过滤) */
+const BRANCH_NAME_RE = /^[\w./-]{1,150}$/;
+
+/**
+ * 任务生效的基线分支:首选 runner 在 phase1_result 里回流的实探值 ——
+ * 派发包缺省 'main',但不少仓库默认分支是 master(milvus 等),runner
+ * 在仓库准备阶段已回落到真实默认分支;PR --base 与审批展示都以它为准。
+ * 回流缺失/畸形 → 退 pack.baseBranch(再缺省 'main',与 runner 同口径)。
+ */
+function taskBaseBranch(task: RunnerTaskRecord): string | undefined {
+  const fromEvent = snapshotStr(latestPhase1Payload(task), 'baseBranch', 150);
+  if (fromEvent && BRANCH_NAME_RE.test(fromEvent) && !fromEvent.split('/').some((s) => s === '.' || s === '..')) {
+    return fromEvent;
+  }
+  return task.pack.baseBranch;
+}
 
 /**
  * 经 fork 派发(viaFork)任务的实际 fork 全名(ghLogin/repo):
@@ -531,9 +547,10 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
   const a = task.approval;
   if (!a || a.status !== 'pending') return null;
   const forkRepo = taskForkRepo(userId, task);
+  const baseBranch = taskBaseBranch(task);
   const preview = buildPublishCommands({
     workBranch: task.pack.workBranch,
-    baseBranch: task.pack.baseBranch,
+    baseBranch,
     prTitle: a.prTitle,
     prBody: a.prBody,
     forkHead: forkRepo?.split('/')[0],
@@ -549,7 +566,7 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
       taskId: task.taskId,
       repo: task.pack.repo,
       workBranch: task.pack.workBranch,
-      baseBranch: task.pack.baseBranch ?? 'main',
+      baseBranch: baseBranch ?? 'main',
       issueUrl: task.pack.issueUrl,
       // 经 fork 派发:审批卡展示 fork 全名(PR 将从它指向上游)
       forkRepo,
@@ -596,11 +613,13 @@ export function resolvePublishApproval(
 
   if (approved) {
     const includeClaim = Boolean(opts?.includeClaim && task.pack.claimDraft);
-    // 经 fork 派发:PR head 固化为 `ghLogin:branch` 跨仓形式(base 仍是上游 baseBranch)
+    // 经 fork 派发:PR head 固化为 `ghLogin:branch` 跨仓形式(base 仍是上游基线)
     const forkRepo = taskForkRepo(userId, task);
     const commands = buildPublishCommands({
       workBranch: task.pack.workBranch,
-      baseBranch: task.pack.baseBranch,
+      // 实探基线(runner 回流,如 master):固化命令执行的 gh pr create --base
+      // 必须指向上游真实存在的分支 —— 派发缺省 'main' 在 milvus 类仓库开不出 PR
+      baseBranch: taskBaseBranch(task),
       prTitle: a.prTitle,
       prBody: a.prBody,
       issueUrl: task.pack.issueUrl,

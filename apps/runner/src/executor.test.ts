@@ -215,6 +215,25 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(r.error).toContain('无本地 commit');
   }, 20_000);
 
+  it('opts.baseBranch(实探基线)→ git 基线校验走该分支(milvus master 场景,pack 缺省 main 不再误用)', async () => {
+    const seen: string[] = [];
+    const wrapped: ExecAsync = async (cmd, args) => {
+      const a = args.join(' ');
+      if (cmd === 'git' && (a.includes('rev-list') || a.includes('diff --stat'))) seen.push(a);
+      return fakeGitExec()(cmd, args);
+    };
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: wrapped }).run(
+      pack,
+      tmpDir(),
+      undefined,
+      { baseBranch: 'master' }
+    );
+    expect(r.ok).toBe(true);
+    const rev = seen.find((s) => s.includes('rev-list'));
+    expect(rev).toContain('origin/master..HEAD');
+    expect(rev).not.toContain('main');
+  }, 20_000);
+
   it('验收命令未通过 → 失败并带 testTail(runner 独立复跑,不信任 agent 自述)', async () => {
     const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec({ testFail: true }) }).run(pack, tmpDir());
     expect(r.ok).toBe(false);

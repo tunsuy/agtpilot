@@ -162,6 +162,66 @@ describe('runnerApprovalToRequest(复用既有审批卡链路)', () => {
   });
 });
 
+describe('taskBaseBranch(实探基线回流 → PR --base 固化,milvus 类 master 默认仓库)', () => {
+  it('phase1_result 回流 baseBranch=master → 审批展示与固化命令的 --base 都用实探值', () => {
+    setupAwaitingTask();
+    // runner 在仓库准备阶段回落实探基线(派发包 baseBranch: main 在 milvus 上不存在)
+    recordRunnerEvents(
+      USER,
+      deviceId,
+      [
+        {
+          eventId: 'ev_base',
+          taskId: validPack.taskId,
+          deviceId,
+          at: T0 + 30,
+          type: 'phase1_result',
+          payload: { baseBranch: 'master' },
+        },
+      ],
+      T0 + 31
+    );
+    const { task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    const req = runnerApprovalToRequest(task, USER)!;
+    expect((req.params as Record<string, any>).baseBranch).toBe('master');
+
+    const r = resolvePublishApproval(USER, task.approvalId!, true, {}, T0 + 200);
+    const cmds = (r as any).task.approval.commands as Array<{ cmd: string; args: string[] }>;
+    const i = cmds[1].args.indexOf('--base');
+    expect(i).toBeGreaterThan(-1);
+    expect(cmds[1].args[i + 1]).toBe('master');
+  });
+
+  it('无回流(旧版 runner)→ 维持 pack.baseBranch(向后兼容,缺省 main)', () => {
+    setupAwaitingTask();
+    const { task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    const req = runnerApprovalToRequest(task, USER)!;
+    expect((req.params as Record<string, any>).baseBranch).toBe('main');
+  });
+
+  it('回流畸形值(注入防御)→ 忽略,退 pack.baseBranch', () => {
+    setupAwaitingTask();
+    recordRunnerEvents(
+      USER,
+      deviceId,
+      [
+        {
+          eventId: 'ev_bad',
+          taskId: validPack.taskId,
+          deviceId,
+          at: T0 + 30,
+          type: 'phase1_result',
+          payload: { baseBranch: 'main; rm -rf /' },
+        },
+      ],
+      T0 + 31
+    );
+    const { task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    const req = runnerApprovalToRequest(task, USER)!;
+    expect((req.params as Record<string, any>).baseBranch).toBe('main');
+  });
+});
+
 describe('resolvePublishApproval(裁决 → 固化 / 拒绝)', () => {
   it('批准:命令集固化落盘(git push + gh pr create),任务 → finishing', () => {
     setupAwaitingTask();

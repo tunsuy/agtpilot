@@ -52,6 +52,12 @@ export interface PreparedRepo {
   mode: 'cloned' | 'updated';
   /** 经 fork 派发时 = 实际克隆的 fork 全名(ghLogin/repo);直连派发缺省 */
   forkRepo?: string;
+  /**
+   * 实探生效的基线分支名:pack.baseBranch 缺省 'main',但不少仓库默认分支
+   * 是 master(milvus/dapper 等)—— 解析失败时回落远程默认分支。回流云端
+   * (phase1_result)固化 PR --base,后续 Phase 2 与本值同一事实源。
+   */
+  baseBranch: string;
 }
 
 /**
@@ -69,6 +75,30 @@ export async function ensureFork(upstreamRepo: string, exec: ExecAsync): Promise
       throw new Error(`gh repo fork 失败(gh 需已登录且有 fork 权限):${msg.slice(-300)}`);
     }
   }
+}
+
+/**
+ * 远程默认分支名(不含 origin/ 前缀),两档探测:
+ * 1. symbolic-ref origin/HEAD —— clone 时设置,增量 fetch 不变,零网络;
+ * 2. ls-remote --symref origin HEAD —— 网络实探(旧目录可能没有 origin/HEAD)。
+ * 全失败返回 null(调用方决定报错口径)。
+ */
+async function remoteDefaultBranch(repoDir: string, exec: ExecAsync): Promise<string | null> {
+  try {
+    const r = await exec('git', ['-C', repoDir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+    const name = r.stdout.trim().replace(/^origin\//, '');
+    if (name) return name;
+  } catch {
+    // 下一档
+  }
+  try {
+    const r = await exec('git', ['-C', repoDir, 'ls-remote', '--symref', 'origin', 'HEAD']);
+    const m = r.stdout.match(/ref:\s*refs\/heads\/([^\s\t]+)/);
+    if (m?.[1]) return m[1];
+  } catch {
+    // 放弃,由调用方报错
+  }
+  return null;
 }
 
 export async function prepareRepo(
@@ -103,11 +133,32 @@ export async function prepareRepo(
     mode = 'cloned';
   }
 
-  // 从基线切工作分支:优先 origin/<base>(fetch 后最新),无远程基线时退本地 <base>
+  // 从基线切工作分支:origin/<base> → 本地 <base> → 远程默认分支。
+  // 第三档是生产实测修复:不少仓库默认分支是 master(milvus-io/milvus
+  // #52049 派发即在前两档翻车 —— fatal: 'main' is not a commit and a
+  // branch cannot be created from it)。回落的分支名经 baseBranch 回流
+  // 云端,PR --base 与 rev-list 基线都以它为准。
+  const checkout = (ref: string) => exec('git', ['-C', repoDir, 'checkout', '-B', pack.workBranch, ref]);
+  let baseBranch = base;
   try {
-    await exec('git', ['-C', repoDir, 'checkout', '-B', pack.workBranch, `origin/${base}`]);
+    await checkout(`origin/${base}`);
   } catch {
-    await exec('git', ['-C', repoDir, 'checkout', '-B', pack.workBranch, base]);
+    try {
+      await checkout(base);
+    } catch {
+      const remoteDefault = await remoteDefaultBranch(repoDir, exec);
+      if (!remoteDefault) {
+        throw new Error(
+          `基线分支 ${base} 不存在(origin/${base} 与本地 ${base} 均失败),远程默认分支也探测失败(git symbolic-ref / ls-remote)。若仓库确用其他基线,派发时请在任务包指定 baseBranch`
+        );
+      }
+      baseBranch = remoteDefault;
+      try {
+        await checkout(`origin/${remoteDefault}`);
+      } catch {
+        await checkout(remoteDefault);
+      }
+    }
   }
-  return { repoDir, mode, ...(forkRepo ? { forkRepo } : {}) };
+  return { repoDir, mode, baseBranch, ...(forkRepo ? { forkRepo } : {}) };
 }

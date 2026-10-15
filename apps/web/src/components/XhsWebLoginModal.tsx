@@ -53,7 +53,7 @@ const PLATFORM_UI: Record<
   fanqie: {
     app: '番茄作家后台',
     opening: '正在打开番茄作家后台…',
-    waiting: '请用番茄作家助手 App 或手机浏览器扫码登录',
+    waiting: '请用番茄小说 App 或番茄作家助手扫描二维码',
     iconClass: 'text-orange-500',
     btnClass: 'bg-orange-500 hover:bg-orange-600',
     subtitle: '登录态保存在本服务的浏览器环境,只用于把章节存进番茄草稿箱(绝不发布)',

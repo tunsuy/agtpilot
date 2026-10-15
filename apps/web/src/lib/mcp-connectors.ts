@@ -857,7 +857,7 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     icon: 'Tomato',
     category: 'Content',
     description:
-      '开源 tomato-writer-mcp(本地 stdio):番茄小说作者后台的章节管理——查稿件、存草稿、发布/定时发布章节。红线:发布章节 = 真实平台副作用,subagentOpen 永不开放,每次发布都由你在主循环人工审批;AI 使用声明由作者本人在番茄后台如实勾选,本连接器不代填不绕过;平台 Cookie 约 1-2 个月过期需重取。需本机 clone 源码并 pnpm build(入口通常是仓库下 dist/index.js)。凭证只存你的本地托管钥匙,绝不入库不进日志。',
+      '番茄小说作者后台:托管模式扫码后 Agent 可存章节草稿(有限频/审计,绝不发布);或本地 tomato-writer-mcp 查稿与存草稿。发布永远由你本人完成。',
     authType: 'token',
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["番茄作者后台", "番茄作家", "tomato writer"],

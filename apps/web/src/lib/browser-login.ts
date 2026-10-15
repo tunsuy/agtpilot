@@ -116,19 +116,25 @@ export const LOGIN_PLATFORMS: Record<LoginPlatform, LoginPlatformConfig> = {
   fanqie: {
     appName: '番茄作家后台',
     /**
-     * ⚠️ 全部待真实账号实测(2026-10 首版,按知乎同款流程上线后修正这里):
-     * - startUrl:未登录打开作家后台会被踢到登录页(spa 路由 /login),
-     *   登录页视图形态(扫码/短信)未实测,扫码态切换配置先按「默认可能短信」留空;
-     * - cookieNames:字节系护照登录后落 sessionid(.fanqienovel.com 域),
-     *   实际以扫码后 cookie 库为准修正;
-     * - loginUrlHint:/login 与 passport 字样(重定向回登录 = 未完成)。
+     * 登录页结构 2026-10-15 无头实测:
+     * - 登录卡 #slogin-pc-login-form 默认落「验证码登录」表单(手机号+验证码);
+     * - header 两 tab:.slogin-pc-form-header__title__tab(「验证码登录」/「扫码登录」),
+     *   非激活侧带 --dim —— 点「扫码登录」tab 即切;
+     * - 扫码态特有文案「番茄作家助手扫码登录」(叶子文本,表单态不出现)做判定锚点;
+     * - 二维码是 .slogin-qrcode-scan-page__content__code__img(data: URI 直出),
+     *   元素级截图该 img,二维码撑满弹窗。
+     * - ⚠️ 仍待真实账号实测:sessionid cookie 与扫码后跳回 /main/writer/home 的登录判定。
      */
     startUrl: 'https://fanqienovel.com/main/writer/home',
     cookieDomain: 'https://fanqienovel.com/',
     cookieNames: ['sessionid'],
     loginUrlHint: /login|passport|signin/i,
     openingDetail: '正在打开番茄作家后台…',
-    waitingDetail: '请扫描页面中的二维码完成登录',
+    waitingDetail: '请用番茄小说或番茄作家助手 App 扫描二维码',
+    qrModeText: '番茄作家助手扫码登录',
+    smsInputSelector: 'input[placeholder="手机号"]',
+    qrSwitchSelector: '.slogin-pc-form-header__title__tab:has-text("扫码登录")',
+    qrCaptureSelector: '.slogin-qrcode-scan-page__content__code__img',
   },
 };
 

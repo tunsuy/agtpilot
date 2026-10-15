@@ -59,9 +59,9 @@ describe('buildZhihuWorkshopPrompt · 文章包格式契约(与公众号工坊�
     expect(prompt).toContain('40 字');
     expect(prompt).toContain('120 字');
     expect(prompt).toContain('1500-3000');
-    // 存草稿口径:工具侧自动把 Markdown 记号转纯文本(草稿里不出 ##/** 记号,
-    // 旧版「纯文本填入、记号不排版」的免责已废 —— 满屏记号是缺陷不是约定)
-    expect(prompt).toContain('自动转成纯文本');
+    // 存草稿口径:工具侧把 Markdown 自动转富文本粘贴进知乎编辑器(标题/加粗/
+    // 列表成真格式;与 doocs/md「复制到各平台」同路),草稿里不出 ##/** 记号
+    expect(prompt).toContain('自动转成富文本排版');
     expect(prompt).not.toContain('Markdown 记号不会自动排版');
   });
 

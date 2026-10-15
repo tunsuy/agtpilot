@@ -11,7 +11,7 @@
  * ③ 系统 prompt「托管终点是草稿箱」。Agent 永远不碰「发布」。
  */
 import type { ToolDefinition } from '@agtpilot/core';
-import { markdownToPlainText } from '@agtpilot/plugin-skill';
+import { markdownToPlainText, markdownToSemanticHtml } from '@agtpilot/plugin-skill';
 import {
   getZhihuManaged,
   getBrowserAudit,
@@ -88,9 +88,9 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
         '依赖知乎的服务端自动保存停进草稿箱 —— 绝不发布(发布按钮被代码级围栏永久拦截),' +
         '发布由用户经「接管浏览器」或在知乎草稿箱亲自完成。知乎草稿存服务端、跨端可见' +
         '(知乎 App「创作中心 → 草稿」/ 网页 zhihu.com/creator 草稿箱)。' +
-        '正文填入前自动把 Markdown 记号转为纯文本(标题/加粗/斜体/行内代码记号剥除,' +
-        '列表转 •,链接转「文字(地址)」,代码块内容原样保留)—— 草稿里不会出现 ##、** 等原始记号;' +
-        '表格等复杂格式保留原文,由用户接管后调整。' +
+        '正文以富文本粘贴:Markdown 自动转语义 HTML(标题/加粗/列表为真格式)派给编辑器,' +
+        '编辑器不认自动粘贴时回退排版化纯文本(▍标题/「加粗」/•列表,不出现原始记号);' +
+        '表格等复杂格式由用户接管后调整。' +
         '调用前需要用户审批确认。每次调用计入每日上限。',
       dangerLevel: 'high',
       compensation: {
@@ -101,7 +101,7 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
         type: 'object',
         properties: {
           title: { type: 'string', description: '文章标题' },
-          body: { type: 'string', description: '文章正文(Markdown 原文即可,填入时自动转纯文本;建议 1500 字以上)' },
+          body: { type: 'string', description: '文章正文(Markdown 原文即可,填入时自动转富文本;建议 1500 字以上)' },
         },
         required: ['title', 'body'],
       },
@@ -167,15 +167,52 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
           // ④ 标题(编辑器可能带旧草稿:fill 整体覆盖)
           await page.fill(ZHIHU_EDITOR_SELECTORS.titleInput, title, { timeout: 20000 });
 
-          // ⑤ 正文(Draft.js contenteditable:聚焦→全选清旧→插入 Markdown 转出的纯文本)
+          // ⑤ 正文(Draft.js contenteditable:聚焦→全选清旧→富文本粘贴)
+          // 与 doocs/md「复制到各平台」同路:Markdown → 语义 HTML → 合成 paste
+          // 事件(text/html + text/plain 双份数据)派给编辑器,Draft.js 读语义
+          // 标签转真富文本(真标题/粗体/列表)。粘贴后校验编辑器仍空 = 知乎
+          // 不认合成 paste → 回退 insertText 排版化纯文本(▍/「」/•)。
           const plainBody = markdownToPlainText(body);
+          const richHtml = markdownToSemanticHtml(body);
           try {
             await page.click(ZHIHU_EDITOR_SELECTORS.bodyEditor, { timeout: 10000 });
           } catch {
             await page.locator(ZHIHU_EDITOR_SELECTORS.bodyEditor).first().focus({ timeout: 5000 });
           }
           await page.keyboard.press('Control+a');
-          await page.keyboard.insertText(plainBody);
+          let richPaste = true;
+          try {
+            await page.evaluate(
+              new Function(
+                'opts',
+                `const target = document.querySelector(opts.selector);
+                 if (!target) return false;
+                 target.focus && target.focus();
+                 const dt = new DataTransfer();
+                 dt.setData('text/html', opts.html);
+                 dt.setData('text/plain', opts.plain);
+                 const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+                 return target.dispatchEvent(ev);`,
+              ) as (opts: unknown) => unknown,
+              { selector: ZHIHU_EDITOR_SELECTORS.bodyEditor, html: richHtml, plain: plainBody },
+            );
+            await sleep(1200);
+            // 粘贴落没落:编辑器文本仍空 → 合成 paste 被忽略,退纯文本
+            let editorText = '';
+            try {
+              editorText = await page.locator(ZHIHU_EDITOR_SELECTORS.bodyEditor).first().innerText({ timeout: 2000 });
+            } catch {
+              editorText = '';
+            }
+            if (!editorText || !editorText.trim()) {
+              await page.keyboard.insertText(plainBody);
+              richPaste = false;
+            }
+          } catch {
+            // 合成事件派发本身失败(如 ClipboardEvent 构造被禁)→ 纯文本兜底
+            await page.keyboard.insertText(plainBody);
+            richPaste = false;
+          }
 
           // ⑥ 顺带看一眼自动保存指示(仅作结果附注;知乎草稿存服务端,
           //    10s 等不到就走 —— 别烧任务时长,用户可接管核对)
@@ -197,14 +234,18 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
             screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
           } catch {}
 
-          // ⑦ 审计(填完即成功;自动保存是否确认只是附加信息)
+          // ⑦ 审计(填完即成功;富文本回退与自动保存只是附加信息)
           appendBrowserAudit(userId, {
             at: Date.now(),
             tool: 'zhihu_save_article_draft',
             action: 'save_article_draft',
             title,
             result: 'success',
-            error: saved ? undefined : '未等到自动保存指示(页面内容不受影响)',
+            error: !richPaste
+              ? '富文本粘贴未被接受,已回退纯文本插入(需人工核查知乎编辑器对自动粘贴的支持)'
+              : saved
+                ? undefined
+                : '未等到自动保存指示(页面内容不受影响)',
             missionId,
           });
 
@@ -213,6 +254,9 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
             title,
             message:
               '文章已填入知乎专栏编辑器 —— 知乎草稿存服务端、跨端可见:' +
+              (richPaste
+                ? '正文以富文本排版粘贴(标题/加粗/列表为真格式)。'
+                : '编辑器不认自动粘贴,正文已回退为排版化纯文本(▍标题/「加粗」/•列表)。') +
               (saved ? '平台已自动保存进草稿箱。' : '自动保存未确认,请接管浏览器核对内容后再离开页面。') +
               '发布由你本人完成:到连接器页点「接管浏览器」核对并亲自发布,或在知乎 App「创作中心 → 草稿」/ 网页草稿箱里发布。' +
               `今日已用 ${todayCount + 1}/${dailyDraftLimit()} 次。`,

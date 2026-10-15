@@ -47,8 +47,8 @@ describe('三个工坊的存草稿指令 · 纯执行边界句(生产先例 2026
   it('知乎:托管工具 + 边界句 + title/body 内嵌,不带公众号参数键', () => {
     const text = buildZhihuDraftReplyText(article, 1);
     expect(text).toContain('zhihu_save_article_draft');
-    // 正文传 Markdown 原文,工具侧自动转纯文本(不再让模型自己改写正文)
-    expect(text).toContain('自动把 Markdown 记号转成纯文本');
+    // 正文传 Markdown 原文,工具侧转富文本粘贴(不再让模型自己改写正文)
+    expect(text).toContain('转成富文本排版填进知乎编辑器');
     expect(text).toContain('不要自行改写正文');
     expect(text).toContain('纯执行投递');
     expect(text).toContain('不要重新检索资料');

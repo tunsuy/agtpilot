@@ -62,8 +62,10 @@ function sampleSkill(over: Record<string, any> = {}): any {
   };
 }
 
-/** 知乎编辑器假 Page(与 zhihu-managed.test.ts 同构) */
-function fakeZhihuPage(opts: { autosaveFails?: boolean; redirectLogin?: boolean } = {}) {
+/** 知乎编辑器假 Page(与 zhihu-managed.test.ts 同构;editorText 模拟 pasteRich 后编辑器内容) */
+function fakeZhihuPage(
+  opts: { autosaveFails?: boolean; redirectLogin?: boolean; editorText?: string } = {},
+) {
   const state = { url: 'about:blank' };
   return {
     goto: vi.fn(async (url: string) => {
@@ -72,11 +74,17 @@ function fakeZhihuPage(opts: { autosaveFails?: boolean; redirectLogin?: boolean 
     url: vi.fn(() => state.url),
     fill: vi.fn(async () => {}),
     click: vi.fn(async () => {}),
+    // pasteRich 用:不真执行函数体(Node 里无 document),只记录 (fn, opts)
+    // 供断言 —— 真浏览器里由 Playwright 序列化后在页面执行
+    evaluate: vi.fn(async () => true),
     locator: vi.fn((sel: string) => {
       const isTitle = String(sel).includes('标题');
       return {
         count: vi.fn(async () => (isTitle && !opts.redirectLogin ? 1 : 0)),
-        first: () => ({ focus: vi.fn(async () => {}) }),
+        first: () => ({
+          focus: vi.fn(async () => {}),
+          innerText: vi.fn(async () => opts.editorText ?? ''),
+        }),
       };
     }),
     keyboard: {
@@ -413,20 +421,27 @@ describe('注册表版 zhihu_save_article_draft · execute 全链路', () => {
     expect(audit[0].error).toBe('not_logged_in');
   }, 30000);
 
-  it('成功链路:填标题正文 → 审计 success → 消息含用量与发布围栏话术', async () => {
+  it('成功链路(富文本粘贴被接受):填标题 → 合成 paste 双份数据 → 审计 success', async () => {
     const uid = 'ss-t5';
-    const page = fakeZhihuPage();
+    const page = fakeZhihuPage({ editorText: '正文已粘贴进编辑器' });
     const { tool } = buildTool(uid, page);
     const res: any = await (tool.execute as any)(okArgs, { taskId: 'm5' });
     expect(res.success).toBe(true);
     expect(res.title).toBe(okArgs.title);
     expect(res.message).toContain('今日已用 1/3');
     expect(res.message).toContain('发布由你本人完成');
+    expect(res.message).toContain('富文本排版粘贴');
     expect(res.message).toContain('平台已自动保存进草稿箱');
     expect(res.screenshotBase64).toContain('data:image/jpeg;base64,');
     expect(page.fill).toHaveBeenCalledWith('textarea[placeholder*="标题"]', okArgs.title, expect.anything());
     expect(page.keyboard.press).toHaveBeenCalledWith('Control+a');
-    expect(page.keyboard.insertText).toHaveBeenCalledWith(okArgs.body);
+    // pasteRich:text/html(语义标签)+ text/plain(排版化纯文本)双份数据派给编辑器
+    const [fn, arg] = (page.evaluate as any).mock.calls[0];
+    expect(arg.html).toBe('<p>这是一段足够长的正文内容,用于通过最少 20 字的校验门槛。</p>');
+    expect(arg.plain).toBe(okArgs.body);
+    expect(typeof fn).toBe('function');
+    // 编辑器认了合成 paste → 不走 insertText 兜底
+    expect(page.keyboard.insertText).not.toHaveBeenCalled();
     const audit = us.getBrowserAudit(uid);
     expect(audit[0].result).toBe('success');
     expect(audit[0].tool).toBe('zhihu_save_article_draft');
@@ -435,9 +450,22 @@ describe('注册表版 zhihu_save_article_draft · execute 全链路', () => {
     expect(audit[0].missionId).toBe('m5');
   }, 30000);
 
+  it('编辑器不认合成 paste(仍空)→ 回退排版化纯文本,消息如实告知,审计带附注', async () => {
+    const uid = 'ss-t5b';
+    const page = fakeZhihuPage(); // editorText 空 → 校验判定粘贴未落
+    const { tool } = buildTool(uid, page);
+    const res: any = await (tool.execute as any)(okArgs, { taskId: 'm5b' });
+    expect(res.success).toBe(true);
+    expect(res.message).toContain('回退为排版化纯文本');
+    expect(page.keyboard.insertText).toHaveBeenCalledWith(okArgs.body);
+    const audit = us.getBrowserAudit(uid);
+    expect(audit[0].result).toBe('success');
+    expect(audit[0].error).toContain('富文本粘贴未被接受');
+  }, 30000);
+
   it('自动保存指示未出现 → 仍算成功,消息如实告知未确认,审计带附注', async () => {
     const uid = 'ss-t6';
-    const page = fakeZhihuPage({ autosaveFails: true });
+    const page = fakeZhihuPage({ autosaveFails: true, editorText: '正文已粘贴进编辑器' });
     const { tool } = buildTool(uid, page);
     const res: any = await (tool.execute as any)(okArgs, { taskId: 'm6' });
     expect(res.success).toBe(true);

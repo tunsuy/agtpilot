@@ -71,8 +71,8 @@ function fakeStore(seed: { managed?: Record<string, any>; audit?: SkillAuditEntr
   };
 }
 
-/** 通用假 Page(按选择器控制可寻性;url 可被 goto 改写) */
-function fakePage(opts: { redirectLogin?: boolean; textFails?: boolean } = {}) {
+/** 通用假 Page(按选择器控制可寻性;url 可被 goto 改写;editorText 模拟 pasteRich 后编辑器内容) */
+function fakePage(opts: { redirectLogin?: boolean; textFails?: boolean; editorText?: string } = {}) {
   const state = { url: 'about:blank' };
   return {
     goto: vi.fn(async (url: string) => {
@@ -81,11 +81,17 @@ function fakePage(opts: { redirectLogin?: boolean; textFails?: boolean } = {}) {
     url: vi.fn(() => state.url),
     fill: vi.fn(async () => {}),
     click: vi.fn(async () => {}),
+    // pasteRich 用:不真执行函数体(Node 里无 document),只记录 (fn, opts)
+    // 供断言 —— 真浏览器里由 Playwright 序列化后在页面执行
+    evaluate: vi.fn(async () => true),
     locator: vi.fn((sel: string) => {
       const visible = String(sel).includes('#editor');
       return {
         count: vi.fn(async () => (visible && !opts.redirectLogin ? 1 : 0)),
-        first: () => ({ focus: vi.fn(async () => {}) }),
+        first: () => ({
+          focus: vi.fn(async () => {}),
+          innerText: vi.fn(async () => opts.editorText ?? ''),
+        }),
       };
     }),
     keyboard: {
@@ -323,6 +329,45 @@ describe('runSkillSteps · 执行器', () => {
     const page = fakePage();
     await runSkillSteps(page, skill, { title: '# 原文' });
     expect(page.keyboard.insertText).toHaveBeenCalledWith('# 原文');
+  });
+
+  it('pasteRich:合成 paste 派发成功 + 编辑器有字 → 旗标 true,insertText 不被调', async () => {
+    const skill = sampleSkill({
+      steps: [{ kind: 'pasteRich', param: 'body', selector: '#editor', flag: 'richPaste', settleMs: 1 }],
+    }) as any;
+    const page = fakePage({ editorText: '粘贴后的正文' });
+    const out = await runSkillSteps(page, skill, { body: '## 小节\n\n**重点**' });
+    expect(out.flags.richPaste).toBe(true);
+    // 双份数据:text/html 语义标签 + text/plain 排版化纯文本
+    const [fn, arg] = (page.evaluate as any).mock.calls[0] as [Function, any];
+    expect(arg.selector).toBe('#editor');
+    expect(arg.html).toBe('<h2>小节</h2><p><strong>重点</strong></p>');
+    expect(arg.plain).toBe('▍ 小节\n\n「重点」');
+    expect(typeof fn).toBe('function');
+    expect(page.keyboard.insertText).not.toHaveBeenCalled();
+  });
+
+  it('pasteRich:编辑器不认合成 paste(仍空)→ 回退 insertText 排版化纯文本,旗标 false', async () => {
+    const skill = sampleSkill({
+      steps: [{ kind: 'pasteRich', param: 'body', selector: '#editor', flag: 'richPaste', settleMs: 1 }],
+    }) as any;
+    const page = fakePage({ editorText: '' });
+    const out = await runSkillSteps(page, skill, { body: '## 小节\n\n- 要点' });
+    expect(out.flags.richPaste).toBe(false);
+    expect(page.keyboard.insertText).toHaveBeenCalledWith('▍ 小节\n\n• 要点');
+  });
+
+  it('pasteRich:evaluate 抛错(ClipboardEvent 构造被禁)→ 纯文本兜底,不失败', async () => {
+    const skill = sampleSkill({
+      steps: [{ kind: 'pasteRich', param: 'body', selector: '#editor', settleMs: 1 }],
+    }) as any;
+    const page = fakePage();
+    (page.evaluate as any) = vi.fn(async () => {
+      throw new Error('ClipboardEvent is not defined');
+    });
+    const out = await runSkillSteps(page, skill, { body: '**纯文本**兜底' });
+    expect(out.flags.richPaste).toBe(false);
+    expect(page.keyboard.insertText).toHaveBeenCalledWith('「纯文本」兜底');
   });
 });
 

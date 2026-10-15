@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownToPlainText } from './markdown-plain';
+import { markdownToPlainText, markdownToSemanticHtml } from './markdown-plain';
 
 /**
  * Markdown → 排版化纯文本(知乎草稿投递,2026-10 生产实例:insertText 原样
@@ -65,5 +65,54 @@ describe('markdownToPlainText · 排版', () => {
   it('GFM 任务列表与表格:☐/☑ 勾选框,表格单元格 | 连接', () => {
     expect(markdownToPlainText('- [ ] 待办\n- [x] 已完成')).toBe('• ☐ 待办\n• ☑ 已完成');
     expect(markdownToPlainText('| 项 | 值 |\n| --- | --- |\n| a | 1 |')).toBe('项 | 值\na | 1');
+  });
+});
+
+/**
+ * markdownToSemanticHtml:语义 HTML(无内联样式),给编辑器粘贴富文本用 ——
+ * Draft.js 类编辑器(知乎专栏)读粘贴 HTML 的语义标签转自己的富文本块。
+ * 与 markdownToPlainText 同一 mdast 两套渲染,约定:
+ * - 标签语义化:h1-h6/strong/em/del/ul/ol/blockquote/pre/code/a/img/table;
+ * - 不掺任何 style(公众号通道才需要 juice 内联样式,这里是另一个形态);
+ * - 转义文本、解析失败兜底转义原文包 <p>。
+ */
+describe('markdownToSemanticHtml · 语义 HTML', () => {
+  it('块级:heading→h1-h6、paragraph→p、blockquote、hr', () => {
+    expect(markdownToSemanticHtml('## 小节')).toBe('<h2>小节</h2>');
+    expect(markdownToSemanticHtml('一段话')).toBe('<p>一段话</p>');
+    expect(markdownToSemanticHtml('> 引文')).toBe('<blockquote><p>引文</p></blockquote>');
+    expect(markdownToSemanticHtml('---')).toBe('<hr>');
+  });
+
+  it('行内:strong/em/del/code/a/img,文本经 HTML 转义', () => {
+    expect(markdownToSemanticHtml('**粗**与*斜*')).toBe('<p><strong>粗</strong>与<em>斜</em></p>');
+    expect(markdownToSemanticHtml('~~删~~ `x`')).toBe('<p><del>删</del> <code>x</code></p>');
+    expect(markdownToSemanticHtml('见 [文档](https://a.dev)')).toBe(
+      '<p>见 <a href="https://a.dev">文档</a></p>',
+    );
+    expect(markdownToSemanticHtml('![图](https://a.dev/x.png)')).toBe(
+      '<p><img src="https://a.dev/x.png" alt="图"></p>',
+    );
+    expect(markdownToSemanticHtml('1 < 2 & x > y')).toBe('<p>1 &lt; 2 &amp; x &gt; y</p>');
+  });
+
+  it('列表:ul/ol,嵌套递归,GFM 任务列表项带勾选标记', () => {
+    expect(markdownToSemanticHtml('- 甲\n- 乙')).toBe('<ul><li><p>甲</p></li><li><p>乙</p></li></ul>');
+    expect(markdownToSemanticHtml('1. 一\n2. 二')).toBe('<ol><li><p>一</p></li><li><p>二</p></li></ol>');
+    expect(markdownToSemanticHtml('- [ ] 待办\n- [x] 已办')).toBe(
+      '<ul><li class="task-list-item"><p>待办</p></li><li class="task-list-item" checked><p>已办</p></li></ul>',
+    );
+  });
+
+  it('代码块:pre>code,内容转义保留', () => {
+    expect(markdownToSemanticHtml('```\nif (a<b) {}\n```')).toBe(
+      '<pre><code>if (a&lt;b) {}</code></pre>',
+    );
+  });
+
+  it('GFM 表格 → table>tbody>tr>td(知乎编辑器自行解释,接管后可调整)', () => {
+    expect(markdownToSemanticHtml('| a | b |\n| --- | --- |\n| 1 | 2 |')).toBe(
+      '<table><tbody><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr></tbody></table>',
+    );
   });
 });

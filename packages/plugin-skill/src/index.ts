@@ -41,10 +41,10 @@ import {
   type SkillDistillOutcome,
   type TokenizeFn,
 } from './cards';
-import { markdownToPlainText } from './markdown-plain';
+import { markdownToPlainText, markdownToSemanticHtml } from './markdown-plain';
 
 export * from './cards';
-export { markdownToPlainText } from './markdown-plain';
+export { markdownToPlainText, markdownToSemanticHtml } from './markdown-plain';
 
 export const name = 'agtpilot-plugin-skill';
 
@@ -114,6 +114,25 @@ export type SkillStep =
       value?: string;
       /** 同 fill.transform:填入前的声明式文本转换 */
       transform?: 'markdown-plain';
+    }
+  | {
+      /**
+       * 富文本粘贴(知乎草稿投递):param 的 Markdown 原文 → 语义 HTML →
+       * 合成 paste 事件(text/html + text/plain 双份数据)派给 selector 的
+       * contenteditable 编辑器 —— Draft.js 类编辑器读语义标签转真富文本
+       * (真标题/粗体/列表,与 doocs/md「复制到各平台」同路)。粘贴后校验
+       * 编辑器仍为空(编辑器不认合成 paste)→ 自动回退 insertText 排版化
+       * 纯文本,flag 记录富文本是否落成。
+       */
+      kind: 'pasteRich';
+      param?: string;
+      value?: string;
+      /** contenteditable 编辑器选择器(粘贴目标与校验读取处) */
+      selector: string;
+      /** 粘贴后等编辑器消化毫秒数(缺省 1200) */
+      settleMs?: number;
+      /** 结果旗标名(缺省 richPaste;true = 富文本落成,false = 回退纯文本) */
+      flag?: string;
     }
   | {
       kind: 'waitForText';
@@ -202,6 +221,7 @@ const STEP_KINDS = new Set([
   'clickOrFocus',
   'pressKeys',
   'insertText',
+  'pasteRich',
   'waitForText',
   'screenshot',
 ]);
@@ -273,6 +293,10 @@ export function validateScriptSkill(raw: any): string | null {
       case 'insertText':
         if (!s.param && !s.value) return `${at} insertText 需要 param 或 value`;
         if (s.transform !== undefined && s.transform !== 'markdown-plain') return `${at} insertText.transform 仅支持 markdown-plain`;
+        break;
+      case 'pasteRich':
+        if (typeof s.selector !== 'string' || !s.selector.trim()) return `${at} pasteRich.selector 缺失`;
+        if (!s.param && !s.value) return `${at} pasteRich 需要 param 或 value`;
         break;
       case 'waitForText':
         if (typeof s.pattern !== 'string' || !s.pattern.trim()) return `${at} pattern 缺失`;
@@ -494,6 +518,53 @@ export async function runSkillSteps(
       case 'insertText':
         await page.keyboard.insertText(stepValue(step, args));
         break;
+
+      case 'pasteRich': {
+        // 原文取值(不经 transform:本动作自带 md→html/md→plain 双转换)
+        const rawText =
+          typeof step.param === 'string' ? String(args?.[step.param] ?? '') : String(step.value ?? '');
+        const html = markdownToSemanticHtml(rawText);
+        const plain = markdownToPlainText(rawText);
+        const flag = step.flag || 'richPaste';
+        try {
+          // 合成 paste:DataTransfer 双份数据(text/html 优先、text/plain 兜底),
+          // 派给 selector 的编辑器 —— isTrusted=false,但 Draft.js 等编辑器的
+          // paste 处理读 clipboardData,不校验 isTrusted(待真机验证的平台假设)。
+          // 函数体用 new Function 构造:既可整体序列化传给 Playwright evaluate,
+          // 又能在单测里被假 page 直接调用。
+          await page.evaluate(
+            new Function(
+              'opts',
+              `const target = document.querySelector(opts.selector);
+               if (!target) return false;
+               target.focus && target.focus();
+               const dt = new DataTransfer();
+               dt.setData('text/html', opts.html);
+               dt.setData('text/plain', opts.plain);
+               const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+               return target.dispatchEvent(ev);`,
+            ) as (opts: unknown) => unknown,
+            { selector: step.selector, html, plain },
+          );
+        } catch {
+          // 合成事件派发本身失败(如页面禁了 ClipboardEvent 构造)→ 走下方兜底
+        }
+        await sleep(step.settleMs ?? 1200);
+        // 校验:编辑器仍空 = 编辑器不认合成 paste → 回退 insertText 排版化纯文本
+        let editorText = '';
+        try {
+          editorText = await page.locator(step.selector).first().innerText({ timeout: 2000 });
+        } catch {
+          editorText = '';
+        }
+        if (!editorText || !editorText.trim()) {
+          await page.keyboard.insertText(plain);
+          flags[flag] = false;
+        } else {
+          flags[flag] = true;
+        }
+        break;
+      }
 
       case 'waitForText': {
         const flag = step.flag || 'textFound';

@@ -12,6 +12,10 @@
  *
  * 历史注记:第一版是手写正则(只剥记号不排版,标题层级/加粗/引用全丢),
  * 本版换 remark 解析 + 排版渲染,嵌套列表/行内嵌套/松散列表都能吃。
+ *
+ * markdownToSemanticHtml(本文件同门):mdast → 语义 HTML(h2/strong/ul/
+ * blockquote/…),供编辑器粘贴富文本用 —— Draft.js 类编辑器(知乎专栏)
+ * 读粘贴 HTML 的语义标签转自己的富文本,与 doocs/md「复制到各平台」同路。
  */
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
@@ -151,5 +155,124 @@ export function markdownToPlainText(md: string): string {
       .trim();
   } catch {
     return String(md || '').trim();
+  }
+}
+
+// ---- Markdown → 语义 HTML(编辑器粘贴富文本用) ----
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** 行内节点 → 语义 HTML(strong/em/code/a 保留标签,样式交给目标编辑器) */
+function htmlInline(nodes: MdNode[]): string {
+  let out = '';
+  for (const n of nodes || []) {
+    switch (n.type) {
+      case 'text':
+        out += escapeHtml(n.value);
+        break;
+      case 'strong':
+        out += `<strong>${htmlInline(n.children)}</strong>`;
+        break;
+      case 'emphasis':
+        out += `<em>${htmlInline(n.children)}</em>`;
+        break;
+      case 'delete':
+        out += `<del>${htmlInline(n.children)}</del>`;
+        break;
+      case 'inlineCode':
+        out += `<code>${escapeHtml(n.value)}</code>`;
+        break;
+      case 'link':
+        out += `<a href="${escapeHtml(n.url || '')}">${htmlInline(n.children)}</a>`;
+        break;
+      case 'image':
+        out += `<img src="${escapeHtml(n.url || '')}" alt="${escapeHtml(n.alt || '')}">`;
+        break;
+      case 'break':
+        out += '<br>';
+        break;
+      default:
+        if (n.children) out += htmlInline(n.children);
+    }
+  }
+  return out;
+}
+
+function htmlList(list: MdNode): string {
+  const tag = list.ordered ? 'ol' : 'ul';
+  const items = (list.children || [])
+    .map((item: MdNode) => {
+      // GFM 任务列表:勾选态进 checkbox(Draft.js 类编辑器多数忽略该属性,无害)
+      const liAttrs =
+        item.checked === true
+          ? ' class="task-list-item" checked'
+          : item.checked === false
+            ? ' class="task-list-item"'
+            : '';
+      const inner = htmlBlocks(item.children || []);
+      return `<li${liAttrs}>${inner}</li>`;
+    })
+    .join('');
+  return `<${tag}>${items}</${tag}>`;
+}
+
+/** 块级节点 → 语义 HTML(段落间不掺 <br>,块级语义交给编辑器解释) */
+function htmlBlocks(nodes: MdNode[]): string {
+  let out = '';
+  for (const n of nodes || []) {
+    switch (n.type) {
+      case 'heading': {
+        const d = Math.min(Math.max(n.depth || 1, 1), 6);
+        out += `<h${d}>${htmlInline(n.children)}</h${d}>`;
+        break;
+      }
+      case 'paragraph':
+        out += `<p>${htmlInline(n.children)}</p>`;
+        break;
+      case 'list':
+        out += htmlList(n);
+        break;
+      case 'blockquote':
+        out += `<blockquote>${htmlBlocks(n.children)}</blockquote>`;
+        break;
+      case 'code':
+        out += `<pre><code>${escapeHtml(String(n.value || '').replace(/\n$/, ''))}</code></pre>`;
+        break;
+      case 'thematicBreak':
+        out += '<hr>';
+        break;
+      case 'table': {
+        const rows = (n.children || [])
+          .map((row: MdNode) => {
+            const cells = (row.children || [])
+              .map((c: MdNode) => `<td>${htmlInline(c.children)}</td>`)
+              .join('');
+            return `<tr>${cells}</tr>`;
+          })
+          .join('');
+        out += `<table><tbody>${rows}</tbody></table>`;
+        break;
+      }
+      default:
+        if (n.children) out += htmlBlocks(n.children);
+    }
+  }
+  return out;
+}
+
+/**
+ * Markdown 原文 → 语义 HTML(h1-h6/strong/em/ul/ol/blockquote/pre/code/a/img/table)。
+ * 给「粘贴富文本」用:Draft.js 类编辑器读语义标签转自己的富文本块(标题/粗体/
+ * 列表成真排版)。不带任何内联样式 —— 目标编辑器会用自家默认样式渲染,
+ * 与 doocs/md 给公众号那套「内联样式 HTML」是两种通道形态。
+ * 解析失败兜底转义原文包裹,粘贴通道永不断。
+ */
+export function markdownToSemanticHtml(md: string): string {
+  try {
+    const tree = parser.parse(String(md || ''));
+    return htmlBlocks(tree.children);
+  } catch {
+    return `<p>${escapeHtml(String(md || ''))}</p>`;
   }
 }

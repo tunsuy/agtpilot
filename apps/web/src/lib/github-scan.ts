@@ -37,7 +37,7 @@ export interface GhScanInput {
   topics: string[];
   /** 活跃门槛:最近 N 天有 push(默认 90,与工坊筛选标准同口径) */
   maxAgeDays?: number;
-  /** 每个 topic 取多少候选仓(默认 8) */
+  /** 每个 topic 取多少候选仓(默认 3 —— star 头部已够核验池,8 个产出过宽,核验轮次被拖长) */
   reposPerTopic?: number;
   now?: () => number;
   fetchImpl?: typeof fetch;
@@ -167,7 +167,7 @@ export async function scanGithub(input: GhScanInput): Promise<GhScanResult> {
   const fetchImpl = input.fetchImpl || fetch;
   const nowMs = (input.now || Date.now)();
   const maxAgeDays = Math.min(365, Math.max(1, Math.round(input.maxAgeDays ?? 90) || 90));
-  const reposPerTopic = Math.min(30, Math.max(1, Math.round(input.reposPerTopic ?? 8) || 8));
+  const reposPerTopic = Math.min(30, Math.max(1, Math.round(input.reposPerTopic ?? 3) || 3));
   const cutoff = new Date(nowMs - maxAgeDays * 86400_000).toISOString().slice(0, 10);
 
   if (topics.length === 0) {
@@ -338,7 +338,7 @@ export function buildGithubScanTools(): ToolDefinition[] {
           },
           reposPerTopic: {
             type: 'number',
-            description: '每个 topic 取多少候选仓库(默认 8,上限 30)',
+            description: '每个 topic 取多少候选仓库(默认 3,上限 30)',
           },
         },
         required: ['topics'],

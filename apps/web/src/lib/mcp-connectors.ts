@@ -860,9 +860,11 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["番茄作者后台", "番茄作家", "tomato writer"],
     tokenEnvVar: 'MCP_TOMATO_WRITER_CRED',
-    quickAuthUrl: 'https://fanqienovel.com/main/writer',
+    // 旧地址 /main/writer 已是 404 死链(打开即「页面无法访问」);作家专区
+    // 实际入口是 /main/writer/index(2026-10 实测),README 同口径
+    quickAuthUrl: 'https://fanqienovel.com/main/writer/index',
     authHint:
-      '先 clone fuhei/tomato-writer-mcp 并 pnpm install && pnpm build;再浏览器登录 fanqienovel.com 作者后台 → F12 Network → 任一请求复制 Cookie 与 x-csrf-token,按「入口文件绝对路径|||Cookie|||CSRF Token」三段格式填到下方(如 /home/me/tomato-writer-mcp/dist/index.js|||sessionid=...|||abc123)。',
+      '先 clone fuhei/tomato-writer-mcp 并 pnpm install && pnpm build;再打开作家专区登录 → F12 Network → 任选一个 /api/author/... 请求,复制请求头里的 Cookie 与 X-Secsdk-Csrf-Token(会话级固定),按「入口文件绝对路径|||Cookie|||X-Secsdk-Csrf-Token」三段格式填到下方(如 /home/me/tomato-writer-mcp/dist/index.js|||sessionid=...|||abc123)。',
     docUrl: 'https://github.com/fuhei/tomato-writer-mcp',
     servers: [
       {

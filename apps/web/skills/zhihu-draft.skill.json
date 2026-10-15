@@ -1,6 +1,6 @@
 {
   "name": "zhihu_save_article_draft",
-  "description": "把一篇知乎专栏文章(标题/正文)填进网页版专栏编辑器(zhuanlan.zhihu.com/write),依赖知乎的服务端自动保存停进草稿箱 —— 绝不发布(发布按钮被代码级围栏永久拦截),发布由用户经「接管浏览器」或在知乎草稿箱亲自完成。知乎草稿存服务端、跨端可见(知乎 App「创作中心 → 草稿」/ 网页 zhihu.com/creator 草稿箱)。正文以纯文本填入,Markdown 记号不会自动排版(复杂格式由用户接管后调整)。调用前需要用户审批确认。每次调用计入每日上限。",
+  "description": "把一篇知乎专栏文章(标题/正文)填进网页版专栏编辑器(zhuanlan.zhihu.com/write),依赖知乎的服务端自动保存停进草稿箱 —— 绝不发布(发布按钮被代码级围栏永久拦截),发布由用户经「接管浏览器」或在知乎草稿箱亲自完成。知乎草稿存服务端、跨端可见(知乎 App「创作中心 → 草稿」/ 网页 zhihu.com/creator 草稿箱)。正文填入前自动把 Markdown 记号转为纯文本(标题/加粗/斜体/行内代码记号剥除,列表转 •,链接转「文字(地址)」,代码块内容原样保留)—— 草稿里不会出现 ##、** 等原始记号;表格等复杂格式保留原文,由用户接管后调整。调用前需要用户审批确认。每次调用计入每日上限。",
   "dangerLevel": "high",
   "compensation": {
     "kind": "partially-reversible",
@@ -10,7 +10,7 @@
     "type": "object",
     "properties": {
       "title": { "type": "string", "description": "文章标题" },
-      "body": { "type": "string", "description": "文章正文(纯文本/Markdown 原文,建议 1500 字以上)" }
+      "body": { "type": "string", "description": "文章正文(Markdown 原文即可,填入时自动转纯文本;建议 1500 字以上)" }
     },
     "required": ["title", "body"]
   },
@@ -38,7 +38,7 @@
     { "kind": "fill", "selector": "textarea[placeholder*=\"标题\"]", "param": "title", "timeoutMs": 20000 },
     { "kind": "clickOrFocus", "selector": "div[contenteditable=\"true\"]", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
     { "kind": "pressKeys", "keys": "Control+a" },
-    { "kind": "insertText", "param": "body" },
+    { "kind": "insertText", "param": "body", "transform": "markdown-plain" },
     { "kind": "waitForText", "pattern": "草稿|已保存|自动保存", "timeoutMs": 10000, "optional": true, "flag": "autosaved" },
     { "kind": "screenshot", "quality": 65 }
   ],

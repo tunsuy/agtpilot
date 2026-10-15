@@ -11,6 +11,7 @@
  * ③ 系统 prompt「托管终点是草稿箱」。Agent 永远不碰「发布」。
  */
 import type { ToolDefinition } from '@agtpilot/core';
+import { markdownToPlainText } from '@agtpilot/plugin-skill';
 import {
   getZhihuManaged,
   getBrowserAudit,
@@ -87,7 +88,9 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
         '依赖知乎的服务端自动保存停进草稿箱 —— 绝不发布(发布按钮被代码级围栏永久拦截),' +
         '发布由用户经「接管浏览器」或在知乎草稿箱亲自完成。知乎草稿存服务端、跨端可见' +
         '(知乎 App「创作中心 → 草稿」/ 网页 zhihu.com/creator 草稿箱)。' +
-        '正文以纯文本填入,Markdown 记号不会自动排版(复杂格式由用户接管后调整)。' +
+        '正文填入前自动把 Markdown 记号转为纯文本(标题/加粗/斜体/行内代码记号剥除,' +
+        '列表转 •,链接转「文字(地址)」,代码块内容原样保留)—— 草稿里不会出现 ##、** 等原始记号;' +
+        '表格等复杂格式保留原文,由用户接管后调整。' +
         '调用前需要用户审批确认。每次调用计入每日上限。',
       dangerLevel: 'high',
       compensation: {
@@ -98,7 +101,7 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
         type: 'object',
         properties: {
           title: { type: 'string', description: '文章标题' },
-          body: { type: 'string', description: '文章正文(纯文本/Markdown 原文,建议 1500 字以上)' },
+          body: { type: 'string', description: '文章正文(Markdown 原文即可,填入时自动转纯文本;建议 1500 字以上)' },
         },
         required: ['title', 'body'],
       },
@@ -164,14 +167,15 @@ export function buildZhihuManagedTools(userId: string, browser?: ZhihuBrowserSer
           // ④ 标题(编辑器可能带旧草稿:fill 整体覆盖)
           await page.fill(ZHIHU_EDITOR_SELECTORS.titleInput, title, { timeout: 20000 });
 
-          // ⑤ 正文(Draft.js contenteditable:聚焦→全选清旧→整体插入纯文本)
+          // ⑤ 正文(Draft.js contenteditable:聚焦→全选清旧→插入 Markdown 转出的纯文本)
+          const plainBody = markdownToPlainText(body);
           try {
             await page.click(ZHIHU_EDITOR_SELECTORS.bodyEditor, { timeout: 10000 });
           } catch {
             await page.locator(ZHIHU_EDITOR_SELECTORS.bodyEditor).first().focus({ timeout: 5000 });
           }
           await page.keyboard.press('Control+a');
-          await page.keyboard.insertText(body);
+          await page.keyboard.insertText(plainBody);
 
           // ⑥ 顺带看一眼自动保存指示(仅作结果附注;知乎草稿存服务端,
           //    10s 等不到就走 —— 别烧任务时长,用户可接管核对)

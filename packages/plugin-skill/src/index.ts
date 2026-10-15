@@ -41,8 +41,10 @@ import {
   type SkillDistillOutcome,
   type TokenizeFn,
 } from './cards';
+import { markdownToPlainText } from './markdown-plain';
 
 export * from './cards';
+export { markdownToPlainText } from './markdown-plain';
 
 export const name = 'agtpilot-plugin-skill';
 
@@ -91,10 +93,28 @@ export type SkillStep =
       abortAs?: string;
       timeoutError?: string;
     }
-  | { kind: 'fill'; selector: string; param?: string; value?: string; timeoutMs?: number }
+  | {
+      kind: 'fill';
+      selector: string;
+      param?: string;
+      value?: string;
+      timeoutMs?: number;
+      /**
+       * 填入前对文本做声明式转换(闭集;新增转换 = 改代码走评审):
+       * 'markdown-plain' = Markdown 记号转纯文本(知乎草稿投递用:
+       * 记号剥除、列表转 •、链接保地址、代码块内容原样)。
+       */
+      transform?: 'markdown-plain';
+    }
   | { kind: 'clickOrFocus'; selector: string; clickTimeoutMs?: number; focusTimeoutMs?: number }
   | { kind: 'pressKeys'; keys: string }
-  | { kind: 'insertText'; param?: string; value?: string }
+  | {
+      kind: 'insertText';
+      param?: string;
+      value?: string;
+      /** 同 fill.transform:填入前的声明式文本转换 */
+      transform?: 'markdown-plain';
+    }
   | {
       kind: 'waitForText';
       pattern: string;
@@ -242,6 +262,7 @@ export function validateScriptSkill(raw: any): string | null {
       case 'fill':
         if (typeof s.selector !== 'string' || !s.selector.trim()) return `${at} selector 缺失`;
         if (!s.param && !s.value) return `${at} fill 需要 param 或 value`;
+        if (s.transform !== undefined && s.transform !== 'markdown-plain') return `${at} fill.transform 仅支持 markdown-plain`;
         break;
       case 'clickOrFocus':
         if (typeof s.selector !== 'string' || !s.selector.trim()) return `${at} selector 缺失`;
@@ -251,6 +272,7 @@ export function validateScriptSkill(raw: any): string | null {
         break;
       case 'insertText':
         if (!s.param && !s.value) return `${at} insertText 需要 param 或 value`;
+        if (s.transform !== undefined && s.transform !== 'markdown-plain') return `${at} insertText.transform 仅支持 markdown-plain`;
         break;
       case 'waitForText':
         if (typeof s.pattern !== 'string' || !s.pattern.trim()) return `${at} pattern 缺失`;
@@ -390,9 +412,19 @@ function auditNotesForFlags(skill: ScriptSkillManifest, flags: Record<string, bo
 
 // ---- flow 形态:执行器(白名单动作,逐步解释) ----
 
+/**
+ * 声明式文本转换(闭集)。填入编辑器前把文本转成目标形态;未知值不炸,
+ * 原文返回(加载校验已拒收,这是防御性兜底)。
+ */
+function stepTransform(step: any, text: string): string {
+  if (step.transform === 'markdown-plain') return markdownToPlainText(text);
+  return text;
+}
+
+/** 取步骤要填的值:param 引用参数,value 字面量;转换(如 markdown-plain)在取值后生效 */
 function stepValue(step: any, args: Record<string, any>): string {
-  if (typeof step.param === 'string') return String(args?.[step.param] ?? '');
-  return String(step.value ?? '');
+  const raw = typeof step.param === 'string' ? String(args?.[step.param] ?? '') : String(step.value ?? '');
+  return stepTransform(step, raw);
 }
 
 /**

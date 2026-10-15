@@ -300,6 +300,29 @@ describe('runSkillSteps · 执行器', () => {
     const out = await runSkillSteps(fakePage({ textFails: true }), skill, {});
     expect(out.flags.autosaved).toBe(false);
   });
+
+  it('insertText/fill 的 markdown-plain 转换:填入的是转出的纯文本,不是 Markdown 原文', async () => {
+    const skill = sampleSkill({
+      steps: [
+        { kind: 'fill', selector: '#editor', param: 'title', transform: 'markdown-plain' },
+        { kind: 'insertText', param: 'body', transform: 'markdown-plain' },
+      ],
+    }) as any;
+    const page = fakePage();
+    await runSkillSteps(page, skill, { title: '**粗**标题', body: '## 小节\n- 要点' });
+    expect(page.fill).toHaveBeenCalledWith('#editor', '粗标题', expect.anything());
+    expect(page.keyboard.insertText).toHaveBeenCalledWith('小节\n• 要点');
+  });
+
+  it('transform 闭集:未知值在加载校验拒收,运行时兜底原文返回', async () => {
+    expect(
+      validateScriptSkill(sampleSkill({ steps: [{ kind: 'insertText', param: 'title', transform: 'yaml' }] }))
+    ).toContain('transform');
+    const skill = sampleSkill({ steps: [{ kind: 'insertText', param: 'title', transform: 'yaml' }] }) as any;
+    const page = fakePage();
+    await runSkillSteps(page, skill, { title: '# 原文' });
+    expect(page.keyboard.insertText).toHaveBeenCalledWith('# 原文');
+  });
 });
 
 describe('renderSkillMessage · 模板', () => {

@@ -188,3 +188,25 @@ export function groupBlocksIntoTurns(blocks: CockpitBlock[]): CockpitTurn[] {
   flush();
   return turns;
 }
+
+/**
+ * 整轮过程折叠的「最终答复块」定位:取轮内【最后一个】带正文的 assistant
+ * 块(messageKind final,或流式/中间轮携带 answer 的回复卡)。用最后一个
+ * 而非第一个 —— 中间轮的思考卡也常带短叙述 answer(生产实测:思考 1640
+ * 字 + 叙述 16 字),首个命中会把其后的工具行/思考卡留在折叠区外,收起
+ * 不完整。取最后一个则折叠边界随回复生成单调前移:任何一轮开始吐正文,
+ * 它之前的过程即收起且不再回弹(避免「思考→工具」往返时收起↔展开反复
+ * 跳变 —— 历史上正是这个跳变观感促成了思考卡独立成块),后续新工具行
+ * 仍在边界之后可见,收尾落盘后边界落在真正的最终答复上。
+ * 纯思考流式(answer 为空)不算最终答复 —— 模型是否还要调工具未知,
+ * 过早收起会把仍在进行的执行过程藏起来。
+ */
+export function findFinalAnswerIndex(blocks: CockpitBlock[]): number {
+  let idx = -1;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type !== 'assistant') continue;
+    if (b.step.messageKind === 'final' || Boolean(b.step.answer)) idx = i;
+  }
+  return idx;
+}

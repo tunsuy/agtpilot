@@ -5,6 +5,7 @@ import {
   findRetryPrompt,
   isEfficiencyStep,
   processElapsedMs,
+  findFinalAnswerIndex,
   EFFICIENCY_STEP_PREFIX,
 } from '../cockpit-blocks';
 import type { MissionStep } from '../../types/agent';
@@ -416,5 +417,73 @@ describe('processElapsedMs · 轮过程耗时(整轮折叠摘要行)', () => {
   it('无任何时间数据 → undefined(摘要行不显示耗时段)', () => {
     expect(processElapsedMs([toolStep('t1', 'web_search')], NOW)).toBeUndefined();
     expect(processElapsedMs([], NOW)).toBeUndefined();
+  });
+});
+
+describe('findFinalAnswerIndex · 整轮折叠边界(收起不完整修复)', () => {
+  it('生产实测形态:中间思考卡带短叙述正文,边界必须落在最后的最终答复上', () => {
+    // 上海→北京出行方案任务的落盘形态:思考 1640 字 + 叙述 16 字的中间轮
+    // 后面还有 artifact_render 工具行,然后才是真正的最终答复
+    const thinkCard = step({
+      id: 'step_live_m1_1',
+      role: 'assistant',
+      messageKind: 'progress',
+      status: 'DONE',
+      answer: '先检索各方案价格…',
+      reasoning: '(长思考)',
+      title: '智能体回复',
+    });
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '上海到北京出行方案对比'),
+      toolStep('t1', 'web_search'),
+      thinkCard,
+      toolStep('t2', 'artifact_render'),
+      finalAnswer('a1', '综合对比结论…'),
+    ]);
+    // [user, tools, assistant(思考卡), tools, assistant(最终)]
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant', 'tools', 'assistant']);
+    const idx = findFinalAnswerIndex(blocks);
+    // 旧的 findIndex 语义会命中索引 2 的思考卡,其后的工具行/思考卡留在折叠区外
+    expect(idx).toBe(4);
+    // 折叠的过程区应包含思考卡与其后的 artifact_render 工具行
+    const process = blocks.slice(0, idx);
+    expect(process.map((b) => b.type)).toEqual(['user', 'tools', 'assistant', 'tools']);
+  });
+
+  it('流式中:live 步骤开始吐正文即成为折叠边界(它之前的过程收起)', () => {
+    const live = step({
+      id: 'step_live_m1_1',
+      role: 'assistant',
+      messageKind: 'progress',
+      status: 'RUNNING',
+      answer: '正在整理…',
+      title: '智能体回复',
+    });
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), toolStep('t1', 'web_search'), live]);
+    expect(findFinalAnswerIndex(blocks)).toBe(2);
+  });
+
+  it('纯思考流式(answer 为空)不触发折叠 —— 是否还要调工具未知,过程保持可见', () => {
+    const live = step({
+      id: 'step_live_m1_1',
+      role: 'assistant',
+      messageKind: 'progress',
+      status: 'RUNNING',
+      reasoning: '(思考中)',
+      title: '智能体回复',
+    });
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), toolStep('t1', 'web_search'), live]);
+    expect(findFinalAnswerIndex(blocks)).toBe(-1);
+  });
+
+  it('旧任务无 messageKind:带正文的收尾回复块同样可作边界', () => {
+    const legacyFinal = step({ id: 'm2', role: 'assistant', answer: '最终结论', status: 'DONE' });
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), toolStep('t1', 'web_search'), legacyFinal]);
+    expect(findFinalAnswerIndex(blocks)).toBe(2);
+  });
+
+  it('无任何回复块 → -1(整轮保持展开)', () => {
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), toolStep('t1', 'web_search')]);
+    expect(findFinalAnswerIndex(blocks)).toBe(-1);
   });
 });

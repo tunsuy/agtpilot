@@ -62,7 +62,7 @@ import { parseNovelPackage } from '../workshops/novel/novel-package';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
 import { resolveArtifactDraft } from '../workshops/registry';
-import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs } from '../lib/cockpit-blocks';
+import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs, findFinalAnswerIndex } from '../lib/cockpit-blocks';
 import { sourcesForAnswer } from '../lib/search-sources';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
 import {
@@ -705,10 +705,11 @@ export function CockpitView({
                   // 本轮全部过程(工具行 + 中间思考)收成一行「任务过程 · N 项」
                   // 摘要 —— 块与块的先后顺序不变,收起只发生在轮内过程区,最终
                   // 答复块始终可见;未手动操作前默认值随 finalIdx 翻转,手动后
-                  // 尊重用户选择(与思考过程折叠同一 expandedTools 字典范式)
-                  const finalIdx = renderable.findIndex(
-                    (b) => b.type === 'assistant' && Boolean(b.step.answer)
-                  );
+                  // 尊重用户选择(与思考过程折叠同一 expandedTools 字典范式)。
+                  // 边界取最后一个带正文的回复块而非第一个 —— 中间轮思考卡也
+                  // 常带短叙述正文,首中会把其后的工具行/思考卡留在折叠区外
+                  // (生产实测),取最后一个则边界随回复生成单调前移不回弹。
+                  const finalIdx = findFinalAnswerIndex(renderable);
                   const processBlocks = finalIdx >= 0 ? renderable.slice(0, finalIdx) : renderable;
                   const finalBlocks = finalIdx >= 0 ? renderable.slice(finalIdx) : [];
                   const turnOpen = expandedTools[turn.key] ?? finalIdx < 0;

@@ -851,9 +851,15 @@ export function CockpitView({
                     const isStreaming = st.status === 'RUNNING' && st.role === 'assistant';
                     // 思考过程折叠态复用 expandedTools(流式期间默认展开,正文
                     // 开始输出后随工具过程一起默认收起,避免顶到正在打字的答复;
-                    // 手动展开/收起后尊重用户选择,收尾后默认保持收起)
+                    // 手动展开/收起后尊重用户选择,收尾后默认保持收起)。
+                    // 整轮收起时(finalIdx > 0 且未展开)最终答复自带的思考流
+                    // 一并归入「任务过程」—— 不再单独挂在正文上方(用户要的是
+                    // 全部按时间线收成一行);展开轮次时按时间线原位恢复。
+                    // finalIdx ≤ 0(纯对话轮,无过程行可展开)不隐藏,思考流
+                    // 仍走自身折叠开关,否则简单问答的思考永久不可见
                     const reasoningKey = `${st.id}_reasoning`;
                     const reasoningOpen = expandedTools[reasoningKey] ?? (isStreaming && !st.answer);
+                    const reasoningInSection = turnOpen || finalIdx <= 0;
                     // 笔记包(scenario-loop §3):流式期间不解析(文本不完整),流结束一次性切换,
                     // 避免原始 markdown → 卡片的闪烁;解析失败则保持普通 markdown 渲染
                     const parsedNote = st.answer && !isStreaming ? parseNotePackages(st.answer) : null;
@@ -900,8 +906,9 @@ export function CockpitView({
 
                     return (
                       <div key={st.id} className="group/ans relative text-xs text-zinc-800 leading-relaxed">
-                            {/* 思考过程（推理模型 reasoning 流，可折叠；左竖线轻量样式，避免框中框） */}
-                            {st.reasoning && (
+                            {/* 思考过程（推理模型 reasoning 流，可折叠；左竖线轻量样式，避免框中框）。
+                                整轮收起时不渲染 —— 最终答复的思考流已归入「任务过程」行 */}
+                            {st.reasoning && reasoningInSection && (
                               <div className="mb-3">
                                 <button
                                   type="button"

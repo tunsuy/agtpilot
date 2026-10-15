@@ -60,6 +60,10 @@ describe('narrateStep 工具映射', () => {
     expect(n?.detail).toBe('产出 3 条核验过的贡献机会');
   });
 
+  it('planner_update_task 不叙述(看板记账是内部簿记,状态由计划卡呈现,活动流不刷「推进任务看板」)', () => {
+    expect(narrateStep(step({ tool: 'planner_update_task', args: { taskId: 't1', status: 'completed' } }))).toBeNull();
+  });
+
   it('mcp_ 前缀归连接器,兜底归执行任务', () => {
     expect(narrateStep(step({ tool: 'mcp_notion__search' }))?.kind).toBe('connector');
     expect(narrateStep(step({ tool: 'some_unknown_tool' }))?.kind).toBe('generic');

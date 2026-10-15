@@ -172,6 +172,11 @@ export function narrateStep(step: MissionStep): NarratedActivity | null {
     return { kind: 'think', label: '完成一轮推理' };
   }
 
+  // planner_update_task 是 Agent 给自己的看板记账(每推进一步一条),对用户是纯噪音:
+  // 看板状态本就由左侧计划卡实时呈现,活动流不再逐条「推进任务看板」
+  // (planner_create_plan 保留 —— 计划建立是一次性事件,goal 作细节有信息量)
+  if (step.tool === 'planner_update_task') return null;
+
   return narrateTool(step.tool, step.args);
 }
 

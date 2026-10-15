@@ -16,6 +16,7 @@ import { cronWorkshopId } from './cron-scenario';
 import { settleToolStep, upsertToolStep } from './tool-steps';
 import { accumulateMissionUsage, buildEfficiencyStepTitle } from './mission-efficiency';
 import { buildTaskSystemPrompt } from './task-system-prompt';
+import { logRuntime } from './runtime-log';
 
 export interface AgentBackendState {
   missions: Mission[];
@@ -115,7 +116,7 @@ class AgentBackend {
       g.__agtPilotBackend = new AgentBackend();
       // 微内核 + 插件统一装配（app-kit），后台启动；调用方经 whenReady() 等待就绪
       g.__agtPilotBackend.ensureRuntime().catch((err: any) => {
-        console.error('Failed to init agent runtime in AgentBackend:', err);
+        logRuntime('ERROR', 'backend', `Failed to init agent runtime: ${err?.message || err}`);
       });
       g.__agtPilotBackend.initCronScheduler();
     }
@@ -751,6 +752,7 @@ class AgentBackend {
           data: { ...this.state.viewport, userId: this.state.viewportUserId ?? undefined },
         });
         this.state.viewportUserId = null;
+        logRuntime('INFO', mission?.id || '', 'mission finished');
         this.addTerminalLog('system', `[Agent] 回复完成: ${finalAnswer.slice(0, 100)}`, mission?.userId);
         break;
       }
@@ -776,6 +778,10 @@ class AgentBackend {
           }
           this.flushDeltas(mission.id);
           closeLiveStep(mission, { status: 'FAILED' });
+          // 错误日志先于 status=DONE 落:挂载逻辑只找 in-flight 任务,
+          // 先置 DONE 再记会把 [Agent Error] 挡在任务档案之外(生产实测:
+          // 失败任务的 terminalLogs 里查不到错误行)
+          this.addTerminalLog('stderr', `[Agent Error] ${errorMsg}`, mission.userId);
           mission.status = 'DONE';
           mission.steps.push({
             id: `step_err_${Date.now()}`,
@@ -783,10 +789,12 @@ class AgentBackend {
             status: 'FAILED',
           });
           this.broadcast({ type: 'mission_updated', data: mission });
+        } else {
+          // 无归属任务(串台/孤儿事件)的错误仍要留痕:程序日志 + 全局终端流
+          this.addTerminalLog('stderr', `[Agent Error] ${errorMsg}`);
         }
         // 失败同样释放视口占用，避免把其他用户永久挡在空白画面外
         this.state.viewportUserId = null;
-        this.addTerminalLog('stderr', `[Agent Error] ${errorMsg}`, mission?.userId);
         break;
       }
     }
@@ -795,8 +803,12 @@ class AgentBackend {
   /**
    * 记终端日志。userId 标记归属用户（多用户部署时 SSE 只推给本人，
    * 未标记的视为全局系统日志）。
+   * stderr 级同步镜像进程序运行日志(runtime.log):模型调用失败、连接器
+   * 连接失败等程序侧错误此前只进内存环形缓冲,进程重启即失、docker logs
+   * 无迹可寻(生产实测:Failed to process successful response 排障无门)。
    */
   public addTerminalLog(type: TerminalLog['type'], text: string, userId?: string) {
+    if (type === 'stderr') logRuntime('ERROR', '', text);
     const entry: TerminalLog = {
       id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       timestamp: Date.now(),
@@ -1057,7 +1069,7 @@ class AgentBackend {
         }
       });
     } catch (e: any) {
-      console.error('[Governance] 治理总线订阅失败(降级:回退弧事件不再传导到运行中任务):', e?.message || e);
+      logRuntime('ERROR', 'governance', `治理总线订阅失败(降级:回退弧事件不再传导到运行中任务): ${e?.message || e}`);
     }
   }
 
@@ -1261,6 +1273,7 @@ class AgentBackend {
       // 用户提问气泡出现的同时智能体头像与思考指示即刻可见
       ensureLiveStep(targetMission);
       this.broadcast({ type: 'mission_created', data: targetMission });
+      logRuntime('INFO', missionId, `mission started: ${goal.slice(0, 60).replace(/\s+/g, ' ')}`);
       this.addTerminalLog('system', `[Mission Started] ID: ${missionId} | Goal: ${goal}`, options.userId);
     }
 
@@ -1750,6 +1763,9 @@ class AgentBackend {
           const superseded = () => this.activeAbortControllers.get(targetMission.id) !== abortController;
 
           if (!result.success && result.error && !superseded()) {
+            // 错误日志先于 status=DONE 落(挂载逻辑只找 in-flight 任务,
+            // 先置 DONE 再记会把 [Mission Error] 挡在任务档案之外)
+            this.addTerminalLog('stderr', `[Mission Error] ${result.error}`, targetMission.userId);
             targetMission.status = 'DONE';
             // 派发期创建的「正在思考」live step 兜底收尾(幂等:
             // orchestrator error 事件已收过则此处空操作)
@@ -1759,7 +1775,6 @@ class AgentBackend {
               title: `执行异常: ${result.error}`,
               status: 'FAILED',
             });
-            this.addTerminalLog('stderr', `[Mission Error] ${result.error}`, targetMission.userId);
             this.broadcast({ type: 'mission_updated', data: targetMission });
           }
         } else {
@@ -1883,7 +1898,7 @@ class AgentBackend {
         this.addTerminalLog('system', `[Cron Scheduler] 调度器已激活，已挂载 ${activeCount} 个后台巡航任务。`);
       })
       .catch((err: any) => {
-        console.error('Failed to init cron scheduler in AgentBackend:', err);
+        logRuntime('ERROR', 'cron', `Failed to init cron scheduler: ${err?.message || err}`);
       });
   }
 
@@ -1914,7 +1929,7 @@ class AgentBackend {
         const { saveUserCronJob } = require('@/lib/user-store');
         saveUserCronJob(userId, jobInfo);
       } catch (e) {
-        console.error('Failed to save updated cron job status:', e);
+        logRuntime('ERROR', 'cron', `Failed to save updated cron job status: ${(e as Error)?.message || e}`);
       }
 
       this.broadcast({

@@ -25,7 +25,7 @@ describe('buildTaskSystemPrompt', () => {
       '结构化交付',
       '步数经济',
       '看板规划',
-      '安静执行',
+      '受控进展播报',
       '小红书托管边界',
       '公众号草稿箱边界',
       '发布永远由用户本人', // 小红书发布合规红线
@@ -51,6 +51,16 @@ describe('buildTaskSystemPrompt', () => {
     // 看板策略已从步数经济里拆出独立规则(两条各自一个注意力锚点)
     expect(s.indexOf('【步数经济】')).toBeGreaterThan(0);
     expect(s.indexOf('【看板规划】')).toBeGreaterThan(s.indexOf('【步数经济】'));
+  });
+
+  it('受控进展播报:开题确认 + 阶段报告两点位,正文通道,无逐工具碎语(原「安静执行」升级)', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('【受控进展播报】');
+    expect(s).toContain('继续'); // 续聊"继续"也要确认目标与路线
+    expect(s).toContain('阶段报告'); // 关键阶段节点出口
+    expect(s).toContain('必须输出在正文里'); // 推理模型会把应答吞进思考流,显式约束通道
+    // 反面清单仍在:逐工具碎语依旧禁止
+    expect(s).toContain('过程碎语');
   });
 
   it('用户记忆块按需插值:有值时插入、缺省时无空占位', () => {

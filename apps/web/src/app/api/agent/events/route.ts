@@ -18,10 +18,13 @@ export async function GET() {
     start(controller) {
       // 心跳保活：代理/负载均衡会掐断静默连接，EventSource 到 TCP 超时才发现
       // （可达分钟级），期间广播的审批卡片等事件全部丢失——卡片"迟到"的主因。
-      // 25s 一帧 SSE 注释行，只占连接不进事件分发
+      // 25s 一帧「具名 ping 事件」（不是注释行）：注释行 EventSource 的 JS API
+      // 听不见，客户端无法区分「没事件可推」和「连接已假死」；具名事件让客户端
+      // 看门狗能据此检测静默并主动重连（生产实测：连接半死不触发 onerror，
+      // 续聊的工具卡/最终答复/完成态全部丢失，页面冻在最后一帧）
       heartbeatTimer = setInterval(() => {
         try {
-          controller.enqueue(encoder.encode(': ping\n\n'));
+          controller.enqueue(encoder.encode(`event: ping\ndata: ${Date.now()}\n\n`));
         } catch {
           // 连接已关闭，忽略
         }

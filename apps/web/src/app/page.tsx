@@ -18,6 +18,7 @@ import { AuthModal } from '../components/AuthModal';
 import { DownloadAppModal } from '../components/DownloadAppModal';
 import { useIsMobile } from '../components/mobile/useIsMobile';
 import { findLiveStep } from '../lib/live-steps';
+import { isZombieSse } from '../lib/sse-liveness';
 import { MobileTabBar, MobileTab } from '../components/mobile/MobileTabBar';
 import { MobileHomeView } from '../components/mobile/MobileHomeView';
 import { MobileActivityView } from '../components/mobile/MobileActivityView';
@@ -703,218 +704,270 @@ export default function Workspace() {
   };
 
   useEffect(() => {
-    const eventSource = new EventSource('/api/agent/events');
+    // SSE 假死自愈:TCP 连接可以「断了一半」——客户端侧仍 ESTABLISHED,
+    // EventSource 不触发 onerror,自动重连永远不发生;期间服务端广播的
+    // 工具卡/流式答复/完成态全部落空,页面冻在最后一帧,顶部的本地耗时
+    // 计时却还在走(生产实测:续聊中段回复后连接假死,用户盯着「什么都没动」
+    // 看了好几分钟,任务其实早已完成)。
+    // 服务端每 25s 发一帧具名 ping 事件;客户端 60s 没收到任何心跳 →
+    // 判定假死,主动 close 重建连接 —— 重连后 init 事件全量重同步,冻结的
+    // 会话状态自动追平。
+    let eventSource: EventSource | null = null;
+    let lastAliveAt = Date.now();
 
-    eventSource.addEventListener('init', (e: MessageEvent) => {
-      try {
-        const state = JSON.parse(e.data);
-        if (state.missions) setMissions(state.missions);
-        if (state.activeMissionId) setActiveMissionId(state.activeMissionId);
-        if (state.viewport) setViewport(state.viewport);
-        if (state.terminalLogs) setTerminalLogs(state.terminalLogs);
-        if (state.approvalRequests) setApprovalRequests(state.approvalRequests);
-        if (state.connectorSuggestions) setConnectorSuggestions(state.connectorSuggestions);
-        if (state.latestArtifact) setArtifact(state.latestArtifact);
-      } catch (err) {
-        console.error(err);
-      }
-    });
+    const connect = () => {
+      lastAliveAt = Date.now();
+      eventSource = new EventSource('/api/agent/events');
 
-    eventSource.addEventListener('viewport_update', (e: MessageEvent) => {
-      try {
-        const vp = JSON.parse(e.data);
-        setViewport((prev) => ({ ...prev, ...vp }));
-        // 视口更新自动带看浏览器，但「执行动态」是粘性的：任务执行期间
-        // 用户正盯着活动流时不被抢走焦点（想看浏览随时手点）
-        setRightTab((prev) => (prev === 'activity' ? prev : 'browser'));
-      } catch (err) {
-        console.error(err);
-      }
-    });
+      // 心跳(具名事件,注释行 EventSource 听不见):任何一帧都证明连接活着
+      eventSource.addEventListener('ping', () => {
+        lastAliveAt = Date.now();
+      });
 
-    eventSource.addEventListener('terminal_log', (e: MessageEvent) => {
-      try {
-        const log = JSON.parse(e.data);
-        setTerminalLogs((prev) => [...prev, log]);
-      } catch (err) {
-        console.error(err);
-      }
-    });
+      eventSource.addEventListener('init', (e: MessageEvent) => {
+        try {
+          const state = JSON.parse(e.data);
+          if (state.missions) setMissions(state.missions);
+          if (state.activeMissionId) setActiveMissionId(state.activeMissionId);
+          if (state.viewport) setViewport(state.viewport);
+          if (state.terminalLogs) setTerminalLogs(state.terminalLogs);
+          if (state.approvalRequests) setApprovalRequests(state.approvalRequests);
+          if (state.connectorSuggestions) setConnectorSuggestions(state.connectorSuggestions);
+          if (state.latestArtifact) setArtifact(state.latestArtifact);
+        } catch (err) {
+          console.error(err);
+        }
+      });
 
-    eventSource.addEventListener('mission_created', (e: MessageEvent) => {
-      try {
-        const mission: Mission = JSON.parse(e.data);
-        // 后端真实会话落地 → 摘除乐观占位会话（真实会话自带用户步骤与思考占位）
-        const pendingLocalId = pendingLocalMissionIdRef.current;
-        pendingLocalMissionIdRef.current = null;
-        setMissions((prev) => [
-          mission,
-          ...prev.filter((m) => m.id !== mission.id && m.id !== pendingLocalId),
-        ]);
-        setActiveMissionId(mission.id);
-        setActiveView('cockpit');
-        setMobileTab('activity');
-      } catch (err) {
-        console.error(err);
-      }
-    });
+      eventSource.addEventListener('viewport_update', (e: MessageEvent) => {
+        try {
+          const vp = JSON.parse(e.data);
+          setViewport((prev) => ({ ...prev, ...vp }));
+          // 视口更新自动带看浏览器，但「执行动态」是粘性的：任务执行期间
+          // 用户正盯着活动流时不被抢走焦点（想看浏览随时手点）
+          setRightTab((prev) => (prev === 'activity' ? prev : 'browser'));
+        } catch (err) {
+          console.error(err);
+        }
+      });
 
-    eventSource.addEventListener('mission_updated', (e: MessageEvent) => {
-      try {
-        const updated: Mission = JSON.parse(e.data);
-        setMissions((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-      } catch (err) {
-        console.error(err);
-      }
-    });
+      eventSource.addEventListener('terminal_log', (e: MessageEvent) => {
+        try {
+          const log = JSON.parse(e.data);
+          setTerminalLogs((prev) => [...prev, log]);
+        } catch (err) {
+          console.error(err);
+        }
+      });
 
-    // token 用量实时更新（每步模型调用完成涨一次）：轻量事件只带
-    // { taskId, usage }，只 patch 单字段，不重发全量 mission
-    eventSource.addEventListener('mission_usage', (e: MessageEvent) => {
-      try {
-        const { taskId, usage } = JSON.parse(e.data);
-        if (!taskId || !usage) return;
-        setMissions((prev) => prev.map((m) => (m.id === taskId ? { ...m, usage } : m)));
-      } catch (err) {
-        console.error(err);
-      }
-    });
+      eventSource.addEventListener('mission_created', (e: MessageEvent) => {
+        try {
+          const mission: Mission = JSON.parse(e.data);
+          // 后端真实会话落地 → 摘除乐观占位会话（真实会话自带用户步骤与思考占位）
+          const pendingLocalId = pendingLocalMissionIdRef.current;
+          pendingLocalMissionIdRef.current = null;
+          setMissions((prev) => [
+            mission,
+            ...prev.filter((m) => m.id !== mission.id && m.id !== pendingLocalId),
+          ]);
+          setActiveMissionId(mission.id);
+          setActiveView('cockpit');
+          setMobileTab('activity');
+        } catch (err) {
+          console.error(err);
+        }
+      });
 
-    // 流式增量（打字机）：按 taskId 定位 mission，从尾向前找 RUNNING 的
-    // live step（step_live_ 前缀）按 kind 追加 answer / reasoning；边界
-    // mission_updated 与 delta 在同一 SSE 连接上有序（后端先 flush 再广播
-    // 边界），两种流不会交错错位。找不到 live step 时前端兜底创建。
-    eventSource.addEventListener('assistant_delta', (e: MessageEvent) => {
-      try {
-        const { taskId, segments } = JSON.parse(e.data);
-        if (!taskId || !Array.isArray(segments) || segments.length === 0) return;
-        setMissions((prev) =>
-          prev.map((m) => {
-            if (m.id !== taskId) return m;
-            const steps = [...m.steps];
-            let applied = false;
-            for (let i = steps.length - 1; i >= 0; i--) {
-              const st = steps[i];
-              if (st.id?.startsWith('step_live_') && st.status === 'RUNNING' && st.role === 'assistant') {
-                const next = { ...st };
+      eventSource.addEventListener('mission_updated', (e: MessageEvent) => {
+        try {
+          const updated: Mission = JSON.parse(e.data);
+          setMissions((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      // token 用量实时更新（每步模型调用完成涨一次）：轻量事件只带
+      // { taskId, usage }，只 patch 单字段，不重发全量 mission
+      eventSource.addEventListener('mission_usage', (e: MessageEvent) => {
+        try {
+          const { taskId, usage } = JSON.parse(e.data);
+          if (!taskId || !usage) return;
+          setMissions((prev) => prev.map((m) => (m.id === taskId ? { ...m, usage } : m)));
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      // 流式增量（打字机）：按 taskId 定位 mission，从尾向前找 RUNNING 的
+      // live step（step_live_ 前缀）按 kind 追加 answer / reasoning；边界
+      // mission_updated 与 delta 在同一 SSE 连接上有序（后端先 flush 再广播
+      // 边界），两种流不会交错错位。找不到 live step 时前端兜底创建。
+      eventSource.addEventListener('assistant_delta', (e: MessageEvent) => {
+        try {
+          const { taskId, segments } = JSON.parse(e.data);
+          if (!taskId || !Array.isArray(segments) || segments.length === 0) return;
+          setMissions((prev) =>
+            prev.map((m) => {
+              if (m.id !== taskId) return m;
+              const steps = [...m.steps];
+              let applied = false;
+              for (let i = steps.length - 1; i >= 0; i--) {
+                const st = steps[i];
+                if (st.id?.startsWith('step_live_') && st.status === 'RUNNING' && st.role === 'assistant') {
+                  const next = { ...st };
+                  for (const seg of segments) {
+                    if (seg.kind === 'reasoning') {
+                      next.reasoning = (next.reasoning || '') + String(seg.delta || '');
+                    } else {
+                      next.answer = (next.answer || '') + String(seg.delta || '');
+                      next.title = '正在处理…';
+                    }
+                  }
+                  steps[i] = next;
+                  applied = true;
+                  break;
+                }
+              }
+              if (!applied) {
+                // 兜底：后端 live step 尚未随 mission_updated 到达（如 SSE 重连初期）
+                const fallback = {
+                  id: `step_live_${taskId}_fe_${Date.now()}`,
+                  role: 'assistant' as const,
+                  messageKind: 'progress' as const,
+                  title: '正在处理…',
+                  status: 'RUNNING' as const,
+                  answer: '',
+                  reasoning: '',
+                  startedAt: Date.now(),
+                };
                 for (const seg of segments) {
                   if (seg.kind === 'reasoning') {
-                    next.reasoning = (next.reasoning || '') + String(seg.delta || '');
+                    fallback.reasoning = (fallback.reasoning || '') + String(seg.delta || '');
                   } else {
-                    next.answer = (next.answer || '') + String(seg.delta || '');
-                    next.title = '正在处理…';
+                    fallback.answer = (fallback.answer || '') + String(seg.delta || '');
                   }
                 }
-                steps[i] = next;
-                applied = true;
-                break;
+                steps.push(fallback);
               }
-            }
-            if (!applied) {
-              // 兜底：后端 live step 尚未随 mission_updated 到达（如 SSE 重连初期）
-              const fallback = {
-                id: `step_live_${taskId}_fe_${Date.now()}`,
-                role: 'assistant' as const,
-                messageKind: 'progress' as const,
-                title: '正在处理…',
-                status: 'RUNNING' as const,
-                answer: '',
-                reasoning: '',
-                startedAt: Date.now(),
-              };
-              for (const seg of segments) {
-                if (seg.kind === 'reasoning') {
-                  fallback.reasoning = (fallback.reasoning || '') + String(seg.delta || '');
-                } else {
-                  fallback.answer = (fallback.answer || '') + String(seg.delta || '');
-                }
-              }
-              steps.push(fallback);
-            }
-            return { ...m, steps };
-          })
-        );
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    eventSource.addEventListener('approval_requested', (e: MessageEvent) => {
-      try {
-        const req: ApprovalRequest = JSON.parse(e.data);
-        setApprovalRequests((prev) => [...prev.filter((r) => r.id !== req.id), req]);
-        setActiveView('cockpit');
-        setMobileTab('activity');
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    eventSource.addEventListener('approval_resolved', (e: MessageEvent) => {
-      try {
-        const { approvalId } = JSON.parse(e.data);
-        setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    // 任务中途连接器授权建议：弹卡片等用户一键授权/跳过
-    eventSource.addEventListener('connector_suggested', (e: MessageEvent) => {
-      try {
-        const s: ConnectorSuggestion = JSON.parse(e.data);
-        setConnectorSuggestions((prev) => [...prev.filter((x) => x.id !== s.id), s]);
-        setActiveView('cockpit');
-        setMobileTab('activity');
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    eventSource.addEventListener('connector_suggestion_resolved', (e: MessageEvent) => {
-      try {
-        const { id } = JSON.parse(e.data);
-        setConnectorSuggestions((prev) => prev.filter((x) => x.id !== id));
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    eventSource.addEventListener('artifact_updated', (e: MessageEvent) => {
-      try {
-        const art: ArtifactState = JSON.parse(e.data);
-        setArtifact(art);
-        // 归属到所属会话（后端 mission_updated 先行,这里兜底合并,
-        // 防止某个会话的产物只在全局 latestArtifact 里"孤儿化"）
-        if (art?.taskId) {
-          setMissions((prev) =>
-            prev.map((m) => (m.id === art.taskId && !m.artifact ? { ...m, artifact: art } : m))
+              return { ...m, steps };
+            })
           );
+        } catch (err) {
+          console.error(err);
         }
-        // 正在浏览别的历史会话时不要强切右栏 —— 产物属于谁就只在
-        // 用户正看着它的会话时才把"成果"页签顶上来,避免串台抢焦点
-        if (!art?.taskId || art.taskId === activeMissionIdRef.current) {
-          setRightTab('artifact');
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    });
+      });
 
-    // 记忆库更新（会话结束自动沉淀新记忆）：静默刷新记忆列表
-    eventSource.addEventListener('memories_updated', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (session?.user?.id && data?.userId === session.user.id) {
-          loadMemories();
+      eventSource.addEventListener('approval_requested', (e: MessageEvent) => {
+        try {
+          const req: ApprovalRequest = JSON.parse(e.data);
+          setApprovalRequests((prev) => [...prev.filter((r) => r.id !== req.id), req]);
+          setActiveView('cockpit');
+          setMobileTab('activity');
+        } catch (err) {
+          console.error(err);
         }
-      } catch (err) {
-        console.error(err);
+      });
+
+      eventSource.addEventListener('approval_resolved', (e: MessageEvent) => {
+        try {
+          const { approvalId } = JSON.parse(e.data);
+          setApprovalRequests((prev) => prev.filter((r) => r.id !== approvalId));
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      // 任务中途连接器授权建议：弹卡片等用户一键授权/跳过
+      eventSource.addEventListener('connector_suggested', (e: MessageEvent) => {
+        try {
+          const s: ConnectorSuggestion = JSON.parse(e.data);
+          setConnectorSuggestions((prev) => [...prev.filter((x) => x.id !== s.id), s]);
+          setActiveView('cockpit');
+          setMobileTab('activity');
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      eventSource.addEventListener('connector_suggestion_resolved', (e: MessageEvent) => {
+        try {
+          const { id } = JSON.parse(e.data);
+          setConnectorSuggestions((prev) => prev.filter((x) => x.id !== id));
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      eventSource.addEventListener('artifact_updated', (e: MessageEvent) => {
+        try {
+          const art: ArtifactState = JSON.parse(e.data);
+          setArtifact(art);
+          // 归属到所属会话（后端 mission_updated 先行,这里兜底合并,
+          // 防止某个会话的产物只在全局 latestArtifact 里"孤儿化"）
+          if (art?.taskId) {
+            setMissions((prev) =>
+              prev.map((m) => (m.id === art.taskId && !m.artifact ? { ...m, artifact: art } : m))
+            );
+          }
+          // 正在浏览别的历史会话时不要强切右栏 —— 产物属于谁就只在
+          // 用户正看着它的会话时才把"成果"页签顶上来,避免串台抢焦点
+          if (!art?.taskId || art.taskId === activeMissionIdRef.current) {
+            setRightTab('artifact');
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      // 记忆库更新（会话结束自动沉淀新记忆）：静默刷新记忆列表
+      eventSource.addEventListener('memories_updated', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (session?.user?.id && data?.userId === session.user.id) {
+            loadMemories();
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      });
+    };
+
+    // 假死连接换新:close 后重连,init 全量重同步把冻结的会话追平
+    const healZombie = () => {
+      console.warn('[sse] 心跳静默超时,重建连接自愈');
+      eventSource?.close();
+      connect();
+    };
+
+    connect();
+
+    // 看门狗:只处理「OPEN 但静默」的假死态;CONNECTING 时 EventSource
+    // 自带退避重试,不掺和
+    const watchdogTimer = setInterval(() => {
+      const es = eventSource;
+      if (es && isZombieSse({ readyState: es.readyState, lastAliveAt })) {
+        healZombie();
       }
-    });
+    }, 15_000);
+
+    // 切回标签页立即检查:后台标签页定时器被节流,看门狗可能迟钝
+    const onVisible = () => {
+      const es = eventSource;
+      if (
+        document.visibilityState === 'visible' &&
+        es &&
+        isZombieSse({ readyState: es.readyState, lastAliveAt })
+      ) {
+        healZombie();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
-      eventSource.close();
+      clearInterval(watchdogTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+      eventSource?.close();
     };
   }, [session?.user?.id]);
 

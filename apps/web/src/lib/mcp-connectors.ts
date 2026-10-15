@@ -853,38 +853,18 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
   },
   {
     id: 'tomato_writer',
-    name: '番茄作者后台 (tomato-writer-mcp)',
+    name: '番茄作家后台',
     icon: 'Tomato',
     category: 'Content',
     description:
-      '番茄小说作者后台:托管模式扫码后 Agent 可存章节草稿(有限频/审计,绝不发布);或本地 tomato-writer-mcp 查稿与存草稿。发布永远由你本人完成。',
+      '番茄作家后台:网页版扫码登录 + 托管模式,Agent 可把章节存进草稿箱(有限频/审计,绝不发布)。发布永远由你本人完成。',
+    // 已不再走本地 tomato-writer-mcp(开源版,自建 Cookie/CSRF):存草稿由扫码
+    // 托管全覆盖,本地 MCP 入口已撤(2026-10 拍板)。servers 留空 —— 本注册仅作
+    // 连接器卡片宿主(扫码/接管/托管 UI 挂在 tomato_writer id 下);authType 维持
+    // token 只为遗留凭证保留「断开」清理通道(tokenEnvVar 指向旧存储键)。
     authType: 'token',
-    /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
-    routeWords: ["番茄作者后台", "番茄作家", "tomato writer"],
     tokenEnvVar: 'MCP_TOMATO_WRITER_CRED',
-    // 作家后台是 React Router SPA(basename /main/writer/),路由表里没有
-    // /index —— 打开 /main/writer/index 服务器给 200 的壳但客户端渲染
-    // 「Unexpected Application Error! 404」(2026-10 实测)。工作台路由是
-    // /home(取自线上 bundle 路由表,与 /、/login 并列),未登录自动转登录页
-    quickAuthUrl: 'https://fanqienovel.com/main/writer/home',
-    authHint:
-      '先 clone fuhei/tomato-writer-mcp 并 pnpm install && pnpm build;再打开作家专区登录 → F12 Network → 任选一个 /api/author/... 请求,复制请求头里的 Cookie 与 X-Secsdk-Csrf-Token(会话级固定),按「入口文件绝对路径|||Cookie|||X-Secsdk-Csrf-Token」三段格式填到下方(如 /home/me/tomato-writer-mcp/dist/index.js|||sessionid=...|||abc123)。',
-    docUrl: 'https://github.com/fuhei/tomato-writer-mcp',
-    servers: [
-      {
-        name: 'tomato_writer',
-        subagentOpen: false, // publish_chapter = 真实平台发布(现实副作用),只走主循环逐次人工审批
-        transport: 'stdio',
-        command: 'node',
-        // 入口路径进 args(用户本机 build 产物,无 npx 包);Cookie/CSRF 经 env 注入,
-        // 不出现在命令行(避免进程列表泄露),也绝不进 process.env 转发
-        args: (cred) => [parseTomatoWriterCred(cred)?.entryPath || ''],
-        env: (cred) => {
-          const p = parseTomatoWriterCred(cred);
-          return { TOMATO_COOKIE: p?.cookie || '', TOMATO_CSRF_TOKEN: p?.csrf || '' };
-        },
-      },
-    ],
+    servers: [],
   },
 ];
 
@@ -907,23 +887,6 @@ export function parseAppCredential(raw: string): { id: string; secret: string } 
   const parts = t.split(/\s*[:：]\s*/);
   if (parts.length < 2 || !parts[0].trim() || !parts[1].trim()) return null;
   return { id: parts[0].trim(), secret: parts.slice(1).join(':').trim() };
-}
-
-/**
- * 解析番茄作者后台三段组合凭证「entryPath|||cookie|||csrf」(||| 分隔,
- * Cookie 自身含 ; 与空格所以不能用冒号/逗号分段)。任一段缺失返回 null ——
- * 调用方拿到 null 就传空值,子进程自然启动失败并显式报错,绝不静默半配置。
- */
-export function parseTomatoWriterCred(
-  raw: string
-): { entryPath: string; cookie: string; csrf: string } | null {
-  const t = (raw || '').trim();
-  if (!t) return null;
-  const parts = t.split('|||');
-  if (parts.length !== 3) return null;
-  const [entryPath, cookie, csrf] = parts.map((p) => p.trim());
-  if (!entryPath || !cookie || !csrf) return null;
-  return { entryPath, cookie, csrf };
 }
 
 /** MCP OAuth start → callback 之间传递 CSRF state 的 httpOnly cookie 名 */

@@ -821,7 +821,15 @@ export function ConnectorsView({
 
             <div className="pt-3 border-t border-zinc-100 flex flex-wrap items-center justify-between gap-y-2">
               <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[130px]">
-                {app.authType === 'oauth' ? 'OAuth 2.1 + PKCE' : app.optIn ? '本地 stdio 子进程' : app.authType === 'none' ? 'MCP Streamable HTTP' : app.keyMasked || 'MCP Streamable HTTP'}
+                {app.id === 'tomato_writer'
+                  ? '浏览器托管'
+                  : app.authType === 'oauth'
+                  ? 'OAuth 2.1 + PKCE'
+                  : app.optIn
+                  ? '本地 stdio 子进程'
+                  : app.authType === 'none'
+                  ? 'MCP Streamable HTTP'
+                  : app.keyMasked || 'MCP Streamable HTTP'}
               </span>
 
               <div className="flex flex-wrap items-center justify-end gap-1.5">
@@ -981,7 +989,7 @@ export function ConnectorsView({
                   </button>
                 )}
 
-                {app.authType === 'token' && (
+                {app.authType === 'token' && app.id !== 'tomato_writer' && (
                   <button
                     onClick={() => {
                       setMcpConfiguring(app);

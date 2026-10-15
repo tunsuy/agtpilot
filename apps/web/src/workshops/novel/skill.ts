@@ -52,7 +52,10 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: '设定库驱动的长篇创作:六件套开书、恒定上下文续写不漂移、状态库全书体检',
     icon: BookOpen,
     accent: 'violet',
-    deps: [],
+    // 番茄存草稿是投递腿(开书/续写/体检本身不依赖,故不设 required):存章节进
+    // 番茄草稿箱走扫码托管(fanqie_save_chapter_draft),「已连接」语义在
+    // WorkshopsView 按托管登录态判定(本地 MCP 已撤,MCP 态恒灰)
+    deps: [{ id: 'tomato_writer', name: '番茄作家后台' }],
     note: '按职业作者方法论(设定集/人物卡/三层大纲/伏笔台账/时间线/文风锚)建库,每章生成只注入恒定上下文,写后反思写回,长篇前后一致。产出存入你的书库(可手改);投递任何平台前请人工审阅,并按平台规则如实勾选 AI 辅助声明——发布永远由你确认,本工坊不自动发布。',
     profileSlot: 'novel',
   },

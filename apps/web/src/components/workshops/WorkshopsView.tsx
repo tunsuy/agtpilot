@@ -12,6 +12,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Sparkles, Play, Clock, ArrowRight, UserRoundPen } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo, Mission } from '../../types/agent';
+import { loginBadgeInfo } from '../../lib/browser-login';
+import type { XhsManagedRecord } from '../../lib/user-store';
 import { WORKSHOPS, WORKSHOP_CATEGORIES, getWorkshop, type WorkshopDef, type WorkshopId } from './registry';
 import { buildWorkshopRun, type WorkshopRunPayload } from './run';
 import { recordRun, recentRuns, relativeTime, type WorkshopRunRecord } from './history';
@@ -112,14 +114,38 @@ export function WorkshopsView({
     })();
   }, []);
 
+  // 番茄扫码登录态(与连接器页卡片同源 /api/fanqie-managed):小说工坊的番茄依赖
+  // 点亮与否看这里,不看 MCP 态 —— 本地 MCP 已撤,MCP 侧永远连不上
+  const [fanqieRecord, setFanqieRecord] = useState<XhsManagedRecord | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/fanqie-managed');
+        if (res.status === 401) return; // 未登录静默
+        const data = await res.json();
+        if (data.success) setFanqieRecord(data.record || null);
+      } catch {
+        // 后端未就绪时静默
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     // 拉全量历史(按工坊去重、至多 20 条):最近使用条目取前 3,卡片「上次使用」逐卡查找
     setHistory(recentRuns(20));
   }, []);
 
-  const isConnected = (depId: string) =>
-    connectors.some((c) => c.id === depId && c.status === 'connected') ||
-    mcpConnectors.some((c) => c.id === depId && c.status === 'connected');
+  const isConnected = (depId: string) => {
+    // 番茄:「已连接」语义 = 扫码登录(托管记录),与连接器页卡片徽标同源;
+    // MCP 态恒未连接(servers 已清空),按 MCP 判会让已扫码用户看到死灰点
+    if (depId === 'tomato_writer') {
+      return loginBadgeInfo(fanqieRecord || undefined).loggedIn;
+    }
+    return (
+      connectors.some((c) => c.id === depId && c.status === 'connected') ||
+      mcpConnectors.some((c) => c.id === depId && c.status === 'connected')
+    );
+  };
 
   const activeWorkshop = activeId ? getWorkshop(activeId) : null;
   const ActiveForm = activeId ? FORMS[activeId] : null;

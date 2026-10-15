@@ -118,6 +118,9 @@ export function parseStreamLine(line: string): ParsedStreamEvent | null {
     return null;
   }
   if (o.type === 'system') {
+    // 只有 init 是真会话启动;CLI 还会输出 thinking_tokens 等其它 subtype 的
+    // system 行(思考过程 token 估算,每步多条)——不区分会把时间线灌满重复的「会话启动」
+    if (o.subtype !== 'init') return null;
     const model = typeof o.model === 'string' ? o.model : '';
     return { kind: 'system', summary: model ? `会话启动 · 模型 ${model}` : '会话启动' };
   }

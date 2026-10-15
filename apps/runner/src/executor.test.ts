@@ -99,11 +99,15 @@ describe('buildClaudeArgs(§6.1 固化命令行,纯函数直测)', () => {
 });
 
 describe('parseStreamLine(stream-json 宽容解析)', () => {
-  it('system/init → 会话启动 + 模型名', () => {
+  it('system/init → 会话启动 + 模型名;非 init 的 system 行 → null', () => {
     expect(parseStreamLine('{"type":"system","subtype":"init","model":"sonnet"}')).toEqual({
       kind: 'system',
       summary: '会话启动 · 模型 sonnet',
     });
+    // CLI 实测:思考过程会持续输出 subtype=thinking_tokens 的 system 行(无 model 字段),
+    // 旧实现把它们全标成「会话启动」,任务时间线被灌成一屏重复 —— 必须忽略
+    expect(parseStreamLine('{"type":"system","subtype":"thinking_tokens","estimated_tokens":8}')).toBeNull();
+    expect(parseStreamLine('{"type":"system","subtype":"status","status":"busy"}')).toBeNull();
   });
 
   it('assistant tool_use → 工具名 + 一行摘要;text → 仅首行', () => {

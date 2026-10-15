@@ -20,6 +20,31 @@ export const inject = ['agent'];
 export type { ModelStepResult };
 
 /**
+ * 模型调用错误信息增稠。APICallError 的顶层 message 常是「Failed to
+ * process successful response」这类无操作性的文案(HTTP 200 但响应体解析
+ * 失败),真实死因 —— 自定义中转/兼容端点返回的错误体(配额耗尽、速率
+ * 限制、上下文超长)、状态码、底层解析异常 —— 都在 statusCode/
+ * responseBody/cause 字段里。orchestrator 与任务错误步骤只透传 message,
+ * 不增稠的话这些字段全被丢弃,生产排障只能靠猜。
+ * 就地改写 err.message(保留原错误对象,abort 语义与 instanceof 判断不受影响)。
+ */
+function enrichModelError(err: any): void {
+  if (!(err instanceof Error)) return;
+  const extras: string[] = [];
+  if (typeof (err as any).statusCode === 'number') extras.push(`HTTP ${(err as any).statusCode}`);
+  const body = typeof (err as any).responseBody === 'string' ? (err as any).responseBody.trim() : '';
+  if (body) extras.push(`响应体: ${body.slice(0, 500)}`);
+  // cause 逐层带出(限深 3 层防循环引用;message 已含的不重复拼)
+  let cause = (err as { cause?: unknown }).cause;
+  for (let depth = 0; cause instanceof Error && depth < 3; depth++) {
+    const m = cause.message || String(cause);
+    if (m && !err.message.includes(m)) extras.push(`原因: ${m.slice(0, 300)}`);
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  if (extras.length > 0) err.message = `${err.message}｜${extras.join(' | ')}`;
+}
+
+/**
  * 模型驱动服务：实现内核的 ModelGateway 契约（@agtpilot/core contracts）。
  *
  * 依赖方向：内核只依赖 ModelGateway 接口，本插件提供实现并以 'model'
@@ -63,6 +88,9 @@ export class ModelService extends Service implements ModelGateway {
       // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
       temperature: options.temperature ?? 0,
       stopWhen: stepCountIs(1), // 严格单步，绝不越权包含循环
+    }).catch((err: any) => {
+      enrichModelError(err);
+      throw err;
     });
 
     this.recordUsage(response.usage?.inputTokens ?? 0, response.usage?.outputTokens ?? 0);
@@ -191,6 +219,7 @@ export class ModelService extends Service implements ModelGateway {
       // abort 时流以 abort part 正常收尾而不抛错 —— 显式转抛，保持与
       // generateText 相同的中止语义（orchestrator catch → 任务已被主动终止）
       if (options.abortSignal?.aborted) throw new Error('Aborted');
+      enrichModelError(err);
       throw err;
     }
     if (options.abortSignal?.aborted) throw new Error('Aborted');

@@ -24,6 +24,7 @@ import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
 import { isRunnerTaskActive, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { formatTokenCount } from '../../lib/mission-efficiency';
+import { ConfirmModal } from '../ConfirmModal';
 
 interface MobileActivityViewProps {
   missions: Mission[];
@@ -115,9 +116,9 @@ export function MobileActivityView({
     };
   }, []);
 
-  // 终止本地任务(执行中止损):确认后 POST cancel,乐观置 cancelRequested 等轮询回填终态
+  // 终止本地任务(执行中止损):确认弹窗确认后 POST cancel,乐观置 cancelRequested 等轮询回填终态
+  const [cancelConfirmId, setCancelConfirmId] = useState<string | null>(null);
   const cancelRunnerTask = async (taskId: string) => {
-    if (!window.confirm('终止该任务?本地执行会被停止(工作分支保留),不可恢复。')) return;
     setRunnerTasks((prev) => prev.map((t) => (t.taskId === taskId ? { ...t, cancelRequested: true } : t)));
     try {
       const res = await fetch('/api/runner/tasks/cancel', {
@@ -309,14 +310,15 @@ export function MobileActivityView({
                         会话
                       </button>
                     )}
-                    {t.cancelRequested ? (
+                    {/* 终止中徽标仅在飞状态有意义(与桌面端同门控:终态任务不悬挂「终止中…」) */}
+                    {t.cancelRequested && (t.state === 'dispatched' || t.state === 'running') ? (
                       <span className="text-[10px] text-amber-600 shrink-0 flex items-center gap-1">
                         <Loader2 className="h-3 w-3 animate-spin" /> 终止中…
                       </span>
                     ) : cancellable ? (
                       <button
                         type="button"
-                        onClick={() => cancelRunnerTask(t.taskId)}
+                        onClick={() => setCancelConfirmId(t.taskId)}
                         className="text-[10px] text-zinc-500 px-1.5 py-0.5 rounded border border-zinc-200 active:bg-rose-50 active:border-rose-200 active:text-rose-600 shrink-0"
                       >
                         终止
@@ -536,6 +538,21 @@ export function MobileActivityView({
           <p className="text-xs text-zinc-300 mt-1">任务执行进度和审批请求会出现在这里</p>
         </div>
       )}
+
+      {/* 终止本地任务确认(替代原生 confirm) */}
+      <ConfirmModal
+        open={cancelConfirmId !== null}
+        danger
+        title="终止该任务?"
+        message="本地执行会被停止(工作分支保留),此操作不可恢复。"
+        confirmText="终止任务"
+        onConfirm={() => {
+          const id = cancelConfirmId;
+          setCancelConfirmId(null);
+          if (id) void cancelRunnerTask(id);
+        }}
+        onClose={() => setCancelConfirmId(null)}
+      />
     </div>
   );
 }

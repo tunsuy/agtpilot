@@ -26,6 +26,7 @@ import {
   type RunnerTaskEventView,
   type RunnerTaskSummary,
 } from '../lib/runner-dispatch';
+import { ConfirmModal } from './ConfirmModal';
 
 /**
  * 本地 Runner 设备页(docs/design/local-runner-bridge.md §4,M1)
@@ -144,7 +145,9 @@ function DeviceTaskItem({
             PR <ExternalLink className="h-3 w-3" />
           </a>
         )}
-        {task.cancelRequested ? (
+        {/* 终止中徽标仅在飞状态有意义:runner 上报离开 dispatched/running 后云端即清;
+            这里再按状态门控一次,云端升级前已持久化的残留标志也不会把终态任务卡在「终止中…」 */}
+        {task.cancelRequested && (task.state === 'dispatched' || task.state === 'running') ? (
           <span
             className="flex items-center gap-1 text-[10px] text-amber-600 flex-shrink-0"
             title="终止指令已下发,等 runner 确认(未升级的 runner 会在任务跑完/超时后落终态)"
@@ -266,6 +269,10 @@ export function DevicesView({
   const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<RunnerTaskEventView[] | null>(null);
+  // 确认弹窗(替代原生 window.confirm):待执行的危险操作先挂起,确认后才发请求
+  const [pendingConfirm, setPendingConfirm] = useState<
+    { kind: 'cancel-task'; taskId: string } | { kind: 'revoke-device'; deviceId: string; hostname: string } | null
+  >(null);
   const tasksTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -369,7 +376,6 @@ export function DevicesView({
   };
 
   const handleRevoke = async (deviceId: string, hostname: string) => {
-    if (!window.confirm(`吊销设备「${hostname}」?该设备将立即失去连接,需重新配对。`)) return;
     try {
       const res = await fetch('/api/runner/devices', {
         method: 'DELETE',
@@ -385,9 +391,9 @@ export function DevicesView({
   };
 
   // 终止任务(执行中止损):排队中直接落 cancelled;在飞的由 runner 收到指令后
-  // 杀本地进程并上报确认 —— 期间行内显示「终止中…」
+  // 杀本地进程并上报确认 —— 期间行内显示「终止中…」(仅在飞状态;离开在飞即清,
+  // 旧 runner 不识别 cancel 时任务跑到自然终态,徽标跟着终态走不悬挂)
   const cancelTask = useCallback(async (taskId: string) => {
-    if (!window.confirm('终止该任务?\n本地执行会被停止(工作分支保留),此操作不可恢复。')) return;
     try {
       const res = await fetch('/api/runner/tasks/cancel', {
         method: 'POST',
@@ -540,7 +546,7 @@ export function DevicesView({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleRevoke(d.deviceId, d.hostname);
+                          setPendingConfirm({ kind: 'revoke-device', deviceId: d.deviceId, hostname: d.hostname });
                         }}
                         className="p-2 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition flex-shrink-0"
                         title="吊销设备"
@@ -564,7 +570,7 @@ export function DevicesView({
                             timeline={timeline}
                             expanded={expandedTaskId === t.taskId}
                             onToggle={() => setExpandedTaskId(expandedTaskId === t.taskId ? null : t.taskId)}
-                            onCancel={cancelTask}
+                            onCancel={(taskId) => setPendingConfirm({ kind: 'cancel-task', taskId })}
                             missionTitle={t.missionId ? missionTitleById[t.missionId] : undefined}
                             onOpenMission={onOpenMission}
                           />
@@ -584,6 +590,26 @@ export function DevicesView({
           完成后审批卡出现在驾驶舱,push/PR 批准后才真正出门。
         </p>
       </div>
+
+      {/* 危险操作确认弹窗(终止任务 / 吊销设备) */}
+      <ConfirmModal
+        open={pendingConfirm !== null}
+        danger
+        title={pendingConfirm?.kind === 'revoke-device' ? '吊销该设备?' : '终止该任务?'}
+        message={
+          pendingConfirm?.kind === 'revoke-device'
+            ? `设备「${pendingConfirm.hostname}」将立即失去连接,需重新配对。`
+            : '本地执行会被停止(工作分支保留),此操作不可恢复。'
+        }
+        confirmText={pendingConfirm?.kind === 'revoke-device' ? '吊销' : '终止任务'}
+        onConfirm={() => {
+          const p = pendingConfirm;
+          setPendingConfirm(null);
+          if (p?.kind === 'cancel-task') void cancelTask(p.taskId);
+          else if (p?.kind === 'revoke-device') void handleRevoke(p.deviceId, p.hostname);
+        }}
+        onClose={() => setPendingConfirm(null)}
+      />
     </div>
   );
 }

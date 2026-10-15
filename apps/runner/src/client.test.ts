@@ -142,3 +142,12 @@ describe('RunnerClient.poll · ghLogin 心跳编码(公开登录名,凭据零上
     expect('ghLogin' in m).toBe(false);
   });
 });
+
+describe('RUNNER_VERSION 自读守卫', () => {
+  it('与 package.json 的 version 恒同步(曾硬编码 0.0.3 落后三个小版本,心跳版本治理失真)', async () => {
+    // 源码形态(src/client.ts → ../package.json)与发布形态(dist/bin.mjs → ../package.json)
+    // 相对位置一致,同一读取逻辑;此处守卫源码形态
+    const pkg = (await import('../package.json', { with: { type: 'json' } })).default;
+    expect(RUNNER_VERSION).toBe(pkg.version);
+  });
+});

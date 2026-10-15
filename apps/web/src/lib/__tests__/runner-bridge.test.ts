@@ -441,6 +441,41 @@ describe('用户终止任务(执行中止损,两阶段)', () => {
     expect(getDeviceActions(USER_A, r.deviceId)).toEqual([]);
   });
 
+  it('终止中任务跑到自然终态(awaiting_approval/failed)→ 标志一并清,不悬挂「终止中…」(旧 runner 不识别 cancel 的兜底)', () => {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_c6' }, T0);
+    claimNextTask(USER_A, r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_r5', taskId: 'rtask_c6', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+    cancelRunnerTask(USER_A, 'rtask_c6', T0 + 30); // 旧 runner 不识别 cancel 动作
+
+    // 任务自己跑完进审批卡:dispatched/running 之外的迁移即清标志
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_r6', taskId: 'rtask_c6', deviceId: r.deviceId, at: T0 + 50, type: 'state', payload: { state: 'awaiting_approval' } },
+    ], T0 + 50);
+    const t = getRunnerTask(USER_A, 'rtask_c6', T0 + 50)!;
+    expect(t.state).toBe('awaiting_approval');
+    expect(t.cancelRequested).toBeUndefined();
+    expect(getDeviceActions(USER_A, r.deviceId)).toEqual([]); // 不再派生 cancel
+  });
+
+  it('终止中任务被懒过期清扫 → expired 时标志一并清', () => {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_c7' }, T0);
+    claimNextTask(USER_A, r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_r7', taskId: 'rtask_c7', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+    cancelRunnerTask(USER_A, 'rtask_c7', T0 + 30);
+
+    // 越过 expiresAt 读取(任意读取路径都会带清扫;TTL 7 天)
+    const t = getRunnerTask(USER_A, 'rtask_c7', T0 + 8 * 24 * 60 * 60 * 1000)!;
+    expect(t.state).toBe('expired');
+    expect(t.cancelRequested).toBeUndefined();
+    expect(getDeviceActions(USER_A, r.deviceId)).toEqual([]);
+  });
+
   it('不可终止:不存在 / 终态 / awaiting_approval(审批卡拒绝才是其终止路径)', () => {
     pairDevice(USER_A);
     expect(cancelRunnerTask(USER_A, 'rtask_nope', T0).error).toBe('not_found');

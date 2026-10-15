@@ -1,4 +1,5 @@
 import * as os from 'os';
+import * as fs from 'fs';
 import {
   RUNNER_PROTOCOL_VERSION,
   normalizeRunnerEvent,
@@ -8,8 +9,21 @@ import {
 import { redactEvent } from './redaction';
 import { getCachedGhLogin } from './gh';
 
-/** runner 自身版本(与 package.json 同步维护;心跳/配对上报,云端做版本治理 §9) */
-export const RUNNER_VERSION = '0.0.3';
+/**
+ * runner 自身版本(心跳/配对上报,云端做版本治理 §9)。
+ * 从包根 package.json 运行时读取 —— src 经 tsx 直跑与 dist/bin.mjs 发布形态
+ * 的相对位置一致(均为「包根/package.json」),不再手工同步版本号
+ * (曾硬编码 '0.0.3' 落后 package.json 三个小版本,心跳版本治理失真)。
+ */
+function readSelfVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
+    return typeof pkg?.version === 'string' ? pkg.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+export const RUNNER_VERSION = readSelfVersion();
 
 /** 401(密钥不符/已吊销)→ 调用方应自毁本地凭据并提示重新配对 */
 export class RunnerAuthError extends Error {}

@@ -338,6 +338,8 @@ export function enqueueTask(
     if (!isTerminalRunnerState(t.state) && t.expiresAt <= now && canTransitionRunnerTask(t.state, 'expired')) {
       t.state = 'expired';
       t.updatedAt = now;
+      // 过期也是"离开在飞状态":残留的终止请求一并清掉,UI 不再显示「终止中…」
+      t.cancelRequested = undefined;
       changed = true;
     }
   }
@@ -453,8 +455,10 @@ export function recordRunnerEvents(
       const from = task.state;
       task.state = to;
       task.updatedAt = now;
-      // 终止指令已被 runner 确认落终态:清请求标志,getDeviceActions 不再派生
-      if (to === 'cancelled' && task.cancelRequested) task.cancelRequested = undefined;
+      // 终止请求只在在飞状态有意义:任务一旦离开 dispatched/running(被 runner 确认落
+      // cancelled、跑到自然终态、或进审批卡),标志即清 —— 旧 runner 不识别 cancel 动作时
+      // 任务会跑到自然终态,不清则 UI 永远显示「终止中…」,getDeviceActions 也不再派生
+      if (task.cancelRequested && to !== 'dispatched' && to !== 'running') task.cancelRequested = undefined;
       result.stateChanges.push({ taskId: task.taskId, from, to });
     }
 

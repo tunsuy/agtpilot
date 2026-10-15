@@ -226,6 +226,26 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(argv[argv.indexOf('-p') + 1]).toContain('严禁 git push');
   }, 20_000);
 
+  it('续跑模式:opts.continuation → prompt 注入续跑指令(先看 git 记录再做);缺省不注入,红线不变', async () => {
+    const dir = tmpDir();
+    process.env.FAKE_CLAUDE_ARGS_FILE = path.join(dir, 'argv.json');
+    const adapter = new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() });
+
+    await adapter.run(pack, dir, undefined, { continuation: true, baseBranch: 'main' });
+    const argv: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
+    const prompt = argv[argv.indexOf('-p') + 1];
+    expect(prompt).toContain('【续跑模式】');
+    expect(prompt).toContain('git log origin/main..HEAD');
+    expect(prompt).toContain('已完成的工作不要重做');
+    // 续跑不放松任何围栏
+    expect(argv).not.toContain('--dangerously-skip-permissions');
+    expect(argv[argv.indexOf('--disallowedTools') + 1]).toBe(DISALLOWED_TOOLS);
+
+    await adapter.run(pack, dir);
+    const argv2: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
+    expect(argv2[argv2.indexOf('-p') + 1]).not.toContain('续跑模式');
+  }, 20_000);
+
   it('detect:--version 可执行 → installed + 版本;抛错 → installed=false', async () => {
     expect(await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() }).detect()).toEqual({
       installed: true, version: '1.2.3 (fake claude)',

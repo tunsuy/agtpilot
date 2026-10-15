@@ -27,7 +27,8 @@ export interface Phase1Result {
   error?: string;
   /**
    * 失败是否为**瞬时 API/网关/网络错误**(isRetryableClaudeFailure 判定)。
-   * true = 重跑大概率恢复:runner 侧现场干净时自动重试一次(task-run),
+   * true = 重跑大概率恢复:runner 侧自动重试一次(task-run)——现场干净从头重跑,
+   * 已有产出则带**续跑模式**接着做(git 记录 = 恢复点,已完成的不重做);
    * 云端把这类 failed 标成「可重试」而非干巴巴的终态(protocol RunnerTaskRecord.retryable)。
    * 仅在 claude 进程级失败(退出码带瞬时错误指纹)时为 true;
    * 超时 / max_turns / 验收失败 / 无产出 / git 校验失败一律 false(重跑无意义或必复现)。
@@ -45,12 +46,16 @@ export interface ExecutorAdapter {
   name: string;
   /** 本机探测:CLI 是否安装可用(派发前云端设备页可展示) */
   detect(): Promise<{ installed: boolean; version?: string }>;
-  /** opts.baseBranch = prepareRepo 实探基线(master 默认仓库的回落值),供 git 基线校验 */
+  /**
+   * opts.baseBranch = prepareRepo 实探基线(master 默认仓库的回落值),供 git 基线校验与 prompt 展示;
+   * opts.continuation = 续跑模式(工作分支已有上次成果,renderTaskPrompt 注入续跑指令:
+   * 先看 git log/status/diff 认清现场,接着做,不重做已完成的)
+   */
   run(
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string }
+    opts?: { baseBranch?: string; continuation?: boolean }
   ): Promise<Phase1Result>;
 }
 
@@ -66,6 +71,9 @@ const ALLOWED_BASE = [
   'Bash(git commit:*)',
   'Bash(git checkout:*)',
   'Bash(git branch:*)',
+  // 续跑模式收尾整理 WIP commit 需要(git reset --soft 到基线后重新提交);
+  // 只影响 workspaceRoot 内的本地副本,对外围栏(push/gh/网络)不变
+  'Bash(git reset:*)',
 ];
 
 /** 固化的禁用清单:对外副作用与网络一律封死(发布走云端审批门) */
@@ -279,9 +287,12 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string }
+    opts?: { baseBranch?: string; continuation?: boolean }
   ): Promise<Phase1Result> {
-    const prompt = renderTaskPrompt(pack);
+    const prompt = renderTaskPrompt(pack, {
+      continuation: opts?.continuation === true,
+      ...(opts?.baseBranch ? { baseBranch: opts.baseBranch } : {}),
+    });
     const args = buildClaudeArgs(pack, repoDir, prompt);
 
     // ---- 1. headless 跑 agent(流式解析 stream-json → 进度事件) ----

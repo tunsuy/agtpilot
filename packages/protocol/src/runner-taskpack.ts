@@ -13,7 +13,20 @@ import type { RunnerTaskPack } from './runner';
 /** PR 终稿回传约定:agent 完成后在最终回复里输出该围栏 JSON 块,runner 解析回流 */
 export const PR_FINAL_FENCE = 'pr-final';
 
-export function renderTaskPrompt(pack: RunnerTaskPack): string {
+/** renderTaskPrompt 可选项(additive:缺省行为与旧版逐字节一致) */
+export interface RenderTaskPromptOptions {
+  /**
+   * 续跑模式:工作分支上已有上次尝试的成果(WIP commit 或未提交改动)。
+   * true → prompt 注入【续跑模式】块:agent 先看 git log/status/diff 认清现场,
+   * 接着上次断点继续,已完成的不重做(git 记录 = 断点续作的恢复点)。
+   */
+  continuation?: boolean;
+  /** 实探生效的基线分支名(prepareRepo 回流;缺省 pack.baseBranch ?? 'main') */
+  baseBranch?: string;
+}
+
+export function renderTaskPrompt(pack: RunnerTaskPack, opts?: RenderTaskPromptOptions): string {
+  const base = opts?.baseBranch || pack.baseBranch || 'main';
   const lines: string[] = [];
   lines.push(`【开源贡献任务 · 本地执行】`);
   lines.push('');
@@ -23,7 +36,15 @@ export function renderTaskPrompt(pack: RunnerTaskPack): string {
   lines.push('- 遵循仓库 CONTRIBUTING 的代码风格与提交规范;');
   lines.push('- 一切产出留在本地:commit 到指定分支即止,发布由用户在云端审批后另行执行。');
   lines.push('');
-  lines.push(`仓库:${pack.repo}(已检出分支 ${pack.workBranch},基于 ${pack.baseBranch ?? 'main'})`);
+  lines.push(`仓库:${pack.repo}(已检出分支 ${pack.workBranch},基于 ${base})`);
+  if (opts?.continuation) {
+    lines.push('');
+    lines.push('【续跑模式】本次是中断后的续跑,工作分支上可能已有上次尝试的成果(WIP commit 或未提交改动):');
+    lines.push(`- 动手前先看清现场:git log origin/${base}..HEAD 看已有哪些提交,git status / git diff 看未提交的改动;`);
+    lines.push('- 在上次的基础上继续,已完成的工作不要重做、不要回退既有改动(确认是错的除外);');
+    lines.push('- 未提交的半成品与你的计划冲突时,可以清理后重新组织,但保留已完成工作的意图;');
+    lines.push('- 收尾要求同工作步骤:整理成符合仓库规范的干净 commit。');
+  }
   if (pack.viaFork) {
     lines.push(`说明:本地克隆是你对 ${pack.repo} 的 fork 副本(origin 指向 fork);改动最终以 PR 从 fork 提交给上游,与你的工作方式无关——照常改码、commit 即可。`);
   }
@@ -46,14 +67,14 @@ export function renderTaskPrompt(pack: RunnerTaskPack): string {
   lines.push('');
   lines.push('【工作步骤】');
   lines.push('1. 读 Issue 上下文与相关代码,先弄清再动手;');
-  lines.push('2. 实现修复/改进,保持改动最小;');
+  lines.push('2. 实现修复/改进,保持改动最小;**边做边小步 commit 到工作分支**(WIP 信息即可,如 `wip: 完成复现与定位`)——git 记录是中断后续跑的恢复点,每完成一个阶段就落一次;');
   if (pack.acceptance.testCommand) {
     lines.push(`3. 运行验收命令并保证通过:${pack.acceptance.testCommand}`);
   } else {
     lines.push('3. 运行仓库相关测试并保证通过(按 CONTRIBUTING 指引)');
   }
   if (pack.acceptance.note) lines.push(`   验收说明:${pack.acceptance.note}`);
-  lines.push('4. git add 相关文件并 commit(信息遵循仓库规范,关联 Issue);不要 push;');
+  lines.push('4. 收尾前把 WIP commit 整理成符合仓库规范的干净 commit(git reset --soft 到基线后重新提交即可),信息关联 Issue;不要 push;');
   lines.push('5. 在最终回复末尾输出 PR 终稿,格式严格如下(围栏名不可改):');
   lines.push('');
   lines.push('```' + PR_FINAL_FENCE);

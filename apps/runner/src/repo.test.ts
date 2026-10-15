@@ -235,7 +235,125 @@ describe('prepareRepo · 经 fork 派发(pack.viaFork,派发弹窗显式勾选)'
   });
 });
 
-describe('isWorktreePristine(自动重试前置闸:无改动 + 零领先 commit)', () => {
+describe('prepareRepo · 现场保留(续跑模式:分支已有上次成果 → 不重置)', () => {
+  /** 假 exec:按场景路由 show-ref/rev-list/symbolic-ref/status/checkout(fetch 恒成功) */
+  function priorExec(o: {
+    branchExists?: boolean; // show-ref 工作分支(缺省存在)
+    ahead?: Record<string, string>; // rev-list range → 领先数(未列出的 range 一律抛)
+    head?: string; // symbolic-ref --short HEAD(当前检出分支)
+    status?: string; // status --porcelain(缺省干净)
+    symref?: string; // origin/HEAD 远程默认分支(缺省探测失败)
+  }) {
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    const exec: ExecAsync = async (cmd, args) => {
+      calls.push({ cmd, args: [...args] });
+      const a = args.join(' ');
+      if (a.includes('fetch')) return { stdout: '', stderr: '' };
+      if (a.includes('clone')) return { stdout: '', stderr: '' };
+      if (a.includes('show-ref')) {
+        if (o.branchExists === false) throw new Error('missing ref');
+        return { stdout: '', stderr: '' };
+      }
+      if (a.includes('rev-list --count')) {
+        const range = a.slice(a.indexOf('rev-list --count') + 'rev-list --count'.length + 1);
+        const v = o.ahead?.[range];
+        if (v === undefined) throw new Error(`bad revision: ${range}`);
+        return { stdout: `${v}\n`, stderr: '' };
+      }
+      if (a.includes('symbolic-ref --short HEAD')) return { stdout: `${o.head ?? ''}\n`, stderr: '' };
+      if (a.includes('symbolic-ref --short refs/remotes/origin/HEAD')) {
+        if (!o.symref) throw new Error('not a symbolic ref');
+        return { stdout: `origin/${o.symref}\n`, stderr: '' };
+      }
+      if (a.includes('status --porcelain')) return { stdout: o.status ?? '', stderr: '' };
+      if (a.includes('checkout')) return { stdout: '', stderr: '' };
+      throw new Error(`unexpected: ${a}`);
+    };
+    return { calls, exec };
+  }
+
+  function existingRepo(root: string): string {
+    const repoDir = path.join(root, 'vllm-project', 'vllm');
+    fs.mkdirSync(path.join(repoDir, '.git'), { recursive: true });
+    return repoDir;
+  }
+
+  it('工作分支有领先 commit(ahead>0)→ mode=resumed,普通 checkout 保现场,绝无 checkout -B 重置', async () => {
+    const root = tmpRoot();
+    const repoDir = existingRepo(root);
+    const { calls, exec } = priorExec({ ahead: { 'origin/main..contrib/fix-1': '3' } });
+    const r = await prepareRepo(pack, root, exec);
+    expect(r.mode).toBe('resumed');
+    expect(r.baseBranch).toBe('main');
+    expect(calls.at(-1)!.args).toEqual(['-C', repoDir, 'checkout', 'contrib/fix-1']);
+    expect(calls.some((c) => c.args.includes('-B'))).toBe(false);
+  });
+
+  it('分支存在但零领先 + 干净 → 无现场,走原 checkout -B 重置路径(与旧版一致)', async () => {
+    const root = tmpRoot();
+    existingRepo(root);
+    const { calls, exec } = priorExec({ ahead: { 'origin/main..contrib/fix-1': '0' }, head: 'main', status: '' });
+    const r = await prepareRepo(pack, root, exec);
+    expect(r.mode).toBe('updated');
+    expect(calls.at(-1)!.args).toEqual([
+      '-C', expect.stringContaining('vllm'), 'checkout', '-B', 'contrib/fix-1', 'origin/main',
+    ]);
+  });
+
+  it('未提交改动 + HEAD 停在工作分支 → 保留现场(刚改完没来得及 commit 就断了的场景)', async () => {
+    const root = tmpRoot();
+    existingRepo(root);
+    const { exec } = priorExec({
+      ahead: { 'origin/main..contrib/fix-1': '0' },
+      head: 'contrib/fix-1',
+      status: ' M sampling_params.py\n',
+    });
+    const r = await prepareRepo(pack, root, exec);
+    expect(r.mode).toBe('resumed');
+    expect(r.baseBranch).toBe('main');
+  });
+
+  it('脏文件在别的分支(HEAD ≠ 工作分支)→ 不算本任务现场,走重置路径', async () => {
+    const root = tmpRoot();
+    existingRepo(root);
+    const { exec } = priorExec({
+      ahead: { 'origin/main..contrib/fix-1': '0' },
+      head: 'some-other-branch',
+      status: ' M x.py\n',
+    });
+    expect((await prepareRepo(pack, root, exec)).mode).toBe('updated');
+  });
+
+  it('工作分支不存在 → 直接走原重置路径(探测零干扰)', async () => {
+    const root = tmpRoot();
+    existingRepo(root);
+    const { exec } = priorExec({ branchExists: false });
+    expect((await prepareRepo(pack, root, exec)).mode).toBe('updated');
+  });
+
+  it('master 默认仓库:main 两档 range 读不出 → 探远程默认分支再算领先,baseBranch 回流 master', async () => {
+    const root = tmpRoot();
+    existingRepo(root);
+    const { exec } = priorExec({
+      ahead: { 'origin/master..contrib/fix-1': '2' }, // main 的两档 range 都抛
+      symref: 'master',
+    });
+    const r = await prepareRepo(pack, root, exec);
+    expect(r.mode).toBe('resumed');
+    expect(r.baseBranch).toBe('master');
+  });
+
+  it('全新克隆不可能有现场 → 零额外探测(不触发 show-ref/rev-list)', async () => {
+    const root = tmpRoot();
+    const { calls, exec } = priorExec({ ahead: { 'origin/main..contrib/fix-1': '9' } });
+    const r = await prepareRepo(pack, root, exec);
+    expect(r.mode).toBe('cloned');
+    expect(calls.some((c) => c.args.includes('show-ref'))).toBe(false);
+    expect(calls.some((c) => c.args.includes('rev-list'))).toBe(false);
+  });
+});
+
+describe('isWorktreePristine(自动重试模式选择器:干净从头跑 / 有产出续跑)', () => {
   function pristineExec(over?: {
     status?: string;
     ahead?: string;
@@ -258,7 +376,7 @@ describe('isWorktreePristine(自动重试前置闸:无改动 + 零领先 commit)
     };
   }
 
-  it('干净 + 零领先 → true(可安全重跑)', async () => {
+  it('干净 + 零领先 → true(什么都没干就挂了,重试从头重跑)', async () => {
     expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec())).toBe(true);
   });
 
@@ -266,7 +384,7 @@ describe('isWorktreePristine(自动重试前置闸:无改动 + 零领先 commit)
     expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec({ status: ' M file.py\n' }))).toBe(false);
   });
 
-  it('有领先 commit(ahead>0)→ false(agent 已产出,不在半成品上叠加)', async () => {
+  it('有领先 commit(ahead>0)→ false(agent 已产出,重试走续跑模式接着做)', async () => {
     expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec({ ahead: '3' }))).toBe(false);
   });
 

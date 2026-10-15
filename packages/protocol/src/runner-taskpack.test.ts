@@ -60,6 +60,39 @@ describe('renderTaskPrompt(Phase 1 执行指令)', () => {
   });
 });
 
+describe('renderTaskPrompt · WIP 留痕与续跑模式(中断续作,git 记录 = 恢复点)', () => {
+  it('工作步骤要求边做边小步 commit 留痕,收尾前整理成干净 commit', () => {
+    const p = renderTaskPrompt(basePack);
+    expect(p).toContain('小步 commit');
+    expect(p).toContain('wip: 完成复现与定位');
+    expect(p).toContain('续跑的恢复点');
+    expect(p).toContain('git reset --soft'); // 整理手段在白名单内(只影响本地副本)
+    expect(p).toContain('不要 push'); // 整理不改变发布红线
+  });
+
+  it('continuation:true → 注入【续跑模式】块:先看现场(git log/status/diff),接着断点做,不重做', () => {
+    const p = renderTaskPrompt(basePack, { continuation: true });
+    expect(p).toContain('【续跑模式】');
+    expect(p).toContain('上次尝试的成果');
+    expect(p).toContain('git log origin/main..HEAD');
+    expect(p).toContain('git status / git diff');
+    expect(p).toContain('已完成的工作不要重做');
+  });
+
+  it('缺省 / 空 opts / continuation:false → 无续跑块(向后兼容,旧调用方零变化)', () => {
+    expect(renderTaskPrompt(basePack)).not.toContain('续跑模式');
+    expect(renderTaskPrompt(basePack, {})).not.toContain('续跑模式');
+    expect(renderTaskPrompt(basePack, { continuation: false })).not.toContain('续跑模式');
+  });
+
+  it('opts.baseBranch = 实探基线(master 默认仓库)→ 仓库行与续跑块都用实探值', () => {
+    const p = renderTaskPrompt(basePack, { continuation: true, baseBranch: 'master' });
+    expect(p).toContain('基于 master');
+    expect(p).toContain('git log origin/master..HEAD');
+    expect(p).not.toContain('基于 main');
+  });
+});
+
 describe('renderHandoffPack(T0 离线交接包)', () => {
   const pack = renderHandoffPack(basePack);
 

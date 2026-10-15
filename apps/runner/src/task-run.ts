@@ -13,10 +13,13 @@ import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } 
  * - 进度事件按 flushThreshold 批量上行(减少请求数;断网离线缓冲由 bin 侧
  *   ReliableEventPoster 包装承担,task-run 只管调 postEvents,失败记日志不阻塞);
  * - 云端 pack 再过一次 normalizeTaskPack(runner 侧防御性校验,与云端清洗同源);
- * - 瞬时 API/网关错误自动重试一次(加固 ①,§6.1):executor 把 claude 进程级失败
- *   标 retryable(瞬时错误指纹);本层在**现场干净**(无改动、无领先 commit)时原地
- *   重跑一次,全程留审计 + 上行进度事件;超时/max_turns/验收失败/无产出不重试。
- *   现场非干净则不自动重跑(避免在半成品上叠加),但 retryable 仍随失败上行,云端标「可重试」。
+ * - 瞬时 API/网关错误自动重试一次(加固 ① + 续跑模式,§6.1):executor 把 claude
+ *   进程级失败标 retryable(瞬时错误指纹);本层原地重跑一次,现场检查只决定重试
+ *   姿势 —— 干净(什么都没干就挂了)从头重跑;已有产出(WIP commit/未提交改动)
+ *   带【续跑模式】指令重跑,agent 先看 git 记录认清现场再接着做(git 记录 =
+ *   中断后续作的恢复点,负责人方案)。超时/max_turns/验收失败/无产出不重试;
+ *   retryable 仍随最终失败上行,云端标「可重试」。人工重派同样保留分支现场续跑
+ *   (prepareRepo mode='resumed' → 首跑即注入续跑指令)。
  */
 
 export interface TaskRunDeps {
@@ -35,7 +38,8 @@ export interface TaskRunDeps {
   flushThreshold?: number;
   /**
    * 自动重试前的现场检查(加固 ①):默认 isWorktreePristine(真 git)。
-   * 返回 true = 干净可安全重跑;测试注入固定值。
+   * 不再是重试闸,而是重试模式选择器:true = 干净从头重跑;
+   * false = 已有产出,带续跑模式指令重跑。测试注入固定值。
    */
   checkPristine?: (repoDir: string, baseBranch: string) => Promise<boolean>;
   /** 自动重试前的退避毫秒(默认 2000,给瞬时网关故障一点恢复窗口;测试注入 0) */
@@ -103,7 +107,8 @@ export async function runTask(
   let repo: PreparedRepo;
   try {
     repo = await prepare(pack, deps.workspaceRoot);
-    log(`仓库就绪(${repo.mode === 'cloned' ? '新克隆' : '增量更新'}):${repo.repoDir}`);
+    const modeLabel = repo.mode === 'cloned' ? '新克隆' : repo.mode === 'resumed' ? '保留上次现场' : '增量更新';
+    log(`仓库就绪(${modeLabel}):${repo.repoDir}`);
   } catch (e) {
     return fail(`仓库准备失败:${(e as Error)?.message || e}`);
   }
@@ -121,30 +126,51 @@ export async function runTask(
     if (queue.length >= threshold) void flush();
   };
 
-  const runOnce = () =>
-    deps.adapter.run(pack, repo.repoDir, onProgress, { baseBranch: repo.baseBranch });
+  const runOnce = (continuation: boolean) =>
+    deps.adapter.run(pack, repo.repoDir, onProgress, {
+      baseBranch: repo.baseBranch,
+      ...(continuation ? { continuation: true } : {}),
+    });
   const checkPristine =
     deps.checkPristine ?? ((dir: string, base: string) => isWorktreePristine(dir, base, defaultExecAsync));
   const retryDelayMs = deps.retryDelayMs ?? 2000;
 
-  let result = await runOnce();
+  // 续跑模式入口一:人工重派/重领时 prepareRepo 发现工作分支已有上次成果
+  // (mode='resumed')→ 首跑即注入续跑指令,agent 看 git 记录接着做,不从头再来。
+  const resumed = repo.mode === 'resumed';
+  if (resumed) {
+    log(`任务 ${taskId} · 工作分支 ${pack.workBranch} 已有上次尝试的成果 → 续跑模式(git 记录为恢复点)`);
+    audit({ kind: 'task_continuation', taskId, workBranch: pack.workBranch });
+    push('progress', { kind: 'system', summary: '工作分支已有上次尝试的成果 · 续跑模式(git 记录为恢复点)' });
+    await flush();
+  }
 
-  // 加固 ①:claude 因瞬时 API/网关错误退出(executor 标 retryable)且**现场干净**
-  // (无未提交改动、相对基线零领先 commit)时,原地自动重试一次。现场非干净则不重跑
-  // (避免在半成品上叠加改动),但 retryable 仍随最终失败上行,云端标「可重试」交人工重派。
+  let result = await runOnce(resumed);
+
+  // 加固 ①(续跑模式升级):claude 因瞬时 API/网关错误退出(executor 标 retryable)
+  // → 原地自动重试一次。现场检查不再是重试闸,只选重试姿势:干净(什么都没干
+  // 就挂了)从头重跑;已有产出(WIP commit/未提交改动)带续跑指令重跑 ——
+  // agent 先看 git log/status/diff 认清现场,接着上次断点做,已完成的不重做。
   if (!result.ok && result.retryable) {
     const pristine = await checkPristine(repo.repoDir, repo.baseBranch);
-    if (pristine) {
-      log(`任务 ${taskId} 瞬时 API/网关错误 · 现场干净,自动重试一次:${result.error}`);
-      audit({ kind: 'task_retry', taskId, attempt: 1, reason: (result.error || '').slice(0, 500) });
-      push('progress', { kind: 'system', summary: '瞬时 API/网关错误 · 现场干净,自动重试一次' });
-      await flush();
-      if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
-      result = await runOnce();
-    } else {
-      log(`任务 ${taskId} 瞬时 API 错误但现场非干净(有改动/领先 commit),跳过自动重试(留人工重派)`);
-      audit({ kind: 'task_retry_skipped', taskId, reason: 'worktree_not_pristine' });
-    }
+    const continuation = !pristine;
+    log(
+      `任务 ${taskId} 瞬时 API/网关错误 · ${continuation ? '保留现场续跑重试一次' : '现场干净,从头自动重试一次'}:${result.error}`
+    );
+    audit({
+      kind: 'task_retry',
+      taskId,
+      attempt: 1,
+      mode: continuation ? 'continue' : 'fresh',
+      reason: (result.error || '').slice(0, 500),
+    });
+    push('progress', {
+      kind: 'system',
+      summary: continuation ? '瞬时 API/网关错误 · 保留已有产出,续跑模式自动重试一次' : '瞬时 API/网关错误 · 现场干净,自动重试一次',
+    });
+    await flush();
+    if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
+    result = await runOnce(continuation);
   }
 
   if (result.ok) {

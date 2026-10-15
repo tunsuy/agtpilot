@@ -221,7 +221,7 @@ export function buildTaskPackFromOpportunity(
     repo,
     issueUrl,
     workBranch,
-    constraints: ['只修这个 Issue,改动最小化', '不动无关文件,不顺手重构', '遵循仓库 CONTRIBUTING 的代码风格与提交规范'],
+    constraints: ['只修这个 Issue,改动最小化', '不动无关文件,不顺手重构', '遵循仓库 CONTRIBUTING 的代码风格与提交规范', '边做边小步 commit 留痕(WIP 提交即可,收尾前整理),中断后续跑以 git 记录为恢复点'],
     acceptance: { note: '按 CONTRIBUTING 指引运行仓库相关测试,保证通过' },
     issueContext,
     claimDraft: `我想认领这个 Issue${issueNo ? `(#${issueNo})` : ''},预计近日内提交 PR 修复。`,

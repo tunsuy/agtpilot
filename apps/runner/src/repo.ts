@@ -7,7 +7,10 @@ import { queryGhLogin } from './gh';
 
 /**
  * 仓库准备(§6.1 步骤 1,runner 直接执行,不消耗 agent 轮次):
- * clone 到 <workspaceRoot>/<owner>/<repo>,已存在则 fetch + 从 baseBranch 切工作分支。
+ * clone 到 <workspaceRoot>/<owner>/<repo>,已存在则 fetch + 从 baseBranch 切工作分支;
+ * 工作分支上若还有上次尝试的成果(领先 commit / 未提交改动)则**保留现场**
+ * (mode='resumed',不重置分支),由 agent 看 git 记录接着做 —— git 记录 =
+ * 中断后续作的恢复点(负责人方案,替代「重派 = 从头再来」)。
  *
  * 经 fork 派发(pack.viaFork,派发弹窗显式勾选):先 `gh repo fork`(幂等,已存在
  * 等同成功)确保本机 gh 账号名下有上游 fork,再克隆 **fork 副本**到
@@ -49,7 +52,12 @@ export function repoDirFor(root: string, repo: string): string {
 
 export interface PreparedRepo {
   repoDir: string;
-  mode: 'cloned' | 'updated';
+  /**
+   * cloned = 新克隆;updated = 增量更新(fetch 后从基线重切工作分支);
+   * resumed = **保留现场续跑** —— 工作分支上已有上次尝试的成果(领先 commit 或
+   * 未提交改动),不重置分支,由 agent 看 git 记录接着做(任务提示注入续跑模式)。
+   */
+  mode: 'cloned' | 'updated' | 'resumed';
   /** 经 fork 派发时 = 实际克隆的 fork 全名(ghLogin/repo);直连派发缺省 */
   forkRepo?: string;
   /**
@@ -102,14 +110,16 @@ async function remoteDefaultBranch(repoDir: string, exec: ExecAsync): Promise<st
 }
 
 /**
- * 现场是否「干净」到可以安全重跑(加固 ①「runner 自动重试」的前置闸,§6.1):
+ * 现场检查(加固 ①「runner 自动重试」的模式选择器,§6.1):
  * 无未提交改动(git status --porcelain 空)**且** 相对基线零领先 commit。
  *
- * claude 因瞬时 API 错误退出时,若 agent 已经改了文件/提交了 commit,重跑会在
- * 半成品现场上叠加,产生重复/冲突改动 —— 那种情况宁可留给人工(云端标可重试,
- * 由负责人重新派发 = 全新克隆)。只有「什么都没干就挂了」才自动重试。
+ * 引入续跑模式(git 记录 = 恢复点)后,这不再是「重试闸」—— 瞬时 API 错误
+ * 一律自动重试一次,本值只决定重试姿势:true(什么都没干就挂了)→ 从头重跑;
+ * false(已有 WIP commit / 未提交改动)→ 带【续跑模式】指令重跑,agent 先
+ * git log/status/diff 看清现场,接着上次断点继续,已完成的不重做。
  *
- * 保守口径:任一 git 命令失败 / 两个 range 都读不出领先数 → 返回 false(不重试)。
+ * 保守口径:任一 git 命令失败 / 两个 range 都读不出领先数 → 返回 false
+ * (宁可让 agent 自己审视现场,也不盲当干净从头跑)。
  * base 用 prepareRepo 实探回流的基线(master 默认仓库的回落值),与 executor 同口径。
  */
 export async function isWorktreePristine(
@@ -132,6 +142,67 @@ export async function isWorktreePristine(
     }
   }
   return false; // 两个 range 都读不出 → 保守不重试
+}
+
+/**
+ * 现场探测(续跑模式的前置,负责人方案:agent 边做边小步 commit,git 记录 =
+ * 中断后续作的恢复点):工作分支是否已有上次尝试的成果。
+ *
+ * 只认**正面证据**,两路:
+ * ① 相对基线有领先 commit(WIP 或整理后的都算)——range 口径与 executor 校验、
+ *    isWorktreePristine 一致:先 origin/<base>..<branch>,再 <base>..<branch>,
+ *    双双读不出时探远程默认分支再试一轮(master 默认仓库口径);
+ * ② HEAD 仍停在工作分支且有未提交改动(刚改完还没来得及 commit 就断了)。
+ *
+ * 分支不存在 / 无正面证据 / 任一关键 git 命令失败 → null(回落 checkout -B
+ * 重置原路径,与旧版行为一致 —— 宁可重头也不误保来路不明的现场)。
+ * 返回值 = 生效基线分支名(供 PreparedRepo.baseBranch 回流)。
+ */
+async function findPriorWork(
+  repoDir: string,
+  workBranch: string,
+  base: string,
+  exec: ExecAsync
+): Promise<string | null> {
+  try {
+    await exec('git', ['-C', repoDir, 'show-ref', '--verify', '--quiet', `refs/heads/${workBranch}`]);
+  } catch {
+    return null; // 工作分支不存在 → 无现场
+  }
+
+  // ① 领先 commit(先按任务包基线,读不出再按远程默认分支)
+  const aheadOf = async (b: string): Promise<'positive' | 'zero' | 'unknown'> => {
+    for (const range of [`origin/${b}..${workBranch}`, `${b}..${workBranch}`]) {
+      try {
+        const n = Number((await exec('git', ['-C', repoDir, 'rev-list', '--count', range])).stdout.trim());
+        if (Number.isFinite(n)) return n > 0 ? 'positive' : 'zero';
+      } catch {
+        /* 换下一个 range */
+      }
+    }
+    return 'unknown';
+  };
+  let effectiveBase = base;
+  let ahead = await aheadOf(base);
+  if (ahead === 'unknown') {
+    const remoteDefault = await remoteDefaultBranch(repoDir, exec);
+    if (remoteDefault && remoteDefault !== base) {
+      effectiveBase = remoteDefault;
+      ahead = await aheadOf(remoteDefault);
+    }
+  }
+  if (ahead === 'positive') return effectiveBase;
+
+  // ② 未提交改动(仅当 HEAD 就停在工作分支,别的分支上的脏文件不算本任务现场)
+  try {
+    const head = (await exec('git', ['-C', repoDir, 'symbolic-ref', '--short', 'HEAD'])).stdout.trim();
+    if (head !== workBranch) return null;
+    const st = await exec('git', ['-C', repoDir, 'status', '--porcelain']);
+    if (st.stdout.trim() === '') return null; // 干净且零领先 → 无现场,走原重置路径
+    return effectiveBase;
+  } catch {
+    return null; // 状态读不出 → 保守回落原路径
+  }
 }
 
 export async function prepareRepo(
@@ -164,6 +235,18 @@ export async function prepareRepo(
     fs.mkdirSync(path.dirname(repoDir), { recursive: true });
     await exec('git', ['clone', '--', remoteUrl, repoDir]);
     mode = 'cloned';
+  }
+
+  // 现场保留(续跑模式):增量更新时工作分支已有上次成果(领先 commit 或未提交
+  // 改动)→ 不再 checkout -B 重置(那会把上次产出扔掉),保留现场直接续作,
+  // 由任务提示注入的【续跑模式】指令让 agent 先看 git 记录再接着做。
+  // 全新克隆不可能有现场,跳过探测(零额外 git 调用)。
+  if (mode === 'updated') {
+    const priorBase = await findPriorWork(repoDir, pack.workBranch, base, exec);
+    if (priorBase) {
+      await exec('git', ['-C', repoDir, 'checkout', pack.workBranch]);
+      return { repoDir, mode: 'resumed', baseBranch: priorBase, ...(forkRepo ? { forkRepo } : {}) };
+    }
   }
 
   // 从基线切工作分支:origin/<base> → 本地 <base> → 远程默认分支。

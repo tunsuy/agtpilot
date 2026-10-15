@@ -48,7 +48,9 @@ describe('buildTaskPackFromOpportunity(雷达机会 → 可入库任务包)', ()
     expect(pack!.issueUrl).toBe('https://github.com/vllm-project/vllm/issues/12345');
     expect(pack!.workBranch).toBe('contrib/oss-radar-12345');
     expect(pack!.constraints).toContain('只修这个 Issue,改动最小化');
-    expect(pack!.constraints.length).toBe(3);
+    // 续跑恢复点:WIP 留痕硬约束(中断后重试/重派看 git 记录接着做)
+    expect(pack!.constraints.some((c) => c.includes('边做边小步 commit 留痕') && c.includes('git 记录为恢复点'))).toBe(true);
+    expect(pack!.constraints.length).toBe(4);
     // Phase 1 禁网:雷达字段全部随包(issueContext)
     expect(pack!.issueContext).toContain('【雷达摘要】采样参数越界导致崩溃');
     expect(pack!.issueContext).toContain('【为什么适合】与你后端经验匹配');

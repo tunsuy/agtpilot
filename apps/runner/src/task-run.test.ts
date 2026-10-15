@@ -22,14 +22,21 @@ function fakeAdapter(opts: {
   results?: Phase1Result[];
   progress?: ParsedStreamEvent[];
   onRun?: () => void;
-}): ExecutorAdapter & { runCalled: number } {
+}): ExecutorAdapter & { runCalled: number; runOpts: Array<{ baseBranch?: string; continuation?: boolean }> } {
   const a = {
     name: 'claude-code',
     runCalled: 0,
+    runOpts: [] as Array<{ baseBranch?: string; continuation?: boolean }>,
     detect: async () => (opts.installed === false ? { installed: false } : { installed: true, version: 'fake' }),
-    run: async (_p: RunnerTaskPack, _dir: string, onProgress?: (e: ParsedStreamEvent) => void) => {
+    run: async (
+      _p: RunnerTaskPack,
+      _dir: string,
+      onProgress?: (e: ParsedStreamEvent) => void,
+      runOpts?: { baseBranch?: string; continuation?: boolean }
+    ) => {
       const idx = a.runCalled;
       a.runCalled++;
+      a.runOpts.push(runOpts ?? {});
       opts.onRun?.();
       for (const e of opts.progress ?? []) onProgress?.(e);
       if (opts.results && opts.results.length > 0) {
@@ -188,7 +195,7 @@ describe('runTask · 实探基线分支回流(master 默认仓库)', () => {
   });
 });
 
-describe('runTask · 瞬时 API 错误自动重试(加固 ①)', () => {
+describe('runTask · 瞬时 API 错误自动重试(加固 ① + 续跑模式)', () => {
   const transientFail: Phase1Result = {
     ok: false,
     error: 'claude 退出码 1 · [claude-code:unrecognized_model] {"query_source":"sdk"}',
@@ -202,11 +209,13 @@ describe('runTask · 瞬时 API 错误自动重试(加固 ①)', () => {
     prFinal: { title: 'T', body: 'B' },
   };
 
-  it('retryable 失败 + 现场干净 → 自动重跑一次,第二次成功 → awaiting_approval', async () => {
+  it('retryable 失败 + 现场干净 → 从头自动重跑一次(不带续跑指令),第二次成功 → awaiting_approval', async () => {
     const adapter = fakeAdapter({ results: [transientFail, success] });
     const { deps, flat } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0 });
     expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
     expect(adapter.runCalled).toBe(2);
+    // 什么都没干就挂了 → 重跑 = 从头,无续跑指令
+    expect(adapter.runOpts[1]?.continuation).toBeUndefined();
     // 重试进度事件上行(云端时间线可见)
     const summaries = flat().filter((e) => e.type === 'progress').map((e) => String((e.payload as any).summary));
     expect(summaries.some((s) => s.includes('自动重试'))).toBe(true);
@@ -215,7 +224,7 @@ describe('runTask · 瞬时 API 错误自动重试(加固 ①)', () => {
     expect(flat().at(-1)!.payload).toEqual({ state: 'awaiting_approval' });
   });
 
-  it('retryable 失败 + 现场干净 → 重试仍失败 → failed,error 带 retryable:true,run 调两次,审计留 task_retry', async () => {
+  it('retryable 失败 + 现场干净 → 重试仍失败 → failed,error 带 retryable:true,审计 task_retry mode=fresh', async () => {
     const adapter = fakeAdapter({ results: [transientFail, transientFail] });
     const audited: Record<string, unknown>[] = [];
     const { deps, flat } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0, audit: (e) => audited.push(e) });
@@ -223,18 +232,23 @@ describe('runTask · 瞬时 API 错误自动重试(加固 ①)', () => {
     expect(adapter.runCalled).toBe(2);
     const errEv = flat().find((e) => e.type === 'error');
     expect((errEv!.payload as any).retryable).toBe(true);
-    expect(audited.some((e) => e.kind === 'task_retry')).toBe(true);
+    expect(audited.some((e) => e.kind === 'task_retry' && e.mode === 'fresh')).toBe(true);
   });
 
-  it('retryable 失败 + 现场非干净(有改动)→ 不自动重跑,但仍标 retryable 上行(交人工重派)', async () => {
-    const adapter = fakeAdapter({ results: [transientFail] });
+  it('retryable 失败 + 现场非干净(已有产出)→ 不再跳过:续跑模式自动重试(第二次带 continuation),审计 mode=continue', async () => {
+    const adapter = fakeAdapter({ results: [transientFail, transientFail] });
     const audited: Record<string, unknown>[] = [];
     const { deps, flat } = makeDeps({ adapter, checkPristine: async () => false, retryDelayMs: 0, audit: (e) => audited.push(e) });
     expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('failed');
-    expect(adapter.runCalled).toBe(1); // 关键:未重试
+    expect(adapter.runCalled).toBe(2); // 关键:半路失败不再放弃,带着现场接着试
+    expect(adapter.runOpts[0]?.continuation).toBeUndefined(); // 首跑常规
+    expect(adapter.runOpts[1]?.continuation).toBe(true); // 重试注入续跑指令
+    expect(audited.some((e) => e.kind === 'task_retry' && e.mode === 'continue')).toBe(true);
+    expect(audited.some((e) => e.kind === 'task_retry_skipped')).toBe(false); // 该审计类型已退役
     const errEv = flat().find((e) => e.type === 'error');
-    expect((errEv!.payload as any).retryable).toBe(true);
-    expect(audited.some((e) => e.kind === 'task_retry_skipped')).toBe(true);
+    expect((errEv!.payload as any).retryable).toBe(true); // 最终失败仍标可重试上行
+    const summaries = flat().filter((e) => e.type === 'progress').map((e) => String((e.payload as any).summary));
+    expect(summaries.some((s) => s.includes('续跑模式自动重试'))).toBe(true);
   });
 
   it('非瞬时失败(验收未过,retryable:false)→ 不重试,error 不带 retryable', async () => {
@@ -251,5 +265,42 @@ describe('runTask · 瞬时 API 错误自动重试(加固 ①)', () => {
     const { deps } = makeDeps({ adapter: fakeAdapter({ result: success }), checkPristine: async () => { pristineCalled++; return true; }, retryDelayMs: 0 });
     expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
     expect(pristineCalled).toBe(0);
+  });
+});
+
+describe('runTask · 续跑模式(prepare mode=resumed:重派/重领保留上次现场)', () => {
+  const transientFail: Phase1Result = {
+    ok: false,
+    error: 'claude 退出码 1 · overloaded',
+    retryable: true,
+  };
+  const success: Phase1Result = { ok: true, commitHash: 'abc123', prFinal: { title: 'T', body: 'B' } };
+  const resumedPrepare = async () => ({ repoDir: '/ws/vllm-project/vllm', mode: 'resumed' as const, baseBranch: 'main' });
+
+  it('首跑即注入续跑指令 + task_continuation 审计 + 续跑进度事件上行', async () => {
+    const adapter = fakeAdapter({ result: success });
+    const audited: Record<string, unknown>[] = [];
+    const { deps, flat } = makeDeps({ adapter, prepare: resumedPrepare, audit: (e) => audited.push(e) });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(adapter.runCalled).toBe(1);
+    expect(adapter.runOpts[0]?.continuation).toBe(true);
+    expect(audited.some((e) => e.kind === 'task_continuation')).toBe(true);
+    const summaries = flat().filter((e) => e.type === 'progress').map((e) => String((e.payload as any).summary));
+    expect(summaries.some((s) => s.includes('续跑模式') && s.includes('git 记录为恢复点'))).toBe(true);
+  });
+
+  it('续跑首跑又遇瞬时错误 → 重试仍带 continuation(已有产出全程不丢)', async () => {
+    const adapter = fakeAdapter({ results: [transientFail, success] });
+    const { deps } = makeDeps({ adapter, prepare: resumedPrepare, checkPristine: async () => false, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(adapter.runCalled).toBe(2);
+    expect(adapter.runOpts.map((o) => o.continuation)).toEqual([true, true]);
+  });
+
+  it('cloned/updated 常规路径 → 首跑不带 continuation(向后兼容)', async () => {
+    const adapter = fakeAdapter({ result: success });
+    const { deps } = makeDeps({ adapter });
+    await runTask({ taskId: 'rtask_1', pack: validPack }, deps);
+    expect(adapter.runOpts[0]?.continuation).toBeUndefined();
   });
 });

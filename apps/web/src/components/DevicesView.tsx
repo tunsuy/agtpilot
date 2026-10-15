@@ -152,7 +152,7 @@ function DeviceTaskItem({
           )}
           {retryable && (
             <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
-              {RUNNER_RETRYABLE_HINT}(重新派发即会全新克隆重跑;发布仍走审批门)
+              {RUNNER_RETRYABLE_HINT}(重新派发会保留分支上的已有产出接着做;发布仍走审批门)
             </div>
           )}
           {timeline === null || timeline.length === 0 ? (

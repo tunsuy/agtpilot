@@ -19,7 +19,12 @@ export interface FrozenCommand {
 /** 审批结果下行动作(设备轮询领取;publish 携带固化命令集) */
 export interface RunnerDeviceAction {
   taskId: string;
-  approvalId: string;
+  /**
+   * 审批关联 id(审计留痕用,非功能键)。审批链路的动作必有;
+   * 用户「终止任务」下发的 cancel 无审批单,缺省 —— 旧 runner 的
+   * normalizeDeviceAction 会拒收该形状,忽略即可(无本地副作用)。
+   */
+  approvalId?: string;
   kind: 'publish' | 'cancel';
   /** owner/repo(runner 侧据此在 workspaceRoot 内解析仓库目录,再过路径围栏) */
   repo: string;
@@ -197,8 +202,9 @@ export function normalizeDeviceAction(input: unknown): RunnerDeviceAction | null
   if (!input || typeof input !== 'object') return null;
   const o = input as Record<string, unknown>;
   const taskId = typeof o.taskId === 'string' && o.taskId.length <= 128 ? o.taskId : null;
-  const approvalId = typeof o.approvalId === 'string' && o.approvalId.length <= 128 ? o.approvalId : null;
-  if (!taskId || !approvalId) return null;
+  if (!taskId) return null;
+  // approvalId 可选:审批链路动作必有;用户终止任务的 cancel 无审批单
+  const approvalId = typeof o.approvalId === 'string' && o.approvalId.length <= 128 ? o.approvalId : undefined;
   if (o.kind !== 'publish' && o.kind !== 'cancel') return null;
   const repo = typeof o.repo === 'string' && o.repo.length <= 201 ? o.repo : null;
   const workBranch = typeof o.workBranch === 'string' && o.workBranch.length <= 200 ? o.workBranch : null;
@@ -212,12 +218,14 @@ export function normalizeDeviceAction(input: unknown): RunnerDeviceAction | null
     forkRepo = o.forkRepo;
   }
   if (o.kind === 'cancel') {
-    return { taskId, approvalId, kind: 'cancel', repo, workBranch };
+    // cancel 允许无审批单(用户终止任务);publish 必带 approvalId(审批链路关联)
+    return { taskId, ...(approvalId ? { approvalId } : {}), kind: 'cancel', repo, workBranch };
   }
+  if (!approvalId) return null;
   if (!Array.isArray(o.commands) || o.commands.length === 0 || o.commands.length > 3) return null;
   const commands = o.commands.filter(
     (c): c is FrozenCommand => Boolean(c) && typeof c === 'object' && typeof (c as any).cmd === 'string' && Array.isArray((c as any).args)
   );
   if (commands.length !== o.commands.length) return null;
-  return { taskId, approvalId, kind: 'publish', repo, workBranch, ...(forkRepo ? { forkRepo } : {}), commands };
+  return { taskId, ...(approvalId ? { approvalId } : {}), kind: 'publish', repo, workBranch, ...(forkRepo ? { forkRepo } : {}), commands };
 }

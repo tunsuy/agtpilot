@@ -159,6 +159,17 @@ describe('runTask(领取任务 → 本地执行 → 事件回流编排)', () => 
     expect(last.outcome).toBe('failed');
     expect(String(last.message)).toContain('claude');
   });
+
+  it('云端终止(用户止损):aborted 结果 → 上报 state cancelled,不发 error/failed,本地分支保留', async () => {
+    const { deps, flat, logs } = makeDeps({
+      adapter: fakeAdapter({ result: { ok: false, aborted: true, error: '任务已被云端终止(用户止损),本地进程已杀' } }),
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('cancelled');
+    // 只有 running + cancelled 两条状态事件,没有 error/failed
+    expect(flat().map((e) => e.type)).toEqual(['state', 'state']);
+    expect(flat()[1].payload).toEqual({ state: 'cancelled' });
+    expect(logs.some((l) => l.includes('终止'))).toBe(true);
+  });
 });
 
 describe('runTask · 经 fork 派发(viaFork)', () => {

@@ -24,6 +24,8 @@ export interface Phase1Result {
   testTail?: string;
   /** agent 按约定输出的 PR 终稿(可能为 null:不阻塞审批,人工可补) */
   prFinal?: { title: string; body: string } | null;
+  /** 任务被云端终止(用户止损):task-run 据此上报 cancelled 而非 failed */
+  aborted?: boolean;
   error?: string;
   /**
    * 失败是否为**瞬时 API/网关/网络错误**(isRetryableClaudeFailure 判定)。
@@ -49,13 +51,14 @@ export interface ExecutorAdapter {
   /**
    * opts.baseBranch = prepareRepo 实探基线(master 默认仓库的回落值),供 git 基线校验与 prompt 展示;
    * opts.continuation = 续跑模式(工作分支已有上次成果,renderTaskPrompt 注入续跑指令:
-   * 先看 git log/status/diff 认清现场,接着做,不重做已完成的)
+   * 先看 git log/status/diff 认清现场,接着做,不重做已完成的);
+   * opts.abortSignal = 云端终止指令(用户止损),触发即杀 claude 进程树并带 aborted 返回。
    */
   run(
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string; continuation?: boolean }
+    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal }
   ): Promise<Phase1Result>;
 }
 
@@ -290,7 +293,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string; continuation?: boolean }
+    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal }
   ): Promise<Phase1Result> {
     const prompt = renderTaskPrompt(pack, {
       continuation: opts?.continuation === true,
@@ -300,10 +303,12 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
 
     // ---- 1. headless 跑 agent(流式解析 stream-json → 进度事件) ----
     const timeoutMs = this.timeoutMs ?? Math.max(1, pack.executor.timeoutMinutes) * 60_000;
-    const agent = await this.runClaude(args, repoDir, timeoutMs, onProgress);
+    const agent = await this.runClaude(args, repoDir, timeoutMs, onProgress, opts?.abortSignal);
     // claude 进程级失败:标注是否瞬时 API/网关错误(供 task-run 自动重试 + 云端标可重试)。
     // 其余 ok:false 分支(git 校验 / 验收)是确定性失败,不带 retryable(缺省即 false)。
+    // 用户中止(aborted)优先:终止就是终止,不进自动重试、不标可重试。
     if (!agent.ok) {
+      if (agent.aborted) return { ok: false, error: agent.error, aborted: true };
       return { ok: false, error: agent.error, retryable: isRetryableClaudeFailure(agent.error) };
     }
 
@@ -368,14 +373,20 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     return { ok: true, commitHash, diffstat: diffstat || undefined, testTail, prFinal };
   }
 
-  /** spawn claude 并流式消费 stdout;超时 tree-kill(SIGTERM→5s→SIGKILL,整进程组) */
+  /** spawn claude 并流式消费 stdout;超时 tree-kill(SIGTERM→5s→SIGKILL,整进程组);
+   *  abortSignal(云端终止指令)同用 tree-kill,带 aborted=true 返回 */
   private runClaude(
     args: string[],
     repoDir: string,
     timeoutMs: number,
-    onProgress?: (e: ParsedStreamEvent) => void
-  ): Promise<{ ok: boolean; resultText?: string; error?: string }> {
+    onProgress?: (e: ParsedStreamEvent) => void,
+    abortSignal?: AbortSignal
+  ): Promise<{ ok: boolean; resultText?: string; error?: string; aborted?: boolean }> {
     return new Promise((resolve) => {
+      if (abortSignal?.aborted) {
+        resolve({ ok: false, error: '任务已被终止(派发后云端即取消)', aborted: true });
+        return;
+      }
       const child = this.spawnImpl(this.bin, args, {
         cwd: repoDir,
         env: process.env,
@@ -389,6 +400,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       let resultIsError = false;
       let sawResult = false;
       let timedOut = false;
+      let aborted = false;
       let settled = false;
 
       const killTimer = setTimeout(() => {
@@ -399,10 +411,21 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
         }, 5000).unref?.();
       }, timeoutMs);
 
-      const finish = (r: { ok: boolean; resultText?: string; error?: string }) => {
+      // 用户止损:同超时路径整树杀(claude 可能已 spawn 子进程,单杀父进程会留孤儿)
+      const onAbort = () => {
+        aborted = true;
+        killTree(child, 'SIGTERM');
+        setTimeout(() => {
+          killTree(child, 'SIGKILL');
+        }, 5000).unref?.();
+      };
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+      const finish = (r: { ok: boolean; resultText?: string; error?: string; aborted?: boolean }) => {
         if (settled) return;
         settled = true;
         clearTimeout(killTimer);
+        abortSignal?.removeEventListener('abort', onAbort);
         resolve(r);
       };
 
@@ -428,6 +451,10 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       });
       child.on('error', (e) => finish({ ok: false, error: `claude 启动失败:${e.message}` }));
       child.on('close', (code) => {
+        if (aborted) {
+          finish({ ok: false, error: '任务已被云端终止(用户止损),本地进程已杀', aborted: true });
+          return;
+        }
         if (timedOut) {
           finish({ ok: false, error: `执行超时(${Math.round(timeoutMs / 60000)} 分钟),已终止` });
           return;

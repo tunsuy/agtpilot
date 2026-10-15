@@ -197,5 +197,8 @@ describe('normalizeDeviceAction(下行动作清洗)', () => {
     const cancel = normalizeDeviceAction({ ...publish, kind: 'cancel', forkRepo: 'tunsuy/repo', commands: undefined });
     expect(cancel!.kind).toBe('cancel');
     expect('forkRepo' in cancel!).toBe(false);
+    // 用户终止任务的 cancel:无审批单(approvalId 缺省)也合法 —— publish 则必带
+    expect(normalizeDeviceAction({ ...publish, kind: 'cancel', approvalId: undefined })).toMatchObject({ kind: 'cancel' });
+    expect('approvalId' in normalizeDeviceAction({ ...publish, kind: 'cancel', approvalId: undefined })!).toBe(false);
   });
 });

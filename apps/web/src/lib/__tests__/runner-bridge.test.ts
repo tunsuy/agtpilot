@@ -14,6 +14,8 @@ import {
   recordRunnerEvents,
   getRunnerTasks,
   getRunnerTask,
+  cancelRunnerTask,
+  getDeviceActions,
 } from '../runner-bridge';
 import { PAIR_CODE_ALPHABET, RUNNER_TASK_TTL_MS, RUNNER_PROTOCOL_VERSION, type RunnerDeviceMeta } from '@agtpilot/protocol';
 
@@ -375,5 +377,78 @@ describe('派发时指定设备(targetDeviceId:任务绑定,仅该设备可领�
     const a = pairDevice(USER_A);
     enqueueTask(USER_A, validPack, T0);
     expect(claimNextTask(USER_A, a.deviceId, T0 + 1)!.taskId).toBe(validPack.taskId);
+  });
+});
+
+describe('用户终止任务(执行中止损,两阶段)', () => {
+  it('queued → 云端直接落 cancelled(runner 永远领不到)', () => {
+    pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_c1' }, T0);
+    const r = cancelRunnerTask(USER_A, 'rtask_c1', T0 + 5);
+    expect(r.ok).toBe(true);
+    expect(getRunnerTask(USER_A, 'rtask_c1', T0 + 5)!.state).toBe('cancelled');
+    const a = pairDevice(USER_A);
+    expect(claimNextTask(USER_A, a.deviceId, T0 + 6)).toBeNull(); // 不再可领
+  });
+
+  it('running → 置 cancelRequested(状态不动),getDeviceActions 派生 cancel 动作下发给归属设备', () => {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_c2' }, T0);
+    claimNextTask(USER_A, r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_r1', taskId: 'rtask_c2', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+
+    const c = cancelRunnerTask(USER_A, 'rtask_c2', T0 + 30);
+    expect(c.ok).toBe(true);
+    const t = getRunnerTask(USER_A, 'rtask_c2', T0 + 30)!;
+    expect(t.state).toBe('running'); // 状态不动,等 runner 确认
+    expect(t.cancelRequested).toBe(true);
+
+    const actions = getDeviceActions(USER_A, r.deviceId);
+    expect(actions).toEqual([
+      { taskId: 'rtask_c2', kind: 'cancel', repo: 'owner/repo', workBranch: 'contrib/fix-1' }, // 无 approvalId(无审批单)
+    ]);
+  });
+
+  it('runner 上报 cancelled → 合法迁移落终态并清标志,动作不再派生(幂等闭环)', () => {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_c3' }, T0);
+    claimNextTask(USER_A, r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_r2', taskId: 'rtask_c3', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+    cancelRunnerTask(USER_A, 'rtask_c3', T0 + 30);
+
+    const res = recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_r3', taskId: 'rtask_c3', deviceId: r.deviceId, at: T0 + 40, type: 'state', payload: { state: 'cancelled' } },
+    ], T0 + 40);
+    expect(res.stateChanges[0]).toEqual({ taskId: 'rtask_c3', from: 'running', to: 'cancelled' });
+    const t = getRunnerTask(USER_A, 'rtask_c3', T0 + 40)!;
+    expect(t.state).toBe('cancelled');
+    expect(t.cancelRequested).toBeUndefined();
+    expect(getDeviceActions(USER_A, r.deviceId)).toEqual([]);
+  });
+
+  it('不可终止:不存在 / 终态 / awaiting_approval(审批卡拒绝才是其终止路径)', () => {
+    pairDevice(USER_A);
+    expect(cancelRunnerTask(USER_A, 'rtask_nope', T0).error).toBe('not_found');
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_c4' }, T0);
+    // queued 直接取消落终态,再取消应拒绝
+    cancelRunnerTask(USER_A, 'rtask_c4', T0 + 1);
+    expect(cancelRunnerTask(USER_A, 'rtask_c4', T0 + 2).error).toBe('not_cancellable');
+  });
+
+  it('重复请求幂等(已 cancelRequested 时再点不再改时间戳/状态)', () => {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_c5' }, T0);
+    claimNextTask(USER_A, r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_r4', taskId: 'rtask_c5', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+    cancelRunnerTask(USER_A, 'rtask_c5', T0 + 30);
+    const r2 = cancelRunnerTask(USER_A, 'rtask_c5', T0 + 99);
+    expect(r2.ok).toBe(true);
+    expect(getRunnerTask(USER_A, 'rtask_c5', T0 + 99)!.updatedAt).toBe(T0 + 30); // 未被二次改写
   });
 });

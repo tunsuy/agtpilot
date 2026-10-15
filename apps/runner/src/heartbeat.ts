@@ -1,10 +1,25 @@
 import { RunnerAuthError, RunnerUpgradeError, type RunnerClient, type PollResult } from './client';
+import { normalizeDeviceAction } from '@agtpilot/protocol';
 
 /**
  * 心跳循环(轮询 → 可选领取)。M2 起 claim=true 时云端 FIFO 派发任务包,
  * pollTick 把领到的任务返回给调用方(bin 接 runTask 执行,串行单任务)。
  * 循环逻辑拆成可注入的 tick/sleep/shouldStop,vitest 用假 client 直测,不起真定时器网络。
  */
+
+/**
+ * 检测「终止当前执行任务」指令(用户止损)。
+ * 任务执行期间主心跳循环被占用,只有 bin 的保活轮询在跑 —— 它的 poll
+ * 响应里同样带 actions(云端由 cancelRequested 标记派生 cancel 动作);
+ * 此函数供保活轮询判定是否要杀当前任务(协议形状与审批链路完全一致)。
+ */
+export function isCancelForTask(actions: unknown, taskId: string): boolean {
+  if (!Array.isArray(actions) || !taskId) return false;
+  return actions.some((raw) => {
+    const a = normalizeDeviceAction(raw);
+    return a !== null && a.kind === 'cancel' && a.taskId === taskId;
+  });
+}
 
 export type TickOutcome = 'ok' | 'auth' | 'upgrade';
 

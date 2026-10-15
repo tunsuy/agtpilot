@@ -115,6 +115,26 @@ export function MobileActivityView({
     };
   }, []);
 
+  // 终止本地任务(执行中止损):确认后 POST cancel,乐观置 cancelRequested 等轮询回填终态
+  const cancelRunnerTask = async (taskId: string) => {
+    if (!window.confirm('终止该任务?本地执行会被停止(工作分支保留),不可恢复。')) return;
+    setRunnerTasks((prev) => prev.map((t) => (t.taskId === taskId ? { ...t, cancelRequested: true } : t)));
+    try {
+      const res = await fetch('/api/runner/tasks/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId }),
+      });
+      const j = await res.json();
+      if (!j?.success) {
+        // 失败回滚乐观标记(终态等场景由下个轮询窗口纠正)
+        setRunnerTasks((prev) => prev.map((t) => (t.taskId === taskId && t.cancelRequested ? { ...t, cancelRequested: undefined } : t)));
+      }
+    } catch {
+      /* 弱网:保持乐观标记,下个轮询窗口以云端为准 */
+    }
+  };
+
   // 新审批/新授权请求进来时自动滚到眼前（只在数量增加时触发，不打断日常滚动）
   useEffect(() => {
     const grew =
@@ -261,6 +281,7 @@ export function MobileActivityView({
               const meta = runnerStateMeta(t.state);
               const active = isRunnerTaskActive(t.state);
               const retryable = runnerRetryable(t);
+              const cancellable = t.state === 'queued' || t.state === 'dispatched' || t.state === 'running';
               return (
                 <li
                   key={t.taskId}
@@ -278,6 +299,19 @@ export function MobileActivityView({
                       </span>
                     )}
                     <span className="text-xs font-mono text-zinc-900 truncate flex-1 min-w-0">{t.repo}</span>
+                    {t.cancelRequested ? (
+                      <span className="text-[10px] text-amber-600 shrink-0 flex items-center gap-1">
+                        <Loader2 className="h-3 w-3 animate-spin" /> 终止中…
+                      </span>
+                    ) : cancellable ? (
+                      <button
+                        type="button"
+                        onClick={() => cancelRunnerTask(t.taskId)}
+                        className="text-[10px] text-zinc-500 px-1.5 py-0.5 rounded border border-zinc-200 active:bg-rose-50 active:border-rose-200 active:text-rose-600 shrink-0"
+                      >
+                        终止
+                      </button>
+                    ) : null}
                     {t.state === 'done' && t.prUrl && (
                       <a
                         href={t.prUrl}

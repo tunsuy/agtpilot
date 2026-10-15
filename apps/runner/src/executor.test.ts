@@ -312,6 +312,35 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(r.error).toContain('执行超时');
   }, 20_000);
 
+  it('云端终止(abortSignal)→ tree-kill 进程并带 aborted 返回,区别于超时/失败', async () => {
+    process.env.FAKE_CLAUDE_SLEEP_MS = '5000';
+    const abort = new AbortController();
+    const p = new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec(), timeoutMs: 30_000 }).run(
+      pack,
+      tmpDir(),
+      undefined,
+      { abortSignal: abort.signal }
+    );
+    setTimeout(() => abort.abort(), 300); // 模拟保活轮询收到终止指令
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.aborted).toBe(true);
+    expect(r.error).toContain('终止');
+  }, 20_000);
+
+  it('abortSignal 已触发(spawn 前取消)→ 不起进程直接 aborted 返回', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() }).run(
+      pack,
+      tmpDir(),
+      undefined,
+      { abortSignal: abort.signal }
+    );
+    expect(r.ok).toBe(false);
+    expect(r.aborted).toBe(true);
+  }, 20_000);
+
   it('工作分支无本地 commit(ahead=0)→ 失败「没有产出」', async () => {
     const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec({ ahead: '0' }) }).run(pack, tmpDir());
     expect(r.ok).toBe(false);

@@ -125,6 +125,13 @@ export interface RunnerTaskRecord {
    * 协议字段只增不改(v1 兼容):旧 runner 不上报 → 缺省 undefined,UI 回退普通「失败」。
    */
   retryable?: boolean;
+  /**
+   * 用户「终止任务」请求标记(执行中止损):dispatched/running 时置位,
+   * 状态不动 —— getDeviceActions 据此下发 cancel 动作,由 runner 杀掉本地
+   * 进程后上报 state cancelled 落终态(与审批拒绝同构,两阶段确认)。
+   * queued 任务终止时云端直接落 cancelled,不经此标志。
+   */
+  cancelRequested?: boolean;
   /** 上行事件(幂等去重后保留最近 N 条,cap 由 runner-bridge 控制) */
   events?: RunnerEvent[];
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pollTick, runHeartbeatLoop, type TickOutcome } from './heartbeat';
+import { pollTick, runHeartbeatLoop, isCancelForTask, type TickOutcome } from './heartbeat';
 import { RunnerAuthError, RunnerUpgradeError } from './client';
 
 function fakeClient(result: unknown) {
@@ -115,5 +115,31 @@ describe('runHeartbeatLoop', () => {
       sleep: async () => {},
     });
     expect(outcome).toBe('upgrade_needed');
+  });
+});
+
+describe('isCancelForTask(保活轮询终止指令检测)', () => {
+  const cancel = (taskId: string, approvalId?: string) => ({
+    taskId,
+    ...(approvalId ? { approvalId } : {}),
+    kind: 'cancel',
+    repo: 'o/r',
+    workBranch: 'b',
+  });
+
+  it('命中:cancel 动作 taskId = 当前任务(用户终止,无 approvalId)', () => {
+    expect(isCancelForTask([cancel('rtask_1')], 'rtask_1')).toBe(true);
+  });
+
+  it('审批拒绝的 cancel(带 approvalId)同样命中 —— 同一形状,同一处置', () => {
+    expect(isCancelForTask([cancel('rtask_1', 'appr_1')], 'rtask_1')).toBe(true);
+  });
+
+  it('不命中:publish 动作、别的任务的 cancel、畸形输入、空 actions', () => {
+    expect(isCancelForTask([{ taskId: 'rtask_1', approvalId: 'a', kind: 'publish', repo: 'o/r', workBranch: 'b', commands: [] }], 'rtask_1')).toBe(false);
+    expect(isCancelForTask([cancel('rtask_2')], 'rtask_1')).toBe(false);
+    expect(isCancelForTask(['garbage', null, {}], 'rtask_1')).toBe(false);
+    expect(isCancelForTask(undefined, 'rtask_1')).toBe(false);
+    expect(isCancelForTask([cancel('rtask_1')], '')).toBe(false);
   });
 });

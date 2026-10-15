@@ -2,7 +2,7 @@
 import { parseArgs, USAGE } from './args';
 import { RunnerClient, RunnerAuthError, deviceMeta } from './client';
 import { clearCredentials, loadCredentials, saveCredentials, credentialsFile, credentialsDir } from './credentials';
-import { pollTick, runHeartbeatLoop } from './heartbeat';
+import { pollTick, runHeartbeatLoop, isCancelForTask } from './heartbeat';
 import { ClaudeCodeAdapter } from './executor';
 import { runTask } from './task-run';
 import { handleDeviceActions } from './publish';
@@ -137,9 +137,21 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
           }
         }
         if (r.outcome === 'ok' && r.claimed) {
-          // 任务执行期间主循环被占用:另起保活轮询,维持 lastSeenAt(设备不被判离线)
+          // 任务执行期间主循环被占用:另起保活轮询,维持 lastSeenAt(设备不被判离线);
+          // 同时检测终止指令(用户止损,云端由 cancelRequested 标记派生 cancel 动作)
+          // —— 命中即 abort,executor tree-kill claude 进程树,task-run 上报 cancelled
+          const abort = new AbortController();
+          const currentTaskId = r.claimed.taskId;
           const keepAlive = setInterval(() => {
-            client.poll({}).catch(() => {});
+            client
+              .poll({})
+              .then((pr) => {
+                if (!abort.signal.aborted && isCancelForTask(pr.actions, currentTaskId)) {
+                  log(`任务 ${currentTaskId} 收到终止指令,停止本地执行…`);
+                  abort.abort();
+                }
+              })
+              .catch(() => {});
           }, intervalMs);
           try {
             await runTask(r.claimed, {
@@ -149,10 +161,12 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
               workspaceRoot: workspaceRoot(),
               log,
               audit,
+              abortSignal: abort.signal,
             });
           } catch (e) {
             log(`任务执行器异常(任务已在云端标记流程内,心跳继续):${(e as Error)?.message || e}`);
           } finally {
+            abort.abort(); // 收尾清理:解掉可能残留的 abort 监听
             clearInterval(keepAlive);
           }
         }

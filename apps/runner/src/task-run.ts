@@ -6,10 +6,12 @@ import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } 
 /**
  * 单个已领取任务的本地执行编排(M2,§6.1):
  * 状态事件(running)→ 仓库准备 → adapter.run(进度事件批量上行)→
- * 成功:phase1_result + awaiting_approval / 失败:error + failed。
+ * 成功:phase1_result + awaiting_approval / 失败:error + failed /
+ * 云端终止(用户止损,deps.abortSignal):杀进程后上报 cancelled(本地分支保留)。
  *
  * 设计约束:
- * - 串行单任务(心跳循环在任务执行期间被占用;bin 侧另起保活轮询维持在线状态);
+ * - 串行单任务(心跳循环在任务执行期间被占用;bin 侧另起保活轮询维持在线状态,
+ *   并检测终止指令触发 abort);
  * - 进度事件按 flushThreshold 批量上行(减少请求数;断网离线缓冲由 bin 侧
  *   ReliableEventPoster 包装承担,task-run 只管调 postEvents,失败记日志不阻塞);
  * - 云端 pack 再过一次 normalizeTaskPack(runner 侧防御性校验,与云端清洗同源);
@@ -44,9 +46,11 @@ export interface TaskRunDeps {
   checkPristine?: (repoDir: string, baseBranch: string) => Promise<boolean>;
   /** 自动重试前的退避毫秒(默认 2000,给瞬时网关故障一点恢复窗口;测试注入 0) */
   retryDelayMs?: number;
+  /** 云端终止指令(用户止损;bin 侧保活轮询检测到 cancel 动作时触发) */
+  abortSignal?: AbortSignal;
 }
 
-export type TaskRunOutcome = 'awaiting_approval' | 'failed';
+export type TaskRunOutcome = 'awaiting_approval' | 'failed' | 'cancelled';
 
 export async function runTask(
   claimed: { taskId: string; pack: unknown },
@@ -130,6 +134,7 @@ export async function runTask(
     deps.adapter.run(pack, repo.repoDir, onProgress, {
       baseBranch: repo.baseBranch,
       ...(continuation ? { continuation: true } : {}),
+      ...(deps.abortSignal ? { abortSignal: deps.abortSignal } : {}),
     });
   const checkPristine =
     deps.checkPristine ?? ((dir: string, base: string) => isWorktreePristine(dir, base, defaultExecAsync));
@@ -146,6 +151,16 @@ export async function runTask(
   }
 
   let result = await runOnce(resumed);
+
+  // 用户止损(aborted 优先于一切重试):上报 cancelled(云端合法迁移落终态),
+  // 本地分支保留(与审批拒绝一致)—— 终止就是终止,不进瞬时错误自动重试。
+  if (result.aborted) {
+    push('state', { state: 'cancelled' });
+    await flush();
+    audit({ kind: 'task_result', taskId, outcome: 'cancelled', message: '云端终止指令' });
+    log(`任务 ${taskId} 被终止(用户止损),已上报 cancelled`);
+    return 'cancelled';
+  }
 
   // 加固 ①(续跑模式升级):claude 因瞬时 API/网关错误退出(executor 标 retryable)
   // → 原地自动重试一次。现场检查不再是重试闸,只选重试姿势:干净(什么都没干
@@ -171,6 +186,14 @@ export async function runTask(
     await flush();
     if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
     result = await runOnce(continuation);
+    // 重试途中也可能被终止:同样落 cancelled,不当失败上报
+    if (result.aborted) {
+      push('state', { state: 'cancelled' });
+      await flush();
+      audit({ kind: 'task_result', taskId, outcome: 'cancelled', message: '云端终止指令(重试期间)' });
+      log(`任务 ${taskId} 被终止(用户止损,重试期间),已上报 cancelled`);
+      return 'cancelled';
+    }
   }
 
   if (result.ok) {

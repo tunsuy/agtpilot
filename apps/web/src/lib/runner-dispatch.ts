@@ -54,6 +54,8 @@ export interface RunnerTaskSummary {
   targetDeviceId?: string;
   /** 最近一条可读进展(runner 上行事件摘要;任务列表单行展示用) */
   latest?: { text: string; at: number };
+  /** 用户已请求终止(runner 确认前 UI 显示「终止中…」) */
+  cancelRequested?: boolean;
 }
 
 /**
@@ -134,6 +136,7 @@ export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
     updatedAt: t.updatedAt,
     ...(t.deviceId ? { deviceId: t.deviceId } : {}),
     ...(t.targetDeviceId ? { targetDeviceId: t.targetDeviceId } : {}),
+    ...(t.cancelRequested ? { cancelRequested: true } : {}),
     ...(latest ? { latest } : {}),
   };
 }

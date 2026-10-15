@@ -324,8 +324,7 @@ export function enqueueTask(
   return record;
 }
 
-/** 懒过期清扫(无常驻定时器:读取路径顺带执行,cron-service 同款哲学) */
-function sweepExpired(tasks: RunnerTaskRecord[], now: number): boolean {
+/** 懒过期清扫(无常驻定时器:读取路径顺带执行,cron-service 同款哲学) */function sweepExpired(tasks: RunnerTaskRecord[], now: number): boolean {
   let changed = false;
   for (const t of tasks) {
     if (!isTerminalRunnerState(t.state) && t.expiresAt <= now && canTransitionRunnerTask(t.state, 'expired')) {
@@ -335,6 +334,34 @@ function sweepExpired(tasks: RunnerTaskRecord[], now: number): boolean {
     }
   }
   return changed;
+}
+
+/**
+ * 用户终止任务(执行中止损;与审批拒绝同构的两阶段设计):
+ * - queued(从未被领取):云端单方面直接落 cancelled,runner 永远领不到;
+ * - dispatched/running(在飞):置 cancelRequested 标志、状态不动 ——
+ *   getDeviceActions 据此下发 cancel 动作,runner 杀掉本地 claude 进程后
+ *   上报 state cancelled 落终态(runner 未升级不识别时,任务至多跑到超时/过期,与现状同);
+ * - awaiting_approval 不在此列:审批卡「拒绝」即其终止路径;终态一律拒绝。
+ */
+export function cancelRunnerTask(userId: string, taskId: string, now: number = Date.now()): { ok: boolean; error?: string; task?: RunnerTaskRecord } {
+  const tasks = readTasks(userId);
+  const task = tasks.find((t) => t.taskId === taskId);
+  if (!task) return { ok: false, error: 'not_found' };
+  if (task.state === 'queued') {
+    task.state = 'cancelled';
+    task.updatedAt = now;
+    writeTasks(userId, tasks);
+    return { ok: true, task };
+  }
+  if (task.state === 'dispatched' || task.state === 'running') {
+    if (task.cancelRequested) return { ok: true, task }; // 幂等:已请求过
+    task.cancelRequested = true;
+    task.updatedAt = now;
+    writeTasks(userId, tasks);
+    return { ok: true, task };
+  }
+  return { ok: false, error: 'not_cancellable', task };
 }
 
 /** runner 领取:FIFO 取最老的可领 queued 任务(无绑定 或 绑定到本设备)→ dispatched 并绑定设备 */
@@ -418,6 +445,8 @@ export function recordRunnerEvents(
       const from = task.state;
       task.state = to;
       task.updatedAt = now;
+      // 终止指令已被 runner 确认落终态:清请求标志,getDeviceActions 不再派生
+      if (to === 'cancelled' && task.cancelRequested) task.cancelRequested = undefined;
       result.stateChanges.push({ taskId: task.taskId, from, to });
     }
 
@@ -655,6 +684,11 @@ export function getDeviceActions(userId: string, deviceId: string): RunnerDevice
   const actions: RunnerDeviceAction[] = [];
   for (const t of readTasks(userId)) {
     if (t.deviceId !== deviceId) continue;
+    // 用户终止任务(cancelRequested 标记派生;无审批单,approvalId 缺省):
+    // 幂等下发直到 runner 上报 cancelled(recordRunnerEvents 收到终态时清标志)
+    if (t.cancelRequested && (t.state === 'dispatched' || t.state === 'running')) {
+      actions.push({ taskId: t.taskId, kind: 'cancel', repo: t.pack.repo, workBranch: t.pack.workBranch });
+    }
     const a = t.approval;
     if (!a) continue;
     if (t.state === 'finishing' && a.status === 'approved' && a.commands && a.commands.length > 0) {

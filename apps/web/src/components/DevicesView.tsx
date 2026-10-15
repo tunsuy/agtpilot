@@ -13,6 +13,7 @@ import {
   Loader2,
   ChevronDown,
   ExternalLink,
+  Square,
 } from 'lucide-react';
 import {
   isRunnerTaskActive,
@@ -68,15 +69,19 @@ function DeviceTaskItem({
   timeline,
   expanded,
   onToggle,
+  onCancel,
 }: {
   task: RunnerTaskSummary;
   timeline: RunnerTaskEventView[] | null;
   expanded: boolean;
   onToggle: () => void;
+  onCancel: (taskId: string) => void;
 }) {
   const meta = runnerStateMeta(task.state);
   const active = isRunnerTaskActive(task.state);
   const retryable = runnerRetryable(task);
+  // 可终止窗口:排队/已领取/执行中(awaiting_approval 走审批卡拒绝,finishing 分钟级不拦)
+  const cancellable = task.state === 'queued' || task.state === 'dispatched' || task.state === 'running';
   return (
     <div className={`rounded-lg border bg-white ${active ? 'border-sky-200' : 'border-zinc-200'}`}>
       <button
@@ -120,6 +125,26 @@ function DeviceTaskItem({
             PR <ExternalLink className="h-3 w-3" />
           </a>
         )}
+        {task.cancelRequested ? (
+          <span
+            className="flex items-center gap-1 text-[10px] text-amber-600 flex-shrink-0"
+            title="终止指令已下发,等 runner 确认(未升级的 runner 会在任务跑完/超时后落终态)"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" /> 终止中…
+          </span>
+        ) : cancellable ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel(task.taskId);
+            }}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-zinc-500 border border-zinc-200 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition flex-shrink-0"
+            title="终止任务(停止本地执行,分支保留)"
+          >
+            <Square className="h-2.5 w-2.5 fill-current" /> 终止
+          </button>
+        ) : null}
         <ChevronDown className={`h-3.5 w-3.5 text-zinc-400 transition flex-shrink-0 ${expanded ? 'rotate-180' : ''}`} />
       </button>
       {expanded && (
@@ -297,6 +322,27 @@ export function DevicesView() {
     }
   };
 
+  // 终止任务(执行中止损):排队中直接落 cancelled;在飞的由 runner 收到指令后
+  // 杀本地进程并上报确认 —— 期间行内显示「终止中…」
+  const cancelTask = useCallback(async (taskId: string) => {
+    if (!window.confirm('终止该任务?\n本地执行会被停止(工作分支保留),此操作不可恢复。')) return;
+    try {
+      const res = await fetch('/api/runner/tasks/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
+        setError(data?.error || '终止失败');
+        return;
+      }
+      refreshTasks(); // 立即拉最新(queued → cancelled / 在飞 → 终止中)
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  }, [refreshTasks]);
+
   const copyText = async (text: string, key: string) => {
     // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
     const ok = await copyToClipboard(text);
@@ -456,6 +502,7 @@ export function DevicesView() {
                             timeline={timeline}
                             expanded={expandedTaskId === t.taskId}
                             onToggle={() => setExpandedTaskId(expandedTaskId === t.taskId ? null : t.taskId)}
+                            onCancel={cancelTask}
                           />
                         ))
                       )}
@@ -469,7 +516,8 @@ export function DevicesView() {
 
         <p className="text-[10px] text-zinc-400 leading-relaxed">
           点击设备行展开它的任务列表:状态变化与本地 agent 的干活轨迹(工具调用 / 阶段文本)实时滚动,
-          任务点开可看完整事件时间线;完成后审批卡出现在驾驶舱,push/PR 批准后才真正出门。
+          任务点开可看完整事件时间线;跑偏的任务可点「终止」止损(工作分支保留,不影响已 clone 的仓库)。
+          完成后审批卡出现在驾驶舱,push/PR 批准后才真正出门。
         </p>
       </div>
     </div>

@@ -175,6 +175,17 @@ describe('任务队列', () => {
     expect(enqueueTask(USER_A, validPack, T0)).toBeNull();
   });
 
+  it('关联会话(missionId):合法字符串落记录;畸形/超长拒绝入队', () => {
+    const t = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m1' }, T0, { missionId: 'mission-abc' })!;
+    expect(t.missionId).toBe('mission-abc');
+    // 缺省不落字段(工坊外派发/旧客户端语义)
+    const t2 = enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m2' }, T0)!;
+    expect('missionId' in t2).toBe(false);
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m3' }, T0, { missionId: '' })).toBeNull();
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m4' }, T0, { missionId: 'x'.repeat(129) })).toBeNull();
+    expect(enqueueTask(USER_A, { ...validPack, taskId: 'rtask_m5' }, T0, { missionId: 42 })).toBeNull();
+  });
+
   it('领取 FIFO:先入先领,领后 dispatched 绑定设备,队列空返回 null', () => {
     const r = pairDevice(USER_A);
     enqueueTask(USER_A, validPack, T0);

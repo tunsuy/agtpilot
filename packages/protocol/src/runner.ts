@@ -108,6 +108,8 @@ export interface RunnerTaskRecord {
   targetDeviceId?: string;
   pack: RunnerTaskPack;
   state: RunnerTaskState;
+  /** 派发时所处的会话任务 id(驾驶舱 mission):设备任务 ↔ 会话互跳的关联键;工坊外派发可缺省 */
+  missionId?: string;
   createdAt: number;
   updatedAt: number;
   expiresAt: number;

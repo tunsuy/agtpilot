@@ -58,6 +58,8 @@ export default function Workspace() {
   // 推送深链指定的 mission（/?tab=activity&mission=<id>）：等 missions 列表加载到该 id 才选中，
   // 规避 loadAgentState / SSE init 稍后回写 activeMissionId 覆盖深链目标
   const [deepLinkMissionId, setDeepLinkMissionId] = useState<string | null>(null);
+  // 会话 ↔ 设备任务互跳:驾驶舱会话卡 chip 跳设备页时要自动展开的 runner 任务
+  const [runnerFocusTaskId, setRunnerFocusTaskId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<ViewportState>({
     activeTab: 'browser',
     url: 'about:blank',
@@ -1217,6 +1219,10 @@ export default function Workspace() {
               isSubmitting={isSubmitting}
               connectors={connectors}
               onSelectModel={handleSetDefaultModel}
+              onOpenRunnerTask={(taskId) => {
+                setRunnerFocusTaskId(taskId);
+                handleViewChange('devices');
+              }}
             />
           )}
 
@@ -1297,7 +1303,15 @@ export default function Workspace() {
 
           {activeView === 'devices' && (
             <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
-              <DevicesView />
+              <DevicesView
+                missions={missions}
+                onOpenMission={(missionId) => {
+                  setActiveMissionId(missionId);
+                  handleViewChange('cockpit');
+                }}
+                focusTaskId={runnerFocusTaskId}
+                onFocusHandled={() => setRunnerFocusTaskId(null)}
+              />
             </main>
           )}
         </div>

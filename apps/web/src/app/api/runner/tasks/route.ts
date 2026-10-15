@@ -17,6 +17,8 @@ import { authenticateRunnerRequest } from '@/lib/runner-route-auth';
  * 入队一个任务包(清洗失败 400;M2 起由机会卡「派发到本地」弹窗调用)。
  * body.deviceId 可选:派发时指定目标设备(须为本用户未吊销的配对设备,否则 400);
  * 缺省 = 任意在线设备 FIFO 领取(存量语义)。
+ * body.missionId 可选:派发时所处的驾驶舱会话 id(设备任务 ↔ 会话互跳关联键;
+ * 畸形 400,会话不存在不阻断 —— 删除过的会话只是跳转失效)。
  */
 export async function GET(req: NextRequest) {
   try {
@@ -56,8 +58,13 @@ export async function POST(req: NextRequest) {
     if (deviceId !== undefined && typeof deviceId !== 'string') {
       return NextResponse.json({ success: false, error: 'deviceId 须为字符串(目标设备 id)' }, { status: 400 });
     }
+    const missionId = body?.missionId;
+    if (missionId !== undefined && (typeof missionId !== 'string' || missionId.length > 128 || missionId.length === 0)) {
+      return NextResponse.json({ success: false, error: 'missionId 须为非空字符串(≤128 字符)' }, { status: 400 });
+    }
     const record = enqueueTask(session.user.id, body?.pack ?? body, Date.now(), {
       ...(deviceId ? { targetDeviceId: deviceId } : {}),
+      ...(missionId ? { missionId } : {}),
     });
     if (!record) {
       return NextResponse.json(

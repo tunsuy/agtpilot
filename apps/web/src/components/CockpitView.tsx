@@ -48,6 +48,7 @@ import {
   Plug,
   FileDown,
   Trash2,
+  Loader2,
 } from 'lucide-react';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { ActivityFeedView } from './ActivityFeedView';
@@ -55,6 +56,7 @@ import { NotePackageList } from './workshops/NotePackageCard';
 import { parseNotePackages } from '../workshops/xhs/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
 import { parseArticlePackages } from '../workshops/shared/article-package';
+import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../lib/runner-dispatch';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../workshops/xhs/topic-picks';
 import { OssOpportunityList } from './workshops/OssOpportunityCard';
@@ -121,6 +123,8 @@ interface CockpitViewProps {
   isSubmitting: boolean;
   connectors?: ConnectorApp[];
   onSelectModel?: (modelId: string) => Promise<void>;
+  /** 跳到设备页看本地任务(会话卡「本地 · …」chip 点击;不传则不显示 chip) */
+  onOpenRunnerTask?: (taskId: string) => void;
 }
 
 export function CockpitView({
@@ -144,6 +148,7 @@ export function CockpitView({
   isSubmitting,
   connectors,
   onSelectModel,
+  onOpenRunnerTask,
 }: CockpitViewProps) {
   const { data: session } = useSession();
   const currentUser = session?.user;
@@ -158,6 +163,30 @@ export function CockpitView({
   const [xhsDraftEnabled, setXhsDraftEnabled] = useState(false);
   // 知乎托管写操作状态(同规则):文章包「存入知乎草稿」按钮的前提
   const [zhihuDraftEnabled, setZhihuDraftEnabled] = useState(false);
+  // 本地 runner 任务(会话 ↔ 设备任务互跳):会话卡 chip 显示该会话派出的最新任务状态。
+  // 只在能跳转(onOpenRunnerTask 提供设备页入口)时才轮询,避免无谓请求
+  const [runnerTasks, setRunnerTasks] = useState<RunnerTaskSummary[]>([]);
+  useEffect(() => {
+    if (!onOpenRunnerTask) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/runner/tasks/mine');
+        const j = await r.json();
+        if (!cancelled && j?.success && Array.isArray(j.tasks)) setRunnerTasks(j.tasks.slice(0, 50));
+      } catch {
+        /* chip 是增强信息,失败不打扰会话主流程;下个轮询窗口重试 */
+      }
+    };
+    load();
+    const timer = setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [onOpenRunnerTask]);
+  const runnerTaskForMission = (missionId: string): RunnerTaskSummary | null =>
+    runnerTasks.find((t) => t.missionId === missionId) ?? null;
   useEffect(() => {
     (async () => {
       try {
@@ -370,6 +399,8 @@ export function CockpitView({
                 const isActive = activeMissionId === m.id || (!activeMissionId && m.id === currentMission?.id);
                 // 执行中/等待中的任务不能删(执行回路还在写盘);完成后与中断的可删
                 const deletable = m.status === 'DONE' || m.status === 'INTERRUPTED';
+                // 该会话派出的最新本地任务(互跳 chip;状态徽章样式与设备页同源)
+                const rt = runnerTaskForMission(m.id);
                 const confirmingDelete = confirmDeleteId === m.id;
                 const handleDeleteClick = (e: React.MouseEvent) => {
                   e.stopPropagation();
@@ -422,8 +453,27 @@ export function CockpitView({
                       </span>
                     </div>
 
-                    <div className="flex items-center justify-between text-[10px] text-zinc-400 font-mono">
-                      <span>会话</span>
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-400 font-mono">
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className="shrink-0">会话</span>
+                        {rt && onOpenRunnerTask && (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenRunnerTask(rt.taskId);
+                            }}
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[9px] font-medium font-sans truncate cursor-pointer transition ${runnerStateMeta(rt.state).cls}`}
+                            title="此会话派发的本地任务 —— 点击到设备页看执行进展"
+                          >
+                            {isRunnerTaskActive(rt.state) && <Loader2 className="h-2.5 w-2.5 animate-spin shrink-0" />}
+                            <span className="truncate">
+                              本地 · {rt.state === 'running' ? '执行中' : rt.state === 'awaiting_approval' ? '待审批' : rt.state === 'finishing' ? '发布中' : rt.state === 'done' ? '完成' : rt.state === 'failed' ? '失败' : rt.state === 'cancelled' ? '已终止' : rt.state === 'expired' ? '过期' : '排队'}
+                            </span>
+                          </span>
+                        )}
+                      </span>
                       <span>
                         {new Date(m.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
@@ -990,8 +1040,8 @@ export function CockpitView({
                                    续写包书号入库前按用户书库校验,未命中给下拉指认(绝不猜归属) */
                                 <NovelPackageCard pkg={parsedNovel} />
                               ) : st.answer && ossResult ? (
-                                /* 开源贡献机会:只读卡片(Issue 直达链接/复制整条),无任何写操作入口 */
-                                <OssOpportunityList result={ossResult} />
+                                /* 开源贡献机会:卡片可派发到本地(missionId 关联当前会话,任务↔会话可互跳) */
+                                <OssOpportunityList result={ossResult} missionId={activeMissionId || currentMission?.id} />
                               ) : st.answer && articleResult ? (
                                 /* 文章包:先于笔记包判定(【摘要】互斥锚);投草稿走续聊 + 审批门。
                                    投递目标按 mission.workshopId 经工坊包声明路由(zhihu 工坊 →

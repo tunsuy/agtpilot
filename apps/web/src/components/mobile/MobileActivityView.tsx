@@ -299,6 +299,16 @@ export function MobileActivityView({
                       </span>
                     )}
                     <span className="text-xs font-mono text-zinc-900 truncate flex-1 min-w-0">{t.repo}</span>
+                    {t.missionId && missions.some((m) => m.id === t.missionId) && (
+                      <button
+                        type="button"
+                        onClick={() => onSelectMission(t.missionId!)}
+                        className="text-[10px] text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-200 active:bg-sky-50 active:text-sky-600 shrink-0"
+                        title="跳到派发它的会话"
+                      >
+                        会话
+                      </button>
+                    )}
                     {t.cancelRequested ? (
                       <span className="text-[10px] text-amber-600 shrink-0 flex items-center gap-1">
                         <Loader2 className="h-3 w-3 animate-spin" /> 终止中…

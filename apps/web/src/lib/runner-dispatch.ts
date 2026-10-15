@@ -56,6 +56,8 @@ export interface RunnerTaskSummary {
   latest?: { text: string; at: number };
   /** 用户已请求终止(runner 确认前 UI 显示「终止中…」) */
   cancelRequested?: boolean;
+  /** 派发时所处的驾驶舱会话 id(互跳关联键;工坊外派发缺省) */
+  missionId?: string;
 }
 
 /**
@@ -137,6 +139,7 @@ export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
     ...(t.deviceId ? { deviceId: t.deviceId } : {}),
     ...(t.targetDeviceId ? { targetDeviceId: t.targetDeviceId } : {}),
     ...(t.cancelRequested ? { cancelRequested: true } : {}),
+    ...(t.missionId ? { missionId: t.missionId } : {}),
     ...(latest ? { latest } : {}),
   };
 }

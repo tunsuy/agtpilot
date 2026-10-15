@@ -209,6 +209,11 @@ describe('summarizeRunnerTask(云端任务记录 → 概览行)', () => {
     expect(summarizeRunnerTask({ ...record, state: 'failed', retryable: true }).retryable).toBe(true);
     expect('retryable' in summarizeRunnerTask({ ...record, state: 'failed' })).toBe(false);
   });
+
+  it('关联会话:missionId 透出(互跳键);缺省不含字段', () => {
+    expect(summarizeRunnerTask({ ...record, missionId: 'mission-9' }).missionId).toBe('mission-9');
+    expect('missionId' in summarizeRunnerTask(record)).toBe(false);
+  });
 });
 
 describe('taskEventTimeline(事件 → 展示时间线,旧→新,截最近 limit 条)', () => {

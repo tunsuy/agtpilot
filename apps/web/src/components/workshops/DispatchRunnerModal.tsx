@@ -31,10 +31,13 @@ interface DeviceRow {
 
 export function DispatchRunnerModal({
   opp,
+  missionId,
   onClose,
   onDispatched,
 }: {
   opp: OssOpportunity;
+  /** 派发时所处的会话 id(设备任务 ↔ 会话互跳的关联键;随入队落库) */
+  missionId?: string;
   onClose: () => void;
   onDispatched: (taskId: string) => void;
 }) {
@@ -111,7 +114,7 @@ export function DispatchRunnerModal({
       const r = await fetch('/api/runner/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pack, deviceId: effectiveDeviceId }),
+        body: JSON.stringify({ pack, deviceId: effectiveDeviceId, ...(missionId ? { missionId } : {}) }),
       });
       const j = await r.json();
       if (!r.ok || !j?.success) {

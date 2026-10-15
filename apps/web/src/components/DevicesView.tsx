@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { copyToClipboard } from '../utils/nativeBridge';
 import {
   MonitorSmartphone,
@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ExternalLink,
   Square,
+  MessageSquare,
 } from 'lucide-react';
 import {
   isRunnerTaskActive,
@@ -70,12 +71,17 @@ function DeviceTaskItem({
   expanded,
   onToggle,
   onCancel,
+  missionTitle,
+  onOpenMission,
 }: {
   task: RunnerTaskSummary;
   timeline: RunnerTaskEventView[] | null;
   expanded: boolean;
   onToggle: () => void;
   onCancel: (taskId: string) => void;
+  /** 该任务所属会话的标题(派发时关联;会话已删除则无值,不显示入口) */
+  missionTitle?: string;
+  onOpenMission?: (missionId: string) => void;
 }) {
   const meta = runnerStateMeta(task.state);
   const active = isRunnerTaskActive(task.state);
@@ -114,6 +120,19 @@ function DeviceTaskItem({
             {timeAgo(task.updatedAt)}
           </div>
         </div>
+        {task.missionId && missionTitle && onOpenMission && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenMission(task.missionId!);
+            }}
+            className="p-1 rounded-md text-zinc-400 hover:text-sky-600 hover:bg-sky-50 transition flex-shrink-0"
+            title={`来自会话:${missionTitle}(点击跳回驾驶舱)`}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+          </button>
+        )}
         {task.state === 'done' && task.prUrl && (
           <a
             href={task.prUrl}
@@ -167,6 +186,16 @@ function DeviceTaskItem({
               </>
             )}
           </div>
+          {task.missionId && missionTitle && onOpenMission && (
+            <button
+              type="button"
+              onClick={() => onOpenMission(task.missionId!)}
+              className="flex items-center gap-1.5 text-[11px] text-zinc-500 hover:text-sky-600 transition"
+            >
+              <MessageSquare className="h-3 w-3 shrink-0" />
+              <span className="truncate">来自会话:{missionTitle}(点击跳回)</span>
+            </button>
+          )}
           {task.error && (
             <div
               className="text-[11px] text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-1.5 whitespace-pre-wrap break-words"
@@ -206,7 +235,24 @@ function DeviceTaskItem({
   );
 }
 
-export function DevicesView() {
+/**
+ * 设备任务 ↔ 会话互跳:
+ * - 设备任务行的会话图标/「来自会话」行 → 跳回驾驶舱并选中该会话(onOpenMission);
+ * - 驾驶舱会话卡的「本地 · …」chip → 跳到设备页并展开该任务(focusTaskId):
+ *   等任务摘要到达后,自动展开其归属设备与该任务的事件时间线。
+ */
+export function DevicesView({
+  missions = [],
+  onOpenMission,
+  focusTaskId,
+  onFocusHandled,
+}: {
+  missions?: Array<{ id: string; title?: string }>;
+  onOpenMission?: (missionId: string) => void;
+  /** 跨页定位:要自动展开的 runner 任务 id(一次性,处理完由 onFocusHandled 清除) */
+  focusTaskId?: string | null;
+  onFocusHandled?: () => void;
+}) {
   const [devices, setDevices] = useState<DeviceView[]>([]);
   const [loading, setLoading] = useState(true);
   const [pairCode, setPairCode] = useState<{ code: string; expiresAt: number } | null>(null);
@@ -281,6 +327,22 @@ export function DevicesView() {
     }
     if (expandedTaskId) loadTimeline(expandedTaskId);
   }, [expandedTaskId, tasks, loadTimeline]);
+
+  // 跨页定位(驾驶舱会话卡 chip 跳入):任务摘要到手后展开其归属设备 + 该任务,
+  // 一次性消费(focusTaskId 由页面层清除;任务未出现时等下个轮询,不重复触发)
+  const missionTitleById = useMemo(
+    () => Object.fromEntries(missions.map((m) => [m.id, m.title ?? ''])),
+    [missions]
+  );
+  useEffect(() => {
+    if (!focusTaskId) return;
+    const t = tasks.find((x) => x.taskId === focusTaskId);
+    if (!t) return; // 摘要未到:等 5s 轮询(跳转目标必为已存在的任务)
+    const deviceId = t.deviceId ?? t.targetDeviceId;
+    if (deviceId) setExpandedDeviceId(deviceId);
+    setExpandedTaskId(t.taskId);
+    onFocusHandled?.();
+  }, [focusTaskId, tasks, onFocusHandled]);
 
   // 配对码过期自动收起
   useEffect(() => {
@@ -503,6 +565,8 @@ export function DevicesView() {
                             expanded={expandedTaskId === t.taskId}
                             onToggle={() => setExpandedTaskId(expandedTaskId === t.taskId ? null : t.taskId)}
                             onCancel={cancelTask}
+                            missionTitle={t.missionId ? missionTitleById[t.missionId] : undefined}
+                            onOpenMission={onOpenMission}
                           />
                         ))
                       )}

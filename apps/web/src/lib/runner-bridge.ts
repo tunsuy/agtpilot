@@ -290,12 +290,13 @@ const DEVICE_ID_RE = /^dev_[0-9a-f]{16}$/;
  * 入队(派发在 M2 接 UI;协议清洗失败 → null,拒绝入队)。
  * targetDeviceId(派发时指定设备,§4):必须是本用户未吊销的配对设备,
  * 否则 null 拒绝入队;缺省 = 不绑定,任意在线设备 FIFO 领取(存量语义)。
+ * missionId(关联会话):设备任务 ↔ 驾驶舱会话互跳的关联键,形状不合法 → null。
  */
 export function enqueueTask(
   userId: string,
   packInput: unknown,
   now: number = Date.now(),
-  opts: { targetDeviceId?: string } = {}
+  opts: { targetDeviceId?: string; missionId?: string } = {}
 ): RunnerTaskRecord | null {
   const pack = normalizeTaskPack(packInput);
   if (!pack) return null;
@@ -306,11 +307,18 @@ export function enqueueTask(
     if (!device || device.revoked) return null; // 目标设备不存在/已吊销:拒绝入队,不静默降级 FIFO
     targetDeviceId = opts.targetDeviceId;
   }
+  // 关联会话(可选):形状校验(存在性由派发侧上下文保证;会话删除后跳转自然失效)
+  let missionId: string | undefined;
+  if (opts.missionId !== undefined) {
+    if (typeof opts.missionId !== 'string' || opts.missionId.length > 128 || opts.missionId.length === 0) return null;
+    missionId = opts.missionId;
+  }
   if (readTasks(userId).some((t) => t.taskId === pack.taskId)) return null; // taskId 冲突(幂等)
   const record: RunnerTaskRecord = {
     taskId: pack.taskId,
     userId,
     ...(targetDeviceId ? { targetDeviceId } : {}),
+    ...(missionId ? { missionId } : {}),
     pack,
     state: 'queued',
     createdAt: now,

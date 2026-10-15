@@ -233,7 +233,14 @@ function OssOpportunityCard({
 }
 
 /** 机会列表:多卡垂直堆叠 + 派发弹窗 + 任务状态回流 + 尾部「其他输出内容」折叠 */
-export function OssOpportunityList({ result }: { result: OssOpportunityParseResult }) {
+export function OssOpportunityList({
+  result,
+  missionId,
+}: {
+  result: OssOpportunityParseResult;
+  /** 派发时所处的会话 id:随任务包入队,设备任务 ↔ 会话互跳的关联键 */
+  missionId?: string;
+}) {
   const [showFallback, setShowFallback] = useState(false);
   const [tasks, setTasks] = useState<RunnerTaskSummary[]>([]);
   const [dispatchOpp, setDispatchOpp] = useState<OssOpportunity | null>(null);
@@ -277,6 +284,7 @@ export function OssOpportunityList({ result }: { result: OssOpportunityParseResu
       {dispatchOpp && (
         <DispatchRunnerModal
           opp={dispatchOpp}
+          missionId={missionId}
           onClose={() => setDispatchOpp(null)}
           onDispatched={() => {
             setDispatchOpp(null);

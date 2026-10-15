@@ -18,6 +18,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { ApprovalRequest, ConnectorSuggestion, Mission, TerminalLog } from '../../types/agent';
+import { KanbanPlanCard } from '../KanbanPlanCard';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
@@ -276,6 +277,14 @@ export function MobileActivityView({
                 >
                   <FileText className="h-3.5 w-3.5" /> 查看交付物 <ChevronRight className="h-3 w-3" />
                 </button>
+              )}
+              {/* 任务看板卡(与桌面驾驶舱同源):钉在任务卡头部,步骤时间线
+                  之前 —— plan 事件实时刷新,看板进度一眼可见;无看板(简单
+                  任务/旧任务)不渲染 */}
+              {mission.plan && (
+                <div className="mb-3">
+                  <KanbanPlanCard plan={mission.plan} />
+                </div>
               )}
               {(mission.steps?.length || 0) > 12 && (
                 <button

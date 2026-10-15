@@ -296,9 +296,11 @@ export const MCP_CONNECTOR_DEFS: McpConnectorDef[] = [
     /** 工具路由触发词：prompt 点名这些词时挂载本连接器的 mcp_<server>_* 工具（服务器粒度路由） */
     routeWords: ["快递", "包裹", "物流", "快递100", "kuaidi100", "运单", "查快递"],
     tokenEnvVar: 'MCP_KUAIDI100_KEY',
-    quickAuthUrl: 'https://api.kuaidi100.com/',
+    // 凭证入口在「企业管理后台」(SPA,授权参数页),不在开放平台营销首页 ——
+    // 官方 MCP 使用说明:注册 → 管理后台 → 授权参数处复制 key
+    quickAuthUrl: 'https://api.kuaidi100.com/manager/v2/home',
     authHint:
-      '注册/登录快递100「百递云·API 开放平台」→「实时查询与订阅推送」→「概览」→ 在「授权参数」处复制 key，粘贴到下方（新用户有免费额度）。',
+      '注册/登录快递100账号 → 进入「企业管理后台」(未登录会先弹登录) → 在「授权参数」处复制 key,粘贴到下方（新用户有免费额度）。',
     docUrl: 'https://api.kuaidi100.com/document/mcp-summary',
     servers: [
       {

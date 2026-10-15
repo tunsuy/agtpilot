@@ -46,6 +46,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         draft: {
           label: '存入草稿箱(经我审批后写入,发布由我在小红书 App 完成)',
           build: buildXhsDraftReplyText,
+          deliverTool: 'xhs_save_note_draft',
           managedGate: 'xhs',
           disabledHint:
             '想直接存进小红书草稿箱?到连接器页「小红书创作者服务」开启托管写操作(需已扫码登录),这里就会出现一键存草稿按钮。',

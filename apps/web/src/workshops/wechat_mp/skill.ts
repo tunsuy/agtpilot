@@ -30,6 +30,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         draft: {
           label: '投草稿箱(经我审批后写入,发布由我在后台人工完成)',
           build: buildWechatMpDraftReplyText,
+          deliverTool: 'wechat_mp_create_draft',
         },
       },
     ],

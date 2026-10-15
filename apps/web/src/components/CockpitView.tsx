@@ -56,6 +56,7 @@ import { NotePackageList } from './workshops/NotePackageCard';
 import { parseNotePackages } from '../workshops/xhs/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
 import { parseArticlePackages } from '../workshops/shared/article-package';
+import { buildDraftDeliveryIndex } from '../lib/draft-delivery';
 import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../lib/runner-dispatch';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../workshops/xhs/topic-picks';
@@ -255,6 +256,10 @@ export function CockpitView({
   // 托管门(zhihu/xhs)由连接器页 opt-in 状态决定,无门工坊(公众号凭证内置)恒开。
   const articleDraft = resolveArtifactDraft(currentMission?.workshopId, 'article-package');
   const noteDraft = resolveArtifactDraft(currentMission?.workshopId, 'note-package');
+  // 已落稿索引(防重复投递):扫 mission 步骤,落稿工具 DONE 且标题/正文命中本篇
+  // → 卡片按钮转「已存入草稿箱」;任务在飞(ACTIVE/待审批)期间按钮一律禁用
+  const articleDelivered = buildDraftDeliveryIndex(currentMission?.steps, articleDraft?.deliverTool);
+  const noteDelivered = buildDraftDeliveryIndex(currentMission?.steps, noteDraft?.deliverTool);
 
   // 任务进入 ACTIVE（新任务 / 续聊 / 选中运行中会话）时自动切到「执行动态」：
   // 用户第一眼看到 agent 正在做什么；浏览中不再被视口更新抢走焦点（见 page.tsx 粘性规则）
@@ -1052,6 +1057,8 @@ export function CockpitView({
                                   onRunMission={onRunMission}
                                   draft={articleDraft}
                                   draftEnabled={articleDraft?.managedGate !== 'zhihu' || zhihuDraftEnabled}
+                                  missionStatus={currentMission?.status}
+                                  draftDelivered={articleDelivered}
                                 />
                               ) : st.answer && noteResult ? (
                                 /* 小红书笔记包:字段级可复制卡片 + 开启托管写操作后的「存草稿箱」(续聊 + 审批门) */
@@ -1061,6 +1068,8 @@ export function CockpitView({
                                   onRunMission={onRunMission}
                                   draft={noteDraft}
                                   draftEnabled={noteDraft?.managedGate !== 'xhs' || xhsDraftEnabled}
+                                  missionStatus={currentMission?.status}
+                                  draftDelivered={noteDelivered}
                                 />
                               ) : (
                                 st.answer && (

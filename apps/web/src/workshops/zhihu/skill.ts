@@ -30,6 +30,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         draft: {
           label: '存入知乎草稿(经我审批后填入,发布由我在知乎人工完成)',
           build: buildZhihuDraftReplyText,
+          deliverTool: 'zhihu_save_article_draft',
           managedGate: 'zhihu',
           disabledHint:
             '想直接存进知乎草稿箱?到连接器页「知乎」卡片扫码登录并开启托管模式后,这里就会出现「存入知乎草稿」按钮;现在可以先「复制全文」手动粘贴。',

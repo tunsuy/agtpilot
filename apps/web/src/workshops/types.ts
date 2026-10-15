@@ -56,6 +56,12 @@ export interface ArtifactDraftSpec<Pkg> {
   managedGate?: 'xhs' | 'zhihu';
   /** managedGate 未开启时的引导文案(替代按钮) */
   disabledHint?: string;
+  /**
+   * 落稿工具名(xhs_save_note_draft / wechat_mp_create_draft / zhihu_save_article_draft):
+   * UI 扫描 mission 步骤,该工具成功执行过(标题或正文命中本篇)→ 按钮转
+   * 「已投递」不可再点 —— 防重复投递同篇。未声明时无投递态检测(按钮恒可点)。
+   */
+  deliverTool?: string;
 }
 
 export type ArtifactSpec =

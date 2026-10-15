@@ -19,6 +19,8 @@ import {
   type ArticlePackage,
   type ArticlePackageParseResult,
 } from '../../workshops/shared/article-package';
+import { isDraftDelivered, type DraftDeliveryIndex } from '../../lib/draft-delivery';
+import type { Mission } from '../../types/agent';
 
 /** 卡片侧的投递声明形状(来自工坊包 ArtifactDraftSpec,结构兼容即可) */
 export interface ArticleDraftSpecProp {
@@ -63,6 +65,8 @@ function ArticlePackageCard({
   onRunMission,
   draft,
   draftEnabled = true,
+  draftInFlight,
+  draftDelivered,
 }: {
   pkg: ArticlePackage;
   missionId?: string | null;
@@ -71,6 +75,10 @@ function ArticlePackageCard({
   draft?: ArticleDraftSpecProp;
   /** 托管写操作门已开启(无门工坊恒 true);未开启且声明了 disabledHint 时给引导 */
   draftEnabled?: boolean;
+  /** 任务在飞(ACTIVE/待审批/排队):投递轮进行中按钮禁用,防重复发指令 */
+  draftInFlight?: boolean;
+  /** 已落稿索引(标题/正文命中本篇 → 已投递态,不可再点) */
+  draftDelivered?: DraftDeliveryIndex;
 }) {
   const [selectedTitle, setSelectedTitle] = useState(0);
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
@@ -87,6 +95,8 @@ function ArticlePackageCard({
     if (!draft) return;
     onRunMission(draft.build(pkg, selectedTitle), undefined, missionId || undefined);
   };
+
+  const delivered = isDraftDelivered(draftDelivered, pkg.titles[selectedTitle], pkg.body);
 
   const canDraft = Boolean(draft) && draftEnabled;
 
@@ -214,15 +224,38 @@ function ArticlePackageCard({
           </div>
         )}
 
-        {/* 存草稿:续聊本 mission → Agent 按工坊声明调存草稿工具(high 审批门);发布永远人工 */}
+        {/* 存草稿:续聊本 mission → Agent 按工坊声明调存草稿工具(high 审批门);发布永远人工。
+            投递终态从 mission 步骤推导:已落稿 → 已投递不可再点(防重复存草稿);
+            任务在飞 → 投递中禁用;审批被拒/失败 → 无 DONE 步骤,按钮回到可点(可重试) */}
         {canDraft && draft ? (
           <button
             type="button"
             onClick={handleDraft}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition shadow-xs"
+            disabled={delivered || draftInFlight}
+            className={`w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition shadow-xs ${
+              delivered
+                ? 'bg-zinc-100 text-zinc-400 cursor-default'
+                : draftInFlight
+                  ? 'bg-emerald-300 text-white cursor-not-allowed'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+            }`}
           >
-            <SendHorizonal className="h-3.5 w-3.5" />
-            {draft.label}
+            {delivered ? (
+              <>
+                <Check className="h-3.5 w-3.5" />
+                已存入草稿箱
+              </>
+            ) : draftInFlight ? (
+              <>
+                <span className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                投递中…
+              </>
+            ) : (
+              <>
+                <SendHorizonal className="h-3.5 w-3.5" />
+                {draft.label}
+              </>
+            )}
           </button>
         ) : draft && draft.disabledHint ? (
           <p className="px-3 py-2 rounded-xl bg-zinc-50 border border-zinc-200 text-[11px] text-zinc-500 leading-relaxed">
@@ -241,14 +274,22 @@ export function ArticlePackageList({
   onRunMission,
   draft,
   draftEnabled = true,
+  missionStatus,
+  draftDelivered,
 }: {
   result: ArticlePackageParseResult;
   missionId?: string | null;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
   draft?: ArticleDraftSpecProp;
   draftEnabled?: boolean;
+  /** 任务状态:ACTIVE/WAITING_APPROVAL/QUEUED 期间投递按钮禁用(投递轮在飞) */
+  missionStatus?: Mission['status'];
+  /** 已落稿索引(标题/正文命中 → 各卡独立转「已存入草稿箱」) */
+  draftDelivered?: DraftDeliveryIndex;
 }) {
   const [showFallback, setShowFallback] = useState(false);
+  const draftInFlight =
+    missionStatus === 'ACTIVE' || missionStatus === 'WAITING_APPROVAL' || missionStatus === 'QUEUED';
 
   return (
     <div className="space-y-3">
@@ -260,6 +301,8 @@ export function ArticlePackageList({
           onRunMission={onRunMission}
           draft={draft}
           draftEnabled={draftEnabled}
+          draftInFlight={draftInFlight}
+          draftDelivered={draftDelivered}
         />
       ))}
       {result.fallback && (

@@ -301,7 +301,7 @@ describe('runSkillSteps · 执行器', () => {
     expect(out.flags.autosaved).toBe(false);
   });
 
-  it('insertText/fill 的 markdown-plain 转换:填入的是转出的纯文本,不是 Markdown 原文', async () => {
+  it('insertText/fill 的 markdown-plain 转换:填入的是排版化纯文本,不是 Markdown 原文', async () => {
     const skill = sampleSkill({
       steps: [
         { kind: 'fill', selector: '#editor', param: 'title', transform: 'markdown-plain' },
@@ -310,8 +310,9 @@ describe('runSkillSteps · 执行器', () => {
     }) as any;
     const page = fakePage();
     await runSkillSteps(page, skill, { title: '**粗**标题', body: '## 小节\n- 要点' });
-    expect(page.fill).toHaveBeenCalledWith('#editor', '粗标题', expect.anything());
-    expect(page.keyboard.insertText).toHaveBeenCalledWith('小节\n• 要点');
+    // 排版约定:加粗转「」,标题 ▍ 前缀,列表 • 弹头
+    expect(page.fill).toHaveBeenCalledWith('#editor', '「粗」标题', expect.anything());
+    expect(page.keyboard.insertText).toHaveBeenCalledWith('▍ 小节\n\n• 要点');
   });
 
   it('transform 闭集:未知值在加载校验拒收,运行时兜底原文返回', async () => {

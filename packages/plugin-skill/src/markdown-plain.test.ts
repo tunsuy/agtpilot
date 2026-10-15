@@ -1,71 +1,69 @@
 import { describe, it, expect } from 'vitest';
 import { markdownToPlainText } from './markdown-plain';
 
-
 /**
- * Markdown → 纯文本(知乎草稿投递,2026-10 生产实例:insertText 原样灌入
- * Markdown 源文,草稿里满屏井号/星号/连字符记号)。转换目标:记号剥除、
- * 结构保留为可读行 —— 列表转 •、链接保地址、代码块内容原样、连续空行压一行。
+ * Markdown → 排版化纯文本(知乎草稿投递,2026-10 生产实例:insertText 原样
+ * 灌入 Markdown 源文,草稿里满屏井号/星号/连字符记号)。
+ *
+ * 解析走 remark(react-markdown 同源),渲染是「纯文本里怎么好看」的排版
+ * 约定:▍标题、「加粗」、•/◦/▪ 层级列表、❝引用、——— 分割线;代码块内容
+ * 原样;链接保「文字(地址)」;块间空一行。
  */
 
-describe('markdownToPlainText', () => {
-  it('井号标题剥记号保留文字行', () => {
-    expect(markdownToPlainText('## 为什么是架构\n正文')).toBe('为什么是架构\n正文');
-    expect(markdownToPlainText('###### 六级也一样')).toBe('六级也一样');
-    // 行中 # 不动(话题标签语义),行首无空格后跟文字才是标题
-    expect(markdownToPlainText('话题 #标签 保留')).toBe('话题 #标签 保留');
+describe('markdownToPlainText · 排版', () => {
+  it('标题:▍ 前缀 + 前后空行(所有层级同档,层级靠正文表达)', () => {
+    expect(markdownToPlainText('## 为什么是架构\n正文')).toBe('▍ 为什么是架构\n\n正文');
+    expect(markdownToPlainText('开篇\n\n# 大标题\n\n结尾')).toBe('开篇\n\n▍ 大标题\n\n结尾');
   });
 
-  it('无序列表转 •,嵌套缩进保留;有序列表保留编号', () => {
-    expect(markdownToPlainText('- 第一项\n- 第二项')).toBe('• 第一项\n• 第二项');
-    expect(markdownToPlainText('* 星号项\n+ 加号项')).toBe('• 星号项\n• 加号项');
-    expect(markdownToPlainText('父项\n  - 嵌套项')).toBe('父项\n  • 嵌套项');
-    expect(markdownToPlainText('1. 第一\n2. 第二')).toBe('1. 第一\n2. 第二');
-  });
-
-  it('加粗/斜体/行内代码记号剥除,文字保留', () => {
-    expect(markdownToPlainText('这是**重点**内容')).toBe('这是重点内容');
-    expect(markdownToPlainText('__粗体__与*斜体*')).toBe('粗体与斜体');
+  it('加粗转「」中文强调,斜体/删除线/行内代码剥记号留字', () => {
+    expect(markdownToPlainText('这是**重点**内容')).toBe('这是「重点」内容');
+    expect(markdownToPlainText('**全句强调**')).toBe('「全句强调」');
+    expect(markdownToPlainText('*斜体*与~~删除~~')).toBe('斜体与删除');
     expect(markdownToPlainText('调用 `npm run` 即可')).toBe('调用 npm run 即可');
-    // 单下划线不剥(snake_case 词不误伤)
-    expect(markdownToPlainText('变量 user_name 保留')).toBe('变量 user_name 保留');
   });
 
-  it('链接转「文字(地址)」,图片转占位锚点', () => {
+  it('无序列表按层级换弹头:• → ◦ → ▪,嵌套缩进可见', () => {
+    expect(markdownToPlainText('- 第一项\n- 第二项')).toBe('• 第一项\n• 第二项');
+    expect(
+      markdownToPlainText('- 一级\n  - 二级\n    - 三级\n- 又一级'),
+    ).toBe('• 一级\n◦ 二级\n▪ 三级\n• 又一级');
+  });
+
+  it('有序列表保留编号;松散列表(项间空行)压成紧凑行', () => {
+    expect(markdownToPlainText('1. 第一\n2. 第二')).toBe('1. 第一\n2. 第二');
+    expect(markdownToPlainText('- 甲\n\n- 乙')).toBe('• 甲\n• 乙');
+  });
+
+  it('引用 ❝ 前缀;分割线 ———;链接保地址,图片留锚点', () => {
+    expect(markdownToPlainText('> 引文一行')).toBe('❝ 引文一行');
+    expect(markdownToPlainText('上段\n\n---\n\n下段')).toBe(`上段\n\n———————————\n\n下段`);
     expect(markdownToPlainText('见 [官方文档](https://example.com/docs)')).toBe(
       '见 官方文档(https://example.com/docs)',
     );
-    expect(markdownToPlainText('前 ![架构图](https://x.com/a.png) 后')).toBe('前 (图片:架构图) 后');
+    expect(markdownToPlainText('前![架构图](https://x.com/a.png)后')).toBe('前(图片:架构图)后');
   });
 
-  it('引用剥 >,水平线转 ———,连续空行压成一行,首尾去空白', () => {
-    expect(markdownToPlainText('> 引文一行')).toBe('引文一行');
-    expect(markdownToPlainText('上段\n\n\n\n下段')).toBe('上段\n\n下段');
-    expect(markdownToPlainText('  \n\n---\n\n  ')).toBe('———');
-  });
-
-  it('围栏代码块:栏行丢弃、块内容原样(行内记号不剥)', () => {
+  it('代码块:栏行丢弃、内容原样独立成段(行内记号不剥)', () => {
     const md = '说明\n\n```ts\nconst x = `t`;\nif (a ** b) {}\n```\n\n后续';
     expect(markdownToPlainText(md)).toBe('说明\n\nconst x = `t`;\nif (a ** b) {}\n\n后续');
   });
 
-  it('整篇典型文章:所有记号清干净,结构可读', () => {
-    const md = [
-      '# 主标题',
-      '',
-      '**开篇**一句话,含 [引用](https://a.b/c)。',
-      '',
-      '## 第一节',
-      '',
-      '- 要点一',
-      '- 要点二 `code`',
-      '',
-      '结尾段。',
-    ].join('\n');
-    const out = markdownToPlainText(md);
-    expect(out).not.toMatch(/(^|\n)#|\*\*|\n- /);
-    expect(out).toContain('• 要点一');
-    expect(out).toContain('第一节');
-    expect(out).toContain('引用(https://a.b/c)');
+  it('嵌套结构(标题里的行内记号/列表里的嵌套列表)正确吃下', () => {
+    const md = '## **性能**三问\n\n- 吞吐:见 [基准](https://b.dev)\n  - 冷启动\n  - 稳态\n- 延迟';
+    expect(markdownToPlainText(md)).toBe(
+      '▍ 「性能」三问\n\n• 吞吐:见 基准(https://b.dev)\n◦ 冷启动\n◦ 稳态\n• 延迟',
+    );
+  });
+
+  it('纯文本原样过(不是 md 的正文零扰动),首尾空白去掉', () => {
+    expect(markdownToPlainText('普通一段话,没有任何记号。\n')).toBe('普通一段话,没有任何记号。');
+    expect(markdownToPlainText('话题 #标签 保留')).toBe('话题 #标签 保留');
+    expect(markdownToPlainText('变量 user_name 保留')).toBe('变量 user_name 保留');
+  });
+
+  it('GFM 任务列表与表格:☐/☑ 勾选框,表格单元格 | 连接', () => {
+    expect(markdownToPlainText('- [ ] 待办\n- [x] 已完成')).toBe('• ☐ 待办\n• ☑ 已完成');
+    expect(markdownToPlainText('| 项 | 值 |\n| --- | --- |\n| a | 1 |')).toBe('项 | 值\na | 1');
   });
 });

@@ -1,4 +1,10 @@
-import { normalizeTaskPack, renderHandoffPack, type RunnerTaskPack } from '@agtpilot/protocol';
+import {
+  normalizeTaskPack,
+  renderHandoffPack,
+  type RunnerEvent,
+  type RunnerTaskPack,
+  type RunnerTaskRecord,
+} from '@agtpilot/protocol';
 import type { OssOpportunity } from '../workshops/oss_radar/opportunities';
 
 /**
@@ -40,7 +46,123 @@ export interface RunnerTaskSummary {
   prUrl?: string;
   error?: string;
   updatedAt: number;
+  /** runner 领取后绑定的设备 */
   deviceId?: string;
+  /** 派发时指定的目标设备(排队中还未被领取时的归属依据) */
+  targetDeviceId?: string;
+  /** 最近一条可读进展(runner 上行事件摘要;任务列表单行展示用) */
+  latest?: { text: string; at: number };
+}
+
+/**
+ * 任务状态徽章(M2 事件回流):状态机 9 态 → 用户话术。
+ * 机会卡徽章与设备页任务列表共用(单一话术来源)。
+ */
+export const TASK_STATE_META: Record<string, { label: string; cls: string }> = {
+  queued: { label: '已派发 · 排队中', cls: 'bg-zinc-50 text-zinc-600 border-zinc-200' },
+  dispatched: { label: '已被 runner 领取', cls: 'bg-sky-50 text-sky-700 border-sky-100' },
+  running: { label: '本地执行中', cls: 'bg-sky-50 text-sky-700 border-sky-100' },
+  awaiting_approval: { label: '待云端审批', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  finishing: { label: '发布执行中', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  done: { label: '完成', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  failed: { label: '失败', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  cancelled: { label: '已取消', cls: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+  expired: { label: '已过期', cls: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+};
+
+/** 未知态兜底(zinc 中性) */
+export function runnerStateMeta(state: string): { label: string; cls: string } {
+  return TASK_STATE_META[state] ?? { label: state, cls: 'bg-zinc-50 text-zinc-600 border-zinc-200' };
+}
+
+/** 非终态 = 仍在跑,任务列表轮询降频/升级的依据 */
+export function isRunnerTaskActive(state: string): boolean {
+  return !['done', 'failed', 'cancelled', 'expired'].includes(state);
+}
+
+/** 单条进展文本(倒序找最近一条有内容的 progress/error 事件;result/state 事件不适合单行展示,跳过) */
+function progressText(e: RunnerEvent): string | null {
+  const p = e.payload ?? {};
+  if (e.type === 'progress') {
+    const summary = typeof p.summary === 'string' ? p.summary.trim() : '';
+    if (!summary) return null; // result 类 progress 无摘要,继续往前找
+    const tool = typeof p.tool === 'string' ? `${p.tool} ` : '';
+    return `${tool}${summary}`.slice(0, 120);
+  }
+  if (e.type === 'error' && typeof p.message === 'string' && p.message.trim()) {
+    return p.message.slice(0, 120);
+  }
+  return null;
+}
+
+/** 任务最近一条可读进展(列表单行);无事件/全是无摘要事件 → undefined */
+export function latestTaskProgress(
+  events?: RunnerEvent[]
+): { text: string; at: number } | undefined {
+  if (!events || events.length === 0) return undefined;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const text = progressText(events[i]);
+    if (text) return { text, at: events[i].at };
+  }
+  return undefined;
+}
+
+/** 云端任务记录 → 概览行(mine / detail 路由同源出口,摘要字段不含完整事件) */
+export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
+  const latest = latestTaskProgress(t.events);
+  return {
+    taskId: t.taskId,
+    state: t.state,
+    repo: t.pack.repo,
+    issueUrl: t.pack.issueUrl,
+    workBranch: t.pack.workBranch,
+    ...(t.prUrl ? { prUrl: t.prUrl } : {}),
+    ...(t.error ? { error: t.error } : {}),
+    updatedAt: t.updatedAt,
+    ...(t.deviceId ? { deviceId: t.deviceId } : {}),
+    ...(t.targetDeviceId ? { targetDeviceId: t.targetDeviceId } : {}),
+    ...(latest ? { latest } : {}),
+  };
+}
+
+/** 设备归属任务:runner 领取绑定(deviceId)或派发时指定(targetDeviceId,排队中未被领取) */
+export function tasksForDevice(tasks: RunnerTaskSummary[], deviceId: string): RunnerTaskSummary[] {
+  return tasks.filter((t) => t.deviceId === deviceId || t.targetDeviceId === deviceId);
+}
+
+/** 任务明细时间线行(事件 → 展示文本;payload 大字段不透出,服务端截断) */
+export interface RunnerTaskEventView {
+  at: number;
+  kind: 'state' | 'progress' | 'error';
+  text: string;
+}
+
+/**
+ * 事件 → 时间线(旧 → 新,取最近 limit 条):progress 逐条展示(agent 干活轨迹),
+ * state 展示状态跳变,error 展示失败原因;phase1/phase2_result 的产出细节走审批卡,不进时间线。
+ */
+export function taskEventTimeline(events?: RunnerEvent[], limit = 60): RunnerTaskEventView[] {
+  if (!events || events.length === 0) return [];
+  const rows: RunnerTaskEventView[] = [];
+  for (let i = Math.max(0, events.length - limit); i < events.length; i++) {
+    const e = events[i];
+    const p = e.payload ?? {};
+    if (e.type === 'state') {
+      const to = typeof p.state === 'string' ? p.state : '';
+      if (to) rows.push({ at: e.at, kind: 'state', text: `状态 → ${runnerStateMeta(to).label}` });
+    } else if (e.type === 'progress') {
+      const summary = typeof p.summary === 'string' ? p.summary.slice(0, 200) : '';
+      const tool = typeof p.tool === 'string' ? p.tool : '';
+      if (summary || tool) {
+        // 工具行「Bash · pytest -x」;文本行只留正文
+        rows.push({ at: e.at, kind: 'progress', text: [tool, summary].filter(Boolean).join(' · ') });
+      }
+    } else if (e.type === 'error') {
+      const message = typeof p.message === 'string' ? p.message.slice(0, 300) : '';
+      if (message) rows.push({ at: e.at, kind: 'error', text: message });
+    }
+  }
+  return rows;
 }
 
 export interface DispatchDraftOptions {

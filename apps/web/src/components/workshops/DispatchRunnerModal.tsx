@@ -297,6 +297,10 @@ export function DispatchRunnerModal({
                 红线:本地 agent 只修这个 Issue、禁 push/禁网(工具白名单固化);产出停在本地 commit,
                 push/PR 经审批卡(含手机 Web Push)批准后由 runner 逐字执行固化命令,别无对外发布路径。
               </p>
+              <p className="text-[10px] text-zinc-400 leading-relaxed">
+                派发后去哪看进展:顶部「设备」页点开这台设备 —— 它的任务列表里状态变化与本地 agent 的干活轨迹
+                (工具调用 / 阶段文本)实时滚动,完成后审批卡会出现在驾驶舱。
+              </p>
 
               {error && (
                 <div className="px-3 py-2 rounded-lg bg-rose-50 border border-rose-100 text-xs text-rose-700">{error}</div>

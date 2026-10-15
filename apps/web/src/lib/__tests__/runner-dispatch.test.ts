@@ -110,3 +110,157 @@ describe('buildTaskPackFromOpportunity · viaFork(经 fork 派发)', () => {
     expect(buildTaskPackFromOpportunity(opp, {})!.viaFork).toBeUndefined();
   });
 });
+
+// ---------- 概览/时间线(mine + detail 路由与设备页任务列表的数据源) ----------
+
+import {
+  isRunnerTaskActive,
+  latestTaskProgress,
+  runnerStateMeta,
+  summarizeRunnerTask,
+  taskEventTimeline,
+  tasksForDevice,
+  type RunnerTaskSummary,
+} from '../runner-dispatch';
+import type { RunnerEvent, RunnerTaskRecord } from '@agtpilot/protocol';
+
+function ev(at: number, type: RunnerEvent['type'], payload?: Record<string, unknown>): RunnerEvent {
+  return { eventId: `ev_${at}`, taskId: 'rtask_1', deviceId: 'dev_1', at, type, ...(payload ? { payload } : {}) };
+}
+
+describe('latestTaskProgress(任务列表单行:最近一条可读进展)', () => {
+  it('倒序找最近一条带摘要的 progress;工具事件拼「工具 摘要」', () => {
+    const events = [
+      ev(1, 'state', { state: 'running' }),
+      ev(2, 'progress', { kind: 'tool', tool: 'Read', summary: 'sampling_params.py' }),
+      ev(3, 'progress', { kind: 'result' }), // result 无摘要,跳过
+      ev(4, 'progress', { kind: 'text', summary: '定位到校验分支' }),
+    ];
+    expect(latestTaskProgress(events)).toEqual({ text: '定位到校验分支', at: 4 });
+    expect(latestTaskProgress([ev(2, 'progress', { kind: 'tool', tool: 'Bash', summary: 'pytest -x' })])).toEqual({
+      text: 'Bash pytest -x',
+      at: 2,
+    });
+  });
+
+  it('无 progress 摘要时兜底 error 消息;全空/缺省 → undefined', () => {
+    expect(latestTaskProgress([ev(1, 'state', { state: 'failed' }), ev(2, 'error', { message: '验收命令未通过' })])).toEqual({
+      text: '验收命令未通过',
+      at: 2,
+    });
+    expect(latestTaskProgress([ev(1, 'state', { state: 'queued' })])).toBeUndefined();
+    expect(latestTaskProgress([])).toBeUndefined();
+    expect(latestTaskProgress(undefined)).toBeUndefined();
+  });
+
+  it('超长摘要截断到 120 字符(单行展示形状)', () => {
+    const long = 'x'.repeat(300);
+    const r = latestTaskProgress([ev(1, 'progress', { kind: 'text', summary: long })])!;
+    expect(r.text.length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe('summarizeRunnerTask(云端任务记录 → 概览行)', () => {
+  const record = {
+    taskId: 'rtask_1',
+    userId: 'u1',
+    pack: {
+      taskId: 'rtask_1',
+      kind: 'oss_contribution' as const,
+      repo: 'milvus-io/milvus',
+      issueUrl: 'https://github.com/milvus-io/milvus/issues/52049',
+      workBranch: 'contrib/oss-radar-52049',
+      constraints: [],
+      acceptance: {},
+      prDraft: { title: 't', bodyTemplate: '' },
+      executor: { name: 'claude-code', maxTurns: 10, timeoutMinutes: 5 },
+    },
+    state: 'running' as const,
+    createdAt: 1,
+    updatedAt: 5,
+    expiresAt: 9,
+    events: [ev(4, 'progress', { kind: 'tool', tool: 'Bash', summary: 'git status' })],
+  } as RunnerTaskRecord;
+
+  it('摘要字段齐 + latest 来自事件;pack 大字段(约束/草稿)不透出', () => {
+    const s = summarizeRunnerTask(record);
+    expect(s).toMatchObject({
+      taskId: 'rtask_1',
+      state: 'running',
+      repo: 'milvus-io/milvus',
+      workBranch: 'contrib/oss-radar-52049',
+      updatedAt: 5,
+      latest: { text: 'Bash git status', at: 4 },
+    });
+    expect(JSON.stringify(s)).not.toContain('prDraft');
+    expect(JSON.stringify(s)).not.toContain('events');
+  });
+
+  it('无事件 → 无 latest 字段(不是 undefined 值的键)', () => {
+    const s = summarizeRunnerTask({ ...record, events: [] });
+    expect('latest' in s).toBe(false);
+  });
+});
+
+describe('taskEventTimeline(事件 → 展示时间线,旧→新,截最近 limit 条)', () => {
+  const events: RunnerEvent[] = [
+    ev(1, 'state', { state: 'dispatched' }),
+    ev(2, 'progress', { kind: 'tool', tool: 'Read', summary: 'sampling.py' }),
+    ev(3, 'progress', { kind: 'text', summary: '开始修复' }),
+    ev(4, 'phase1_result', { commitHash: 'abc', diffstat: 'big', testTail: 'ok' }),
+    ev(5, 'state', { state: 'awaiting_approval' }),
+    ev(6, 'error', { message: '发布失败' }),
+  ];
+
+  it('state/progress/error 进时间线;phase1_result 产出细节不透出(走审批卡)', () => {
+    const rows = taskEventTimeline(events);
+    expect(rows.map((r) => r.kind)).toEqual(['state', 'progress', 'progress', 'state', 'error']);
+    expect(rows[0].text).toBe('状态 → 已被 runner 领取');
+    expect(rows[1].text).toBe('Read · sampling.py');
+    expect(rows[2].text).toBe('开始修复');
+    expect(rows[4].text).toBe('发布失败');
+    expect(rows.map((r) => r.at)).toEqual([1, 2, 3, 5, 6]);
+    expect(JSON.stringify(rows)).not.toContain('commitHash');
+  });
+
+  it('只取最近 limit 条(尾部窗口);空/缺省 → []', () => {
+    const rows = taskEventTimeline(events, 2);
+    expect(rows.map((r) => r.kind)).toEqual(['state', 'error']);
+    expect(taskEventTimeline(undefined)).toEqual([]);
+    expect(taskEventTimeline([])).toEqual([]);
+  });
+});
+
+describe('runnerStateMeta / isRunnerTaskActive(话术与在途判定共用)', () => {
+  it('9 态全覆盖;未知态 zinc 兜底不裸奔', () => {
+    for (const s of ['queued', 'dispatched', 'running', 'awaiting_approval', 'finishing', 'done', 'failed', 'cancelled', 'expired']) {
+      expect(runnerStateMeta(s).label.length).toBeGreaterThan(0);
+    }
+    expect(runnerStateMeta('mystery').label).toBe('mystery');
+  });
+
+  it('终态四兄弟不在途,其余在途', () => {
+    expect(isRunnerTaskActive('running')).toBe(true);
+    expect(isRunnerTaskActive('awaiting_approval')).toBe(true);
+    for (const s of ['done', 'failed', 'cancelled', 'expired']) expect(isRunnerTaskActive(s)).toBe(false);
+  });
+});
+
+describe('tasksForDevice(设备详情归属:领取绑定或派发指定)', () => {
+  const tasks = [
+    { taskId: 'a', device: undefined, target: 'dev_1' }, // 排队中:派发指定,还未被领取
+    { taskId: 'b', device: 'dev_1', target: 'dev_1' }, // 领取后绑定
+    { taskId: 'c', device: 'dev_2', target: undefined }, // 其他设备
+  ];
+  const asTasks = tasks.map((t) => ({ taskId: t.taskId, deviceId: t.device, targetDeviceId: t.target })) as RunnerTaskSummary[];
+
+  it('排队任务按 targetDeviceId 归入目标设备(刚派发、runner 未领取时也能在设备详情看到)', () => {
+    expect(tasksForDevice(asTasks, 'dev_1').map((t) => t.taskId)).toEqual(['a', 'b']);
+  });
+
+  it('别的设备的任务不串门;无归属任务不进任何设备详情', () => {
+    expect(tasksForDevice(asTasks, 'dev_2').map((t) => t.taskId)).toEqual(['c']);
+    const orphan = [{ taskId: 'x' }] as RunnerTaskSummary[];
+    expect(tasksForDevice(orphan, 'dev_1')).toEqual([]);
+  });
+});

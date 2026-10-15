@@ -22,6 +22,7 @@ import { KanbanPlanCard } from '../KanbanPlanCard';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
+import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 
 interface MobileActivityViewProps {
   missions: Mission[];
@@ -91,6 +92,27 @@ export function MobileActivityView({
   const approvalTopRef = useRef<HTMLDivElement>(null);
   const prevApprovalCount = useRef(approvalRequests.length);
   const prevSuggestionCount = useRef(connectorSuggestions.length);
+
+  // 本地 runner 任务(派发到本地的贡献):最新一条进展实时滚动
+  const [runnerTasks, setRunnerTasks] = useState<RunnerTaskSummary[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/runner/tasks/mine');
+        const j = await r.json();
+        if (!cancelled && j?.success && Array.isArray(j.tasks)) setRunnerTasks(j.tasks.slice(0, 10));
+      } catch {
+        /* 移动端弱网不打扰主流程;下个轮询窗口重试 */
+      }
+    };
+    load();
+    const timer = setInterval(load, 8_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   // 新审批/新授权请求进来时自动滚到眼前（只在数量增加时触发，不打断日常滚动）
   useEffect(() => {
@@ -223,6 +245,53 @@ export function MobileActivityView({
                 </div>
               </li>
             ))}
+          </ul>
+        </section>
+      )}
+
+      {/* 本地 runner 任务:派发到本地的贡献进展(最新一条上行事件滚动) */}
+      {runnerTasks.length > 0 && (
+        <section className="mb-5">
+          <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 px-1">
+            本地任务 · {runnerTasks.filter((t) => isRunnerTaskActive(t.state)).length} 个在途
+          </h2>
+          <ul className="space-y-2">
+            {runnerTasks.map((t) => {
+              const meta = runnerStateMeta(t.state);
+              const active = isRunnerTaskActive(t.state);
+              return (
+                <li
+                  key={t.taskId}
+                  className={`rounded-xl border px-3.5 py-3 shadow-sm ${active ? 'border-sky-200 bg-white' : 'border-zinc-200 bg-white'}`}
+                >
+                  <div className="flex items-center gap-2">
+                    {active && <Loader2 className="h-3.5 w-3.5 text-sky-500 animate-spin shrink-0" />}
+                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${meta.cls}`}>{meta.label}</span>
+                    <span className="text-xs font-mono text-zinc-900 truncate flex-1 min-w-0">{t.repo}</span>
+                    {t.state === 'done' && t.prUrl && (
+                      <a
+                        href={t.prUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-sky-600 hover:underline shrink-0"
+                      >
+                        PR
+                      </a>
+                    )}
+                  </div>
+                  {(t.latest?.text || (t.state === 'failed' && t.error)) && (
+                    <p
+                      className="text-[11px] text-zinc-500 mt-1.5 truncate"
+                      title={t.latest?.text ?? t.error ?? ''}
+                    >
+                      {t.latest?.text ?? t.error?.slice(0, 120)}
+                      {' · '}
+                      {fmtTime(t.updatedAt)}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

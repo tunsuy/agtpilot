@@ -20,7 +20,7 @@ import {
   type OssOpportunity,
   type OssOpportunityParseResult,
 } from '../../workshops/oss_radar/opportunities';
-import { handoffPackFor, pickIssueUrl, type RunnerTaskSummary } from '../../lib/runner-dispatch';
+import { handoffPackFor, pickIssueUrl, runnerStateMeta, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { DispatchRunnerModal } from './DispatchRunnerModal';
 
 /** 单字段复制按钮:成功打勾、失败明示,不静默假成功(与笔记包卡同款) */
@@ -57,21 +57,9 @@ function difficultyClass(difficulty: string): string {
   return 'bg-zinc-50 text-zinc-600 border-zinc-200';
 }
 
-/** 任务状态徽章(M2 事件回流):状态机 9 态 → 用户话术;failed 悬浮看原因;done 附 PR 直达 */
-const TASK_STATE_META: Record<string, { label: string; cls: string }> = {
-  queued: { label: '已派发 · 排队中', cls: 'bg-zinc-50 text-zinc-600 border-zinc-200' },
-  dispatched: { label: '已被 runner 领取', cls: 'bg-sky-50 text-sky-700 border-sky-100' },
-  running: { label: '本地执行中', cls: 'bg-sky-50 text-sky-700 border-sky-100' },
-  awaiting_approval: { label: '待云端审批', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  finishing: { label: '发布执行中', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  done: { label: '完成', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  failed: { label: '失败', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
-  cancelled: { label: '已取消', cls: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
-  expired: { label: '已过期', cls: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
-};
-
+/** 任务状态徽章(M2 事件回流):状态机 9 态话术与设备页任务列表共用 runnerStateMeta */
 function TaskStateBadge({ task }: { task: RunnerTaskSummary }) {
-  const meta = TASK_STATE_META[task.state] ?? { label: task.state, cls: 'bg-zinc-50 text-zinc-600 border-zinc-200' };
+  const meta = runnerStateMeta(task.state);
   return (
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${meta.cls} min-w-0`}

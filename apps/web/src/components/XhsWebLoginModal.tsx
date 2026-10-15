@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 平台网页版扫码登录弹窗(scenario-loop P2 模块 1;小红书 + 知乎共用)。
+ * 平台网页版扫码登录弹窗(scenario-loop P2 模块 1;小红书 / 知乎 / 番茄共用)。
  *
  * 远程部署形态:浏览器在服务器上无头运行,弹窗实时回传页面截图,
  * 用户用手机 App 扫截图里的二维码 —— 全程登录态只落服务器
@@ -15,7 +15,7 @@ interface XhsWebLoginModalProps {
   /** 登录成功回调(连接器页刷新登录徽标) */
   onLoggedIn?: () => void;
   /** 目标平台(缺省 xhs,向后兼容旧调用) */
-  platform?: 'xhs' | 'zhihu';
+  platform?: 'xhs' | 'zhihu' | 'fanqie';
 }
 
 type Phase =
@@ -31,7 +31,7 @@ type Phase =
 
 /** 平台文案(与 browser-login 的 LOGIN_PLATFORMS 同源语义,前端只管展示) */
 const PLATFORM_UI: Record<
-  'xhs' | 'zhihu',
+  'xhs' | 'zhihu' | 'fanqie',
   { app: string; opening: string; waiting: string; iconClass: string; btnClass: string; subtitle: string }
 > = {
   xhs: {
@@ -49,6 +49,14 @@ const PLATFORM_UI: Record<
     iconClass: 'text-blue-500',
     btnClass: 'bg-blue-500 hover:bg-blue-600',
     subtitle: '登录态保存在本服务的浏览器环境,只用于把文章存进知乎草稿箱',
+  },
+  fanqie: {
+    app: '番茄作家后台',
+    opening: '正在打开番茄作家后台…',
+    waiting: '请用番茄作家助手 App 或手机浏览器扫码登录',
+    iconClass: 'text-orange-500',
+    btnClass: 'bg-orange-500 hover:bg-orange-600',
+    subtitle: '登录态保存在本服务的浏览器环境,只用于把章节存进番茄草稿箱(绝不发布)',
   },
 };
 

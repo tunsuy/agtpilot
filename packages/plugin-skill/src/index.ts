@@ -69,8 +69,8 @@ export interface ManagedGateRecord {
 }
 
 export interface SkillStoreAdapter {
-  /** 读平台托管记录(zhihu/xhs);无记录返回 undefined */
-  getManagedRecord(userId: string, platform: 'zhihu' | 'xhs'): ManagedGateRecord | undefined;
+  /** 读平台托管记录(zhihu/xhs/fanqie);无记录返回 undefined */
+  getManagedRecord(userId: string, platform: 'zhihu' | 'xhs' | 'fanqie'): ManagedGateRecord | undefined;
   /** 浏览器操作审计(限频计数用) */
   listAudit(userId: string): SkillAuditEntry[];
   /** 追加审计(成败都落) */
@@ -81,7 +81,18 @@ export interface SkillStoreAdapter {
 
 /** 动作词汇表:引擎认识的全部步骤类型(闭集;新增动作 = 改代码走评审,不是放文件) */
 export type SkillStep =
-  | { kind: 'goto'; url: string; waitUntil?: string; timeoutMs?: number }
+  | {
+      kind: 'goto';
+      url: string;
+      waitUntil?: string;
+      timeoutMs?: number;
+      /**
+       * URL 参数化(番茄章节管理这类带 id 的页面):url 里的 {name} 占位符按
+       * args 替换(encodeURIComponent 编码),params 声明允许替换的参数名
+       * (必须在 parameters 里声明;未列出的占位符原样保留)。缺省 = 纯静态 URL。
+       */
+      params?: string[];
+    }
   | {
       kind: 'waitForSelector';
       selector: string;
@@ -159,7 +170,7 @@ export interface ScriptSkillManifest {
   /** 额外参数校验(如正文最少字数) */
   checks?: Array<{ param: string; minLength?: number }>;
   /** 托管 opt-in 门:对应平台的 enabled + riskAckAt 缺一不可,否则不注入 */
-  gate?: { managed: 'zhihu' | 'xhs' };
+  gate?: { managed: 'zhihu' | 'xhs' | 'fanqie' };
   /** 登录门:导航前查 cookie,未登录不开浏览器、审计 not_logged_in、返回扫码引导 */
   login?: { homeUrl: string; cookieNames: string[]; hint: string };
   /** 每日限频(成败都计);env 可运行时调整 */
@@ -241,8 +252,8 @@ export function validateScriptSkill(raw: any): string | null {
   if (raw.dangerLevel !== undefined && !['low', 'medium', 'high'].includes(raw.dangerLevel)) {
     return 'dangerLevel 非法';
   }
-  if (raw.gate !== undefined && !['zhihu', 'xhs'].includes(raw.gate?.managed)) {
-    return 'gate.managed 仅支持 zhihu/xhs';
+  if (raw.gate !== undefined && !['zhihu', 'xhs', 'fanqie'].includes(raw.gate?.managed)) {
+    return 'gate.managed 仅支持 zhihu/xhs/fanqie';
   }
   if (raw.login !== undefined) {
     const l = raw.login;
@@ -275,6 +286,14 @@ export function validateScriptSkill(raw: any): string | null {
     switch (s.kind) {
       case 'goto':
         if (typeof s.url !== 'string' || !/^https:\/\//.test(s.url)) return `${at} goto.url 必须为 https`;
+        if (s.params !== undefined) {
+          if (!Array.isArray(s.params) || s.params.some((p) => typeof p !== 'string' || !p)) {
+            return `${at} goto.params 必须是参数名字符串数组`;
+          }
+          for (const p of s.params) {
+            if (!props[p]) return `${at} goto.params 引用了未声明的参数 ${p}`;
+          }
+        }
         break;
       case 'waitForSelector':
         if (typeof s.selector !== 'string' || !s.selector.trim()) return `${at} selector 缺失`;
@@ -465,9 +484,15 @@ export async function runSkillSteps(
 
   for (const step of skill.steps) {
     switch (step.kind) {
-      case 'goto':
-        await page.goto(step.url, { waitUntil: step.waitUntil || 'domcontentloaded', timeout: step.timeoutMs || 30000 });
+      case 'goto': {
+        // URL 参数化:声明的参数按 args 替换(编码);未声明的占位符原样保留
+        let url = step.url;
+        for (const p of step.params || []) {
+          url = url.replaceAll(`{${p}}`, encodeURIComponent(String(args?.[p] ?? '')));
+        }
+        await page.goto(url, { waitUntil: step.waitUntil || 'domcontentloaded', timeout: step.timeoutMs || 30000 });
         break;
+      }
 
       case 'waitForSelector': {
         // SPA 首屏渲染数秒:轮询等待(缺省 12×2s)

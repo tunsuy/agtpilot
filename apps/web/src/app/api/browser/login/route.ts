@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getAgentBackend } from '@/lib/agent-backend';
-import { markXhsLoginAt, markZhihuLoginAt } from '@/lib/user-store';
+import { markXhsLoginAt, markZhihuLoginAt, markFanqieLoginAt } from '@/lib/user-store';
 import {
   LOGIN_POLL_INTERVAL_MS,
   LOGIN_TIMEOUT_MS,
@@ -29,6 +29,7 @@ async function realDeps(platform: LoginPlatform): Promise<LoginDeps> {
     browser,
     onLoginSuccess: (userId) => {
       if (platform === 'zhihu') markZhihuLoginAt(userId);
+      else if (platform === 'fanqie') markFanqieLoginAt(userId);
       else markXhsLoginAt(userId);
     },
     pollIntervalMs: LOGIN_POLL_INTERVAL_MS,
@@ -36,7 +37,7 @@ async function realDeps(platform: LoginPlatform): Promise<LoginDeps> {
   };
 }
 
-/** POST:发起登录会话(?platform=xhs|zhihu,缺省 xhs;同用户已有进行中会话 → 409 带既有 sessionId) */
+/** POST:发起登录会话(?platform=xhs|zhihu|fanqie,缺省 xhs;同用户已有进行中会话 → 409 带既有 sessionId) */
 export async function POST(req: NextRequest) {
   try {
     const session = await auth();

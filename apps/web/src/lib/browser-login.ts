@@ -53,7 +53,7 @@ export const LOGIN_SETTLE_MS = 2000;
 export const LOGIN_SESSION_RETENTION_MS = 60_000;
 
 /** 支持的登录平台(每平台一套站点配置;新增平台只加配置,不改状态机) */
-export type LoginPlatform = 'xhs' | 'zhihu';
+export type LoginPlatform = 'xhs' | 'zhihu' | 'fanqie';
 
 export interface LoginPlatformConfig {
   appName: string;
@@ -112,6 +112,23 @@ export const LOGIN_PLATFORMS: Record<LoginPlatform, LoginPlatformConfig> = {
     smsInputSelector: 'input[placeholder*="手机号"]',
     /** 元素级截图目标(语义 class,非 emotion 哈希;页面唯一二维码容器):整帧里二维码太小扫不动 */
     qrCaptureSelector: '.Qrcode-container',
+  },
+  fanqie: {
+    appName: '番茄作家后台',
+    /**
+     * ⚠️ 全部待真实账号实测(2026-10 首版,按知乎同款流程上线后修正这里):
+     * - startUrl:未登录打开作家后台会被踢到登录页(spa 路由 /login),
+     *   登录页视图形态(扫码/短信)未实测,扫码态切换配置先按「默认可能短信」留空;
+     * - cookieNames:字节系护照登录后落 sessionid(.fanqienovel.com 域),
+     *   实际以扫码后 cookie 库为准修正;
+     * - loginUrlHint:/login 与 passport 字样(重定向回登录 = 未完成)。
+     */
+    startUrl: 'https://fanqienovel.com/main/writer/home',
+    cookieDomain: 'https://fanqienovel.com/',
+    cookieNames: ['sessionid'],
+    loginUrlHint: /login|passport|signin/i,
+    openingDetail: '正在打开番茄作家后台…',
+    waitingDetail: '请扫描页面中的二维码完成登录',
   },
 };
 

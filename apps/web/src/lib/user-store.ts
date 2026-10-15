@@ -65,6 +65,8 @@ export interface UserScopedData {
   xhsManaged?: XhsManagedRecord;
   /** 知乎托管模式开关与登录状态(与 xhsManaged 同构;opt-in 默认关闭,零迁移) */
   zhihuManaged?: ZhihuManagedRecord;
+  /** 番茄作者后台托管模式开关与登录状态(与 xhsManaged 同构;opt-in 默认关闭,零迁移) */
+  fanqieManaged?: FanqieManagedRecord;
   /** 写操作审计(浏览器存草稿/公众号官方 API 投草稿等;上限 200 条滚动,最近在前) */
   browserAudit?: BrowserAuditEntry[];
   /** TRS 技能卡(skill-cards.ts):任务轨迹蒸馏的五字段结构化经验;旧文件未知字段透传,零迁移 */
@@ -90,6 +92,12 @@ export interface XhsManagedRecord {
  * 每日存草稿上限缺省 3(可用 AGTPILOT_ZHIHU_DRAFT_DAILY_LIMIT 调整)。
  */
 export type ZhihuManagedRecord = XhsManagedRecord;
+
+/**
+ * 番茄作者后台托管模式记录(与小红书同构):opt-in + 风险已读 + 扫码登录时间。
+ * 每日存章节草稿上限缺省 3(可用 AGTPILOT_FANQIE_DRAFT_DAILY_LIMIT 调整)。
+ */
+export type FanqieManagedRecord = XhsManagedRecord;
 
 /** 浏览器写操作审计条目:谁在何时用哪个工具对哪个页面做了什么、结果如何(成败都落) */
 export interface BrowserAuditEntry {
@@ -592,6 +600,26 @@ export function markZhihuLoginAt(userId: string) {
   data.zhihuManaged = { enabled: false, ...(data.zhihuManaged || {}), lastLoginAt: Date.now() };
   saveUserData(data);
   return data.zhihuManaged;
+}
+
+// 番茄作者后台托管模式:与小红书/知乎三件套同构(开关/风险已读/登录时间)
+export function getFanqieManaged(userId: string): FanqieManagedRecord | undefined {
+  return getUserData(userId).fanqieManaged;
+}
+
+export function saveFanqieManaged(userId: string, record: FanqieManagedRecord): FanqieManagedRecord {
+  const data = getUserData(userId);
+  data.fanqieManaged = { ...(data.fanqieManaged || {}), ...record };
+  saveUserData(data);
+  return data.fanqieManaged;
+}
+
+/** 记录番茄网页版登录成功时间(登录态本体在浏览器 profile 目录,这里只记时间) */
+export function markFanqieLoginAt(userId: string) {
+  const data = getUserData(userId);
+  data.fanqieManaged = { enabled: false, ...(data.fanqieManaged || {}), lastLoginAt: Date.now() };
+  saveUserData(data);
+  return data.fanqieManaged;
 }
 
 /** 浏览器写操作审计:只增不改,最近在前,上限 200 条滚动 */

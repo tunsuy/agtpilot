@@ -151,6 +151,22 @@ describe('validateScriptSkill · 清单校验', () => {
     expect(validateScriptSkill(sampleSkill({ steps: [{ kind: 'insertText', param: 'nope' }] }))).toContain('未声明');
     expect(validateScriptSkill(sampleSkill({ checks: [{ param: 'nope', minLength: 5 }] }))).toContain('未声明');
   });
+
+  it('gate.managed:fanqie 放行,未知平台拒收', () => {
+    expect(validateScriptSkill(sampleSkill({ gate: { managed: 'fanqie' } }))).toBeNull();
+    expect(validateScriptSkill(sampleSkill({ gate: { managed: 'weibo' } }))).toContain('gate.managed');
+  });
+
+  it('goto.params:引用未声明参数拒收;声明齐了通过', () => {
+    const step = { kind: 'goto', url: 'https://example.com/write/{bookId}', params: ['nope'] };
+    expect(validateScriptSkill(sampleSkill({ steps: [step] }))).toContain('未声明的参数 nope');
+    const ok = { kind: 'goto', url: 'https://example.com/write/{bookId}', params: ['bookId'] };
+    expect(
+      validateScriptSkill(
+        sampleSkill({ parameters: { type: 'object', properties: { title: { type: 'string' }, bookId: { type: 'string' } }, required: ['title'] } , steps: [ok] })
+      )
+    ).toBeNull();
+  });
 });
 
 describe('loadScriptSkills · 目录热加载', () => {
@@ -294,6 +310,19 @@ describe('存储适配器 · gate / 限频 / 审计全部走注入的 store', ()
 });
 
 describe('runSkillSteps · 执行器', () => {
+  it('goto params 模板替换:声明的参数按 args 编码替换,未声明的占位符原样保留', async () => {
+    const skill = sampleSkill({
+      parameters: { type: 'object', properties: { bookId: { type: 'string' } }, required: ['bookId'] },
+      steps: [{ kind: 'goto', url: 'https://example.com/write/{bookId}/{other}', params: ['bookId'] }],
+    }) as any;
+    const page = fakePage();
+    await runSkillSteps(page, skill, { bookId: '7123456 89/xx' });
+    expect(page.goto).toHaveBeenCalledWith(
+      'https://example.com/write/7123456%2089%2Fxx/{other}',
+      expect.anything()
+    );
+  });
+
   it('运行时发布围栏:clickOrFocus 选择器含发布词 → 抛错拦截(双保险)', async () => {
     const forged = sampleSkill({ steps: [{ kind: 'clickOrFocus', selector: 'button.publish-btn:发布' }] }) as any;
     await expect(runSkillSteps(fakePage(), forged, {})).rejects.toThrow(/发布围栏/);

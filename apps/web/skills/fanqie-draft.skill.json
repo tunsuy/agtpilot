@@ -1,0 +1,74 @@
+{
+  "name": "fanqie_save_chapter_draft",
+  "description": "把一章小说(bookId 对应作品的章节)填进番茄作家后台网页版编辑器并存为草稿。正文为小说行文,偶发的 Markdown 记号自动转排版化纯文本再填入。绝不发布:发布/定时发布按钮被代码级围栏永久拦截,发布由作者本人在番茄后台或「番茄作家助手」App 完成。你开启托管模式时已一次性确认风险,之后存草稿直接执行、无需逐次审批;草稿存平台服务端、未发布前对外不可见。每次调用计入每日上限并落审计。",
+  "dangerLevel": "low",
+  "compensation": {
+    "kind": "partially-reversible",
+    "undoHint": "章节存为番茄账号草稿箱内的草稿,可在网页版「章节管理」直接删除;未发布前对外不可见"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "bookId": {
+        "type": "string",
+        "description": "作品 ID:网页版「章节管理」页地址里的那一段(fanqienovel.com/main/writer/chapter-manage/<bookId>),或让用户从「作品管理」进入章节管理后看地址栏"
+      },
+      "title": { "type": "string", "description": "章节标题(如「第12章 风起」;只写标题本体,不要带书名)" },
+      "body": { "type": "string", "description": "章节正文(纯小说行文;建议 1000 字以上,填入前自动剥除偶发的 Markdown 记号)" }
+    },
+    "required": ["bookId", "title", "body"]
+  },
+  "paramError": "bookId、title 与 body 必填(正文至少 50 字)",
+  "checks": [{ "param": "body", "minLength": 50 }],
+  "gate": { "managed": "fanqie" },
+  "login": {
+    "homeUrl": "https://fanqienovel.com/",
+    "cookieNames": ["sessionid"],
+    "hint": "番茄网页版尚未登录或登录态已失效。请引导用户到「连接器页 → 番茄作者后台 → 网页版扫码登录」,完成后重试。"
+  },
+  "dailyLimit": { "default": 3, "env": "AGTPILOT_FANQIE_DRAFT_DAILY_LIMIT" },
+  "auditAction": "save_chapter_draft",
+  "steps": [
+    {
+      "kind": "goto",
+      "url": "https://fanqienovel.com/main/writer/chapter-manage/{bookId}",
+      "params": ["bookId"],
+      "waitUntil": "domcontentloaded",
+      "timeoutMs": 30000
+    },
+    {
+      "kind": "waitForSelector",
+      "selector": "button:has-text(\"新建章节\")",
+      "retries": 12,
+      "intervalMs": 2000,
+      "abortIfUrl": "login|passport|signin",
+      "abortAs": "not_logged_in",
+      "timeoutError": "章节管理页未渲染:新建章节按钮始终未出现(页面改版或 bookId 无效,需人工核查 fanqienovel.com/main/writer/chapter-manage)"
+    },
+    { "kind": "clickOrFocus", "selector": "button:has-text(\"新建章节\")", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
+    {
+      "kind": "waitForSelector",
+      "selector": ".editor-title",
+      "retries": 10,
+      "intervalMs": 2000,
+      "abortIfUrl": "login|passport|signin",
+      "abortAs": "not_logged_in",
+      "timeoutError": "章节编辑器未渲染:标题栏始终未出现(页面改版,需人工核查番茄章节编辑器)"
+    },
+    { "kind": "fill", "selector": ".editor-title", "param": "title", "timeoutMs": 20000 },
+    { "kind": "clickOrFocus", "selector": ".editor-content", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
+    { "kind": "pressKeys", "keys": "Control+a" },
+    { "kind": "insertText", "param": "body", "transform": "markdown-plain" },
+    { "kind": "clickOrFocus", "selector": "button:has-text(\"存草稿\")", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
+    { "kind": "waitForText", "pattern": "草稿|已保存|保存成功", "timeoutMs": 8000, "optional": true, "flag": "saved" },
+    { "kind": "screenshot", "quality": 65 }
+  ],
+  "notes": {
+    "saved": {
+      "present": "保存确认已出现,章节管理 → 草稿箱立即可见(网页版与番茄作家助手 App 同步)。",
+      "missing": "保存确认未出现,请到「章节管理 → 草稿箱」核对是否落盘;未落盘可「接管浏览器」手动补存。",
+      "auditMissing": "未等到保存确认文案(页面内容不受影响,需人工核对草稿箱)"
+    }
+  },
+  "successMessage": "章节已存入番茄草稿箱:{note:saved}发布/定时发布由你本人在番茄后台完成(发布按钮被代码级围栏永久拦截)。今日已用 {todayCount}/{dailyLimit} 次。"
+}

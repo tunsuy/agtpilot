@@ -28,6 +28,7 @@ import {
 import {
   getZhihuManaged,
   getXhsManaged,
+  getFanqieManaged,
   getBrowserAudit,
   appendBrowserAudit,
   type BrowserAuditEntry,
@@ -56,8 +57,13 @@ export {
 /** web 存储适配器:托管记录按平台分流,审计直连 user-store(滚动 200 条) */
 export function webSkillStore(): SkillStoreAdapter {
   return {
-    getManagedRecord(userId: string, platform: 'zhihu' | 'xhs'): ManagedGateRecord | undefined {
-      const rec = platform === 'zhihu' ? getZhihuManaged(userId) : getXhsManaged(userId);
+    getManagedRecord(userId: string, platform: 'zhihu' | 'xhs' | 'fanqie'): ManagedGateRecord | undefined {
+      const rec =
+        platform === 'zhihu'
+          ? getZhihuManaged(userId)
+          : platform === 'fanqie'
+            ? getFanqieManaged(userId)
+            : getXhsManaged(userId);
       if (!rec) return undefined;
       return { enabled: rec.enabled, riskAckAt: rec.riskAckAt };
     },

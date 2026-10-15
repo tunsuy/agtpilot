@@ -496,3 +496,131 @@ describe('注册表版 zhihu_save_article_draft · execute 全链路', () => {
     }
   });
 });
+
+describe('随包 fanqie-draft.skill.json · 番茄章节存草稿', () => {
+  /** 番茄编辑器假 Page:.editor-title/.editor-content/新建章节/存草稿 可寻,其余不可寻 */
+  function fakeFanqiePage(opts: { redirectLogin?: boolean; savedFails?: boolean } = {}) {
+    const state = { url: 'about:blank' };
+    const FINDABLE = ['.editor-title', '新建章节', 'editor-content', '存草稿'];
+    return {
+      goto: vi.fn(async (url: string) => {
+        state.url = opts.redirectLogin
+          ? 'https://fanqienovel.com/main/writer/login?next=%2Fchapter-manage'
+          : url;
+      }),
+      url: vi.fn(() => state.url),
+      fill: vi.fn(async () => {}),
+      click: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => true),
+      locator: vi.fn((sel: string) => {
+        const visible = FINDABLE.some((k) => String(sel).includes(k)) && !opts.redirectLogin;
+        return {
+          count: vi.fn(async () => (visible ? 1 : 0)),
+          first: () => ({ focus: vi.fn(async () => {}), innerText: vi.fn(async () => '') }),
+        };
+      }),
+      keyboard: {
+        insertText: vi.fn(async () => {}),
+        press: vi.fn(async () => {}),
+      },
+      getByText: vi.fn(() => ({
+        first: () => ({
+          waitFor: vi.fn(async () => {
+            if (opts.savedFails) throw new Error('timeout');
+          }),
+        }),
+      })),
+      screenshot: vi.fn(async () => Buffer.from('jpeg-bytes')),
+    };
+  }
+
+  function optInFanqie(uid: string) {
+    us.saveFanqieManaged(uid, { enabled: true, riskAckAt: Date.now(), lastLoginAt: Date.now() });
+  }
+
+  const okArgs = {
+    bookId: '7123456789',
+    title: '第12章 风起',
+    body: '这是一段足够长的章节正文内容,远超最少五十字的校验门槛;下面还有一个独立标题行与一段加粗,用于验证 markdown-plain 转换会把它们全部剥成排版化纯文本再填入编辑器,不留任何 Markdown 原文。\n\n## 小节\n\n这行属于小节,加粗记号 **强调** 也一并剥除。',
+  };
+
+  it('清单合格且步骤里不存在发布词(三层红线之二)', () => {
+    const raw = fs.readFileSync(path.join(SHIPPED_DIR, 'fanqie-draft.skill.json'), 'utf-8');
+    const manifest = JSON.parse(raw);
+    expect(ss.validateScriptSkill(manifest)).toBeNull();
+    const stepsDump = JSON.stringify(manifest.steps);
+    expect(stepsDump).not.toMatch(/发布/);
+    expect(stepsDump).not.toMatch(/publish|submit/i);
+  });
+
+  it('注入门:未 opt-in 不注入;opt-in 后注入且 dangerLevel 为 low(用户拍板免逐次审批)', () => {
+    const uid = 'ss-fq-gate';
+    const browser = fakeBrowser(fakeFanqiePage());
+    expect(ss.buildScriptSkillTools(uid, browser, { dir: SHIPPED_DIR }).tools).toHaveLength(0);
+    optInFanqie(uid);
+    const tools = ss.buildScriptSkillTools(uid, browser, { dir: SHIPPED_DIR }).tools;
+    expect(tools).toHaveLength(1);
+    expect(tools[0].name).toBe('fanqie_save_chapter_draft');
+    expect(tools[0].dangerLevel).toBe('low');
+  });
+
+  it('execute 全链路:URL 模板替换 → 填标题 → 正文剥 Markdown → 存草稿 → 审计 success', async () => {
+    const uid = 'ss-fq-run';
+    const page = fakeFanqiePage();
+    optInFanqie(uid);
+    const tools = ss.buildScriptSkillTools(uid, fakeBrowser(page), { dir: SHIPPED_DIR }).tools;
+    const tool = tools.find((t: any) => t.name === 'fanqie_save_chapter_draft')!;
+    const res: any = await (tool.execute as any)(okArgs, { taskId: 'mf1' });
+    expect(res.success).toBe(true);
+    // goto params 模板替换:bookId 填进 chapter-manage 路径
+    expect(page.goto).toHaveBeenCalledWith(
+      `https://fanqienovel.com/main/writer/chapter-manage/${okArgs.bookId}`,
+      expect.anything()
+    );
+    expect(page.fill).toHaveBeenCalledWith('.editor-title', okArgs.title, expect.anything());
+    expect(page.keyboard.press).toHaveBeenCalledWith('Control+a');
+    // insertText + markdown-plain:Markdown 记号被剥除(标题 ▍ 前缀,不再有 ##)
+    const inserted = (page.keyboard.insertText as any).mock.calls[0][0] as string;
+    expect(inserted).toContain('章节正文内容');
+    expect(inserted).not.toContain('##');
+    // 点了「存草稿」按钮;保存确认出现 → 旗标 true → 消息用 present 文案
+    expect(page.click).toHaveBeenCalledWith('button:has-text("存草稿")', expect.anything());
+    expect(res.message).toContain('章节管理 → 草稿箱立即可见');
+    expect(res.message).toContain('发布/定时发布由你本人');
+    expect(res.message).toContain('今日已用 1/3');
+    expect(res.screenshotBase64).toContain('data:image/jpeg;base64,');
+    const audit = us.getBrowserAudit(uid);
+    expect(audit[0]).toMatchObject({
+      result: 'success',
+      tool: 'fanqie_save_chapter_draft',
+      action: 'save_chapter_draft',
+      title: okArgs.title,
+      missionId: 'mf1',
+    });
+  }, 30000);
+
+  it('保存确认未出现 → 仍算成功,消息如实引导人工核对草稿箱', async () => {
+    const uid = 'ss-fq-unconfirmed';
+    const page = fakeFanqiePage({ savedFails: true });
+    optInFanqie(uid);
+    const tools = ss.buildScriptSkillTools(uid, fakeBrowser(page), { dir: SHIPPED_DIR }).tools;
+    const res: any = await (tools[0].execute as any)(okArgs, { taskId: 'mf2' });
+    expect(res.success).toBe(true);
+    expect(res.message).toContain('保存确认未出现');
+    const audit = us.getBrowserAudit(uid);
+    expect(audit[0].result).toBe('success');
+    expect(String(audit[0].error || '')).toContain('未等到保存确认');
+  }, 30000);
+
+  it('goto 后被重定向回登录 → not_logged_in(登录引导,审计 failure)', async () => {
+    const uid = 'ss-fq-login';
+    const page = fakeFanqiePage({ redirectLogin: true });
+    optInFanqie(uid);
+    const tools = ss.buildScriptSkillTools(uid, fakeBrowser(page), { dir: SHIPPED_DIR }).tools;
+    const res: any = await (tools[0].execute as any)(okArgs, { taskId: 'mf3' });
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('扫码');
+    const audit = us.getBrowserAudit(uid);
+    expect(audit[0]).toMatchObject({ result: 'failure', error: 'not_logged_in' });
+  }, 30000);
+});

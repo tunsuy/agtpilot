@@ -16,6 +16,7 @@ import {
   ArrowDown,
   Lock,
   Shield,
+  Coins,
   Copy,
   CheckCheck,
   Clock,
@@ -66,6 +67,7 @@ import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processEla
 import { KanbanPlanCard } from './KanbanPlanCard';
 import { sourcesForAnswer } from '../lib/search-sources';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
+import { formatTokenCount } from '../lib/mission-efficiency';
 import {
   Mission,
   ViewportState,
@@ -529,6 +531,17 @@ export function CockpitView({
                       <span className="text-[11px] font-medium text-emerald-700">就绪</span>
                     </div>
                   )}
+                </div>
+              )}
+              {currentMission && currentMission.usage && (
+                <div
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-zinc-200 bg-white text-[11px] font-medium text-zinc-500 transition shadow-2xs"
+                  title={`token 累计:输入 ${currentMission.usage.promptTokens} / 输出 ${currentMission.usage.completionTokens}(每步模型调用实时入账)`}
+                >
+                  <Coins className="h-3 w-3 text-zinc-400" />
+                  <span className="font-mono tabular-nums">
+                    {formatTokenCount(currentMission.usage.promptTokens)} / {formatTokenCount(currentMission.usage.completionTokens)}
+                  </span>
                 </div>
               )}
             </div>

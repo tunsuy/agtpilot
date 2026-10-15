@@ -40,7 +40,8 @@ export class ModelRouterService extends Service {
   constructor(ctx: Context) {
     super(ctx, 'router');
 
-    // 真实用量累计：内核在每次 agent loop 结束后广播 agtpilot/usage
+    // 真实用量累计：内核在每步模型调用完成后广播增量（收尾补残差），
+    // 逐步之和 = 单次 agent loop 总账，累加语义不受影响
     ctx.on('agtpilot/usage', (usage) => {
       this.usedTokens += (usage.promptTokens || 0) + (usage.completionTokens || 0);
     });

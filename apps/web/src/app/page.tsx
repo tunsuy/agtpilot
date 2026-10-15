@@ -766,6 +766,18 @@ export default function Workspace() {
       }
     });
 
+    // token 用量实时更新（每步模型调用完成涨一次）：轻量事件只带
+    // { taskId, usage }，只 patch 单字段，不重发全量 mission
+    eventSource.addEventListener('mission_usage', (e: MessageEvent) => {
+      try {
+        const { taskId, usage } = JSON.parse(e.data);
+        if (!taskId || !usage) return;
+        setMissions((prev) => prev.map((m) => (m.id === taskId ? { ...m, usage } : m)));
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
     // 流式增量（打字机）：按 taskId 定位 mission，从尾向前找 RUNNING 的
     // live step（step_live_ 前缀）按 kind 追加 answer / reasoning；边界
     // mission_updated 与 delta 在同一 SSE 连接上有序（后端先 flush 再广播

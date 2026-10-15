@@ -85,6 +85,12 @@ export async function GET() {
               return;
             }
           }
+          // token 用量实时更新（轻量事件只带 taskId + 累计 usage）：按归属用户过滤
+          if (event.type === 'mission_usage') {
+            if (!userId || event.data?.userId !== userId) {
+              return;
+            }
+          }
           // 记忆库更新（会话结束自动沉淀）按用户过滤
           if (event.type === 'memories_updated') {
             if (!userId || event.data?.userId !== userId) {

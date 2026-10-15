@@ -170,8 +170,11 @@ export class ModelService extends Service implements ModelGateway {
         // 预算实时记账：每步用量即时累计，stopWhen 下一轮即可感知 ——
         // 旧实现只在整循环结束后记账，循环内预算闸门永远看不见当次消耗
         const stepUsage = (step as any).usage;
+        let usage: { promptTokens: number; completionTokens: number } | undefined;
         if (stepUsage) {
           this.recordUsage(stepUsage.inputTokens ?? 0, stepUsage.outputTokens ?? 0);
+          // 透传上层（orchestrator 逐步入账 mission.usage → 前端实时成本展示）
+          usage = { promptTokens: stepUsage.inputTokens ?? 0, completionTokens: stepUsage.outputTokens ?? 0 };
         }
         if (!options.onStepFinish) return;
         options.onStepFinish({
@@ -188,6 +191,7 @@ export class ModelService extends Service implements ModelGateway {
             result: (tr as any).output,
           })),
           finishReason: step.finishReason,
+          ...(usage ? { usage } : {}),
         } satisfies AgentLoopStepInfo);
       },
     });

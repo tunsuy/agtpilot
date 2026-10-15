@@ -387,6 +387,17 @@ export class OrchestratorService extends Service {
     // 用量累计（成本可观测）：loop 主循环 + 步数耗尽后的强制总结轮都要付费；
     // 先声明后赋值 —— buildEfficiency 闭包在收尾时读取最终值
     let usageAcc = { promptTokens: 0, completionTokens: 0 };
+    // 实时上报记账：agtpilot/usage 改为逐步发增量（agent-backend 累计进 mission.usage
+    // 并轻量透传前端），收尾只补 SDK 汇总口径与逐步汇报的残差，防双计
+    const usageEmitted = { promptTokens: 0, completionTokens: 0 };
+    const emitUsageDelta = (delta: { promptTokens?: number; completionTokens?: number }) => {
+      const p = Number.isFinite(delta?.promptTokens) ? (delta!.promptTokens as number) : 0;
+      const c = Number.isFinite(delta?.completionTokens) ? (delta!.completionTokens as number) : 0;
+      if (p + c <= 0) return; // 残差为负/零:不发
+      usageEmitted.promptTokens += p;
+      usageEmitted.completionTokens += c;
+      this.ctx.emit('agtpilot/usage', { taskId, promptTokens: p, completionTokens: c });
+    };
     const buildEfficiency = (stepsCount: number): TaskEfficiency => ({
       stepsCount,
       toolCalls: stats.toolCalls,
@@ -520,8 +531,10 @@ export class OrchestratorService extends Service {
             timestamp: Date.now(),
           });
         },
-        onStepFinish: (info: { stepNumber: number; text: string; finishReason: string }) => {
+        onStepFinish: (info: { stepNumber: number; text: string; finishReason: string; usage?: { promptTokens: number; completionTokens: number } }) => {
           currentStep = (info.stepNumber || 1) + 1;
+          // 实时成本：本步账单即刻上行（前端任务执行中就能看到 tokens 在涨）
+          if (info.usage) emitUsageDelta(info.usage);
           if (info.text) {
             broadcast({
               type: 'thought',
@@ -537,6 +550,12 @@ export class OrchestratorService extends Service {
         promptTokens: loopResult.usage?.promptTokens || 0,
         completionTokens: loopResult.usage?.completionTokens || 0,
       };
+      // 残差对账：SDK 汇总与逐步汇报的口径差（如缓存 token 计法差异）
+      // 一次性补发；逐步已发够（或超发）时不发 —— mission 总账仍与旧口径一致
+      emitUsageDelta({
+        promptTokens: usageAcc.promptTokens - usageEmitted.promptTokens,
+        completionTokens: usageAcc.completionTokens - usageEmitted.completionTokens,
+      });
 
       const stepsCount = Math.max(1, loopResult.stepsCount || 1);
       let finalAnswer: string = loopResult.text || '';
@@ -574,21 +593,19 @@ export class OrchestratorService extends Service {
             disableTools: true,
           });
           finalAnswer = wrapResult.text || finalAnswer;
-          // 强制总结轮同样要付费：补记进任务用量
+          // 强制总结轮同样要付费：补记进任务用量（增量上行，实时口径）
           if (wrapResult.usage) {
             usageAcc.promptTokens += wrapResult.usage.promptTokens || 0;
             usageAcc.completionTokens += wrapResult.usage.completionTokens || 0;
+            emitUsageDelta(wrapResult.usage);
           }
         } catch {
           // 总结调用失败时，回退到已有的最后一段文本
         }
       }
 
-      // 用量上报（plugin-router 预算统计 + apps/web mission 落库消费）：
-      // 放在强制总结之后，报的是本任务的完整账单
-      if (usageAcc.promptTokens + usageAcc.completionTokens > 0) {
-        this.ctx.emit('agtpilot/usage', { ...usageAcc, taskId });
-      }
+      // 用量上报收口：主循环逐步 + 残差 + 强总结轮都已发过增量 —— 此处无动作。
+      // （plugin-router 预算统计消费 ctx 事件,apps/web mission 落库同源）
 
       if (!finalAnswer) {
         finalAnswer = loopResult.stepsExhausted

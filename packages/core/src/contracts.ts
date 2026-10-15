@@ -46,6 +46,11 @@ export interface AgentLoopStepInfo {
   toolCalls: Array<{ toolCallId: string; toolName: string; args: Record<string, any> }>;
   toolResults: Array<{ toolCallId: string; toolName: string; result: any }>;
   finishReason: string;
+  /**
+   * 本步 token 用量（实时成本观测：上层逐步入账 mission.usage）。
+   * 实现侧拿不到每步 usage 时缺省，由上层收尾统一对账。
+   */
+  usage?: { promptTokens: number; completionTokens: number };
 }
 
 /**

@@ -23,6 +23,7 @@ import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
 import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../../lib/runner-dispatch';
+import { formatTokenCount } from '../../lib/mission-efficiency';
 
 interface MobileActivityViewProps {
   missions: Mission[];
@@ -336,7 +337,17 @@ export function MobileActivityView({
             <div className="mt-3 rounded-xl border border-zinc-200 bg-white px-4 py-4 shadow-sm">
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-semibold text-zinc-900 truncate pr-2">{mission.title || '未命名任务'}</p>
-                <span className="text-[11px] text-zinc-400 shrink-0">{Math.round(mission.progress || 0)}%</span>
+                <span className="flex items-center gap-1 shrink-0">
+                  {mission.usage && (
+                    <span
+                      className="text-[11px] font-mono tabular-nums text-zinc-400"
+                      title={`token 累计:输入 ${mission.usage.promptTokens} / 输出 ${mission.usage.completionTokens}`}
+                    >
+                      {formatTokenCount(mission.usage.promptTokens)}/{formatTokenCount(mission.usage.completionTokens)}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-zinc-400">{Math.round(mission.progress || 0)}%</span>
+                </span>
               </div>
               {onOpenDeliverable && (
                 <button

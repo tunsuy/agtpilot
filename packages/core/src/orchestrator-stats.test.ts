@@ -142,3 +142,119 @@ describe('只读工具结果复用（TTL 缓存）', () => {
     expect(result.efficiency?.effectiveRate).toBe(0.67);
   });
 });
+
+// ---------- token 用量实时上报(每步增量 + 残差对账 + 强总结轮) ----------
+
+function buildUsageHarness(opts: {
+  /** 每步回调携带的 usage(依次) */
+  stepUsages: Array<{ promptTokens: number; completionTokens: number }>;
+  /** runAgentLoop 返回的 SDK 汇总口径 */
+  totalUsage: { promptTokens: number; completionTokens: number };
+  /** 步数耗尽 → 强总结轮走 invokeStep,其 usage */
+  stepsExhausted?: boolean;
+  wrapUsage?: { promptTokens: number; completionTokens: number };
+}) {
+  const ctx = new Context();
+  new AgentService(ctx);
+  const orch = new OrchestratorService(ctx);
+
+  ctx.agent.registerTool({
+    name: 'read_x',
+    description: 'read_x',
+    parameters: { type: 'object', properties: {} },
+    readOnly: true,
+    execute: async () => ({ ok: true }),
+  } as ToolDefinition);
+
+  const usageEvents: Array<{ promptTokens: number; completionTokens: number }> = [];
+  ctx.on('agtpilot/usage', (u: any) => {
+    usageEvents.push({ promptTokens: u.promptTokens, completionTokens: u.completionTokens });
+  });
+
+  const stubModel: ModelGateway = {
+    setPreferredModel: () => {},
+    setBudget: () => {},
+    runAgentLoop: async (o: any) => {
+      for (const [i, u] of opts.stepUsages.entries()) {
+        o.onStepFinish?.({ stepNumber: i + 1, text: '', finishReason: 'tool-calls', usage: u });
+      }
+      return {
+        text: '最终答复',
+        finishReason: 'stop',
+        stepsCount: opts.stepUsages.length,
+        stepsExhausted: Boolean(opts.stepsExhausted),
+        usage: opts.totalUsage,
+        responseMessages: [],
+      };
+    },
+    invokeStep: async () => ({
+      text: '总结',
+      toolCalls: [],
+      finishReason: 'stop',
+      ...(opts.wrapUsage ? { usage: opts.wrapUsage } : {}),
+    }),
+  };
+  ctx.reflect.provide('model', stubModel);
+  ctx.reflect.provide('planner', { noteToolResult: () => {} } as PlannerNotifier);
+
+  return {
+    run: () => orch.runTask({ prompt: '测试任务', maxSteps: 20 }),
+    usageEvents,
+  };
+}
+
+describe('token 用量实时上报(agtpilot/usage 增量流)', () => {
+  it('每步完成即发增量;逐步之和 = SDK 汇总 → 零残差,不多发', async () => {
+    const h = buildUsageHarness({
+      stepUsages: [
+        { promptTokens: 1000, completionTokens: 200 },
+        { promptTokens: 3000, completionTokens: 400 },
+      ],
+      totalUsage: { promptTokens: 4000, completionTokens: 600 },
+    });
+    await h.run();
+    // 两步两条事件,无残差补发
+    expect(h.usageEvents).toEqual([
+      { promptTokens: 1000, completionTokens: 200 },
+      { promptTokens: 3000, completionTokens: 400 },
+    ]);
+  });
+
+  it('SDK 汇总口径大于逐步之和(如缓存 token 计法差异)→ 残差一次性补发,总账一致', async () => {
+    const h = buildUsageHarness({
+      stepUsages: [{ promptTokens: 1000, completionTokens: 200 }],
+      totalUsage: { promptTokens: 1500, completionTokens: 300 },
+    });
+    await h.run();
+    expect(h.usageEvents).toEqual([
+      { promptTokens: 1000, completionTokens: 200 },
+      { promptTokens: 500, completionTokens: 100 },
+    ]);
+    // 事件累计 = SDK 汇总(旧口径的单次总账语义不变)
+    const sum = h.usageEvents.reduce((a, e) => ({ promptTokens: a.promptTokens + e.promptTokens, completionTokens: a.completionTokens + e.completionTokens }));
+    expect(sum).toEqual({ promptTokens: 1500, completionTokens: 300 });
+  });
+
+  it('步数耗尽的强总结轮 usage 同样上行', async () => {
+    const h = buildUsageHarness({
+      stepUsages: [{ promptTokens: 1000, completionTokens: 200 }],
+      totalUsage: { promptTokens: 1000, completionTokens: 200 },
+      stepsExhausted: true,
+      wrapUsage: { promptTokens: 800, completionTokens: 150 },
+    });
+    await h.run();
+    expect(h.usageEvents).toEqual([
+      { promptTokens: 1000, completionTokens: 200 },
+      { promptTokens: 800, completionTokens: 150 }, // 强总结轮
+    ]);
+  });
+
+  it('零用量/负残差不发事件(脏数据防御)', async () => {
+    const h = buildUsageHarness({
+      stepUsages: [],
+      totalUsage: { promptTokens: 0, completionTokens: 0 },
+    });
+    await h.run();
+    expect(h.usageEvents).toEqual([]);
+  });
+});

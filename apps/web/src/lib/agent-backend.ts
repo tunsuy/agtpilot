@@ -297,11 +297,16 @@ class AgentBackend {
     });
     this.ctx.on('agtpilot/usage', ({ taskId, promptTokens, completionTokens }: any) => {
       // token 用量落 mission（成本可观测，loop 执行优化 P3）：
-      // 事件在每次 runTask 收尾（含强制总结轮）发一次，这里按任务累计——
-      // 多轮追问续跑时 usage 是任务级总账，而效率摘要展示的是单次运行值
+      // 编排器每步模型调用完成即发增量（收尾补 SDK 汇总残差 + 强总结轮），
+      // 这里累计成任务级总账——多轮追问续跑时同样是总账口径，
+      // 并以轻量 mission_usage 事件实时透传前端（不发全量 mission）
       const mission = this.state.missions.find((m) => m.id === taskId);
       if (!mission) return;
       mission.usage = accumulateMissionUsage(mission.usage, { promptTokens, completionTokens });
+      this.broadcast({
+        type: 'mission_usage',
+        data: { taskId: mission.id, usage: mission.usage, userId: mission.userId },
+      });
     });
   }
 

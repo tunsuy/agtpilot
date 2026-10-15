@@ -20,7 +20,7 @@ import {
   type OssOpportunity,
   type OssOpportunityParseResult,
 } from '../../workshops/oss_radar/opportunities';
-import { handoffPackFor, pickIssueUrl, runnerStateMeta, type RunnerTaskSummary } from '../../lib/runner-dispatch';
+import { handoffPackFor, pickIssueUrl, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { DispatchRunnerModal } from './DispatchRunnerModal';
 
 /** 单字段复制按钮:成功打勾、失败明示,不静默假成功(与笔记包卡同款) */
@@ -60,23 +60,34 @@ function difficultyClass(difficulty: string): string {
 /** 任务状态徽章(M2 事件回流):状态机 9 态话术与设备页任务列表共用 runnerStateMeta */
 function TaskStateBadge({ task }: { task: RunnerTaskSummary }) {
   const meta = runnerStateMeta(task.state);
+  const retryable = runnerRetryable(task);
   return (
-    <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${meta.cls} min-w-0`}
-      title={task.state === 'failed' && task.error ? task.error : `任务 ${task.taskId} · 分支 ${task.workBranch}`}
-    >
-      <MonitorSmartphone className="h-3 w-3 shrink-0" />
-      <span className="truncate">{meta.label}</span>
-      {task.state === 'done' && task.prUrl && (
-        <a
-          href={task.prUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline shrink-0"
-          onClick={(e) => e.stopPropagation()}
+    <span className="inline-flex items-center gap-1 min-w-0">
+      <span
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium border ${meta.cls} min-w-0`}
+        title={task.state === 'failed' && task.error ? task.error : `任务 ${task.taskId} · 分支 ${task.workBranch}`}
+      >
+        <MonitorSmartphone className="h-3 w-3 shrink-0" />
+        <span className="truncate">{meta.label}</span>
+        {task.state === 'done' && task.prUrl && (
+          <a
+            href={task.prUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            PR
+          </a>
+        )}
+      </span>
+      {retryable && (
+        <span
+          className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border shrink-0 bg-amber-50 text-amber-700 border-amber-200"
+          title={RUNNER_RETRYABLE_HINT}
         >
-          PR
-        </a>
+          {RUNNER_RETRYABLE_LABEL}
+        </span>
       )}
     </span>
   );

@@ -17,6 +17,9 @@ import {
 import {
   isRunnerTaskActive,
   runnerStateMeta,
+  runnerRetryable,
+  RUNNER_RETRYABLE_LABEL,
+  RUNNER_RETRYABLE_HINT,
   tasksForDevice,
   type RunnerTaskEventView,
   type RunnerTaskSummary,
@@ -73,6 +76,7 @@ function DeviceTaskItem({
 }) {
   const meta = runnerStateMeta(task.state);
   const active = isRunnerTaskActive(task.state);
+  const retryable = runnerRetryable(task);
   return (
     <div className={`rounded-lg border bg-white ${active ? 'border-sky-200' : 'border-zinc-200'}`}>
       <button
@@ -85,6 +89,14 @@ function DeviceTaskItem({
         >
           {meta.label}
         </span>
+        {retryable && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium border flex-shrink-0 bg-amber-50 text-amber-700 border-amber-200"
+            title={RUNNER_RETRYABLE_HINT}
+          >
+            {RUNNER_RETRYABLE_LABEL}
+          </span>
+        )}
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-medium font-mono text-zinc-900 truncate">{task.repo}</div>
           <div className="text-[11px] text-zinc-500 mt-0.5 truncate" title={task.latest?.text ?? task.error ?? task.workBranch}>
@@ -136,6 +148,11 @@ function DeviceTaskItem({
               title={task.error}
             >
               {task.error.slice(0, 400)}
+            </div>
+          )}
+          {retryable && (
+            <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
+              {RUNNER_RETRYABLE_HINT}(重新派发即会全新克隆重跑;发布仍走审批门)
             </div>
           )}
           {timeline === null || timeline.length === 0 ? (

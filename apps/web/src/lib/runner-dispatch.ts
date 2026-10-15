@@ -45,6 +45,8 @@ export interface RunnerTaskSummary {
   workBranch: string;
   prUrl?: string;
   error?: string;
+  /** 失败为瞬时 API/网关错误(云端从 runner error 事件回流):UI 标「可重试」,重派大概率恢复 */
+  retryable?: boolean;
   updatedAt: number;
   /** runner 领取后绑定的设备 */
   deviceId?: string;
@@ -73,6 +75,16 @@ export const TASK_STATE_META: Record<string, { label: string; cls: string }> = {
 /** 未知态兜底(zinc 中性) */
 export function runnerStateMeta(state: string): { label: string; cls: string } {
   return TASK_STATE_META[state] ?? { label: state, cls: 'bg-zinc-50 text-zinc-600 border-zinc-200' };
+}
+
+/**
+ * 失败任务的「可重试」标记(加固 ②,UI 三处展示共用单一话术):
+ * 瞬时 API/网关错误导致的 failed,重新派发大概率恢复。非可重试失败 → null。
+ */
+export const RUNNER_RETRYABLE_LABEL = '可重试';
+export const RUNNER_RETRYABLE_HINT = '瞬时 API/网关错误 · 重新派发大概率恢复';
+export function runnerRetryable(task: { state: string; retryable?: boolean }): boolean {
+  return task.state === 'failed' && task.retryable === true;
 }
 
 /** 非终态 = 仍在跑,任务列表轮询降频/升级的依据 */
@@ -118,6 +130,7 @@ export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
     workBranch: t.pack.workBranch,
     ...(t.prUrl ? { prUrl: t.prUrl } : {}),
     ...(t.error ? { error: t.error } : {}),
+    ...(t.retryable ? { retryable: true } : {}),
     updatedAt: t.updatedAt,
     ...(t.deviceId ? { deviceId: t.deviceId } : {}),
     ...(t.targetDeviceId ? { targetDeviceId: t.targetDeviceId } : {}),

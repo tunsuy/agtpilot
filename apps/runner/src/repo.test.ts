@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { RunnerTaskPack } from '@agtpilot/protocol';
-import { repoDirFor, prepareRepo, WorkspaceFenceError, type ExecAsync } from './repo';
+import { repoDirFor, prepareRepo, isWorktreePristine, WorkspaceFenceError, type ExecAsync } from './repo';
 
 const pack = {
   taskId: 'rtask_1',
@@ -232,5 +232,53 @@ describe('prepareRepo · 经 fork 派发(pack.viaFork,派发弹窗显式勾选)'
     expect(r2.mode).toBe('updated');
     expect(r2.repoDir).toBe(forkDir);
     expect(calls.filter((c) => c.args[0] === 'clone')).toHaveLength(1); // 仅直连那次;fork 复用走 fetch 不再克隆
+  });
+});
+
+describe('isWorktreePristine(自动重试前置闸:无改动 + 零领先 commit)', () => {
+  function pristineExec(over?: {
+    status?: string;
+    ahead?: string;
+    statusThrow?: boolean;
+    revListThrow?: boolean;
+    originRangeFail?: boolean;
+  }): ExecAsync {
+    return async (_cmd, args) => {
+      const a = args.join(' ');
+      if (a.includes('status --porcelain')) {
+        if (over?.statusThrow) throw new Error('git status boom');
+        return { stdout: over?.status ?? '', stderr: '' };
+      }
+      if (a.includes('rev-list --count')) {
+        if (over?.revListThrow) throw new Error('rev-list boom');
+        if (over?.originRangeFail && a.includes('origin/')) throw new Error('no origin ref');
+        return { stdout: `${over?.ahead ?? '0'}\n`, stderr: '' };
+      }
+      throw new Error(`unexpected: ${a}`);
+    };
+  }
+
+  it('干净 + 零领先 → true(可安全重跑)', async () => {
+    expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec())).toBe(true);
+  });
+
+  it('有未提交改动 → false', async () => {
+    expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec({ status: ' M file.py\n' }))).toBe(false);
+  });
+
+  it('有领先 commit(ahead>0)→ false(agent 已产出,不在半成品上叠加)', async () => {
+    expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec({ ahead: '3' }))).toBe(false);
+  });
+
+  it('git status 失败 → false(保守不重试)', async () => {
+    expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec({ statusThrow: true }))).toBe(false);
+  });
+
+  it('两个 range 都读不出领先数 → false', async () => {
+    expect(await isWorktreePristine('/ws/o/r', 'main', pristineExec({ revListThrow: true }))).toBe(false);
+  });
+
+  it('origin/<base> 不存在 → 回落本地 <base>..HEAD range(master 回落场景)', async () => {
+    expect(await isWorktreePristine('/ws/o/r', 'master', pristineExec({ originRangeFail: true, ahead: '0' }))).toBe(true);
   });
 });

@@ -101,6 +101,39 @@ async function remoteDefaultBranch(repoDir: string, exec: ExecAsync): Promise<st
   return null;
 }
 
+/**
+ * 现场是否「干净」到可以安全重跑(加固 ①「runner 自动重试」的前置闸,§6.1):
+ * 无未提交改动(git status --porcelain 空)**且** 相对基线零领先 commit。
+ *
+ * claude 因瞬时 API 错误退出时,若 agent 已经改了文件/提交了 commit,重跑会在
+ * 半成品现场上叠加,产生重复/冲突改动 —— 那种情况宁可留给人工(云端标可重试,
+ * 由负责人重新派发 = 全新克隆)。只有「什么都没干就挂了」才自动重试。
+ *
+ * 保守口径:任一 git 命令失败 / 两个 range 都读不出领先数 → 返回 false(不重试)。
+ * base 用 prepareRepo 实探回流的基线(master 默认仓库的回落值),与 executor 同口径。
+ */
+export async function isWorktreePristine(
+  repoDir: string,
+  base: string,
+  exec: ExecAsync = defaultExecAsync
+): Promise<boolean> {
+  try {
+    const st = await exec('git', ['-C', repoDir, 'status', '--porcelain']);
+    if (st.stdout.trim() !== '') return false; // 有未提交改动
+  } catch {
+    return false; // 读不出状态 → 保守视为不干净
+  }
+  for (const range of [`origin/${base}..HEAD`, `${base}..HEAD`]) {
+    try {
+      const n = Number((await exec('git', ['-C', repoDir, 'rev-list', '--count', range])).stdout.trim());
+      if (Number.isFinite(n)) return n === 0; // 能读出领先数即以它为准
+    } catch {
+      /* 换下一个 range */
+    }
+  }
+  return false; // 两个 range 都读不出 → 保守不重试
+}
+
 export async function prepareRepo(
   pack: RunnerTaskPack,
   root: string,

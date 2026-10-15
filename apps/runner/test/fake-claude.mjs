@@ -9,6 +9,7 @@
  *  - FAKE_CLAUDE_NO_PR=1: result 不带 pr-final 围栏
  *  - FAKE_CLAUDE_BAD_RESULT=1: result 为 is_error(max_turns)
  *  - FAKE_CLAUDE_NO_RESULT=1: 不输出 result 事件(流不完整)
+ *  - FAKE_CLAUDE_STDERR: 自定义 stderr 内容(测瞬时错误指纹,默认「fake-claude stderr 备注」)
  */
 import { writeFileSync } from 'node:fs';
 
@@ -38,7 +39,7 @@ function run() {
       console.log(JSON.stringify({ type: 'result', subtype: 'success', result: prBody, is_error: false, num_turns: 4 }));
     }
   }
-  console.error('fake-claude stderr 备注');
+  console.error(process.env.FAKE_CLAUDE_STDERR || 'fake-claude stderr 备注');
   process.exit(exitCode);
 }
 

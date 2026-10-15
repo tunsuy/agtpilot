@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeTaskPack, type RunnerEventType, type RunnerTaskPack } from '@agtpilot/protocol';
 import type { ExecutorAdapter, ParsedStreamEvent } from './executor';
-import { prepareRepo, type PreparedRepo } from './repo';
+import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } from './repo';
 
 /**
  * 单个已领取任务的本地执行编排(M2,§6.1):
@@ -12,7 +12,11 @@ import { prepareRepo, type PreparedRepo } from './repo';
  * - 串行单任务(心跳循环在任务执行期间被占用;bin 侧另起保活轮询维持在线状态);
  * - 进度事件按 flushThreshold 批量上行(减少请求数;断网离线缓冲由 bin 侧
  *   ReliableEventPoster 包装承担,task-run 只管调 postEvents,失败记日志不阻塞);
- * - 云端 pack 再过一次 normalizeTaskPack(runner 侧防御性校验,与云端清洗同源)。
+ * - 云端 pack 再过一次 normalizeTaskPack(runner 侧防御性校验,与云端清洗同源);
+ * - 瞬时 API/网关错误自动重试一次(加固 ①,§6.1):executor 把 claude 进程级失败
+ *   标 retryable(瞬时错误指纹);本层在**现场干净**(无改动、无领先 commit)时原地
+ *   重跑一次,全程留审计 + 上行进度事件;超时/max_turns/验收失败/无产出不重试。
+ *   现场非干净则不自动重跑(避免在半成品上叠加),但 retryable 仍随失败上行,云端标「可重试」。
  */
 
 export interface TaskRunDeps {
@@ -29,6 +33,13 @@ export interface TaskRunDeps {
   newEventId?: () => string;
   /** 进度事件批量上行阈值(默认 10 条) */
   flushThreshold?: number;
+  /**
+   * 自动重试前的现场检查(加固 ①):默认 isWorktreePristine(真 git)。
+   * 返回 true = 干净可安全重跑;测试注入固定值。
+   */
+  checkPristine?: (repoDir: string, baseBranch: string) => Promise<boolean>;
+  /** 自动重试前的退避毫秒(默认 2000,给瞬时网关故障一点恢复窗口;测试注入 0) */
+  retryDelayMs?: number;
 }
 
 export type TaskRunOutcome = 'awaiting_approval' | 'failed';
@@ -110,7 +121,32 @@ export async function runTask(
     if (queue.length >= threshold) void flush();
   };
 
-  const result = await deps.adapter.run(pack, repo.repoDir, onProgress, { baseBranch: repo.baseBranch });
+  const runOnce = () =>
+    deps.adapter.run(pack, repo.repoDir, onProgress, { baseBranch: repo.baseBranch });
+  const checkPristine =
+    deps.checkPristine ?? ((dir: string, base: string) => isWorktreePristine(dir, base, defaultExecAsync));
+  const retryDelayMs = deps.retryDelayMs ?? 2000;
+
+  let result = await runOnce();
+
+  // 加固 ①:claude 因瞬时 API/网关错误退出(executor 标 retryable)且**现场干净**
+  // (无未提交改动、相对基线零领先 commit)时,原地自动重试一次。现场非干净则不重跑
+  // (避免在半成品上叠加改动),但 retryable 仍随最终失败上行,云端标「可重试」交人工重派。
+  if (!result.ok && result.retryable) {
+    const pristine = await checkPristine(repo.repoDir, repo.baseBranch);
+    if (pristine) {
+      log(`任务 ${taskId} 瞬时 API/网关错误 · 现场干净,自动重试一次:${result.error}`);
+      audit({ kind: 'task_retry', taskId, attempt: 1, reason: (result.error || '').slice(0, 500) });
+      push('progress', { kind: 'system', summary: '瞬时 API/网关错误 · 现场干净,自动重试一次' });
+      await flush();
+      if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
+      result = await runOnce();
+    } else {
+      log(`任务 ${taskId} 瞬时 API 错误但现场非干净(有改动/领先 commit),跳过自动重试(留人工重派)`);
+      audit({ kind: 'task_retry_skipped', taskId, reason: 'worktree_not_pristine' });
+    }
+  }
+
   if (result.ok) {
     push('phase1_result', {
       commitHash: result.commitHash,
@@ -133,5 +169,7 @@ export async function runTask(
   return fail(result.error || '执行器返回失败(无错误信息)', {
     commitHash: result.commitHash,
     testTail: result.testTail,
+    // 加固 ②:瞬时 API/网关失败 → error 事件带 retryable,云端落任务记录、UI 标「可重试」
+    ...(result.retryable ? { retryable: true } : {}),
   });
 }

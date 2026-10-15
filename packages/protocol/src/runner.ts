@@ -118,6 +118,13 @@ export interface RunnerTaskRecord {
   /** Phase 2 审批单(M3,§6.2):展示快照 + 批准时刻固化的命令集 */
   approval?: RunnerApproval;
   error?: string;
+  /**
+   * 失败是否为**瞬时 API/网关错误**(加固 ②,§6.1):runner 的 error 事件带
+   * retryable 标志,recordRunnerEvents 落到这里。true = 重新派发大概率恢复,
+   * UI 把这类 failed 标成「可重试」而非干巴巴的终态(重派仍人工,不自动 requeue)。
+   * 协议字段只增不改(v1 兼容):旧 runner 不上报 → 缺省 undefined,UI 回退普通「失败」。
+   */
+  retryable?: boolean;
   /** 上行事件(幂等去重后保留最近 N 条,cap 由 runner-bridge 控制) */
   events?: RunnerEvent[];
 }

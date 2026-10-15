@@ -18,6 +18,8 @@ const validPack = {
 function fakeAdapter(opts: {
   installed?: boolean;
   result?: Phase1Result;
+  /** 顺序返回(自动重试测试:第一次失败、第二次成功等);用尽后停在最后一项 */
+  results?: Phase1Result[];
   progress?: ParsedStreamEvent[];
   onRun?: () => void;
 }): ExecutorAdapter & { runCalled: number } {
@@ -26,9 +28,13 @@ function fakeAdapter(opts: {
     runCalled: 0,
     detect: async () => (opts.installed === false ? { installed: false } : { installed: true, version: 'fake' }),
     run: async (_p: RunnerTaskPack, _dir: string, onProgress?: (e: ParsedStreamEvent) => void) => {
+      const idx = a.runCalled;
       a.runCalled++;
       opts.onRun?.();
       for (const e of opts.progress ?? []) onProgress?.(e);
+      if (opts.results && opts.results.length > 0) {
+        return opts.results[Math.min(idx, opts.results.length - 1)];
+      }
       return opts.result ?? { ok: true, commitHash: 'abc123', diffstat: '1 file', testTail: 'ok', prFinal: { title: 'T', body: 'B' } };
     },
   };
@@ -179,5 +185,71 @@ describe('runTask · 实探基线分支回流(master 默认仓库)', () => {
     });
     await runTask({ taskId: 'rtask_1', pack: { ...validPack, baseBranch: 'release-1.x' } }, deps);
     expect(flat()[1].payload).toMatchObject({ baseBranch: 'release-1.x' });
+  });
+});
+
+describe('runTask · 瞬时 API 错误自动重试(加固 ①)', () => {
+  const transientFail: Phase1Result = {
+    ok: false,
+    error: 'claude 退出码 1 · [claude-code:unrecognized_model] {"query_source":"sdk"}',
+    retryable: true,
+  };
+  const success: Phase1Result = {
+    ok: true,
+    commitHash: 'abc123',
+    diffstat: '1 file',
+    testTail: 'ok',
+    prFinal: { title: 'T', body: 'B' },
+  };
+
+  it('retryable 失败 + 现场干净 → 自动重跑一次,第二次成功 → awaiting_approval', async () => {
+    const adapter = fakeAdapter({ results: [transientFail, success] });
+    const { deps, flat } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(adapter.runCalled).toBe(2);
+    // 重试进度事件上行(云端时间线可见)
+    const summaries = flat().filter((e) => e.type === 'progress').map((e) => String((e.payload as any).summary));
+    expect(summaries.some((s) => s.includes('自动重试'))).toBe(true);
+    // 成功事件链完整:phase1_result + awaiting_approval
+    expect(flat().map((e) => e.type)).toContain('phase1_result');
+    expect(flat().at(-1)!.payload).toEqual({ state: 'awaiting_approval' });
+  });
+
+  it('retryable 失败 + 现场干净 → 重试仍失败 → failed,error 带 retryable:true,run 调两次,审计留 task_retry', async () => {
+    const adapter = fakeAdapter({ results: [transientFail, transientFail] });
+    const audited: Record<string, unknown>[] = [];
+    const { deps, flat } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0, audit: (e) => audited.push(e) });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('failed');
+    expect(adapter.runCalled).toBe(2);
+    const errEv = flat().find((e) => e.type === 'error');
+    expect((errEv!.payload as any).retryable).toBe(true);
+    expect(audited.some((e) => e.kind === 'task_retry')).toBe(true);
+  });
+
+  it('retryable 失败 + 现场非干净(有改动)→ 不自动重跑,但仍标 retryable 上行(交人工重派)', async () => {
+    const adapter = fakeAdapter({ results: [transientFail] });
+    const audited: Record<string, unknown>[] = [];
+    const { deps, flat } = makeDeps({ adapter, checkPristine: async () => false, retryDelayMs: 0, audit: (e) => audited.push(e) });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('failed');
+    expect(adapter.runCalled).toBe(1); // 关键:未重试
+    const errEv = flat().find((e) => e.type === 'error');
+    expect((errEv!.payload as any).retryable).toBe(true);
+    expect(audited.some((e) => e.kind === 'task_retry_skipped')).toBe(true);
+  });
+
+  it('非瞬时失败(验收未过,retryable:false)→ 不重试,error 不带 retryable', async () => {
+    const adapter = fakeAdapter({ results: [{ ok: false, error: '验收命令未通过', testTail: 'FAILED', retryable: false }] });
+    const { deps, flat } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('failed');
+    expect(adapter.runCalled).toBe(1);
+    const errEv = flat().find((e) => e.type === 'error');
+    expect((errEv!.payload as any).retryable).toBeUndefined();
+  });
+
+  it('成功路径不触发现场检查(checkPristine 仅在 retryable 失败时调用)', async () => {
+    let pristineCalled = 0;
+    const { deps } = makeDeps({ adapter: fakeAdapter({ result: success }), checkPristine: async () => { pristineCalled++; return true; }, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(pristineCalled).toBe(0);
   });
 });

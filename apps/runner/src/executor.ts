@@ -25,6 +25,14 @@ export interface Phase1Result {
   /** agent 按约定输出的 PR 终稿(可能为 null:不阻塞审批,人工可补) */
   prFinal?: { title: string; body: string } | null;
   error?: string;
+  /**
+   * 失败是否为**瞬时 API/网关/网络错误**(isRetryableClaudeFailure 判定)。
+   * true = 重跑大概率恢复:runner 侧现场干净时自动重试一次(task-run),
+   * 云端把这类 failed 标成「可重试」而非干巴巴的终态(protocol RunnerTaskRecord.retryable)。
+   * 仅在 claude 进程级失败(退出码带瞬时错误指纹)时为 true;
+   * 超时 / max_turns / 验收失败 / 无产出 / git 校验失败一律 false(重跑无意义或必复现)。
+   */
+  retryable?: boolean;
 }
 
 export type ParsedStreamEvent =
@@ -152,6 +160,62 @@ export function tail2k(s: string): string {
   return s.length > 2048 ? '…' + s.slice(-2048) : s;
 }
 
+/**
+ * 瞬时失败分类器(纯函数,vitest 直测;加固 ①「runner 自动重试」与
+ * 加固 ②「云端标可重试」共用同一判据,docs/design/local-runner-bridge.md §6.1)。
+ *
+ * 只认「claude 因瞬时 API/网关/网络错误退出」——这类重跑一次大概率恢复
+ * (2026-10-15 生产实测:ai.ctaigw.cn 网关别名瞬断 → claude 退出码 1 ·
+ * [claude-code:unrecognized_model],同环境两次忠实复跑均成功)。
+ *
+ * 明确**不**重试(重跑要么必复现、要么再耗一个超时窗口、要么是真失败):
+ * 执行超时 / max_turns / 验收命令未过 / 无本地产出 / git 校验失败 / claude 启动失败。
+ * 采用「先否决后放行」:命中任一 NON_RETRYABLE 立即 false,再匹配 RETRYABLE 指纹。
+ */
+const NON_RETRYABLE_PATTERNS: readonly RegExp[] = [
+  /执行超时/,
+  /max[_\s]?turns/i,
+  /达到最大轮次/,
+  /agent 报告执行失败/, // max_turns 或内部错误的包装文案,含 max_turns 字样 → 保守不重试
+  /验收命令/,
+  /无本地 commit/,
+  /没有产出/,
+  /无法读取工作分支/,
+  /无法确认相对基线/,
+  /启动失败/, // spawn 失败(detect 已过,非瞬时)
+];
+
+const RETRYABLE_PATTERNS: readonly RegExp[] = [
+  /unrecognized[_\s]?model/i,
+  /model[_\s]?(?:not[_\s]?(?:found|available)|unavailable)/i,
+  /overloaded/i,
+  /\bapi[_\s]error\b/i,
+  /internal[_\s]server[_\s]error/i,
+  /rate[_\s]?limit/i,
+  /too[_\s]many[_\s]requests/i,
+  /service[_\s]unavailable/i,
+  /\bbad[_\s]gateway\b/i,
+  /gateway[_\s]time-?out/i,
+  /connection[_\s](?:reset|closed|refused|error|timed[_\s]?out)/i,
+  /\b(?:econnreset|econnrefused|etimedout|eai_again|enotfound|ehostunreach|enetunreach|epipe)\b/i,
+  /socket[_\s]hang[_\s]up/i,
+  /\bfetch[_\s]failed\b/i,
+  /network[_\s](?:error|unreachable)/i,
+  /stream[_\s](?:disconnected|error|timeout)/i,
+  /temporarily[_\s]unavailable/i,
+  /\btry[_\s]again\b/i,
+  /\bupstream[_\s](?:error|unavailable|timeout|reset)\b/i,
+  /\bcapacity\b/i,
+  /\b(?:status|code|http)[_\s:]*(?:code)?[\s:]*(?:429|500|502|503|504|529)\b/i,
+];
+
+/** claude 失败文案 → 是否瞬时(可重试);非字符串/空 → false */
+export function isRetryableClaudeFailure(errorText: string | undefined | null): boolean {
+  if (typeof errorText !== 'string' || !errorText) return false;
+  if (NON_RETRYABLE_PATTERNS.some((re) => re.test(errorText))) return false;
+  return RETRYABLE_PATTERNS.some((re) => re.test(errorText));
+}
+
 export type SpawnImpl = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess;
 
 /**
@@ -223,7 +287,11 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     // ---- 1. headless 跑 agent(流式解析 stream-json → 进度事件) ----
     const timeoutMs = this.timeoutMs ?? Math.max(1, pack.executor.timeoutMinutes) * 60_000;
     const agent = await this.runClaude(args, repoDir, timeoutMs, onProgress);
-    if (!agent.ok) return { ok: false, error: agent.error };
+    // claude 进程级失败:标注是否瞬时 API/网关错误(供 task-run 自动重试 + 云端标可重试)。
+    // 其余 ok:false 分支(git 校验 / 验收)是确定性失败,不带 retryable(缺省即 false)。
+    if (!agent.ok) {
+      return { ok: false, error: agent.error, retryable: isRetryableClaudeFailure(agent.error) };
+    }
 
     const prFinal = agent.resultText ? extractPrFinal(agent.resultText) : null;
 

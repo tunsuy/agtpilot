@@ -116,7 +116,9 @@ describe('buildTaskPackFromOpportunity · viaFork(经 fork 派发)', () => {
 import {
   isRunnerTaskActive,
   latestTaskProgress,
+  runnerRetryable,
   runnerStateMeta,
+  RUNNER_RETRYABLE_LABEL,
   summarizeRunnerTask,
   taskEventTimeline,
   tasksForDevice,
@@ -200,6 +202,11 @@ describe('summarizeRunnerTask(云端任务记录 → 概览行)', () => {
     const s = summarizeRunnerTask({ ...record, events: [] });
     expect('latest' in s).toBe(false);
   });
+
+  it('retryable 透传:记录带 retryable:true → 概览行也带(供 UI 打「可重试」);缺省 → 无该键', () => {
+    expect(summarizeRunnerTask({ ...record, state: 'failed', retryable: true }).retryable).toBe(true);
+    expect('retryable' in summarizeRunnerTask({ ...record, state: 'failed' })).toBe(false);
+  });
 });
 
 describe('taskEventTimeline(事件 → 展示时间线,旧→新,截最近 limit 条)', () => {
@@ -243,6 +250,20 @@ describe('runnerStateMeta / isRunnerTaskActive(话术与在途判定共用)', ()
     expect(isRunnerTaskActive('running')).toBe(true);
     expect(isRunnerTaskActive('awaiting_approval')).toBe(true);
     for (const s of ['done', 'failed', 'cancelled', 'expired']) expect(isRunnerTaskActive(s)).toBe(false);
+  });
+});
+
+describe('runnerRetryable(「可重试」琥珀徽章判定,加固 ②)', () => {
+  it('仅 failed + retryable:true → true(话术常量非空)', () => {
+    expect(runnerRetryable({ state: 'failed', retryable: true })).toBe(true);
+    expect(RUNNER_RETRYABLE_LABEL).toBe('可重试');
+  });
+
+  it('非 failed 态 / 无标记 / 显式 false → false(不误挂徽章)', () => {
+    expect(runnerRetryable({ state: 'done', retryable: true })).toBe(false);
+    expect(runnerRetryable({ state: 'running', retryable: true })).toBe(false);
+    expect(runnerRetryable({ state: 'failed' })).toBe(false);
+    expect(runnerRetryable({ state: 'failed', retryable: false })).toBe(false);
   });
 });
 

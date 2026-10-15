@@ -9,6 +9,7 @@ import {
   parseStreamLine,
   summarizeToolInput,
   tail2k,
+  isRetryableClaudeFailure,
   ClaudeCodeAdapter,
   DISALLOWED_TOOLS,
   type ParsedStreamEvent,
@@ -53,7 +54,7 @@ function fakeGitExec(over?: { ahead?: string; testFail?: boolean; testOut?: stri
   };
 }
 
-const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT'];
+const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT', 'FAKE_CLAUDE_STDERR'];
 afterEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
 });
@@ -139,6 +140,65 @@ describe('parseStreamLine(stream-json 宽容解析)', () => {
   });
 });
 
+describe('isRetryableClaudeFailure(瞬时 API/网关错误分类器,加固 ①② 共用判据)', () => {
+  it('生产实测事故文案 → 可重试(2026-10-15 ai.ctaigw.cn 网关别名瞬断)', () => {
+    expect(
+      isRetryableClaudeFailure(
+        'claude 退出码 1 · [claude-code:unrecognized_model] {"model":"3bbfba16dd6e4fed90af61eee76db87f","query_source":"sdk"}'
+      )
+    ).toBe(true);
+  });
+
+  it('常见瞬时 API/网关/网络错误 → 可重试', () => {
+    for (const e of [
+      'claude 退出码 1 · API Error: overloaded',
+      'claude 退出码 1 · rate_limit_error: Too many requests',
+      'claude 退出码 1 · 503 Service Unavailable',
+      'claude 退出码 1 · status 529 {"type":"error"}',
+      'claude 退出码 1 · Error: fetch failed (ECONNRESET)',
+      'claude 退出码 1 · socket hang up',
+      'claude 退出码 1 · Internal server error',
+      'claude 退出码 1 · connection reset by peer',
+      'claude 退出码 1 · Bad Gateway',
+      'claude 退出码 1 · upstream timeout, please try again',
+      'claude 退出码 1 · stream disconnected before completion',
+      'claude 退出码 1 · getaddrinfo EAI_AGAIN api.example.com',
+    ]) {
+      expect(isRetryableClaudeFailure(e), e).toBe(true);
+    }
+  });
+
+  it('确定性失败 → 不重试(重跑必复现/再耗超时窗口/是真失败)', () => {
+    for (const e of [
+      '执行超时(30 分钟),已终止',
+      'agent 报告执行失败(max_turns 或内部错误)',
+      'agent 报告执行失败(max_turns 或内部错误) · 达到最大轮次',
+      '验收命令未通过',
+      '验收命令超时(10 分钟)',
+      'agent 结束但工作分支无本地 commit(没有产出)',
+      '无法读取工作分支 HEAD(git rev-parse 失败)',
+      '无法确认相对基线 main 的 commit 数(git rev-list 失败)',
+      'claude 启动失败:spawn claude ENOENT',
+      // 退出码非零但 stderr 无瞬时指纹(如 agent 自身报错)→ 保守不重试
+      'claude 退出码 1 · some deterministic agent crash',
+      'claude 退出码 2',
+    ]) {
+      expect(isRetryableClaudeFailure(e), e).toBe(false);
+    }
+  });
+
+  it('否决优先:文案同时含瞬时指纹与不可重试标记 → 不重试(如超时里提到 overloaded)', () => {
+    expect(isRetryableClaudeFailure('执行超时(30 分钟),已终止 · 期间 overloaded')).toBe(false);
+    expect(isRetryableClaudeFailure('验收命令未通过 · pytest 报 connection error')).toBe(false);
+  });
+
+  it('空/非字符串 → false', () => {
+    expect(isRetryableClaudeFailure(undefined)).toBe(false);
+    expect(isRetryableClaudeFailure(null)).toBe(false);
+    expect(isRetryableClaudeFailure('')).toBe(false);
+  });
+});
+
 describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', () => {
   it('成功路径:进度事件流 + commit/diffstat/验收尾部 + pr-final 提取;实收参数无红线', async () => {
     const dir = tmpDir();
@@ -187,6 +247,25 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(r.ok).toBe(false);
     expect(r.error).toContain('退出码 1');
     expect(r.error).toContain('fake-claude stderr 备注');
+    // stderr 无瞬时指纹 → retryable 缺省(false),不触发自动重试
+    expect(r.retryable).toBe(false);
+  }, 20_000);
+
+  it('瞬时 API 错误退出(unrecognized_model)→ 失败标 retryable:true(加固 ①/② 的判据来源)', async () => {
+    process.env.FAKE_CLAUDE_EXIT = '1';
+    process.env.FAKE_CLAUDE_STDERR = '[claude-code:unrecognized_model] {"model":"x","query_source":"sdk"}';
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() }).run(pack, tmpDir());
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('退出码 1');
+    expect(r.retryable).toBe(true);
+  }, 20_000);
+
+  it('max_turns(result is_error)→ retryable:false(确定性失败,不重试)', async () => {
+    process.env.FAKE_CLAUDE_BAD_RESULT = '1';
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() }).run(pack, tmpDir());
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('agent 报告执行失败');
+    expect(r.retryable).toBe(false);
   }, 20_000);
 
   it('result is_error(max_turns)→ 失败;流缺 result → 失败', async () => {

@@ -22,7 +22,7 @@ import { KanbanPlanCard } from '../KanbanPlanCard';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
-import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../../lib/runner-dispatch';
+import { isRunnerTaskActive, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { formatTokenCount } from '../../lib/mission-efficiency';
 
 interface MobileActivityViewProps {
@@ -260,6 +260,7 @@ export function MobileActivityView({
             {runnerTasks.map((t) => {
               const meta = runnerStateMeta(t.state);
               const active = isRunnerTaskActive(t.state);
+              const retryable = runnerRetryable(t);
               return (
                 <li
                   key={t.taskId}
@@ -268,6 +269,14 @@ export function MobileActivityView({
                   <div className="flex items-center gap-2">
                     {active && <Loader2 className="h-3.5 w-3.5 text-sky-500 animate-spin shrink-0" />}
                     <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${meta.cls}`}>{meta.label}</span>
+                    {retryable && (
+                      <span
+                        className="text-[10px] font-medium px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200 shrink-0"
+                        title={RUNNER_RETRYABLE_HINT}
+                      >
+                        {RUNNER_RETRYABLE_LABEL}
+                      </span>
+                    )}
                     <span className="text-xs font-mono text-zinc-900 truncate flex-1 min-w-0">{t.repo}</span>
                     {t.state === 'done' && t.prUrl && (
                       <a

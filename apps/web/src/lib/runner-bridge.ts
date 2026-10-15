@@ -427,6 +427,9 @@ export function recordRunnerEvents(
     }
     if (event.type === 'error' && typeof event.payload?.message === 'string') {
       task.error = event.payload.message.slice(0, 2000);
+      // 加固 ②:瞬时 API/网关失败 → runner 在 error 事件带 retryable:true,落任务记录;
+      // UI 据此把 failed 标成「可重试」(重派仍人工,不自动 requeue)。仅认显式 true。
+      if (event.payload?.retryable === true) task.retryable = true;
       task.updatedAt = now;
     }
 

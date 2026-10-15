@@ -278,6 +278,29 @@ describe('上行事件记录', () => {
     expect(getRunnerTask(USER_A, 'rtask_0001', T0 + 50)!.error).toBe('超时');
   });
 
+  it('error 事件带 retryable:true → 任务记录可重试标记(加固 ②:云端 UI 据此打「可重试」)', () => {
+    const r = setup();
+    recordRunnerEvents(USER_A, r.deviceId, [ev({ deviceId: r.deviceId, type: 'state', payload: { state: 'running' } })], T0 + 30);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      ev({ deviceId: r.deviceId, type: 'error', payload: { message: 'claude 退出码 1 · [claude-code:unrecognized_model]', retryable: true } }),
+    ], T0 + 40);
+    const t = getRunnerTask(USER_A, 'rtask_0001', T0 + 40)!;
+    expect(t.error).toContain('unrecognized_model');
+    expect(t.retryable).toBe(true);
+  });
+
+  it('error 不带 retryable / retryable 非 true → 字段不写入(旧版 runner 与确定性失败保持原语义)', () => {
+    const r = setup();
+    recordRunnerEvents(USER_A, r.deviceId, [ev({ deviceId: r.deviceId, type: 'error', payload: { message: '验收命令未通过' } })], T0 + 30);
+    let t = getRunnerTask(USER_A, 'rtask_0001', T0 + 30)!;
+    expect(t.error).toBe('验收命令未通过');
+    expect(t.retryable).toBeUndefined();
+
+    recordRunnerEvents(USER_A, r.deviceId, [ev({ deviceId: r.deviceId, type: 'error', payload: { message: 'x', retryable: 'yes' } })], T0 + 40);
+    t = getRunnerTask(USER_A, 'rtask_0001', T0 + 40)!;
+    expect(t.retryable).toBeUndefined(); // 严格 === true 才认
+  });
+
   it('事件保留上限 200 条(滚动淘汰最老)', () => {
     const r = setup();
     const batch = Array.from({ length: 250 }, (_, i) => ev({ deviceId: r.deviceId, eventId: `ev_${i}` }));

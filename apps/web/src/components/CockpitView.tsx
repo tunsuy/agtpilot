@@ -86,7 +86,16 @@ import {
  * 任务执行中 / 思考占位附带已耗时，慢模型首 token 前的长静默窗口
  * 持续有数字变化，不再「看似卡死」。<60s 显示秒，超 1 分钟显示 m+s。
  */
-function ElapsedTick({ startedAt, className }: { startedAt?: number; className?: string }) {
+function ElapsedTick({
+  startedAt,
+  className,
+  slowHintAfterMs,
+}: {
+  startedAt?: number;
+  className?: string;
+  /** 超过该静默时长追加琥珀提示(模型处理长上下文,让「还在跑」可感知) */
+  slowHintAfterMs?: number;
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!startedAt) return;
@@ -95,9 +104,11 @@ function ElapsedTick({ startedAt, className }: { startedAt?: number; className?:
   }, [startedAt]);
   if (!startedAt) return null;
   const total = Math.floor(Math.max(0, now - startedAt) / 1000);
+  const slow = slowHintAfterMs !== undefined && total * 1000 >= slowHintAfterMs;
   return (
     <span className={className || 'font-mono'}>
       {total < 60 ? `${total}s` : `${Math.floor(total / 60)}m${total % 60}s`}
+      {slow && <span className="text-amber-500 font-sans"> · 模型处理中(长上下文较慢)</span>}
     </span>
   );
 }
@@ -1002,6 +1013,14 @@ export function CockpitView({
                                   {isStreaming && (
                                     <span className="h-1 w-1 rounded-full bg-blue-500 animate-pulse" />
                                   )}
+                                  {/* 流式态补已耗时(含慢提示):思考稀疏流出时(长上下文
+                                      模型每秒仅数十字)耗时表此前只挂在无输出占位上,
+                                      一出字就消失,静默期看似「没有任何动作」 */}
+                                  {isStreaming && st.startedAt && (
+                                    <span className="text-[10px] font-mono text-zinc-400">
+                                      · <ElapsedTick startedAt={st.startedAt} slowHintAfterMs={90_000} />
+                                    </span>
+                                  )}
                                   <ChevronDown
                                     className={`h-3.5 w-3.5 text-zinc-400 transition-transform duration-200 ${
                                       reasoningOpen ? 'rotate-180' : ''
@@ -1027,7 +1046,7 @@ export function CockpitView({
                                 <span className="text-[11px] font-medium">{st.title || '正在思考…'}</span>
                                 {st.startedAt && (
                                   <span className="text-[10px] font-mono text-zinc-400">
-                                    · <ElapsedTick startedAt={st.startedAt} />
+                                    · <ElapsedTick startedAt={st.startedAt} slowHintAfterMs={90_000} />
                                   </span>
                                 )}
                               </div>

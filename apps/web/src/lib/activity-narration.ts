@@ -107,6 +107,8 @@ function narrateTool(tool: string, args: any = {}): NarratedActivity {
       return { kind: 'connector', label: '读取小红书创作数据' };
     case 'xhs_save_note_draft':
       return { kind: 'connector', label: '保存小红书笔记草稿' };
+    case 'zhihu_save_article_draft':
+      return { kind: 'connector', label: '保存知乎文章草稿' };
     case 'wechat_mp_create_draft':
       return { kind: 'connector', label: '写入公众号草稿箱' };
   }

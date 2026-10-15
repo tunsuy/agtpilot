@@ -1224,7 +1224,12 @@ class AgentBackend {
 
     if (targetMission) {
       targetMission.status = 'ACTIVE';
-      targetMission.progress = 10;
+      // 续聊进度按既有步骤真实完成度计,不再硬编码 10:已完成任务的续聊显示
+      // ~100%(它本来就基本做完了,只是追问一轮),新任务步骤少自然低起步。
+      // 此前砸回 10,看板已全完成的会话一续聊侧栏就跳「10%」,像从头再来
+      // (生产实测:知乎工坊首轮交付后续聊存草稿,侧栏 10% + 看板全完成)
+      const doneCount = targetMission.steps.filter((s) => s.status === 'DONE').length;
+      targetMission.progress = Math.round((doneCount / (targetMission.steps.length || 1)) * 100);
       // 轮末兜底派发的续聊走 skipUserStep:排队气泡已在会话流里,
       // 再推一条用户步骤会重复;正常续聊(用户手动发)照常推
       if (!options.skipUserStep) {

@@ -50,6 +50,7 @@ describe('narrateStep 工具映射', () => {
 
   it('平台专用工具走专区叙述', () => {
     expect(narrateStep(step({ tool: 'xhs_save_note_draft' }))?.label).toBe('保存小红书笔记草稿');
+    expect(narrateStep(step({ tool: 'zhihu_save_article_draft' }))?.label).toBe('保存知乎文章草稿');
     expect(narrateStep(step({ tool: 'wechat_mp_create_draft' }))?.label).toBe('写入公众号草稿箱');
   });
 

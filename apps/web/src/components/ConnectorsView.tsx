@@ -700,6 +700,11 @@ export function ConnectorsView({
     mcpConnectors.filter((c) => c.status === 'connected').length;
   const totalConnectors = connectors.length + mcpConnectors.length;
 
+  // 番茄卡片右上角徽标数据源:扫码登录态(托管记录 lastLoginAt),不是 MCP 连接态。
+  // 本地 MCP 已撤、servers 为空,MCP 侧永远是「未配置」——已扫码的用户看到灰徽标
+  // 是误导(实测反馈:扫码登录后右上角仍显示未配置)
+  const fanqieLogin = loginBadgeInfo(fanqieStatus?.record || undefined);
+
   // MCP 卡片渲染函数:知乎(平台账号型:网页版扫码登录 + 托管存草稿)上提到原生连接器区
   // 与微信/小红书同网格,其余 MCP 连接器仍在下方「官方托管直连」区 —— 同一份卡片 JSX 两处复用
   const renderMcpCard = (app: McpConnectorInfo) => (
@@ -723,25 +728,48 @@ export function ConnectorsView({
                         className={`text-[9px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5 whitespace-nowrap ${
                           app.authType === 'oauth'
                             ? 'bg-violet-50 text-violet-600 border border-violet-200'
-                            : app.authType === 'none'
+                            : app.authType === 'none' || app.id === 'tomato_writer'
                             ? 'bg-sky-50 text-sky-600 border border-sky-200'
                             : 'bg-amber-50 text-amber-600 border border-amber-200'
                         }`}
                       >
-                        {app.authType === 'oauth' ? '一键授权' : app.optIn || app.publicTrial ? '手动启用' : app.authType === 'none' ? '免凭证直连' : app.deviceFlow?.available ? '设备码授权' : '粘贴凭证'}
+                        {app.id === 'tomato_writer'
+                          ? '扫码登录'
+                          : app.authType === 'oauth'
+                          ? '一键授权'
+                          : app.optIn || app.publicTrial
+                          ? '手动启用'
+                          : app.authType === 'none'
+                          ? '免凭证直连'
+                          : app.deviceFlow?.available
+                          ? '设备码授权'
+                          : '粘贴凭证'}
                       </span>
                     </div>
                   </div>
                 </div>
 
+                {/* 番茄:徽标按扫码登录态显示;其余 MCP 连接器仍按 MCP 连接态 */}
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
-                    app.status === 'connected'
+                    app.id === 'tomato_writer'
+                      ? fanqieLogin.loggedIn
+                        ? fanqieLogin.maybeStale
+                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-zinc-100 text-zinc-500'
+                      : app.status === 'connected'
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : 'bg-zinc-100 text-zinc-500'
                   }`}
                 >
-                  {app.status === 'connected'
+                  {app.id === 'tomato_writer'
+                    ? fanqieLogin.loggedIn
+                      ? fanqieLogin.maybeStale
+                        ? '登录可能过期'
+                        : '已登录'
+                      : '未登录'
+                    : app.status === 'connected'
                     ? app.toolCount
                       ? `已挂载 ${app.toolCount} 工具`
                       : app.optIn || app.publicTrial

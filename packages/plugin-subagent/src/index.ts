@@ -66,7 +66,15 @@ export const DEFAULT_MCP_SERVERS: readonly string[] = [
 // 逃生口默认项(不要求 readOnly 声明,人工担责)——以 2026-10-14 annotations-report.mjs
 // 实测记录为背书:deepwiki 全部 3 个工具(ask/read 类)、newsnow 全部 1 个工具(拉热榜)均为只读,
 // 但两台服务器都不带 annotations,双钥匙机器钥匙缺席,只能走前缀放行。
-export const DEFAULT_MCP_ALLOW_TOOLS: readonly string[] = ['mcp_deepwiki_', 'mcp_newsnow_'];
+// fanqie_radar 2026-10-15 同脚本实测(负责人批准入库):10 个工具全为榜单/检索查询
+// (fanqie_ranks/find/trend/genre_heat/imitation_score/hotwords/stats + hongguo_ranks/find/stats),
+// 零注解(0/10 readOnly,手写 JSON-RPC 服务器不发 annotations);handler 语义已对照上游
+// mcp_server.py(master)逐个核实为纯查询,无任何写/发布路径。上游若新增工具需重新实测。
+export const DEFAULT_MCP_ALLOW_TOOLS: readonly string[] = [
+  'mcp_deepwiki_',
+  'mcp_newsnow_',
+  'mcp_fanqie_radar_',
+];
 
 /** env 列表解析:未设置 → 内置默认;off/none → 空(全关);其余 → 逗号分隔覆盖 */
 function listWithDefault(raw: string | undefined, defaults: readonly string[]): string[] {

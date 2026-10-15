@@ -21,8 +21,14 @@ describe('DEFAULT_MCP_SERVERS(双钥匙的人工钥匙默认值)', () => {
 });
 
 describe('DEFAULT_MCP_ALLOW_TOOLS(逃生口默认值,实测背书)', () => {
-  it('仅 deepwiki / newsnow 前缀(2026-10-14 annotations-report.mjs 实测全部工具只读)', () => {
-    expect([...DEFAULT_MCP_ALLOW_TOOLS]).toEqual(['mcp_deepwiki_', 'mcp_newsnow_']);
+  it('仅 deepwiki / newsnow / fanqie_radar 前缀(annotations-report.mjs 实测全部工具只读)', () => {
+    // deepwiki/newsnow:2026-10-14 实测;fanqie_radar:2026-10-15 实测(10 工具零注解,
+    // 语义对照上游 mcp_server.py 源码核实纯查询)
+    expect([...DEFAULT_MCP_ALLOW_TOOLS]).toEqual([
+      'mcp_deepwiki_',
+      'mcp_newsnow_',
+      'mcp_fanqie_radar_',
+    ]);
   });
 
   it('不含裸 mcp_ 前缀(那会放行全部 MCP 工具)', () => {

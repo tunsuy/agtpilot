@@ -140,6 +140,11 @@ describe('subagentAvailability(详情页展示判定)', () => {
   it('逃生口前缀命中 → escape(免只读注解,实测背书)', () => {
     expect(mc.subagentAvailability('deepwiki', { flagged: true, toolCount: 3, readOnlyCount: 0 })).toBe('escape');
     expect(mc.subagentAvailability('newsnow', { flagged: true, toolCount: 1, readOnlyCount: 0 })).toBe('escape');
+    // fanqie_radar:2026-10-15 annotations-report.mjs 实测 10 工具零注解(手写 JSON-RPC),
+    // 语义对照上游源码核实纯查询 → 前缀入 plugin-subagent 默认逃生口(两处同步回归)
+    expect(mc.subagentAvailability('fanqie_radar', { flagged: true, toolCount: 10, readOnlyCount: 0 })).toBe(
+      'escape'
+    );
   });
 
   it('已标记 + 有只读声明 → ready', () => {

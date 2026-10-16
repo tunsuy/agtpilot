@@ -94,9 +94,10 @@ describe('开新书 prompt', () => {
     for (const anchor of ['【书名】', '【设定集】', '【人物卡】', '【粗纲】', '【细纲】', '【伏笔】', '【时间线】', '【本章摘要】']) {
       expect(p).toContain(anchor);
     }
-    // 红线:不自动发布 + AI 声明人工如实勾选 + 原创
+    // 红线:不自动发布 + AI 声明由自动化如实代勾(2026-10-16 拍板)+ 原创
     expect(p).toContain('严禁调用任何发布/投稿/自动上传类工具');
-    expect(p).toContain('AI 辅助声明由作者本人在平台如实勾选');
+    expect(p).toContain('AI 辅助声明由自动化如实代勾「AI辅助」');
+    expect(p).toContain('发布永远由作者本人人工确认');
     expect(p).toContain('必须原创');
     expect(p).toContain('存入书库');
   });

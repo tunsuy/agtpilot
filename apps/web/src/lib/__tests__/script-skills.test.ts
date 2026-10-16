@@ -559,9 +559,8 @@ describe('随包 fanqie-draft.skill.json · 番茄章节存草稿', () => {
     expect(ss.buildScriptSkillTools(uid, browser, { dir: SHIPPED_DIR }).tools).toHaveLength(0);
     optInFanqie(uid);
     const tools = ss.buildScriptSkillTools(uid, browser, { dir: SHIPPED_DIR }).tools;
-    expect(tools).toHaveLength(1);
-    expect(tools[0].name).toBe('fanqie_save_chapter_draft');
-    expect(tools[0].dangerLevel).toBe('low');
+    expect(tools.map((t) => t.name).sort()).toEqual(['fanqie_create_book', 'fanqie_save_chapter_draft']);
+    for (const t of tools) expect(t.dangerLevel).toBe('low');
   });
 
   it('execute 全链路:URL 模板替换 → 填标题 → 正文剥 Markdown → 存草稿 → 审计 success', async () => {
@@ -604,7 +603,8 @@ describe('随包 fanqie-draft.skill.json · 番茄章节存草稿', () => {
     const page = fakeFanqiePage({ savedFails: true });
     optInFanqie(uid);
     const tools = ss.buildScriptSkillTools(uid, fakeBrowser(page), { dir: SHIPPED_DIR }).tools;
-    const res: any = await (tools[0].execute as any)(okArgs, { taskId: 'mf2' });
+    const draftTool = tools.find((t: any) => t.name === 'fanqie_save_chapter_draft')!;
+    const res: any = await (draftTool.execute as any)(okArgs, { taskId: 'mf2' });
     expect(res.success).toBe(true);
     expect(res.message).toContain('保存确认未出现');
     const audit = us.getBrowserAudit(uid);
@@ -617,10 +617,59 @@ describe('随包 fanqie-draft.skill.json · 番茄章节存草稿', () => {
     const page = fakeFanqiePage({ redirectLogin: true });
     optInFanqie(uid);
     const tools = ss.buildScriptSkillTools(uid, fakeBrowser(page), { dir: SHIPPED_DIR }).tools;
-    const res: any = await (tools[0].execute as any)(okArgs, { taskId: 'mf3' });
+    const draftTool = tools.find((t: any) => t.name === 'fanqie_save_chapter_draft')!;
+    const res: any = await (draftTool.execute as any)(okArgs, { taskId: 'mf3' });
     expect(res.success).toBe(false);
     expect(res.error).toContain('扫码');
     const audit = us.getBrowserAudit(uid);
     expect(audit[0]).toMatchObject({ result: 'failure', error: 'not_logged_in' });
+  }, 30000);
+
+  it('开书技能全链路:填书名+点频道 radio+立即创建 → 捕获落地页书号;AI 声明缺席如实注记', async () => {
+    const uid = 'ss-fq-create';
+    optInFanqie(uid);
+    let url = 'https://fanqienovel.com/main/writer/create?enter_from=home';
+    const clicks: string[] = [];
+    const fills: Array<[string, string]> = [];
+    const page: any = {
+      goto: async (u: string) => {
+        url = u;
+      },
+      url: () => url,
+      fill: async (sel: string, val: string) => {
+        fills.push([sel, val]);
+      },
+      click: async (sel: string) => {
+        clicks.push(sel);
+        // 提交成功 → 落地 /book-info/<书号>(commit 6 侦察挖到的 onSuccess 路由)
+        if (sel.includes('立即创建')) url = 'https://fanqienovel.com/main/writer/book-info/7712345?type=1';
+      },
+      locator: (sel: string) => ({
+        count: async () => (sel.includes('#name_input') ? 1 : 0),
+        first: () => ({ focus: async () => {} }),
+      }),
+      keyboard: { press: async () => {}, insertText: async () => {} },
+      screenshot: vi.fn(async () => Buffer.from('jpeg-bytes')),
+    };
+    const tools = ss.buildScriptSkillTools(uid, fakeBrowser(page), { dir: SHIPPED_DIR }).tools;
+    const tool = tools.find((t: any) => t.name === 'fanqie_create_book')!;
+    const res: any = await (tool.execute as any)(
+      { title: '我以杀伐换长生', intro: '', channel: '男频' },
+      { taskId: 'mf4' }
+    );
+    expect(res.success).toBe(true);
+    expect(res.captures?.fanqieBookId).toBe('7712345');
+    // 频道 enum 闭集插值进 radio label;简介空串 = 留空(选填不凑字)
+    expect(clicks).toContain('#radio label.arco-radio:has-text("男频")');
+    expect(clicks).toContain('button:has-text("立即创建")');
+    expect(fills).toEqual([
+      ['#name_input input', '我以杀伐换长生'],
+      ['#descRow_input textarea', ''],
+    ]);
+    // AI 辅助声明入口缺席(2026-10-16 侦察事实)→ 三态注记走 missing 如实说明
+    expect(res.message).toContain('书号 7712345');
+    expect(res.message).toContain('本次建书页无 AI 辅助声明入口');
+    const audit = us.getBrowserAudit(uid);
+    expect(audit[0]).toMatchObject({ result: 'success', action: 'create_book' });
   }, 30000);
 });

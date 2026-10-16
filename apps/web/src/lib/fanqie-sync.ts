@@ -326,39 +326,26 @@ function wasNotLoggedIn(userId: string, tool: string, since: number): boolean {
 }
 
 const FEMALE_GENRE = /女频|言情|古言|现言|宫斗|宅斗|甜宠|婚恋|大女主/;
-/** genre → 番茄频道(enum 闭集,与 create 技能 parameters.channel.enum 同源) */
-function mapChannel(genre: string): 'male' | 'female' {
-  return FEMALE_GENRE.test(String(genre || '')) ? 'female' : 'male';
-}
-const CATEGORY_MAP: Array<[RegExp, string]> = [
-  [/玄幻|奇幻/, '玄幻'],
-  [/仙侠|修真|修仙/, '仙侠'],
-  [/武侠/, '武侠'],
-  [/都市|现实|职场/, '都市'],
-  [/科幻|末世|星际/, '科幻'],
-  [/历史|穿越|架空/, '历史'],
-  [/悬疑|推理|灵异/, '悬疑'],
-  [/游戏|电竞/, '游戏'],
-  [/军事|谍战/, '军事'],
-];
-/** genre → 番茄分类(启发式;真实分类闭集以 commit 6 侦察为准,页内可人工改) */
-function mapCategory(genre: string): string {
-  const g = String(genre || '');
-  for (const [re, cat] of CATEGORY_MAP) if (re.test(g)) return cat;
-  return '都市';
+/** genre → 番茄频道(enum 闭集,与 fanqie-create 技能 parameters.channel.enum 同源) */
+function mapChannel(genre: string): '男频' | '女频' {
+  return FEMALE_GENRE.test(String(genre || '')) ? '女频' : '男频';
 }
 
-/** 开书参数(技能契约:title/intro/channel/category;多余键引擎忽略) */
+/**
+ * 开书参数(技能契约:title/intro/channel;commit 6 侦察 2026-10-16 定稿)。
+ * 阅读/内容标签、主角名、封面在建书页均**选填**(标签是服务端 ID 下拉,自动化
+ * 脆且无必需价值)→ 不代填,作者可在书信息页自补。书名平台上限 15 字预截断;
+ * 简介平台要求 50-500 字且选填 → 不足 50 字传空串留空,绝不凑字。
+ */
 function buildCreateArgs(book: NovelBook): Record<string, string> {
   const introSource =
     String(book.premise || '').trim() ||
     String(book.volumeSummary || '').trim() ||
     String(book.outline || '').trim();
   return {
-    title: book.title,
-    intro: introSource.slice(0, 500),
+    title: String(book.title || '').slice(0, 15),
+    intro: introSource.length >= 50 ? introSource.slice(0, 500) : '',
     channel: mapChannel(book.genre),
-    category: mapCategory(book.genre),
   };
 }
 

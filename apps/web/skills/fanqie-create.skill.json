@@ -1,0 +1,96 @@
+{
+  "name": "fanqie_create_book",
+  "description": "在番茄作家后台网页版创建一本未发布新书(书名+目标读者频道;简介满 50-500 字才填,标签/主角名/封面均选填不代填)。仅由服务端 fanqie-sync 运行器在「存入书库」后自动调用(确定性流程不经模型、不逐次审批;托管模式风险已一次性确认)。止步建书,绝不发布:建书页提交按钮为「立即创建」,发布按钮被代码级围栏永久拦截,发布由作者本人在番茄后台完成。书号靠建书成功后落地页 URL 捕获(/book-info/<书号>)回写书库映射;未捕获书号即终态失败、绝不自动重试(防番茄侧重复建书),改走卡片「手动绑定书号」。每次调用计入每日上限并落审计。",
+  "dangerLevel": "low",
+  "compensation": {
+    "kind": "partially-reversible",
+    "undoHint": "创建的是未发布书籍(未发布前对外不可见),可在网页版「作品管理」删除或置之不理;后续草稿箱章节可逐章删除"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "书名(平台上限 15 字,运行器已预截断;同名书平台报「书名已存在」)"
+      },
+      "intro": {
+        "type": "string",
+        "description": "作品简介:仅当 50-500 字时填入;空字符串=留空(该字段选填,平台不校验空值)"
+      },
+      "channel": {
+        "type": "string",
+        "enum": ["男频", "女频"],
+        "description": "目标读者频道(建书页 radio,默认不预勾,必须点选)"
+      }
+    },
+    "required": ["title", "channel"]
+  },
+  "paramError": "title 与 channel 必填(channel 仅男频/女频);intro 可空",
+  "checks": [{ "param": "title", "minLength": 1 }],
+  "gate": { "managed": "fanqie" },
+  "login": {
+    "homeUrl": "https://fanqienovel.com/",
+    "cookieNames": ["sessionid"],
+    "hint": "番茄网页版尚未登录或登录态已失效。请引导用户到「连接器页 → 番茄作者后台 → 网页版扫码登录」,完成后重试。"
+  },
+  "dailyLimit": { "default": 5, "env": "AGTPILOT_FANQIE_CREATE_DAILY_LIMIT" },
+  "auditAction": "create_book",
+  "steps": [
+    {
+      "kind": "goto",
+      "url": "https://fanqienovel.com/main/writer/create?enter_from=home",
+      "waitUntil": "domcontentloaded",
+      "timeoutMs": 30000
+    },
+    {
+      "kind": "waitForSelector",
+      "selector": "#name_input input",
+      "retries": 12,
+      "intervalMs": 2000,
+      "abortIfUrl": "login|passport|signin",
+      "abortAs": "not_logged_in",
+      "timeoutError": "建书页未渲染:书名输入框始终未出现(页面改版,需人工核查 fanqienovel.com/main/writer/create)"
+    },
+    {
+      "kind": "clickOrFocus",
+      "selector": ".arco-modal-close-icon:visible, button:has-text(\"知道了\"):visible",
+      "optional": true,
+      "flag": "modalDismissed",
+      "clickTimeoutMs": 3000,
+      "focusTimeoutMs": 1500
+    },
+    { "kind": "fill", "selector": "#name_input input", "param": "title", "timeoutMs": 15000 },
+    {
+      "kind": "clickOrFocus",
+      "selector": "#radio label.arco-radio:has-text(\"{channel}\")",
+      "params": ["channel"],
+      "clickTimeoutMs": 8000,
+      "focusTimeoutMs": 4000
+    },
+    { "kind": "fill", "selector": "#descRow_input textarea", "param": "intro", "timeoutMs": 15000 },
+    {
+      "kind": "clickOrFocus",
+      "selector": "label:has-text(\"AI辅助\"):visible, label:has-text(\"AI 辅助\"):visible",
+      "optional": true,
+      "flag": "aiDeclared",
+      "clickTimeoutMs": 3000,
+      "focusTimeoutMs": 1500
+    },
+    { "kind": "clickOrFocus", "selector": "button:has-text(\"立即创建\")", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
+    {
+      "kind": "captureUrl",
+      "pattern": "book-info/([0-9A-Za-z_-]+)",
+      "output": "fanqieBookId",
+      "timeoutMs": 15000
+    },
+    { "kind": "screenshot", "quality": 65 }
+  ],
+  "notes": {
+    "aiDeclared": {
+      "present": "建书页出现 AI 辅助声明勾选框,已如实代勾「AI辅助」(2026-10-16 拍板:如实声明不是绕过)。",
+      "missing": "本次建书页无 AI 辅助声明入口(2026-10-16 侦察:声明入口在发布环节)——发布由你人工完成,届时请如实勾选。",
+      "auditMissing": "建书页无 AI 辅助声明入口(声明在发布环节,由作者发布时如实勾选)"
+    }
+  },
+  "successMessage": "番茄新书已创建,书号 {capture:fanqieBookId}:{note:aiDeclared}该书后续入库章节将自动续传草稿箱。今日开书 {todayCount}/{dailyLimit} 次。"
+}

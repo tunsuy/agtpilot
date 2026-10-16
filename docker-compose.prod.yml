@@ -18,6 +18,12 @@ services:
       # 进程 cwd = /app/apps/web:浏览器登录态 profile、沙箱等运行期缓存都落在
       # cwd/.cache,挂卷持久化(否则小红书扫码登录态随容器重建丢失)
       - /opt/agtpilot/cache:/app/apps/web/.cache
+      # 浏览器脚本技能热修目录(fanqie-create/fanqie-draft/zhihu-draft 等 *.skill.json,
+      # 进程 cwd=/app/apps/web → scriptSkillsDir()=cwd/skills):loadScriptSkills 每次
+      # 装配重扫,选择器坏了改卷内 JSON 即生效,免重建镜像。首次部署必须先播种
+      # docker cp agtpilot-web:/app/apps/web/skills /opt/agtpilot/skills(空目录会遮蔽
+      # 镜像内置技能);下面 workshop-overrides 的嵌套挂载优先,不受影响
+      - /opt/agtpilot/skills:/app/apps/web/skills
       # 工坊提示词覆盖热修目录(AGTPILOT_WORKSHOP_OVERRIDE_DIR 缺省路径):
       # 放 <workshopId>.md 即全量替换该工坊提示词,60s TTL 生效;挂卷后热修跨容器重建存活
       - /opt/agtpilot/workshop-overrides:/app/apps/web/skills/workshop-overrides

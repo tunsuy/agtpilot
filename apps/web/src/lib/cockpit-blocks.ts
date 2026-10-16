@@ -200,13 +200,30 @@ export function groupBlocksIntoTurns(blocks: CockpitBlock[]): CockpitTurn[] {
  * 仍在边界之后可见,收尾落盘后边界落在真正的最终答复上。
  * 纯思考流式(answer 为空)不算最终答复 —— 模型是否还要调工具未知,
  * 过早收起会把仍在进行的执行过程藏起来。
+ * 工坊成品豁免(可选谓词):步数耗尽触发强制总结时,最终答复是泛化散文,
+ * 真正的成品清单留在中间 assistant step 上 —— 原语义下它进折叠区,成品卡
+ * 收尾不直接可见(生产回归:开源雷达机会卡)。传入谓词后:边界及之后的回复
+ * 块自身能解析出成品则维持原边界(卡片本就在常显区);否则边界前移到最后一
+ * 个能解析出成品的回复块,成品卡与其后的总结答复一并落在常显区。
  */
-export function findFinalAnswerIndex(blocks: CockpitBlock[]): number {
+export function findFinalAnswerIndex(
+  blocks: CockpitBlock[],
+  hasDeliverable?: (answer: string) => boolean,
+): number {
   let idx = -1;
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
     if (b.type !== 'assistant') continue;
     if (b.step.messageKind === 'final' || Boolean(b.step.answer)) idx = i;
+  }
+  if (idx < 0 || !hasDeliverable) return idx;
+  for (let i = idx; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type === 'assistant' && b.step.answer && hasDeliverable(b.step.answer)) return idx;
+  }
+  for (let i = idx - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.type === 'assistant' && b.step.answer && hasDeliverable(b.step.answer)) return i;
   }
   return idx;
 }

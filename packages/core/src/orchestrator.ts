@@ -612,7 +612,7 @@ export class OrchestratorService extends Service {
         try {
           const wrapResult: ModelStepResult = await model.invokeStep({
             model: options.model,
-            system: `${systemPrompt}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`,
+            system: `${systemPrompt}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。若此前已按任务要求的格式(字段头/清单结构)产出过完整交付物，最终总结必须按原格式完整保留该交付物正文，状态说明只可附加在其后，不得改写或省略。`,
             messages: conversation as any,
             configOverride: options.configOverride,
             disableTools: true,

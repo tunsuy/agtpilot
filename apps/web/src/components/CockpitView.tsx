@@ -60,12 +60,13 @@ import { buildDraftDeliveryIndex } from '../lib/draft-delivery';
 import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../lib/runner-dispatch';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../workshops/xhs/topic-picks';
-import { OssOpportunityList } from './workshops/OssOpportunityCard';
+import { OssOpportunityList, parseOssDeliverable } from './workshops/OssOpportunityCard';
 import { NovelPackageCard, type NovelChainHandler } from './workshops/NovelPackageCard';
 import type { WorkshopRunPayload } from './workshops/run';
 import { parseNovelPackage } from '../workshops/novel/novel-package';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
+import { hasWorkshopDeliverable } from '../workshops/deliverable';
 import { resolveArtifactDraft } from '../workshops/registry';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs, findFinalAnswerIndex, turnCreatesPlan } from '../lib/cockpit-blocks';
 import { KanbanPlanCard } from './KanbanPlanCard';
@@ -90,12 +91,9 @@ import {
 function ElapsedTick({
   startedAt,
   className,
-  slowHintAfterMs,
 }: {
   startedAt?: number;
   className?: string;
-  /** 超过该静默时长追加琥珀提示(模型处理长上下文,让「还在跑」可感知) */
-  slowHintAfterMs?: number;
 }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -105,11 +103,9 @@ function ElapsedTick({
   }, [startedAt]);
   if (!startedAt) return null;
   const total = Math.floor(Math.max(0, now - startedAt) / 1000);
-  const slow = slowHintAfterMs !== undefined && total * 1000 >= slowHintAfterMs;
   return (
     <span className={className || 'font-mono'}>
       {total < 60 ? `${total}s` : `${Math.floor(total / 60)}m${total % 60}s`}
-      {slow && <span className="text-amber-500 font-sans"> · 模型处理中(长上下文较慢)</span>}
     </span>
   );
 }
@@ -794,7 +790,9 @@ export function CockpitView({
                   // 边界取最后一个带正文的回复块而非第一个 —— 中间轮思考卡也
                   // 常带短叙述正文,首中会把其后的工具行/思考卡留在折叠区外
                   // (生产实测),取最后一个则边界随回复生成单调前移不回弹。
-                  const finalIdx = findFinalAnswerIndex(renderable);
+                  // 工坊成品豁免:步数耗尽强制总结会把成品清单留在中间 step,
+                  // 带谓词时边界前移到成品块,卡片收尾直接可见(见 cockpit-blocks)
+                  const finalIdx = findFinalAnswerIndex(renderable, hasWorkshopDeliverable);
                   const processBlocks = finalIdx >= 0 ? renderable.slice(0, finalIdx) : renderable;
                   const finalBlocks = finalIdx >= 0 ? renderable.slice(finalIdx) : [];
                   const turnOpen = expandedTools[turn.key] ?? finalIdx < 0;
@@ -1018,12 +1016,12 @@ export function CockpitView({
                                   {isStreaming && (
                                     <span className="h-1 w-1 rounded-full bg-blue-500 animate-pulse" />
                                   )}
-                                  {/* 流式态补已耗时(含慢提示):思考稀疏流出时(长上下文
+                                  {/* 流式态补已耗时:思考稀疏流出时(长上下文
                                       模型每秒仅数十字)耗时表此前只挂在无输出占位上,
                                       一出字就消失,静默期看似「没有任何动作」 */}
                                   {isStreaming && st.startedAt && (
                                     <span className="text-[10px] font-mono text-zinc-400">
-                                      · <ElapsedTick startedAt={st.startedAt} slowHintAfterMs={90_000} />
+                                      · <ElapsedTick startedAt={st.startedAt} />
                                     </span>
                                   )}
                                   <ChevronDown
@@ -1051,7 +1049,7 @@ export function CockpitView({
                                 <span className="text-[11px] font-medium">{st.title || '正在思考…'}</span>
                                 {st.startedAt && (
                                   <span className="text-[10px] font-mono text-zinc-400">
-                                    · <ElapsedTick startedAt={st.startedAt} slowHintAfterMs={90_000} />
+                                    · <ElapsedTick startedAt={st.startedAt} />
                                   </span>
                                 )}
                               </div>
@@ -1674,6 +1672,12 @@ export function CockpitView({
 
             const currentArtifact = missionArtifacts[selectedArtifactIndex] || missionArtifacts[0] || null;
 
+            // 机会清单交付物分支:不绑定 artifact type,解析出有效清单则预览态优先渲可派发卡片
+            const canvasOss =
+              currentArtifact && artifactViewMode === 'preview'
+                ? parseOssDeliverable(currentArtifact.content)
+                : null;
+
             const handleDownloadCurrent = () => {
               if (!currentArtifact?.content) return;
               // file 产物(如 .pptx):本体在服务端文件库,走下载路由(cookie 鉴权)
@@ -1882,6 +1886,11 @@ export function CockpitView({
                           <p className="mt-2 text-[11px] text-zinc-400 leading-relaxed">
                             网页演示页:画面内可翻页放映;点右上下载按钮保存 .bento.html,双击即可离线放映,浏览器内可继续编辑。
                           </p>
+                        </div>
+                      ) : canvasOss ? (
+                        /* 机会清单交付物(开源雷达):可派发卡片,与交付库同分支 */
+                        <div className="animate-fadeIn w-full min-w-0">
+                          <OssOpportunityList result={canvasOss} missionId={currentMission?.id} />
                         </div>
                       ) : (
                         <div className="prose prose-zinc prose-sm max-w-none leading-relaxed animate-fadeIn p-2 md:p-4">

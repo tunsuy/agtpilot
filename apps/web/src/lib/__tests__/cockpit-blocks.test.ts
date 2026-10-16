@@ -487,6 +487,39 @@ describe('findFinalAnswerIndex · 整轮折叠边界(收起不完整修复)', ()
     const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), toolStep('t1', 'web_search')]);
     expect(findFinalAnswerIndex(blocks)).toBe(-1);
   });
+
+  it('工坊成品豁免:清单留在中间 step、final 是泛化总结时,边界前移到成品块', () => {
+    // 步数耗尽强制总结的落盘形态:机会清单在中间回复块,final 是散文总结 ——
+    // 无谓词时清单块进折叠区,成品卡收尾不可见(生产回归形态)
+    const list = step({
+      id: 'step_live_m1_2',
+      role: 'assistant',
+      messageKind: 'progress',
+      status: 'DONE',
+      answer: '【项目】\na/b\n【机会链接】\nhttps://github.com/a/b/issues/1\n',
+      reasoning: '(逐条核检思考)',
+      title: '智能体回复',
+    });
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '只读调研 a/b'),
+      toolStep('t1', 'github_scan'),
+      list,
+      finalAnswer('a1', '调研完成,看板已收尾。清单与卡片均已交付。'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant', 'assistant']);
+    expect(findFinalAnswerIndex(blocks)).toBe(3);
+    // 带谓词:边界前移到成品块,成品卡与总结答复一并落在常显区
+    expect(findFinalAnswerIndex(blocks, (a) => a.includes('【项目】'))).toBe(2);
+  });
+
+  it('工坊成品豁免:最终答复自身解析出成品时边界不动', () => {
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '只读调研 a/b'),
+      toolStep('t1', 'github_scan'),
+      finalAnswer('a1', '【项目】\na/b\n【机会链接】\nhttps://github.com/a/b/issues/1\n'),
+    ]);
+    expect(findFinalAnswerIndex(blocks, (a) => a.includes('【项目】'))).toBe(2);
+  });
 });
 
 describe('turnCreatesPlan · 看板卡钉挂轮判定', () => {

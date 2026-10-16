@@ -789,8 +789,10 @@ class AgentBackend {
             // (DeliverablesView)与「最终交付物」画布只认 mission.artifact(仅
             // artifact_render / PPT 发布写它),于是成稿永远落不进交付库。收尾时服务端
             // 复用同一套解析器从最终答复抽出成品,发布成一份 markdown 交付物(与
-            // artifact_render 同一落地通路:mission.artifact + 广播持久化)。模型已自行
-            // 发布过(mission.artifact 已存在)则跳过;非成品格式解析不出包也绝不发布。
+            // artifact_render 同一落地通路:mission.artifact + 广播持久化)。开源雷达的
+            // 机会清单同样参与(oss-opportunity 声明驱动;步数耗尽时清单留在中间 step,
+            // buildWorkshopDeliverable 倒扫 steps 取源)。模型已自行发布过(mission.artifact
+            // 已存在)则跳过;非成品格式解析不出包也绝不发布。
             if (mission.workshopId && !mission.artifact) {
               try {
                 const { resolveDeliverableKind } = require('@/workshops/registry');
@@ -800,22 +802,27 @@ class AgentBackend {
                   const deliv = buildWorkshopDeliverable(
                     kind,
                     finalAnswer,
-                    mission.title || '内容工坊成品'
+                    mission.title || '内容工坊成品',
+                    (mission.steps || []).map((s) => s.answer)
                   );
                   const svc = (this.ctx as any)?.artifact;
                   if (deliv && svc) {
+                    // 量词/标签随 kind:机会清单按「条」,包类成品按「篇」
+                    const isOss = kind === 'oss-opportunity';
+                    const label = isOss ? '贡献机会清单' : '内容工坊成品';
+                    const unit = isOss ? '条' : '篇';
                     svc.createOrUpdateArtifact(
                       {
                         title: deliv.title,
                         type: 'markdown',
                         content: deliv.content,
-                        description: `内容工坊成品 · ${deliv.count} 篇(收尾自动落入交付库)`,
+                        description: `${label} · ${deliv.count} ${unit}(收尾自动落入交付库)`,
                       },
                       mission.id
                     );
                     this.addTerminalLog(
                       'system',
-                      `[Agent] 内容工坊成品已落入交付库(${deliv.count} 篇)`,
+                      `[Agent] ${label}已落入交付库(${deliv.count} ${unit})`,
                       mission.userId
                     );
                   }

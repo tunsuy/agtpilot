@@ -8,18 +8,20 @@
  * 会写)。于是内容工坊的成稿永远落不进交付库。
  *
  * 本模块把「收尾自动落地」的纯逻辑收在一处:任务结束时,服务端用与卡片同源的
- * 解析器(article-package / note-package)从最终答复里抽出成品,渲染成干净的
- * Markdown 交付文档。agent-backend 的 done 收尾据此调 ArtifactService 发布一份
- * markdown 产物 —— 走的是与 artifact_render 完全相同的落地通路(mission.artifact
- * + 广播持久化),模型不必回显、不撑上下文,卡片与交付物同源同步。
+ * 解析器(article-package / note-package / oss-opportunity)从最终答复里抽出成品
+ * (机会清单额外倒扫 steps:步数耗尽时最终答复可能是散文总结,清单留在中间 step),
+ * 渲染成干净的 Markdown 交付文档。agent-backend 的 done 收尾据此调 ArtifactService
+ * 发布一份 markdown 产物 —— 走的是与 artifact_render 完全相同的落地通路
+ * (mission.artifact + 广播持久化),模型不必回显、不撑上下文,卡片与交付物同源同步。
  *
  * 纯函数,无 React/浏览器依赖,便于以固定样例做契约测试。
  */
 import { parseArticlePackages, type ArticlePackage } from './article-package';
 import { parseNotePackages, type NotePackage } from '../xhs/note-package';
+import { parseOssOpportunities } from '../oss_radar/opportunities';
 
-/** 可自动落交付库的包类型(与工坊 artifacts 声明的 kind 同一套字面量) */
-export type DeliverableKind = 'article-package' | 'note-package';
+/** 可自动落交付库的交付物类型(与工坊 artifacts 声明的 kind 同一套字面量) */
+export type DeliverableKind = 'article-package' | 'note-package' | 'oss-opportunity';
 
 /** 交付件发布结果(交给 ArtifactService.createOrUpdateArtifact 组装 ArtifactData) */
 export interface WorkshopDeliverable {
@@ -54,17 +56,39 @@ function renderNoteMarkdown(pkg: NotePackage): string {
 /**
  * 按交付物类型从最终答复抽取成品并渲染成一份交付文档。
  *
- * - kind='article-package' 走文章包解析器(知乎/公众号);'note-package' 走笔记包解析器(小红书)。
+ * - kind='article-package' 走文章包解析器(知乎/公众号);'note-package' 走笔记包解析器
+ *   (小红书);'oss-opportunity' 走机会清单解析器(开源雷达),交付正文即清单原文
+ *   (卡片解析器同源契约格式),count=机会条数。
  * - 解析不出任何包(非成品格式:选题清单 / 自由文本 / 空答复)→ null,绝不发布
  *   (绝不把非成品当交付件,也绝不为凑数发布空文档)。
  * - fallbackTitle 用于多篇合并、或单篇标题缺失时的兜底标题(通常传任务名)。
+ * - stepAnswers 为本轮各步答复(按序),仅 oss-opportunity 反扫取源用。
  */
 export function buildWorkshopDeliverable(
   kind: DeliverableKind,
   finalAnswer: string,
-  fallbackTitle: string
+  fallbackTitle: string,
+  stepAnswers?: ReadonlyArray<string | undefined>
 ): WorkshopDeliverable | null {
-  const source = finalAnswer || '';
+  // oss 机会清单:步数耗尽强制总结时最终答复是散文,真清单留在中间 step ——
+  // 倒扫 stepAnswers 取最后一段能解析出清单的 answer;不命中回落 finalAnswer
+  // (解析有效性门槛与卡片同源:解析不出清单绝不发布)。
+  let source = finalAnswer || '';
+  if (kind === 'oss-opportunity' && stepAnswers) {
+    for (let i = stepAnswers.length - 1; i >= 0; i--) {
+      const a = stepAnswers[i];
+      if (a && parseOssOpportunities(a).opportunities.length > 0) {
+        source = a;
+        break;
+      }
+    }
+  }
+  if (kind === 'oss-opportunity') {
+    const opportunities = parseOssOpportunities(source).opportunities;
+    if (opportunities.length === 0) return null;
+    // 清单原文即契约格式(卡片解析器同源),原样保留不重渲染
+    return { title: fallbackTitle, content: source.trim(), count: opportunities.length };
+  }
   // 只解析一次:titles[0] 取标题、渲染取正文,复用同一批 packages
   const packages =
     kind === 'article-package'

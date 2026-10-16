@@ -67,7 +67,8 @@ export interface ArtifactDraftSpec<Pkg> {
 
 export type ArtifactSpec =
   | { kind: 'article-package'; label: string; draft?: ArtifactDraftSpec<ArticlePackage> }
-  | { kind: 'note-package'; label: string; draft?: ArtifactDraftSpec<NotePackage> };
+  | { kind: 'note-package'; label: string; draft?: ArtifactDraftSpec<NotePackage> }
+  | { kind: 'oss-opportunity'; label: string };
 
 export interface WorkshopDef {
   id: WorkshopId;

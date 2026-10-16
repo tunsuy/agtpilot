@@ -81,15 +81,19 @@ describe('buildWorkshopDeliverable · note-package(小红书)', () => {
   });
 });
 
-describe('resolveDeliverableKind(声明驱动:仅包类内容工坊参与自动落地)', () => {
+describe('resolveDeliverableKind(声明驱动:仅声明结构化交付物的工坊参与自动落地)', () => {
   it('知乎/公众号 → article-package;小红书 → note-package', () => {
     expect(resolveDeliverableKind('zhihu')).toBe('article-package');
     expect(resolveDeliverableKind('wechat_mp')).toBe('article-package');
     expect(resolveDeliverableKind('xhs')).toBe('note-package');
   });
 
-  it('非包类交付物工坊 → null(PPT/开源雷达/小说/视频/微博/邮件等)', () => {
-    for (const id of ['ppt', 'oss_radar', 'novel', 'video_douyin', 'video_bilibili', 'weibo', 'email_triage', 'weekly']) {
+  it('开源雷达声明机会清单 → oss-opportunity(收尾落库,交付库渲派发卡)', () => {
+    expect(resolveDeliverableKind('oss_radar')).toBe('oss-opportunity');
+  });
+
+  it('未声明结构化交付物的工坊 → null(PPT/小说/视频/微博/邮件等)', () => {
+    for (const id of ['ppt', 'novel', 'video_douyin', 'video_bilibili', 'weibo', 'email_triage', 'weekly']) {
       expect(resolveDeliverableKind(id)).toBeNull();
     }
   });
@@ -97,5 +101,63 @@ describe('resolveDeliverableKind(声明驱动:仅包类内容工坊参与自动�
   it('无 workshopId / 未知 id → null(手输任务、历史任务不参与)', () => {
     expect(resolveDeliverableKind(undefined)).toBeNull();
     expect(resolveDeliverableKind('not_a_workshop')).toBeNull();
+  });
+});
+
+/** 单条机会块(契约格式:【机会 N】+ 字段头,与 opportunities 解析器测试同构) */
+const oppBlock = (n: number, project: string) =>
+  [
+    `【机会 ${n}】`,
+    `${n}`,
+    '【项目】',
+    project,
+    '【项目简介】',
+    `项目 ${n} 简介:AI infra 方向活跃仓库,发版节奏稳定。`,
+    '【机会类型】',
+    'good first issue',
+    '【机会链接】',
+    `https://github.com/${project}/issues/${100 + n}`,
+    '【为什么适合你】',
+    '你主力是 Go + TypeScript,该 Issue 只涉及参数解析。',
+    '【难度】',
+    '低',
+  ].join('\n');
+
+const OSS_LIST = [oppBlock(1, 'google/ax'), '---', oppBlock(2, 'vllm-project/vllm')].join('\n');
+const OSS_PROSE = '调研完成,看板已收尾。清单与卡片均已交付(2 条机会),随时可以指定一条。';
+
+describe('buildWorkshopDeliverable · oss-opportunity(开源贡献雷达)', () => {
+  it('清单:content 原样保留契约格式,count=机会数,标题=任务名', () => {
+    const d = buildWorkshopDeliverable('oss-opportunity', OSS_LIST, '只读深挖指定仓库 google/ax');
+    expect(d).not.toBeNull();
+    expect(d!.count).toBe(2);
+    expect(d!.title).toBe('只读深挖指定仓库 google/ax');
+    expect(d!.content).toContain('【项目】');
+    expect(d!.content).toContain('https://github.com/google/ax/issues/101');
+  });
+
+  it('收尾倒扫 steps:final 是散文、清单在中间步骤 → 取清单', () => {
+    const d = buildWorkshopDeliverable(
+      'oss-opportunity',
+      OSS_PROSE,
+      '只读深挖指定仓库 google/ax',
+      ['开始检索 open issues…', OSS_LIST, OSS_PROSE]
+    );
+    expect(d).not.toBeNull();
+    expect(d!.count).toBe(2);
+    expect(d!.content).toContain('【机会 1】');
+  });
+
+  it('散文/空答复且 steps 无清单 → null,绝不发布', () => {
+    expect(buildWorkshopDeliverable('oss-opportunity', OSS_PROSE, '任务名')).toBeNull();
+    expect(buildWorkshopDeliverable('oss-opportunity', '', '任务名', ['检索中…'])).toBeNull();
+  });
+});
+
+describe('resolveDeliverableKind · 开源雷达参与收尾自动落地', () => {
+  it('oss_radar → oss-opportunity;未声明工坊/手输任务 → null', () => {
+    expect(resolveDeliverableKind('oss_radar')).toBe('oss-opportunity');
+    expect(resolveDeliverableKind('novel')).toBeNull();
+    expect(resolveDeliverableKind(undefined)).toBeNull();
   });
 });

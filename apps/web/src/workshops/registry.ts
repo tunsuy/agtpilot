@@ -28,6 +28,7 @@ import type {
   WorkshopRunPayload,
   CronScenarioSpec,
   ArtifactDraftSpec,
+  ArtifactSpec,
 } from './types';
 import type { ArticlePackage } from './shared/article-package';
 import type { NotePackage } from './xhs/note-package';
@@ -97,36 +98,48 @@ type ArtifactPkg<K extends 'article-package' | 'note-package'> =
  * 时按格式缺省路由:文章包 → 公众号(格式为两工坊共享,公众号是缺省投递目标),
  * 笔记包 → 小红书(格式仅 xhs 工坊产出)。不靠任务标题嗅探,投递目标永远出自声明。
  */
+/** 带 draft 的包类交付物声明(article/note;oss-opportunity 无 draft 不参与草稿直投) */
+type DraftArtifactSpec = Extract<
+  ArtifactSpec,
+  { kind: 'article-package' } | { kind: 'note-package' }
+>;
+
 export function resolveArtifactDraft<K extends 'article-package' | 'note-package'>(
   workshopId: string | undefined,
   kind: K
 ): ArtifactDraftSpec<ArtifactPkg<K>> | undefined {
   const fromWorkshop =
     workshopId && (workshopId as WorkshopId) in WORKSHOP_SKILLS
-      ? (WORKSHOP_SKILLS[workshopId as WorkshopId].meta.artifacts || []).find((a) => a.kind === kind)?.draft
+      ? (WORKSHOP_SKILLS[workshopId as WorkshopId].meta.artifacts || []).find(
+          (a): a is DraftArtifactSpec => a.kind === kind
+        )?.draft
       : undefined;
   if (fromWorkshop) return fromWorkshop as ArtifactDraftSpec<ArtifactPkg<K>>;
   const fallbackId: WorkshopId = kind === 'note-package' ? 'xhs' : 'wechat_mp';
-  return (WORKSHOP_SKILLS[fallbackId].meta.artifacts || []).find((a) => a.kind === kind)?.draft as
+  return (WORKSHOP_SKILLS[fallbackId].meta.artifacts || []).find(
+    (a): a is DraftArtifactSpec => a.kind === kind
+  )?.draft as
     | ArtifactDraftSpec<ArtifactPkg<K>>
     | undefined;
 }
 
 /**
- * 工坊声明的结构化包交付物类型(article-package / note-package);未声明包类交付物
- * (PPT / 开源雷达 / 小说 / 视频 / 微博 / 手输任务等)→ null。
+ * 工坊声明的结构化交付物类型(article-package / note-package / oss-opportunity);
+ * 未声明此类交付物的工坊(PPT / 小说 / 视频 / 微博 / 手输任务等)→ null。
  *
  * 服务端收尾据此决定是否把成品自动落进交付库(见 shared/deliverable-publish.ts):
- * 只有声明了包类交付物的内容工坊(知乎/公众号=文章包,小红书=笔记包)才参与,
- * 声明驱动、不靠任务标题嗅探,新增内容工坊自动纳入。
+ * 声明了包类交付物的内容工坊(知乎/公众号=文章包,小红书=笔记包)与声明机会清单的
+ * 开源雷达(oss-opportunity)才参与,声明驱动、不靠任务标题嗅探,新增工坊自动纳入。
  */
 export function resolveDeliverableKind(
   workshopId: string | undefined
-): 'article-package' | 'note-package' | null {
+): 'article-package' | 'note-package' | 'oss-opportunity' | null {
   if (!workshopId || !((workshopId as WorkshopId) in WORKSHOP_SKILLS)) return null;
   const artifacts = WORKSHOP_SKILLS[workshopId as WorkshopId].meta.artifacts || [];
-  const pkg = artifacts.find((a) => a.kind === 'article-package' || a.kind === 'note-package');
-  return pkg ? (pkg.kind as 'article-package' | 'note-package') : null;
+  const pkg = artifacts.find(
+    (a) => a.kind === 'article-package' || a.kind === 'note-package' || a.kind === 'oss-opportunity'
+  );
+  return pkg ? (pkg.kind as 'article-package' | 'note-package' | 'oss-opportunity') : null;
 }
 
 /**

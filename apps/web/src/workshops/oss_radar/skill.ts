@@ -46,6 +46,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     ],
     note: '生成后跳转任务页,Agent 用 GitHub MCP 搜活跃仓库与 good first issue、DeepWiki 理解代码库、网页搜索补充社区动态(缺哪个自动降级并注明),产出结构化「贡献机会」卡片:项目/机会类型/Issue 直达链接/为什么适合你/建议第一步/难度。全程只读:不 fork、不建 Issue、不评论;链接必须来自真实检索并在清单末尾注明检索时间与数据源。想贡献哪条:链接直达 Issue 人工核对,或让 Agent 起草认领留言/PR 描述——对外发送前逐条经你审批,代码由你本地动手。',
     profileSlot: 'oss_radar',
+    artifacts: [{ kind: 'oss-opportunity', label: '贡献机会清单' }],
   },
   run: (params, ctx) => {
     const count = num(params.count, 5);

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { ArtifactState, Mission } from '../types/agent';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
+import { OssOpportunityList, parseOssDeliverable } from './workshops/OssOpportunityCard';
 import { shareToApp } from '../utils/nativeBridge';
 
 interface DeliverablesViewProps {
@@ -167,6 +168,10 @@ export function DeliverablesView({
     }
     return filteredArtifacts[0] || allArtifacts[0] || null;
   }, [selectedArtifactId, allArtifacts, filteredArtifacts]);
+
+  // 机会清单交付物分支:正文能解析出有效清单则渲可派发卡片(与会话流/画布同分支),
+  // 否则按原类型渲染(markdown / html / file)
+  const activeOss = activeItem ? parseOssDeliverable(activeItem.content) : null;
 
   const handleCopy = async () => {
     if (!activeItem?.content) return;
@@ -545,6 +550,11 @@ export function DeliverablesView({
                     <p className="mt-2 text-[11px] text-zinc-400 leading-relaxed">
                       网页演示页:画面内可翻页放映;下载保存 .bento.html 后双击即可离线放映,浏览器内可继续编辑。
                     </p>
+                  </div>
+                ) : activeOss ? (
+                  /* 机会清单交付物(开源雷达):可派发卡片,派发/起草审批与会话流同源 */
+                  <div className="p-4 md:p-6 min-w-0">
+                    <OssOpportunityList result={activeOss} missionId={activeItem.missionId || undefined} />
                   </div>
                 ) : (
                   <div className="p-6 md:p-8 prose prose-zinc prose-sm max-w-none leading-relaxed min-h-[500px]">

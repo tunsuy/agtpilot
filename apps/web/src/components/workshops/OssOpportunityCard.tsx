@@ -17,6 +17,7 @@ import { Copy, Check, Radar, ChevronDown, ExternalLink, Send, MonitorSmartphone 
 import { copyToClipboard } from '../../utils/nativeBridge';
 import {
   buildOssOpportunityCopyText,
+  parseOssOpportunities,
   type OssOpportunity,
   type OssOpportunityParseResult,
 } from '../../workshops/oss_radar/opportunities';
@@ -326,4 +327,15 @@ export function OssOpportunityList({
       )}
     </div>
   );
+}
+
+/**
+ * 交付物机会清单分支判定:content 能解析出有效机会清单则返回解析结果,调用方渲染
+ * 可派发卡片;否则返回 null,调用方回落自身渲染(markdown / html / file)。不绑定
+ * artifact type —— 清单内容可能藏在任何 type 的 content 里(生产实测:模型把清单
+ * 用 artifact_render type=markdown 渲进画布,收尾落库通路也产 markdown 交付物)。
+ */
+export function parseOssDeliverable(content: string): OssOpportunityParseResult | null {
+  const parsed = content ? parseOssOpportunities(content) : null;
+  return parsed && parsed.opportunities.length > 0 ? parsed : null;
 }

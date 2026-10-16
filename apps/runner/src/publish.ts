@@ -15,7 +15,8 @@ import { repoDirFor, defaultExecAsync, type ExecAsync } from './repo';
  * Phase 2 发布执行(M3,docs/design/local-runner-bridge.md §6.2):
  * 审批结果随轮询下行(publish 携带批准时刻固化的命令集 / cancel 拒绝确认),
  * runner **逐字执行、不重新规划、不追加命令**:
- * - 执行前每条命令再过协议白名单 validatePublishCommand(三种完整形状),
+ * - 执行前每条命令再过协议白名单 validatePublishCommand(三种完整形状,
+ *   pr create 含经 fork 派发的 --repo 12 元变体),
  *   任何一条不合法 → 整组拒绝执行并上报 error(防漂移围栏的 runner 侧闸);
  * - 顺序执行,任何一条失败即停并上报;
  * - gh pr create 输出提取 PR 链接 → phase2_result 回流 → state done。

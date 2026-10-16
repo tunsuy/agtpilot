@@ -10,6 +10,7 @@ import {
 const BASE_INPUT = {
   workBranch: 'contrib/oss-radar-123',
   baseBranch: 'main',
+  repo: 'owner/repo',
   prTitle: 'fix: 采样参数越界校验',
   prBody: '关联 Issue:https://github.com/owner/repo/issues/123\n\n## 改动说明\n修好了',
   issueUrl: 'https://github.com/owner/repo/issues/123',
@@ -54,20 +55,40 @@ describe('buildPublishCommands(批准时刻固化)', () => {
     expect(buildPublishCommands({ ...BASE_INPUT, prBody: 'y'.repeat(20001) })).toBeNull();
   });
 
-  it('forkHead(经 fork 派发)→ PR head 固化为 owner:branch 跨仓形式;push 形状不变', () => {
+  it('forkHead(经 fork 派发)→ pr create 12 元:--repo 钉上游 + head=owner:branch 跨仓;push 形状不变', () => {
     const cmds = buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy' });
     expect(cmds).not.toBeNull();
     expect(cmds![0]).toEqual({ cmd: 'git', args: ['push', '-u', 'origin', 'contrib/oss-radar-123'] });
+    // 显式 --repo 上游:发布命令在 fork 克隆目录内执行(origin=fork),不带 --repo
+    // 时 gh 按 origin 解析缺省 base 仓,PR 会落进 fork 自己 —— 上游永远收不到
+    expect(cmds![1].args.slice(0, 4)).toEqual(['pr', 'create', '--repo', 'owner/repo']);
     const headIdx = cmds![1].args.indexOf('--head');
     expect(cmds![1].args[headIdx + 1]).toBe('tunsuy:contrib/oss-radar-123');
     // base 仍是上游 baseBranch(不带 owner 前缀)
     expect(cmds![1].args[cmds![1].args.indexOf('--base') + 1]).toBe('main');
   });
 
+  it('直连派发(无 forkHead)→ 保持 10 元旧形状,不带 --repo(origin 即上游,旧 runner 兼容)', () => {
+    const cmds = buildPublishCommands(BASE_INPUT);
+    expect(cmds![1].args).toHaveLength(10);
+    expect(cmds![1].args).not.toContain('--repo');
+    expect(cmds![1].args[cmds![1].args.indexOf('--head') + 1]).toBe('contrib/oss-radar-123');
+  });
+
   it('畸形 forkHead(带冒号/空格/以 - 开头)→ 整体 null,拒绝固化', () => {
     expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'a:b' })).toBeNull();
     expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'a b' })).toBeNull();
     expect(buildPublishCommands({ ...BASE_INPUT, forkHead: '-x' })).toBeNull();
+  });
+
+  it('经 fork 但缺 repo / repo 畸形 → 整体 null(宁可拒绝批准,不固化打不到上游的命令)', () => {
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy', repo: undefined })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy', repo: '' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy', repo: 'owner' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy', repo: 'a/b/c' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy', repo: '-owner/repo' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy', repo: 'ow..ner/repo' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, forkHead: 'tunsuy', repo: './repo' })).toBeNull();
   });
 });
 
@@ -129,6 +150,36 @@ describe('validatePublishCommand(白名单:三种完整形状,其余全拒)', ()
       args: ['pr', 'create', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'tunsuy:contrib/x'],
     });
     expect(v).not.toBeNull();
+  });
+
+  it('pr create 12 元(--repo owner/repo 定序 [2][3],经 fork 钉上游)合法,返回值是副本', () => {
+    const c: FrozenCommand = {
+      cmd: 'gh',
+      args: ['pr', 'create', '--repo', 'owner/repo', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'tunsuy:contrib/x'],
+    };
+    const v = validatePublishCommand(c);
+    expect(v).not.toBeNull();
+    expect(v).toEqual(c);
+    expect(v).not.toBe(c);
+  });
+
+  it('--repo 形状的畸形全拒:错位/段数不对/flag 段/穿越段/空段/长度不符', () => {
+    const bad: unknown[] = [
+      { cmd: 'gh', args: ['pr', 'create', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h', '--repo', 'o/r'] }, // --repo 尾随(非定序 [2])
+      { cmd: 'gh', args: ['pr', 'create', '--repo', 'owner', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h'] }, // 缺 / 段
+      { cmd: 'gh', args: ['pr', 'create', '--repo', 'a/b/c', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h'] }, // 三段
+      { cmd: 'gh', args: ['pr', 'create', '--repo', '', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h'] }, // 空
+      { cmd: 'gh', args: ['pr', 'create', '--repo', '-o/r', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h'] }, // flag 段
+      { cmd: 'gh', args: ['pr', 'create', '--repo', 'o/../r', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h'] }, // 穿越段
+      { cmd: 'gh', args: ['pr', 'create', '--repo', './r', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h'] }, // '.' 段
+      { cmd: 'gh', args: ['pr', 'create', '--repo', 'o/r', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h', '--draft'] }, // 13 元
+      { cmd: 'gh', args: ['pr', 'create', '--repo', 'o/r', '--body', 'b', '--title', 't', '--base', 'main', '--head', 'h'] }, // 后 8 元换序
+      { cmd: 'gh', args: ['pr', 'create', '--repo', 'o/r', '--title', '', '--body', 'b', '--base', 'main', '--head', 'h'] }, // 空标题
+      { cmd: 'gh', args: ['pr', 'create', '--repo', 'o\nr', '--title', 't', '--body', 'b', '--base', 'main', '--head', 'h'] }, // 控制字符
+    ];
+    for (const m of bad) {
+      expect(validatePublishCommand(m), JSON.stringify(m)).toBeNull();
+    }
   });
 
   it('--head 跨仓形式的畸形全拒:多冒号/空段/owner 带 - 或 ../分支段是 flag/穿越/控制字符', () => {

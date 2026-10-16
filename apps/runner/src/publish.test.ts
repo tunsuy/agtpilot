@@ -98,6 +98,25 @@ describe('executePublishAction(固化命令集逐字执行)', () => {
     expect(calls[1].args).toEqual(prCmd.args);
   });
 
+  it('经 fork 派发的 12 元 pr create(--repo 钉上游)过白名单并逐字执行', async () => {
+    const forkPrCmd: FrozenCommand = {
+      cmd: 'gh',
+      args: ['pr', 'create', '--repo', 'owner/repo', '--title', 'fix: t', '--body', 'b', '--base', 'main', '--head', 'tunsuy:contrib/x'],
+    };
+    fs.mkdirSync(path.join(wsRoot, 'tunsuy', 'repo', '.git'), { recursive: true }); // fork 克隆目录
+    const { calls, exec } = fakeExec();
+    const r = await executePublishAction(
+      makeAction({ forkRepo: 'tunsuy/repo', commands: [pushCmd, forkPrCmd] }),
+      makeDeps(exec)
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.prUrl).toBe(PR_URL);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].args).toEqual(forkPrCmd.args); // 逐字执行,--repo 原样传给 gh
+    // fork 任务:命令在 fork 克隆目录内执行(origin=fork)
+    expect(calls[1].cwd).toBe(path.join(wsRoot, 'tunsuy', 'repo'));
+  });
+
   it('白名单复核先于执行:混入一条非法命令 → 整组拒绝,一条都不执行', async () => {
     const { calls, exec } = fakeExec();
     const deps = makeDeps(exec);

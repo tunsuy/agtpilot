@@ -97,9 +97,21 @@ function badHead(s: string): boolean {
 }
 
 /**
+ * --repo 参数防线:owner/repo 恰好两段,每段形状合法、不以 '-' 开头(防被解析成
+ * flag)、不含 '..'/'.' 段。经 fork 派发的 pr create 用它钉住上游仓。
+ */
+function badRepo(s: string): boolean {
+  const parts = s.split('/');
+  if (parts.length !== 2) return true;
+  return parts.some((p) => !GH_OWNER_RE.test(p) || p.startsWith('-') || p.includes('..') || p === '.');
+}
+
+/**
  * 白名单只认三种**完整形状**(多余参数、缺参数、换序、非字符串一律拒绝):
  * 1. git push -u origin <workBranch>
- * 2. gh pr create --title <t> --body <b> --base <base> --head <head>(定序 10 元)
+ * 2. gh pr create --title <t> --body <b> --base <base> --head <head>(定序 10 元);
+ *    经 fork 派发为 12 元:gh pr create --repo <owner/repo> 后接同一定序 8 元
+ *    (显式钉住上游仓,否则 gh 按 fork 克隆的 origin 把 PR 开进 fork 自己)
  * 3. gh issue comment <issueUrl> --body <text>(issueUrl 必须是 GitHub Issue 直达)
  */
 export function validatePublishCommand(input: unknown): FrozenCommand | null {
@@ -120,12 +132,17 @@ export function validatePublishCommand(input: unknown): FrozenCommand | null {
 
   if (o.cmd === 'gh') {
     if (a[0] === 'pr' && a[1] === 'create') {
-      if (a.length !== 10) return null;
-      if (a[2] !== '--title' || a[4] !== '--body' || a[6] !== '--base' || a[8] !== '--head') return null;
-      const title = a[3];
-      const body = a[5];
-      const base = a[7];
-      const head = a[9];
+      // 经 fork 派发:12 元(--repo owner/repo 定序在 [2][3],钉住上游);
+      // 直连/旧固化:10 元。两种形状之外(含 12 元但 [2] 非 --repo)一律拒绝
+      const hasRepo = a.length === 12 && a[2] === '--repo';
+      if (!hasRepo && a.length !== 10) return null;
+      if (hasRepo && badRepo(a[3])) return null;
+      const rest = a.slice(hasRepo ? 4 : 2);
+      if (rest[0] !== '--title' || rest[2] !== '--body' || rest[4] !== '--base' || rest[6] !== '--head') return null;
+      const title = rest[1];
+      const body = rest[3];
+      const base = rest[5];
+      const head = rest[7];
       if (!title || title.length > 300) return null;
       if (body.length > 20000) return null;
       if (badBranch(base) || badHead(head)) return null;
@@ -160,6 +177,13 @@ export interface PublishCommandInput {
    * 畸形 forkHead 会使固化命令过不了 validatePublishCommand → 整体 null(拒绝批准)。
    */
   forkHead?: string;
+  /**
+   * 上游仓库全名(owner/repo),经 fork 派发时**必带**:固化的 gh pr create 显式
+   * `--repo` 钉住上游。发布命令在 fork 克隆目录内执行(origin=fork),不带 --repo
+   * 时 gh 按 origin 解析缺省 base 仓 → PR 落进 fork 自己(contrib 分支 → fork main),
+   * 根本到不了上游。直连派发(origin 即上游)不带,保持 10 元旧形状(旧 runner 兼容)。
+   */
+  repo?: string;
 }
 
 /**
@@ -169,14 +193,17 @@ export interface PublishCommandInput {
  * 保证「固化的必是可执行合法的」。
  */
 export function buildPublishCommands(input: PublishCommandInput): FrozenCommand[] | null {
-  // 经 fork 派发:push 的 origin 就是 fork 克隆(形状不变);PR head 用跨仓形式指向上游
-  const head = input.forkHead ? `${input.forkHead}:${input.workBranch}` : input.workBranch;
+  // 经 fork 派发:push 的 origin 就是 fork 克隆(形状不变);PR 显式 --repo 钉住上游 +
+  // head 跨仓形式指向 fork 分支。缺 repo 时 --repo '' 过不了白名单 → 整体 null(拒绝批准)
+  const viaFork = input.forkHead !== undefined;
+  const head = viaFork ? `${input.forkHead}:${input.workBranch}` : input.workBranch;
   const cmds: FrozenCommand[] = [
     { cmd: 'git', args: ['push', '-u', 'origin', input.workBranch] },
     {
       cmd: 'gh',
       args: [
         'pr', 'create',
+        ...(viaFork ? ['--repo', input.repo ?? ''] : []),
         '--title', input.prTitle,
         '--body', input.prBody,
         '--base', input.baseBranch || 'main',

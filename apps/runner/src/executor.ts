@@ -91,6 +91,11 @@ const ALLOWED_BASE = [
   // 续跑模式收尾整理 WIP commit 需要(git reset --soft 到基线后重新提交);
   // 只影响 workspaceRoot 内的本地副本,对外围栏(push/gh/网络)不变
   'Bash(git reset:*)',
+  // 身份自愈窄口:prepareRepo 已预写 repo-local user.name/email,这里是
+  // 兜底(agent 想改提交身份时不至于撞权限死锁,生产实测 google/ax #470)。
+  // 前缀窄匹配:--global/--system 变体不以 `git config user.` 开头,进不来
+  'Bash(git config user.name:*)',
+  'Bash(git config user.email:*)',
 ];
 
 /** 固化的禁用清单:对外副作用与网络一律封死(发布走云端审批门) */

@@ -205,6 +205,26 @@ async function findPriorWork(
   }
 }
 
+/**
+ * repo-local git 身份(user.name/user.email),prepareRepo 在克隆/更新后调用。
+ * 只写工作副本的 .git/config,绝不碰设备 global 配置;ghLogin 传 null 时
+ * (直连派发保持「零 gh 调用」契约,不额外实探)回落固定兜底身份。
+ * AGTPILOT_GIT_NAME / AGTPILOT_GIT_EMAIL 可显式覆写(设备上想用别的
+ * 提交身份时设置,如公司账号)。
+ */
+export async function ensureGitIdentity(
+  repoDir: string,
+  exec: ExecAsync = defaultExecAsync,
+  ghLogin: string | null = null
+): Promise<void> {
+  const name = process.env.AGTPILOT_GIT_NAME?.trim() || ghLogin || 'agtpilot-runner';
+  const email =
+    process.env.AGTPILOT_GIT_EMAIL?.trim() ||
+    (ghLogin ? `${ghLogin}@users.noreply.github.com` : 'agtpilot-runner@localhost');
+  await exec('git', ['-C', repoDir, 'config', 'user.name', name]);
+  await exec('git', ['-C', repoDir, 'config', 'user.email', email]);
+}
+
 export async function prepareRepo(
   pack: RunnerTaskPack,
   root: string,
@@ -213,8 +233,9 @@ export async function prepareRepo(
   // 经 fork 派发:实际克隆目标 = ghLogin/repo(每次实探账号,不用进程缓存)
   let cloneRepo = pack.repo;
   let forkRepo: string | undefined;
+  let ghLogin: string | null = null;
   if (pack.viaFork) {
-    const ghLogin = await queryGhLogin(exec);
+    ghLogin = await queryGhLogin(exec);
     if (!ghLogin) {
       throw new Error('任务要求经 fork 派发,但本机 gh 未登录(或输出异常):先执行 gh auth login,或重新以直连方式派发');
     }
@@ -236,6 +257,17 @@ export async function prepareRepo(
     await exec('git', ['clone', '--', remoteUrl, repoDir]);
     mode = 'cloned';
   }
+
+  // repo 级 git 身份固化(生产实测 google/ax #470「改得动、提不了」的根因):
+  // 克隆出来的工作副本没有 user.name/user.email,headless agent 的裸
+  // `git commit` 必失败;而补身份的各种变体(git config / git -c / GIT_*
+  // env 前缀)又都不匹配固化白名单的形状,default 权限模式下被自动拒绝
+  // (`--author=` 能过权限但只设 author,committer 身份仍缺)。那次任务
+  // agent 改完 4 个文件、试了 8 种 commit 姿势全灭,最终被判「无本地
+  // commit(没有产出)」。这里在准备阶段统一写 repo-local config(不碰
+  // global),agent 裸 commit 即可成功;身份优先级 env 覆写 > gh 登录名
+  // (fork 派发已实探,零额外调用)> agtpilot-runner 兜底。
+  await ensureGitIdentity(repoDir, exec, ghLogin);
 
   // 现场保留(续跑模式):增量更新时工作分支已有上次成果(领先 commit 或未提交
   // 改动)→ 不再 checkout -B 重置(那会把上次产出扔掉),保留现场直接续作,

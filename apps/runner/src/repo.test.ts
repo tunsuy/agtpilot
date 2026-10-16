@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { RunnerTaskPack } from '@agtpilot/protocol';
-import { repoDirFor, prepareRepo, isWorktreePristine, WorkspaceFenceError, type ExecAsync } from './repo';
+import { repoDirFor, prepareRepo, ensureGitIdentity, isWorktreePristine, WorkspaceFenceError, type ExecAsync } from './repo';
 
 const pack = {
   taskId: 'rtask_1',
@@ -54,10 +54,13 @@ describe('prepareRepo(clone/fetch + 切工作分支,零 shell)', () => {
       cmd: 'git',
       args: ['clone', '--', 'https://github.com/vllm-project/vllm.git', r.repoDir],
     });
-    expect(calls[1].args).toEqual(['-C', r.repoDir, 'checkout', '-B', 'contrib/fix-1', 'origin/main']);
+    // 克隆后先固化 repo 级 git 身份(两发 config),再切工作分支
+    expect(calls[1].args).toEqual(['-C', r.repoDir, 'config', 'user.name', 'agtpilot-runner']);
+    expect(calls[2].args).toEqual(['-C', r.repoDir, 'config', 'user.email', 'agtpilot-runner@localhost']);
+    expect(calls[3].args).toEqual(['-C', r.repoDir, 'checkout', '-B', 'contrib/fix-1', 'origin/main']);
     // 基线命中 → 零额外探测调用,回流原值
     expect(r.baseBranch).toBe('main');
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(4);
   });
 
   it('已有 .git → fetch --prune 增量更新(不重复 clone)', async () => {
@@ -193,7 +196,10 @@ describe('prepareRepo · 经 fork 派发(pack.viaFork,派发弹窗显式勾选)'
     expect(calls[0]).toEqual({ cmd: 'gh', args: ['api', 'user', '--jq', '.login'] });
     expect(calls[1]).toEqual({ cmd: 'gh', args: ['repo', 'fork', 'vllm-project/vllm', '--clone=false'] });
     expect(calls[2]).toEqual({ cmd: 'git', args: ['clone', '--', 'https://github.com/tunsuy/vllm.git', r.repoDir] });
-    expect(calls[3].args).toEqual(['-C', r.repoDir, 'checkout', '-B', 'contrib/fix-1', 'origin/main']);
+    // fork 派发身份 = gh 登录名 + noreply 邮箱(复用已实探的 ghLogin,零额外 gh 调用)
+    expect(calls[3].args).toEqual(['-C', r.repoDir, 'config', 'user.name', 'tunsuy']);
+    expect(calls[4].args).toEqual(['-C', r.repoDir, 'config', 'user.email', 'tunsuy@users.noreply.github.com']);
+    expect(calls[5].args).toEqual(['-C', r.repoDir, 'checkout', '-B', 'contrib/fix-1', 'origin/main']);
   });
 
   it('fork 已存在(gh 报 already exists)→ 等同成功,继续克隆', async () => {
@@ -235,6 +241,57 @@ describe('prepareRepo · 经 fork 派发(pack.viaFork,派发弹窗显式勾选)'
   });
 });
 
+describe('ensureGitIdentity(repo 级身份固化,google/ax #470「改得动、提不了」根修)', () => {
+  it('有 gh 登录名 → name=login,email=<login>@users.noreply.github.com(PR 提交可归属)', async () => {
+    const { calls, exec } = recExec();
+    await ensureGitIdentity('/ws/o/r', exec, 'tunsuy');
+    expect(calls).toEqual([
+      { cmd: 'git', args: ['-C', '/ws/o/r', 'config', 'user.name', 'tunsuy'] },
+      { cmd: 'git', args: ['-C', '/ws/o/r', 'config', 'user.email', 'tunsuy@users.noreply.github.com'] },
+    ]);
+  });
+
+  it('无 gh 登录名(直连派发)→ agtpilot-runner 兜底身份,零 gh 调用', async () => {
+    const { calls, exec } = recExec();
+    await ensureGitIdentity('/ws/o/r', exec, null);
+    expect(calls[0].args.at(-1)).toBe('agtpilot-runner');
+    expect(calls[1].args.at(-1)).toBe('agtpilot-runner@localhost');
+    expect(calls.every((c) => c.cmd !== 'gh')).toBe(true);
+  });
+
+  it('env 覆写优先于 gh 登录名(设备想换提交身份的场景)', async () => {
+    process.env.AGTPILOT_GIT_NAME = 'bot';
+    process.env.AGTPILOT_GIT_EMAIL = 'bot@example.com';
+    try {
+      const { calls, exec } = recExec();
+      await ensureGitIdentity('/ws/o/r', exec, 'tunsuy');
+      expect(calls[0].args.at(-1)).toBe('bot');
+      expect(calls[1].args.at(-1)).toBe('bot@example.com');
+    } finally {
+      delete process.env.AGTPILOT_GIT_NAME;
+      delete process.env.AGTPILOT_GIT_EMAIL;
+    }
+  });
+
+  it('续跑现场(resumed)也先补身份再 checkout(现场保留不跳过固化)', async () => {
+    const root = tmpRoot();
+    const repoDir = path.join(root, 'vllm-project', 'vllm');
+    fs.mkdirSync(path.join(repoDir, '.git'), { recursive: true });
+    const { calls, exec } = recExec(async (_cmd, args) => {
+      const a = args.join(' ');
+      if (a.includes('rev-list --count')) return { stdout: '2\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const r = await prepareRepo(pack, root, exec);
+    expect(r.mode).toBe('resumed');
+    const cfgIdx = calls.findIndex((c) => c.args.includes('user.name'));
+    const coIdx = calls.findIndex((c) => c.args[2] === 'checkout');
+    expect(cfgIdx).toBeGreaterThan(-1);
+    expect(coIdx).toBeGreaterThan(-1);
+    expect(cfgIdx).toBeLessThan(coIdx);
+  });
+});
+
 describe('prepareRepo · 现场保留(续跑模式:分支已有上次成果 → 不重置)', () => {
   /** 假 exec:按场景路由 show-ref/rev-list/symbolic-ref/status/checkout(fetch 恒成功) */
   function priorExec(o: {
@@ -250,6 +307,7 @@ describe('prepareRepo · 现场保留(续跑模式:分支已有上次成果 → 
       const a = args.join(' ');
       if (a.includes('fetch')) return { stdout: '', stderr: '' };
       if (a.includes('clone')) return { stdout: '', stderr: '' };
+      if (a.includes('config user.')) return { stdout: '', stderr: '' }; // repo 级身份固化
       if (a.includes('show-ref')) {
         if (o.branchExists === false) throw new Error('missing ref');
         return { stdout: '', stderr: '' };

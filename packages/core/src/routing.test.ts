@@ -4,6 +4,7 @@ import {
   estimateToolTokens,
   toolSearchTokenThreshold,
   selectActiveTools,
+  isSmalltalkPrompt,
   widenMountedTools,
   filterToolsByEnv,
   stableStringify,
@@ -101,6 +102,37 @@ describe('selectActiveTools', () => {
     expect(selectActiveTools('讲个笑话', TOOLS, ROUTES)).toBeUndefined();
   });
 
+  it('闲聊短路：全串问候/自我介绍只挂基线工具（「你是谁」不再背 135 个 MCP 工具）', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    for (const hi of ['你是谁', '你好', '自我介绍', '你能做什么？', 'Hello!', '在吗', '谢谢！']) {
+      const result = selectActiveTools(hi, TOOLS, ROUTES);
+      expect(result).toEqual(['memory_store', 'planner_create_plan']); // 仅 baseline
+    }
+  });
+
+  it('闲聊短路误伤防线：半截任务话不命中（全串锚定），该路由路由、该兜底兜底', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    // 不是全串问候 → 不走闲聊短路;「搜索」命中 search 路由(正确,不是误伤)
+    const hybrid = selectActiveTools('你好，帮我搜索一下', TOOLS, ROUTES);
+    expect(hybrid).toContain('search_web');
+    expect(hybrid).not.toContain('browser_navigate');
+    // 无任何路由命中 → 全量兜底
+    expect(selectActiveTools('你是谁的作者', TOOLS, ROUTES)).toBeUndefined();
+    expect(selectActiveTools('介绍一下 RAG 架构', TOOLS, ROUTES)).toBeUndefined();
+  });
+
+  it('闲聊短路后转入真实任务：只扩不缩机制把工具扩回来', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    // 第一步:闲聊 → 只挂基线
+    const initial = selectActiveTools('你是谁', TOOLS, ROUTES)!;
+    const mounted = new Set<string>(initial);
+    // 续聊转入任务:步内重算命中 search 路由 → widen 扩容
+    const next = selectActiveTools('帮我搜索一下', TOOLS, ROUTES)!;
+    const widened = widenMountedTools(mounted, next);
+    expect(widened).toContain('search_web');
+    expect(widened).toContain('memory_store'); // 基线还在
+  });
+
   it('显式指定工具子集时直接生效', () => {
     expect(selectActiveTools('任意', TOOLS, ROUTES, ['search_web', '不存在的工具'])).toEqual(['search_web']);
   });
@@ -117,6 +149,24 @@ describe('selectActiveTools', () => {
     const newRoutes: ToolRoute[] = [...ROUTES, { id: 'weather', prefixes: ['weather_'], test: /天气|weather/i }];
     const result = selectActiveTools('查一下明天天气', newPluginTools, newRoutes);
     expect(result).toContain('weather_query');
+  });
+});
+
+describe('isSmalltalkPrompt（闲聊短路判定）', () => {
+  it('全串问候/自我介绍/简单问答命中', () => {
+    for (const t of ['你是谁', '自我介绍', '介绍一下自己', '你能做什么', '你好', 'hello', '在吗', '谢谢', '再见！']) {
+      expect(isSmalltalkPrompt(t)).toBe(true);
+    }
+  });
+  it('长度超限不命中（任务话不会只剩闲聊形态）', () => {
+    expect(isSmalltalkPrompt('你是谁'.repeat(10))).toBe(false);
+  });
+  it('多行 routingText（任务历史拼接）不命中', () => {
+    expect(isSmalltalkPrompt('你是谁\n上一轮的任务结果很长很长很长很长很长很长')).toBe(false);
+  });
+  it('空串不命中', () => {
+    expect(isSmalltalkPrompt('')).toBe(false);
+    expect(isSmalltalkPrompt('   ')).toBe(false);
   });
 });
 

@@ -7,7 +7,8 @@ import { ToolDefinition, ToolRoute } from './contracts';
  * 保证跨任务前缀稳定、共享 provider 缓存；只有当工具声明 tokens 超过
  * 上下文窗口的一定比例才启用筛选。路由规则由各插件通过
  * `ctx.agent.registerToolRoute()` 自注册（见 contracts.ToolRoute），
- * 内核不维护任何插件专属前缀表。
+ * 内核不维护任何插件专属前缀表；纯闲聊 prompt 由内核闲聊短路兜住
+ * （只挂基线工具，不进插件路由）。
  *
  * 可调参数：AGTPILOT_TOOL_ROUTING=0 整体关闭；
  * AGTPILOT_CONTEXT_WINDOW（默认 64000）；AGTPILOT_TOOL_SEARCH_THRESHOLD（默认 10，单位 %）。
@@ -59,11 +60,29 @@ export function toolSearchTokenThreshold(): number {
 }
 
 /**
+ * 闲聊短路模式（全串锚定）：整条消息就是问候 / 自我介绍 / 简单问答。
+ * 「你是谁」三个字实测付了 45.8k 输入 —— 135 个 MCP 连接器工具占六成，
+ * 而行为准则第 1 条本就要求这类请求直接作答不调工具。
+ * 保守设计：全串匹配 + 长度上限（24 字符），「你是谁的作者」这类半截
+ * 任务话不会命中（不是全串），误伤路径落回全量兜底，损失只是省不了 token。
+ */
+const SMALLTALK_RE =
+  /^(你是谁|自我介绍|介绍(一下)?(自己|你自己)|你能(做|干)什么|你会什么|你好|您好|嗨|哈喽|hello|hi|hey|在吗|谢谢|多谢|辛苦了|再见|拜拜)[!！?？。.,，~～\s]*$/i;
+
+/** 闲聊短路判定：明显不需要任何领域工具组的 prompt（只看文本形态，不猜语义） */
+export function isSmalltalkPrompt(text: string): boolean {
+  const p = String(text || '').trim().toLowerCase();
+  if (!p || p.length > 24) return false;
+  return SMALLTALK_RE.test(p);
+}
+
+/**
  * 依据阈值与 prompt 选出本次任务需要声明的工具子集。
  * 返回 undefined 表示全量挂载（未超阈值 / 未命中任何规则 / 路由被关闭）。
  *
  * 决策顺序：显式指定 > 路由开关 > 阈值门（工具 tokens < 上下文 10% 时
- * 全量挂载，前缀恒定跨任务共享缓存）> 插件注册的关键词规则路由。
+ * 全量挂载，前缀恒定跨任务共享缓存）> 闲聊短路（纯问候/自我介绍只挂基线）
+ * > 插件注册的关键词规则路由。
  * 基线工具（ToolDefinition.baseline）无论如何都挂载。
  */
 export function selectActiveTools(
@@ -81,6 +100,14 @@ export function selectActiveTools(
 
   // 阈值门：工具目录还小 → 全量挂载，保证前缀稳定
   if (estimateToolTokens(allTools) < toolSearchTokenThreshold()) return undefined;
+
+  // 闲聊短路：全串锚定的问候/自我介绍 → 只挂基线工具（看板/记忆/交付等
+  // 小而通用的常驻件）。返回的可能是空数组 —— 编排器照常跑，模型没有
+  // 领域工具可调反而不会乱调；续聊转入真实任务时由「只扩不缩」机制
+  // 在重算路由的那一步扩容（扩容才写回，前缀缓存只破一次）。
+  if (isSmalltalkPrompt(prompt)) {
+    return allTools.filter((t) => t.baseline).map((t) => t.name);
+  }
 
   // 超阈值：插件注册的关键词规则 → 工具前缀路由
   const matched = new Set<string>();

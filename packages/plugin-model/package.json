@@ -14,5 +14,11 @@
     "@deepseek-ai/cordis": "^4.0.4",
     "ai": "^5.0.273",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.7"
+  },
+  "scripts": {
+    "test": "vitest run"
   }
 }

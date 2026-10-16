@@ -14,6 +14,7 @@ import type {
   ModelStreamTelemetry,
 } from '@agtpilot/core';
 import '@agtpilot/core';
+import { thinkingProviderOptions } from './thinking';
 
 export const name = 'agtpilot-plugin-model';
 export const inject = ['agent'];
@@ -92,7 +93,7 @@ export class ModelService extends Service implements ModelGateway {
    * 用于步数耗尽后的强制总结收尾等纯文本场景。
    */
   async invokeStep(options: ModelInvokeOptions): Promise<ModelStepResult> {
-    const selectedModel = this.resolveActiveModel(options.model, options.configOverride);
+    const { model: selectedModel, branch } = this.resolveActiveModel(options.model, options.configOverride);
 
     // 单步无状态调用【不执行】工具，因此也【不声明】工具：
     // 声明无 execute 的工具会诱导模型产出 tool-call，随后 SDK 因无法执行而报错
@@ -104,6 +105,7 @@ export class ModelService extends Service implements ModelGateway {
       // 工具循环默认低温：高温会降低工具选择与 JSON 参数生成的稳定性，
       // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
       temperature: options.temperature ?? 0,
+      providerOptions: thinkingProviderOptions(branch),
       stopWhen: stepCountIs(1), // 严格单步，绝不越权包含循环
     }).catch((err: any) => {
       enrichModelError(err);
@@ -133,7 +135,7 @@ export class ModelService extends Service implements ModelGateway {
    * 上层（core OrchestratorService）只需注入包装好的工具（审批门/熔断/广播）。
    */
   async runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
-    const selectedModel = this.resolveActiveModel(options.model, options.configOverride);
+    const { model: selectedModel, branch } = this.resolveActiveModel(options.model, options.configOverride);
     const maxSteps = Math.max(1, options.maxSteps ?? 10);
 
     // ---- 流健康遥测状态（打点见 contracts.ModelStreamTelemetry）----
@@ -208,6 +210,9 @@ export class ModelService extends Service implements ModelGateway {
       // 工具循环默认低温：高温会降低工具选择与 JSON 参数生成的稳定性，
       // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
       temperature: options.temperature ?? 0,
+      // 思考深度旋钮：单轮输出上限由思考与答复/工具调用共用，思考不设防会
+      // 把额度吃光导致 tool_call 写到一半被截（见 thinkingProviderOptions 注释）
+      providerOptions: thinkingProviderOptions(branch),
       // 步数上限 + Token 预算双闸门：任一触达即停止循环（预算由 setBudget 设置）
       stopWhen: ({ steps }: { steps: any[] }) =>
         steps.length >= maxSteps || this.isBudgetExceeded(),
@@ -407,7 +412,7 @@ export class ModelService extends Service implements ModelGateway {
   private resolveActiveModel(
     modelOverride?: string,
     configOverride?: { activeModelId?: string; apiKey?: string; baseURL?: string; modelName?: string }
-  ) {
+  ): { model: any; branch: string } {
     // 优先级：用户级覆盖 > 任务显式指定 > 运行时偏好（router 能级切换）> 环境变量默认
     const activeModelId =
       configOverride?.activeModelId ||
@@ -442,7 +447,7 @@ export class ModelService extends Service implements ModelGateway {
         apiKey,
         baseURL: baseURL || 'https://api.openai.com/v1',
       });
-      return provider(modelName);
+      return { model: provider(modelName), branch: 'custom_llm' };
     }
 
     if (activeModelId === 'local_llm') {
@@ -461,7 +466,7 @@ export class ModelService extends Service implements ModelGateway {
         apiKey,
         baseURL,
       });
-      return provider(modelName);
+      return { model: provider(modelName), branch: 'local_llm' };
     }
 
     if (activeModelId === 'openai') {
@@ -476,7 +481,7 @@ export class ModelService extends Service implements ModelGateway {
         apiKey,
         baseURL,
       });
-      return provider(modelName);
+      return { model: provider(modelName), branch: 'openai' };
     }
 
     if (activeModelId !== 'deepseek') {
@@ -497,7 +502,7 @@ export class ModelService extends Service implements ModelGateway {
       apiKey,
       baseURL,
     });
-    return provider(modelName);
+    return { model: provider(modelName), branch: 'deepseek' };
   }
 }
 
@@ -530,3 +535,5 @@ function toInputSchema(params?: Record<string, any>) {
 export function apply(ctx: Context) {
   new ModelService(ctx);
 }
+
+export { thinkingProviderOptions } from './thinking';

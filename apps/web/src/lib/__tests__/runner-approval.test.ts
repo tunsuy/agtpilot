@@ -153,6 +153,14 @@ describe('runnerApprovalToRequest(复用既有审批卡链路)', () => {
     expect(p.prTitle).toBe('fix: agent 终稿标题');
   });
 
+  it('带来源会话 missionId(审批卡归回该会话展示);任务无 missionId → 不设,回落全局可见', () => {
+    setupAwaitingTask();
+    const { task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    // missionId 由派发时写入任务记录,审批单从记录透传(不改写、不派生)
+    expect(runnerApprovalToRequest({ ...task, missionId: 'msn_abc' }, USER)!.missionId).toBe('msn_abc');
+    expect(runnerApprovalToRequest(task, USER)!.missionId).toBeUndefined();
+  });
+
   it('非 pending 单 → null', () => {
     setupAwaitingTask();
     const { task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
@@ -395,6 +403,9 @@ describe('经 fork 派发(viaFork):head 固化为 owner:branch + forkRepo 下行
     expect(req.description).toContain('经 fork tunsuy/repo');
     const previewPr = p.commands.find((c: any) => c.cmd === 'gh' && c.args[0] === 'pr');
     expect(previewPr.args[previewPr.args.indexOf('--head') + 1]).toBe('tunsuy:contrib/fix-9');
+    // 显式 --repo 钉住上游:发布命令在 fork 克隆内执行(origin=fork),缺了它
+    // gh 按 origin 解析缺省 base 仓,PR 会落进 fork 自己(线上真实踩过的坑)
+    expect(previewPr.args.slice(0, 4)).toEqual(['pr', 'create', '--repo', 'owner/repo']);
 
     const r = resolvePublishApproval(USER, approval.approvalId, true, {}, T0 + 200);
     expect(r.ok).toBe(true);
@@ -402,6 +413,7 @@ describe('经 fork 派发(viaFork):head 固化为 owner:branch + forkRepo 下行
     const cmds = r.task.approval!.commands!;
     expect(cmds[0]).toEqual({ cmd: 'git', args: ['push', '-u', 'origin', 'contrib/fix-9'] }); // origin=fork 克隆,形状不变
     const prCmd = cmds.find((c) => c.cmd === 'gh' && c.args[0] === 'pr')!;
+    expect(prCmd.args.slice(0, 4)).toEqual(['pr', 'create', '--repo', 'owner/repo']); // 固化同带 --repo 上游
     expect(prCmd.args[prCmd.args.indexOf('--head') + 1]).toBe('tunsuy:contrib/fix-9');
     expect(prCmd.args[prCmd.args.indexOf('--base') + 1]).toBe('main'); // base 仍是上游分支
     const actions = getDeviceActions(USER, dev);
@@ -430,6 +442,9 @@ describe('经 fork 派发(viaFork):head 固化为 owner:branch + forkRepo 下行
     const cmds = (r as any).task.approval.commands as Array<{ cmd: string; args: string[] }>;
     const prCmd = cmds.find((c) => c.cmd === 'gh' && c.args[0] === 'pr')!;
     expect(prCmd.args[prCmd.args.indexOf('--head') + 1]).toBe('contrib/fix-9');
+    // 拿不到 fork 名 → 无跨仓 head 可构造,保持 10 元直连旧形状(不带 --repo)
+    expect(prCmd.args).not.toContain('--repo');
+    expect(prCmd.args).toHaveLength(10);
     expect(getDeviceActions(USER, dev)[0].forkRepo).toBeUndefined();
   });
 });

@@ -120,14 +120,17 @@ import {
   isRunnerTaskActive,
   latestTaskProgress,
   noActionLabel,
+  partitionApprovalsByMission,
   RADAR_HISTORY_LIMIT,
   radarDispatchHistory,
+  runnerDeletable,
   runnerRetryable,
   runnerStateMeta,
   RUNNER_RETRYABLE_LABEL,
   summarizeRunnerTask,
   taskEventTimeline,
   tasksForDevice,
+  tombstoneAsHistorySource,
   type RunnerTaskSummary,
 } from '../runner-dispatch';
 import type { RunnerEvent, RunnerTaskRecord } from '@agtpilot/protocol';
@@ -309,6 +312,55 @@ describe('runnerRetryable(「可重试」琥珀徽章判定,加固 ②)', () => 
   });
 });
 
+describe('runnerDeletable(删除记录入口门控:仅终态)', () => {
+  it('五个终态可删', () => {
+    for (const state of ['done', 'failed', 'no_action', 'cancelled', 'expired']) {
+      expect(runnerDeletable({ state }), state).toBe(true);
+    }
+  });
+
+  it('在途/待审批不可删(先终止或审批卡拒绝落终态)', () => {
+    for (const state of ['queued', 'dispatched', 'running', 'awaiting_approval', 'finishing']) {
+      expect(runnerDeletable({ state }), state).toBe(false);
+    }
+    expect(runnerDeletable({ state: 'bogus_state' })).toBe(false);
+  });
+});
+
+describe('tombstoneAsHistorySource(墓碑 → 雷达黑名单数据源)', () => {
+  it('deletedAt 当 updatedAt 参与排序;issueUrl/reason 完整映射', () => {
+    const src = tombstoneAsHistorySource({
+      taskId: 'rtask_t1',
+      issueUrl: 'https://github.com/o/r/issues/1',
+      state: 'no_action',
+      noActionReason: 'already_fixed',
+      deletedAt: 999,
+    });
+    expect(src).toEqual({
+      state: 'no_action',
+      updatedAt: 999,
+      pack: { issueUrl: 'https://github.com/o/r/issues/1' },
+      noAction: { reason: 'already_fixed' },
+    });
+  });
+
+  it('墓碑与在档任务混合:同 Issue 留最近一次,新墓碑盖旧结局', () => {
+    const live = {
+      state: 'failed',
+      updatedAt: 100,
+      pack: { issueUrl: 'https://github.com/o/r/issues/9' },
+    };
+    const tomb = tombstoneAsHistorySource({
+      taskId: 'rtask_t2',
+      issueUrl: 'https://github.com/o/r/issues/9',
+      state: 'done',
+      deletedAt: 200,
+    });
+    const h = radarDispatchHistory([live, tomb]);
+    expect(h).toEqual([{ issueUrl: 'https://github.com/o/r/issues/9', outcome: '已派发并完成(PR 已发布)' }]);
+  });
+});
+
 describe('tasksForDevice(设备详情归属:领取绑定或派发指定)', () => {
   const tasks = [
     { taskId: 'a', device: undefined, target: 'dev_1' }, // 排队中:派发指定,还未被领取
@@ -434,5 +486,42 @@ describe('radarDispatchHistory(雷达去重黑名单数据源)', () => {
     expect(h).toHaveLength(RADAR_HISTORY_LIMIT);
     expect(h[0].issueUrl).toBe('https://github.com/o/r/issues/79');
     expect(radarDispatchHistory(many, 3)).toHaveLength(3);
+  });
+});
+
+describe('partitionApprovalsByMission(审批卡按会话归属分区)', () => {
+  const mk = (id: string, missionId?: string) => ({ id, action: 'runner_publish', missionId });
+
+  it('带 missionId 的只在所属会话可见,其他会话进 hidden', () => {
+    const reqs = [mk('a', 'msn_1'), mk('b', 'msn_2')];
+    expect(partitionApprovalsByMission(reqs, 'msn_1')).toEqual({
+      visible: [reqs[0]],
+      hidden: [reqs[1]],
+    });
+    expect(partitionApprovalsByMission(reqs, 'msn_2')).toEqual({
+      visible: [reqs[1]],
+      hidden: [reqs[0]],
+    });
+  });
+
+  it('不带 missionId(会话内安全审批/历史单)恒可见,行为与旧版一致', () => {
+    const reqs = [mk('a'), mk('b', 'msn_1')];
+    const { visible, hidden } = partitionApprovalsByMission(reqs, 'msn_9');
+    expect(visible).toEqual([reqs[0]]);
+    expect(hidden).toEqual([reqs[1]]);
+  });
+
+  it('无选中会话(null/undefined)→ 带 missionId 的全部进 hidden', () => {
+    const reqs = [mk('a', 'msn_1'), mk('b')];
+    expect(partitionApprovalsByMission(reqs, null)).toEqual({ visible: [reqs[1]], hidden: [reqs[0]] });
+    expect(partitionApprovalsByMission(reqs, undefined)).toEqual({ visible: [reqs[1]], hidden: [reqs[0]] });
+  });
+
+  it('空列表 → 双空;不改动入参数组', () => {
+    expect(partitionApprovalsByMission([], 'msn_1')).toEqual({ visible: [], hidden: [] });
+    const reqs = [mk('a', 'msn_1')];
+    const { visible } = partitionApprovalsByMission(reqs, 'msn_1');
+    expect(visible[0]).toBe(reqs[0]);
+    expect(reqs).toHaveLength(1);
   });
 });

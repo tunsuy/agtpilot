@@ -21,6 +21,7 @@ import {
   isRunnerTaskActive,
   runnerStateMeta,
   runnerRetryable,
+  runnerDeletable,
   RUNNER_RETRYABLE_LABEL,
   RUNNER_RETRYABLE_HINT,
   tasksForDevice,
@@ -73,6 +74,7 @@ function DeviceTaskItem({
   expanded,
   onToggle,
   onCancel,
+  onDelete,
   onInterject,
   missionTitle,
   onOpenMission,
@@ -82,6 +84,8 @@ function DeviceTaskItem({
   expanded: boolean;
   onToggle: () => void;
   onCancel: (taskId: string) => void;
+  /** 删除终态任务记录(墓碑保留 Issue 结局,雷达黑名单不受影响) */
+  onDelete: (taskId: string) => void;
   /** 中途插话(执行中纠偏):文本入队下发,runner 注入正在执行的会话后回执清除 */
   onInterject: (taskId: string, text: string) => Promise<boolean>;
   /** 该任务所属会话的标题(派发时关联;会话已删除则无值,不显示入口) */
@@ -93,6 +97,8 @@ function DeviceTaskItem({
   const retryable = runnerRetryable(task);
   // 可终止窗口:排队/已领取/执行中(awaiting_approval 走审批卡拒绝,finishing 分钟级不拦)
   const cancellable = task.state === 'queued' || task.state === 'dispatched' || task.state === 'running';
+  // 可删除窗口:仅终态记录(在途/待审批先终止再删;删除只是云端记录清理)
+  const deletable = runnerDeletable(task);
   // 可插话窗口:只有本地正在执行(dispatched/running)才有会话可注入 ——
   // 排队中没人跑、审批中 agent 已收工,插了也没人听
   const interjectable = task.state === 'dispatched' || task.state === 'running';
@@ -201,6 +207,18 @@ function DeviceTaskItem({
             title="终止任务(停止本地执行,分支保留)"
           >
             <Square className="h-2.5 w-2.5 fill-current" /> 终止
+          </button>
+        ) : deletable ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(task.taskId);
+            }}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-zinc-400 border border-zinc-200 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition flex-shrink-0"
+            title="删除该任务记录(设备工作区与已发布的 PR 不受影响;Issue 仍留在雷达去重黑名单)"
+          >
+            <Trash2 className="h-2.5 w-2.5" /> 删除
           </button>
         ) : null}
         <ChevronDown className={`h-3.5 w-3.5 text-zinc-400 transition flex-shrink-0 ${expanded ? 'rotate-180' : ''}`} />
@@ -353,7 +371,10 @@ export function DevicesView({
   const [timeline, setTimeline] = useState<RunnerTaskEventView[] | null>(null);
   // 确认弹窗(替代原生 window.confirm):待执行的危险操作先挂起,确认后才发请求
   const [pendingConfirm, setPendingConfirm] = useState<
-    { kind: 'cancel-task'; taskId: string } | { kind: 'revoke-device'; deviceId: string; hostname: string } | null
+    | { kind: 'cancel-task'; taskId: string }
+    | { kind: 'delete-task'; taskId: string }
+    | { kind: 'revoke-device'; deviceId: string; hostname: string }
+    | null
   >(null);
   const tasksTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -493,6 +514,27 @@ export function DevicesView({
     }
   }, [refreshTasks]);
 
+  // 删除终态任务记录:云端列表清理(设备工作区/已发布 PR 不受影响);带 Issue 的
+  // 由服务端落墓碑,雷达去重黑名单照常生效。非终态服务端会 400 拒绝(入口已按
+  // 终态门控,这里是兜底)
+  const deleteTask = useCallback(async (taskId: string) => {
+    try {
+      const res = await fetch('/api/runner/tasks/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
+        setError(data?.error || '删除失败');
+        return;
+      }
+      refreshTasks(); // 行立即消失
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  }, [refreshTasks]);
+
   // 中途插话(执行中纠偏):文本入 pendingInterjects 队列,runner 保活轮询(约 5s)
   // 领取并注入正在执行的会话,ack 回执后徽标消失。非危险操作,不走确认弹窗;
   // 返回是否成功(组件据此清空输入框)
@@ -531,7 +573,7 @@ export function DevicesView({
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+      <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
         {/* 头部 */}
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -676,6 +718,7 @@ export function DevicesView({
                             expanded={expandedTaskId === t.taskId}
                             onToggle={() => setExpandedTaskId(expandedTaskId === t.taskId ? null : t.taskId)}
                             onCancel={(taskId) => setPendingConfirm({ kind: 'cancel-task', taskId })}
+                            onDelete={(taskId) => setPendingConfirm({ kind: 'delete-task', taskId })}
                             onInterject={interjectTask}
                             missionTitle={t.missionId ? missionTitleById[t.missionId] : undefined}
                             onOpenMission={onOpenMission}
@@ -697,21 +740,36 @@ export function DevicesView({
         </p>
       </div>
 
-      {/* 危险操作确认弹窗(终止任务 / 吊销设备) */}
+      {/* 危险操作确认弹窗(终止任务 / 删除记录 / 吊销设备) */}
       <ConfirmModal
         open={pendingConfirm !== null}
         danger
-        title={pendingConfirm?.kind === 'revoke-device' ? '吊销该设备?' : '终止该任务?'}
+        title={
+          pendingConfirm?.kind === 'revoke-device'
+            ? '吊销该设备?'
+            : pendingConfirm?.kind === 'delete-task'
+              ? '删除该任务记录?'
+              : '终止该任务?'
+        }
         message={
           pendingConfirm?.kind === 'revoke-device'
             ? `设备「${pendingConfirm.hostname}」将立即失去连接,需重新配对。`
-            : '本地执行会被停止(工作分支保留),此操作不可恢复。'
+            : pendingConfirm?.kind === 'delete-task'
+              ? '任务记录与事件流会从列表移除(设备工作区与已发布的 PR 不受影响);Issue 仍留在雷达去重黑名单,不会被重复推荐。'
+              : '本地执行会被停止(工作分支保留),此操作不可恢复。'
         }
-        confirmText={pendingConfirm?.kind === 'revoke-device' ? '吊销' : '终止任务'}
+        confirmText={
+          pendingConfirm?.kind === 'revoke-device'
+            ? '吊销'
+            : pendingConfirm?.kind === 'delete-task'
+              ? '删除记录'
+              : '终止任务'
+        }
         onConfirm={() => {
           const p = pendingConfirm;
           setPendingConfirm(null);
           if (p?.kind === 'cancel-task') void cancelTask(p.taskId);
+          else if (p?.kind === 'delete-task') void deleteTask(p.taskId);
           else if (p?.kind === 'revoke-device') void handleRevoke(p.deviceId, p.hostname);
         }}
         onClose={() => setPendingConfirm(null)}

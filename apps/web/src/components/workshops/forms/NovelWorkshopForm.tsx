@@ -406,7 +406,7 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
           </div>
 
           <p className="text-[11px] text-zinc-500 leading-relaxed rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5">
-            开书分三步走:① 本任务产「设定包」(书名/卖点/设定集/人物卡),点「存入书库」建书;② 卡片上点「继续:生成大纲」产粗纲/细纲/伏笔/时间线并入书;③ 再点「继续:写第 1 章」,此后逐章续写。每步结果都先给你审,不满意可重跑。
+            开书分三步走:① 本任务产「设定包」(书名/卖点/设定集/人物卡),点「存入书库」建书;② 卡片上点「继续:生成大纲」产粗纲/细纲/伏笔/时间线并入书,入库后卡片上可直接「开通日更」;③ 再点「继续:写第 1 章」,此后逐章续写(或交给日更)。每步结果都先给你审,不满意可重跑。
           </p>
         </>
       )}

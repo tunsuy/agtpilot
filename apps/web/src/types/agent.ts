@@ -157,6 +157,9 @@ export interface ApprovalRequest {
   taskId?: string;
   /** 归属用户（SSE 过滤锚点） */
   userId?: string;
+  /** 来源会话任务(runner 发布审批从任务记录带上):审批卡只在该会话展示,
+   *  切会话不再全局跟随;缺省(会话内安全审批/历史单)保持全局可见 */
+  missionId?: string;
 }
 
 /** 任务中途连接器授权建议（驾驶舱实时弹卡片，一键授权后任务原地继续） */

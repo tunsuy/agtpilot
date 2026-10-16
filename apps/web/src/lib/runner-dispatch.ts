@@ -105,6 +105,15 @@ export function runnerRetryable(task: { state: string; retryable?: boolean }): b
   return task.state === 'failed' && task.retryable === true;
 }
 
+/**
+ * 可删除窗口:仅终态任务(done/failed/no_action/cancelled/expired)可删记录;
+ * 在途/待审批是非终态,先「终止」(或审批卡拒绝)落终态再删 —— 删除只是云端
+ * 记录清理,设备工作区与已发布的 PR 不受影响。
+ */
+export function runnerDeletable(task: { state: string }): boolean {
+  return isTerminalRunnerState(task.state as RunnerTaskRecord['state']);
+}
+
 /** 非终态 = 仍在跑,任务列表轮询降频/升级的依据(no_action 是例外终态,不算在途) */
 export function isRunnerTaskActive(state: string): boolean {
   return !['done', 'failed', 'no_action', 'cancelled', 'expired'].includes(state);
@@ -199,8 +208,41 @@ export function describeDispatchConflict(c: {
  * 口径:expired(从未执行)不占名单;同 issueUrl 只留最近一次;新→旧,截断 limit 条。
  */
 export const RADAR_HISTORY_LIMIT = 50;
+
+/**
+ * 删除任务的墓碑(runner-bridge 持久化到 task-tombstones.json):完整记录与
+ * 事件流删掉后,Issue 的处置结局留档 —— 雷达去重黑名单不因用户清理列表而
+ * 失效(保护场景:删掉 done 任务后同一 Issue 又被周扫推荐,milvus #52049 回归)。
+ */
+export interface RunnerTaskTombstone {
+  taskId: string;
+  issueUrl?: string;
+  /** 删除时刻的任务状态(必为终态,deleteRunnerTask 门控) */
+  state: RunnerTaskRecord['state'];
+  noActionReason?: string;
+  deletedAt: number;
+}
+
+/** 雷达派发历史数据源:完整任务记录或删除后的墓碑映射(结构化兼容,server-render 合并传入) */
+export interface RadarHistorySource {
+  state: string;
+  updatedAt: number;
+  pack?: { issueUrl?: string } | null;
+  noAction?: { reason?: string } | null;
+}
+
+/** 墓碑 → 历史数据源(deletedAt 当 updatedAt 参与「同 Issue 留最近一次」排序) */
+export function tombstoneAsHistorySource(t: RunnerTaskTombstone): RadarHistorySource {
+  return {
+    state: t.state,
+    updatedAt: t.deletedAt,
+    ...(t.issueUrl ? { pack: { issueUrl: t.issueUrl } } : {}),
+    ...(t.noActionReason ? { noAction: { reason: t.noActionReason } } : {}),
+  };
+}
+
 export function radarDispatchHistory(
-  tasks: RunnerTaskRecord[],
+  tasks: readonly RadarHistorySource[],
   limit: number = RADAR_HISTORY_LIMIT
 ): RadarDispatchHistoryEntry[] {
   const seen = new Set<string>();
@@ -216,8 +258,8 @@ export function radarDispatchHistory(
   return out;
 }
 
-/** 单条任务 → 派发历史话术(雷达 prompt 里的「不要再推荐」理由) */
-function dispatchOutcomeLabel(t: RunnerTaskRecord): string {
+/** 单条任务(或墓碑)→ 派发历史话术(雷达 prompt 里的「不要再推荐」理由) */
+function dispatchOutcomeLabel(t: RadarHistorySource): string {
   switch (t.state) {
     case 'no_action':
       return `已核实无需改动(${noActionLabel(t.noAction?.reason ?? 'other')})`;
@@ -228,7 +270,9 @@ function dispatchOutcomeLabel(t: RunnerTaskRecord): string {
     case 'cancelled':
       return '已派发后被终止';
     default:
-      return isTerminalRunnerState(t.state) ? `已处理(${runnerStateMeta(t.state).label})` : '已派发,进行中';
+      return isTerminalRunnerState(t.state as RunnerTaskRecord['state'])
+        ? `已处理(${runnerStateMeta(t.state).label})`
+        : '已派发,进行中';
   }
 }
 
@@ -344,4 +388,24 @@ export function buildTaskPackFromOpportunity(
 export function handoffPackFor(opp: OssOpportunity): string | null {
   const pack = buildTaskPackFromOpportunity(opp);
   return pack ? renderHandoffPack(pack) : null;
+}
+
+/**
+ * 审批卡按会话归属分区(驾驶舱/移动端「动态」共用):
+ * runner 发布审批带来源会话 missionId,只在该会话内展示 —— 切换任何会话都
+ * 全局跟随的旧行为把无关审批糊在每个页面上;hidden 交给细条提示(计数 +
+ * 跳回来源会话),Navbar 角标仍按全量计数,不会静默漏掉。
+ * 不带 missionId 的(会话内安全审批、旧历史单)恒在 visible,行为不变。
+ */
+export function partitionApprovalsByMission<T extends { missionId?: string }>(
+  reqs: readonly T[],
+  missionId: string | null | undefined
+): { visible: T[]; hidden: T[] } {
+  const visible: T[] = [];
+  const hidden: T[] = [];
+  for (const r of reqs) {
+    if (r.missionId && r.missionId !== missionId) hidden.push(r);
+    else visible.push(r);
+  }
+  return { visible, hidden };
 }

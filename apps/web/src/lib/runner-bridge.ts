@@ -30,6 +30,7 @@ import {
   type RunnerTaskRecord,
   type RunnerTaskState,
 } from '@agtpilot/protocol';
+import { runnerDeletable, type RunnerTaskTombstone } from './runner-dispatch';
 
 /**
  * 本地 Runner 桥接 · 云端侧服务(docs/design/local-runner-bridge.md)
@@ -86,6 +87,7 @@ const pairCodesFile = () => path.join(runnerRoot(), 'pair-codes.json');
 const deviceIndexFile = () => path.join(runnerRoot(), 'device-index.json');
 const devicesFile = (userId: string) => path.join(userDir(userId), 'devices.json');
 const tasksFile = (userId: string) => path.join(userDir(userId), 'tasks.json');
+const taskTombstonesFile = (userId: string) => path.join(userDir(userId), 'task-tombstones.json');
 
 function readPairCodes(): RunnerPairCodeRecord[] {
   return readJson<RunnerPairCodeRecord[]>(pairCodesFile(), []);
@@ -411,6 +413,56 @@ export function cancelRunnerTask(userId: string, taskId: string, now: number = D
   return { ok: false, error: 'not_cancellable', task };
 }
 
+/** 墓碑只服务雷达黑名单(每轮截断 50 条),200 条封顶够多年派发量;超限丢最旧 */
+const TOMBSTONES_CAP = 200;
+
+function readTombstones(userId: string): RunnerTaskTombstone[] {
+  const raw = readJson<RunnerTaskTombstone[]>(taskTombstonesFile(userId), []);
+  return Array.isArray(raw) ? raw : [];
+}
+
+/** 删除任务的墓碑(server-render 合并进雷达派发历史:删列表 ≠ Issue 放出黑名单) */
+export function getRunnerTaskTombstones(userId: string): RunnerTaskTombstone[] {
+  return readTombstones(userId);
+}
+
+/**
+ * 删除终态任务记录(设备页清理):完整记录与事件流从 tasks.json 移除;带
+ * issueUrl 的落一条墓碑 —— 雷达去重黑名单不因删除失效(milvus #52049 修复
+ * 合并后仍被周扫反复推荐的回归保护)。非终态(在途/待审批)一律拒绝:
+ * 先终止(或审批卡拒绝)落终态再删。同一 Issue 只留最近一条墓碑,与
+ * radarDispatchHistory「同 issueUrl 只留最近一次」口径一致。
+ */
+export function deleteRunnerTask(
+  userId: string,
+  taskId: string,
+  now: number = Date.now()
+): { ok: boolean; error?: string } {
+  const tasks = readTasks(userId);
+  const idx = tasks.findIndex((t) => t.taskId === taskId);
+  if (idx < 0) return { ok: false, error: 'not_found' };
+  const task = tasks[idx];
+  if (!runnerDeletable(task)) return { ok: false, error: 'not_deletable' };
+  tasks.splice(idx, 1);
+  writeTasks(userId, tasks);
+  const issueUrl = task.pack?.issueUrl;
+  if (issueUrl) {
+    const next = readTombstones(userId).filter((t) => t.issueUrl !== issueUrl);
+    next.push({
+      taskId,
+      issueUrl,
+      state: task.state,
+      ...(task.noAction?.reason ? { noActionReason: task.noAction.reason } : {}),
+      deletedAt: now,
+    });
+    writeJsonAtomic(
+      taskTombstonesFile(userId),
+      next.length > TOMBSTONES_CAP ? next.slice(next.length - TOMBSTONES_CAP) : next
+    );
+  }
+  return { ok: true };
+}
+
 /** 单任务待送达插话上限(队列满 → 拒绝新插话;正常纠偏场景远够用,防误连发) */
 const PENDING_INTERJECTS_CAP = 10;
 
@@ -702,6 +754,9 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
   const preview = buildPublishCommands({
     workBranch: task.pack.workBranch,
     baseBranch,
+    // 经 fork 派发:pr create 显式 --repo 钉住上游(否则 gh 按 fork 克隆的
+    // origin 解析缺省 base 仓,PR 会落进 fork 自己而非上游)
+    repo: task.pack.repo,
     prTitle: a.prTitle,
     prBody: a.prBody,
     forkHead: forkRepo?.split('/')[0],
@@ -734,7 +789,9 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
       // 批准后必执行的两条(展示预览;批准时刻重新固化落盘,以落盘为准)
       commands: preview ?? undefined,
     },
-    // 不设 taskId:runner 任务不是 Mission,避免 submitApproval 误定位 mission
+    // 不设 taskId:runner 任务不是 Mission,避免 submitApproval 误定位 mission。
+    // missionId 仅供 UI 作用域(审批卡归回来源会话展示),不参与裁决路由
+    ...(task.missionId ? { missionId: task.missionId } : {}),
     userId,
   };
 }
@@ -764,13 +821,16 @@ export function resolvePublishApproval(
 
   if (approved) {
     const includeClaim = Boolean(opts?.includeClaim && task.pack.claimDraft);
-    // 经 fork 派发:PR head 固化为 `ghLogin:branch` 跨仓形式(base 仍是上游基线)
+    // 经 fork 派发:PR head 固化为 `ghLogin:branch` 跨仓形式,且显式 --repo 钉住
+    // 上游(base 仍是上游基线)——不带 --repo 时 gh 在 fork 克隆目录内按 origin
+    // 解析缺省 base 仓,PR 会开进 fork 自己,到不了上游
     const forkRepo = taskForkRepo(userId, task);
     const commands = buildPublishCommands({
       workBranch: task.pack.workBranch,
       // 实探基线(runner 回流,如 master):固化命令执行的 gh pr create --base
       // 必须指向上游真实存在的分支 —— 派发缺省 'main' 在 milvus 类仓库开不出 PR
       baseBranch: taskBaseBranch(task),
+      repo: task.pack.repo,
       prTitle: a.prTitle,
       prBody: a.prBody,
       issueUrl: task.pack.issueUrl,

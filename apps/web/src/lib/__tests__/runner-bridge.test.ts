@@ -16,9 +16,12 @@ import {
   getRunnerTasks,
   getRunnerTask,
   cancelRunnerTask,
+  deleteRunnerTask,
+  getRunnerTaskTombstones,
   interjectRunnerTask,
   getDeviceActions,
 } from '../runner-bridge';
+import { radarDispatchHistory, tombstoneAsHistorySource } from '../runner-dispatch';
 import { PAIR_CODE_ALPHABET, RUNNER_TASK_TTL_MS, RUNNER_PROTOCOL_VERSION, type RunnerDeviceMeta } from '@agtpilot/protocol';
 
 /**
@@ -797,5 +800,92 @@ describe('中途插话(执行中纠偏,pendingInterjects 队列 + interject_ack 
       { eventId: 'ev_ack5', taskId: 'rtask_i10', deviceId: r.deviceId, at: T0 + 60, type: 'interject_ack', payload: { interjectId: first, delivered: true } },
     ], T0 + 60);
     expect(interjectRunnerTask(USER_A, 'rtask_i10', '第11条', T0 + 70).ok).toBe(true);
+  });
+});
+
+describe('终态任务删除(deleteRunnerTask + 墓碑 → 雷达黑名单不因清理失效)', () => {
+  /** 配对设备并把任务驱动到 failed 终态(dispatched → running → failed) */
+  function driveToFailed(taskId: string, issueUrl: string) {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId, issueUrl }, T0)!;
+    claimNextTask(USER_A, r.deviceId, T0 + 10)!;
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: `${taskId}_run`, taskId, deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+      { eventId: `${taskId}_fail`, taskId, deviceId: r.deviceId, at: T0 + 21, type: 'state', payload: { state: 'failed' } },
+    ], T0 + 21);
+    expect(getRunnerTask(USER_A, taskId, T0 + 22)!.state).toBe('failed');
+  }
+
+  it('failed 终态:记录移除、墓碑留结局,合并后的雷达黑名单照常命中', () => {
+    driveToFailed('rtask_del1', validPack.issueUrl);
+    const r = deleteRunnerTask(USER_A, 'rtask_del1', T0 + 100);
+    expect(r).toEqual({ ok: true });
+    expect(getRunnerTask(USER_A, 'rtask_del1', T0 + 100)).toBeNull();
+
+    const tombs = getRunnerTaskTombstones(USER_A);
+    expect(tombs).toHaveLength(1);
+    expect(tombs[0]).toEqual({
+      taskId: 'rtask_del1',
+      issueUrl: validPack.issueUrl,
+      state: 'failed',
+      deletedAt: T0 + 100,
+    });
+
+    // server-render 的合并口径:任务表 + 墓碑映射 → 已删 Issue 仍在「不要再推荐」名单
+    const history = radarDispatchHistory([
+      ...getRunnerTasks(USER_A, T0 + 100),
+      ...tombs.map(tombstoneAsHistorySource),
+    ]);
+    expect(history).toEqual([{ issueUrl: validPack.issueUrl, outcome: '已派发但失败' }]);
+  });
+
+  it('非终态(queued)不可删;不存在的任务 → not_found;均不落墓碑', () => {
+    enqueueTask(USER_A, validPack, T0)!;
+    expect(deleteRunnerTask(USER_A, 'rtask_0001', T0 + 1)).toEqual({ ok: false, error: 'not_deletable' });
+    expect(getRunnerTask(USER_A, 'rtask_0001', T0 + 1)!.state).toBe('queued');
+    expect(deleteRunnerTask(USER_A, 'rtask_nope', T0 + 1)).toEqual({ ok: false, error: 'not_found' });
+    expect(getRunnerTaskTombstones(USER_A)).toHaveLength(0);
+  });
+
+  it('cancelled 终态可删(排队中终止 → 清理);墓碑结局=已派发后被终止', () => {
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_dc1' }, T0)!;
+    cancelRunnerTask(USER_A, 'rtask_dc1', T0 + 1); // queued → cancelled
+    expect(deleteRunnerTask(USER_A, 'rtask_dc1', T0 + 2).ok).toBe(true);
+    const history = radarDispatchHistory(getRunnerTaskTombstones(USER_A).map(tombstoneAsHistorySource));
+    expect(history[0].outcome).toBe('已派发后被终止');
+  });
+
+  it('no_action 终态可删:墓碑带 reason,黑名单话术含核实结论', () => {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_dn1' }, T0)!;
+    claimNextTask(USER_A, r.deviceId, T0 + 10)!;
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'rtask_dn1_run', taskId: 'rtask_dn1', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+      { eventId: 'rtask_dn1_err', taskId: 'rtask_dn1', deviceId: r.deviceId, at: T0 + 21, type: 'error', payload: { message: 'm', noAction: { reason: 'already_fixed', evidence: 'commit d9bef57b8f 已在基线' } } },
+      { eventId: 'rtask_dn1_fail', taskId: 'rtask_dn1', deviceId: r.deviceId, at: T0 + 22, type: 'state', payload: { state: 'failed' } },
+    ], T0 + 22);
+    expect(getRunnerTask(USER_A, 'rtask_dn1', T0 + 23)!.state).toBe('no_action');
+    expect(deleteRunnerTask(USER_A, 'rtask_dn1', T0 + 30).ok).toBe(true);
+    expect(getRunnerTaskTombstones(USER_A)[0].noActionReason).toBe('already_fixed');
+    const history = radarDispatchHistory(getRunnerTaskTombstones(USER_A).map(tombstoneAsHistorySource));
+    expect(history[0].outcome).toContain('已核实无需改动');
+  });
+
+  it('同 Issue 只留最近一条墓碑:删除 → 重派再失败 → 再删除,墓碑换新', () => {
+    driveToFailed('rtask_dt1', validPack.issueUrl);
+    deleteRunnerTask(USER_A, 'rtask_dt1', T0 + 50);
+    // 删除后任务表已空,同 Issue 重派不被防重拦(墓碑不是派发防重数据源,只喂雷达黑名单)
+    driveToFailed('rtask_dt2', validPack.issueUrl);
+    expect(deleteRunnerTask(USER_A, 'rtask_dt2', T0 + 200).ok).toBe(true);
+    const tombs = getRunnerTaskTombstones(USER_A);
+    expect(tombs).toHaveLength(1);
+    expect(tombs[0]).toMatchObject({ taskId: 'rtask_dt2', state: 'failed', deletedAt: T0 + 200 });
+  });
+
+  it('用户隔离:A 的删除与墓碑不影响 B', () => {
+    driveToFailed('rtask_du1', validPack.issueUrl);
+    deleteRunnerTask(USER_A, 'rtask_du1', T0 + 50);
+    expect(getRunnerTaskTombstones(USER_B)).toHaveLength(0);
+    expect(deleteRunnerTask(USER_B, 'rtask_du1', T0 + 50)).toEqual({ ok: false, error: 'not_found' });
   });
 });

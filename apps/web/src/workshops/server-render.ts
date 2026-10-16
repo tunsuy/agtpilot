@@ -11,8 +11,8 @@ import { getWorkshop, getWorkshopSkill, CRON_SCENARIOS, type WorkshopId } from '
 import { getWorkshopOverrides } from './overrides';
 import { getUserScenarioProfiles } from '@/lib/user-store';
 import { getNovelBook } from '@/lib/novel-store';
-import { getRunnerTasks } from '@/lib/runner-bridge';
-import { radarDispatchHistory } from '@/lib/runner-dispatch';
+import { getRunnerTasks, getRunnerTaskTombstones } from '@/lib/runner-bridge';
+import { radarDispatchHistory, tombstoneAsHistorySource } from '@/lib/runner-dispatch';
 import { normalizeCronScenario, resolveCronPrompt, type CronScenario } from '@/lib/cron-scenario';
 import type { WorkshopRun, WorkshopRunContext } from './types';
 
@@ -35,8 +35,12 @@ const STATE_LOADERS: Partial<Record<WorkshopId, (userId: string, params: Record<
   },
   oss_radar: (userId) => ({
     // 派发历史黑名单现读(周扫不重复推荐已派发/已核实无需改动的 Issue);
+    // 已删除任务的墓碑一并合入 —— 用户清理设备页列表 ≠ 把 Issue 放出黑名单;
     // 读任务记录失败 = 权威渲染拒绝,不静默降级成「无历史」的 prompt
-    ossDispatchHistory: radarDispatchHistory(getRunnerTasks(userId)),
+    ossDispatchHistory: radarDispatchHistory([
+      ...getRunnerTasks(userId),
+      ...getRunnerTaskTombstones(userId).map(tombstoneAsHistorySource),
+    ]),
   }),
 };
 

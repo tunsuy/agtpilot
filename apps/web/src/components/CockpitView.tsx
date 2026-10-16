@@ -57,7 +57,7 @@ import { parseNotePackages } from '../workshops/xhs/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
 import { parseArticlePackages } from '../workshops/shared/article-package';
 import { buildDraftDeliveryIndex } from '../lib/draft-delivery';
-import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../lib/runner-dispatch';
+import { isRunnerTaskActive, runnerStateMeta, partitionApprovalsByMission, type RunnerTaskSummary } from '../lib/runner-dispatch';
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../workshops/xhs/topic-picks';
 import { OssOpportunityList, parseOssDeliverable } from './workshops/OssOpportunityCard';
@@ -262,6 +262,14 @@ export function CockpitView({
   const currentMission = activeMissionId
     ? (missions.find((m) => m.id === activeMissionId) || null)
     : null;
+
+  // runner 发布审批归回来源会话:切会话不再全局跟随卡片(旧行为把无关审批
+  // 糊在每个会话顶上);hidden 走下方细条提示 + 跳转,Navbar 角标仍全量计数。
+  // 不带 missionId 的会话内安全审批恒可见,行为不变。
+  const { visible: visibleApprovals, hidden: hiddenApprovals } = partitionApprovalsByMission(
+    approvalRequests,
+    activeMissionId
+  );
 
   // 投递目标按任务来源工坊路由(工坊包声明驱动,不嗅探任务标题):知乎工坊的
   // 文章包走知乎托管存草稿,其余文章包走公众号草稿箱;笔记包格式仅 xhs 产出。
@@ -661,16 +669,17 @@ export function CockpitView({
 
         {/* 人机协同安全授权横幅 (如在中间流也需要响应)。
             多张审批全部堆叠展示：只渲染 [0] 时，排在后面的卡片要么看不见
-            要么被误当成同一张点两次——正是「点了两次才生效」的观感来源 */}
-        {approvalRequests.length > 0 && (
+            要么被误当成同一张点两次——正是「点了两次才生效」的观感来源。
+            runner 发布审批带来源会话,只在其所属会话内展示(visibleApprovals) */}
+        {visibleApprovals.length > 0 && (
           <div className="m-3 space-y-2 animate-fadeIn">
-            {approvalRequests.length > 1 && (
+            {visibleApprovals.length > 1 && (
               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700">
                 <Shield className="h-3 w-3" />
-                {approvalRequests.length} 项待审批
+                {visibleApprovals.length} 项待审批
               </span>
             )}
-            {approvalRequests.map((req) =>
+            {visibleApprovals.map((req) =>
               req.action === 'runner_publish' ? (
                 // 本地贡献发布审批(M3):专用高危卡(PR 终稿/diffstat/固化命令集/认领留言勾选)
                 <RunnerPublishApprovalCard key={req.id} req={req} onApproval={onApproval} />
@@ -710,6 +719,28 @@ export function CockpitView({
               </div>
               )
             )}
+          </div>
+        )}
+
+        {/* 其他会话的发布审批:卡片归回来源会话后,这里留一条细提示 + 跳转入口,
+            避免「切走就找不到审批」(点标题跳回来源会话,完整卡片在那里展开) */}
+        {hiddenApprovals.length > 0 && (
+          <div className="m-3 px-3.5 py-2 rounded-xl border border-amber-200/70 bg-amber-50/60 flex items-center justify-between gap-2 animate-fadeIn">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-800 min-w-0 truncate">
+              <Shield className="h-3 w-3 flex-shrink-0" />
+              另有 {hiddenApprovals.length} 项发布审批待处理(来自其他会话)
+            </span>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {hiddenApprovals.map((req) => (
+                <button
+                  key={req.id}
+                  onClick={() => req.missionId && onSelectMission(req.missionId)}
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 transition max-w-[10rem] truncate"
+                >
+                  {missions.find((m) => m.id === req.missionId)?.title || '未知会话'}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

@@ -22,7 +22,7 @@ import { KanbanPlanCard } from '../KanbanPlanCard';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
-import { isRunnerTaskActive, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, type RunnerTaskSummary } from '../../lib/runner-dispatch';
+import { isRunnerTaskActive, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, partitionApprovalsByMission, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { formatTokenCount } from '../../lib/mission-efficiency';
 import { ConfirmModal } from '../ConfirmModal';
 
@@ -153,6 +153,13 @@ export function MobileActivityView({
     [missions, activeMissionId]
   );
 
+  // 发布审批归回来源会话(与桌面驾驶舱同规则):切会话不再全局跟随卡片;
+  // hidden 走「待你审批」下方的细条提示 + 跳回来源会话,不会静默漏掉
+  const { visible: visibleApprovals, hidden: hiddenApprovals } = partitionApprovalsByMission(
+    approvalRequests,
+    mission?.id ?? null
+  );
+
   const recentLogs = useMemo(() => {
     const scope = mission?.terminalLogs?.length ? mission.terminalLogs : terminalLogs;
     return (scope || []).slice(-40).reverse();
@@ -165,14 +172,14 @@ export function MobileActivityView({
       </header>
       <div ref={approvalTopRef} className="scroll-mt-4" />
 
-      {/* 待审批 */}
-      {approvalRequests.length > 0 && (
+      {/* 待审批(runner 发布审批只在来源会话展示,其他会话走下方细条提示) */}
+      {visibleApprovals.length > 0 && (
         <section className="mb-5">
           <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 px-1">
-            待你审批 · {approvalRequests.length}
+            待你审批 · {visibleApprovals.length}
           </h2>
           <ul className="space-y-2.5">
-            {approvalRequests.map((req) =>
+            {visibleApprovals.map((req) =>
               req.action === 'runner_publish' ? (
                 // 本地贡献发布审批(M3):专用高危卡,与桌面驾驶舱同一组件(细节不缩水)
                 <li key={req.id}>
@@ -226,6 +233,31 @@ export function MobileActivityView({
               </li>
               )
             )}
+          </ul>
+        </section>
+      )}
+
+      {/* 其他会话的发布审批:细条提示 + 跳回来源会话(完整卡片在那里展开) */}
+      {hiddenApprovals.length > 0 && (
+        <section className="mb-5">
+          <ul className="space-y-2">
+            {hiddenApprovals.map((req) => (
+              <li key={req.id}>
+                <button
+                  type="button"
+                  onClick={() => req.missionId && onSelectMission(req.missionId)}
+                  className="w-full rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3 flex items-center justify-between gap-2 shadow-sm active:bg-amber-100/60 transition text-left"
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <ShieldAlert className="h-4 w-4 shrink-0 text-amber-600" />
+                    <span className="text-xs text-amber-900 truncate">
+                      发布审批待处理 · {missions.find((m) => m.id === req.missionId)?.title || '其他会话'}
+                    </span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-amber-600" />
+                </button>
+              </li>
+            ))}
           </ul>
         </section>
       )}

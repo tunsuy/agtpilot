@@ -26,7 +26,7 @@
     "cookieNames": ["sessionid"],
     "hint": "番茄网页版尚未登录或登录态已失效。请引导用户到「连接器页 → 番茄作者后台 → 网页版扫码登录」,完成后重试。"
   },
-  "dailyLimit": { "default": 3, "env": "AGTPILOT_FANQIE_DRAFT_DAILY_LIMIT" },
+  "dailyLimit": { "default": 10, "env": "AGTPILOT_FANQIE_DRAFT_DAILY_LIMIT" },
   "auditAction": "save_chapter_draft",
   "steps": [
     {

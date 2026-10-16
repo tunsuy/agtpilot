@@ -10,11 +10,19 @@ import {
   deleteNovelBook,
   markNovelReviewed,
   updateNovelStyle,
+  findNovelBookByTitle,
   isReviewDue,
   MAX_STYLE_CHARS,
   type CreateNovelInput,
   type AppendChapterInput,
 } from '@/lib/novel-store';
+import {
+  maybeEnqueueFanqieBookCreate,
+  maybeEnqueueFanqieChapter,
+  setFanqieSyncEnabled,
+  retryFanqieSync,
+  bindFanqieBook,
+} from '@/lib/fanqie-sync';
 import { buildNovelTxt, buildNovelEpub } from '@/lib/novel-export';
 
 /**
@@ -23,17 +31,31 @@ import { buildNovelTxt, buildNovelEpub } from '@/lib/novel-export';
  * GET  ?无参 → 书库列表(轻量摘要);?bookId= → 全书状态(不含正文,
  *      续写/审查表单的服务端现读同源数据);&chapter=N → 附该章正文;
  *      &export=txt|epub → 全书导出直下(P1,附件流,不落 artifact-files)。
- * POST action=create(设定包建书)/ mergeOutline(大纲包并书)/ append(续写包反思写回) /
- *      delete / markReviewed(体检提醒落点)/ updateStyle(文风锚)。
+ * POST action=create(设定包建书,书名幂等)/ mergeOutline(大纲包并书)/ append(续写包反思写回) /
+ *      delete / markReviewed(体检提醒落点)/ updateStyle(文风锚)/
+ *      setFanqieSync(书级同步开关)/ retryFanqieSync(显式重试)/ bindFanqieBook(手动绑定番茄书号)。
  *
  * 边界:书号入库前按当前登录用户校验(getNovelBook 按 userId 隔离);
  * 章序号永远由 novel-store 按 progress.nextChapter 分配,请求体传什么不算什么;
  * 本路由只读写创作内容,不碰任何凭证。
+ *
+ * 番茄自动同步(P2):create/append 成功后 fire-and-forget 记意图入队
+ * (fanqie-sync 意图先落 book.json,响应不等浏览器;与 runMission detached 同模式)。
  */
 
 async function requireUser(): Promise<string | null> {
   const session = await auth();
   return session?.user?.id || null;
+}
+
+/** 番茄同步入队(fire-and-forget):钩子失败绝不影响入库响应 —— 意图账本在
+ *  book.json,sweeper 15min 兜底重排,这里吞错只记日志 */
+function enqueueFanqie(fn: () => unknown): void {
+  try {
+    fn();
+  } catch (err: any) {
+    console.error('[novels] fanqie 同步入队失败(sweeper 会兜底):', err?.message || err);
+  }
 }
 
 /** 导出文件名消毒:书名可能带路径/引号等字符,只留可读安全集(不消毒就是不信任边界) */
@@ -217,7 +239,21 @@ export async function POST(req: NextRequest) {
       if (!input) {
         return NextResponse.json({ success: false, error: '设定包不完整:需要书名' }, { status: 400 });
       }
+      // 幂等:同名书已在库 → 不重复建书,返回既有书号(existed 供卡片区分)。
+      // 「存入书库」双击/重挂载重放从这里死透;番茄开书意图按幂等守卫补排。
+      const existing = findNovelBookByTitle(userId, input.title);
+      if (existing) {
+        enqueueFanqie(() => maybeEnqueueFanqieBookCreate(userId, existing.bookId));
+        return NextResponse.json({
+          success: true,
+          bookId: existing.bookId,
+          progress: existing.progress,
+          existed: true,
+        });
+      }
       const book = createNovelBook(userId, input);
+      // fire-and-forget:意图先落 book.json(fanqie-sync 内部),响应不等浏览器
+      enqueueFanqie(() => maybeEnqueueFanqieBookCreate(userId, book.bookId));
       return NextResponse.json({ success: true, bookId: book.bookId, progress: book.progress });
     }
 
@@ -268,7 +304,43 @@ export async function POST(req: NextRequest) {
         );
       }
       const book = appendChapter(userId, bookId, input);
+      // 自动存草稿钩子:手动续写与日更 cron 产出的入库都经本 action,一处覆盖两条路
+      const synced = book.progress.chapterCount;
+      enqueueFanqie(() => maybeEnqueueFanqieChapter(userId, bookId, synced));
       return NextResponse.json({ success: true, bookId, progress: book.progress, reviewDue: isReviewDue(book) });
+    }
+
+    if (action === 'setFanqieSync') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      if (!bookId || !getNovelBook(userId, bookId)) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      const enabled = body?.enabled !== false; // 缺省视为开(全自动是默认姿态)
+      const fanqie = setFanqieSyncEnabled(userId, bookId, enabled);
+      return NextResponse.json({ success: true, bookId, fanqie });
+    }
+
+    if (action === 'retryFanqieSync') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      if (!bookId || !getNovelBook(userId, bookId)) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      const chapterIndex = Number.isFinite(Number(body?.chapterIndex)) ? Math.floor(Number(body.chapterIndex)) : undefined;
+      const retried = retryFanqieSync(userId, bookId, chapterIndex);
+      return NextResponse.json({ success: true, bookId, retried });
+    }
+
+    if (action === 'bindFanqieBook') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      if (!bookId || !getNovelBook(userId, bookId)) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      const fanqieBookId = typeof body?.fanqieBookId === 'string' ? body.fanqieBookId.trim() : '';
+      const out = bindFanqieBook(userId, bookId, fanqieBookId);
+      if (!out.ok) {
+        return NextResponse.json({ success: false, error: out.error }, { status: 400 });
+      }
+      return NextResponse.json({ success: true, bookId, fanqieBookId });
     }
 
     if (action === 'markReviewed') {

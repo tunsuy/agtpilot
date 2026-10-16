@@ -13,10 +13,11 @@ export const dynamic = 'force-dynamic';
 /** 番茄存草稿工具名(限频计数按审计里的同名条目) */
 const FANQIE_TOOL = 'fanqie_save_chapter_draft';
 
-/** 番茄每日存草稿上限(可用 env 调整;与 skill 清单缺省值同源语义) */
+/** 番茄每日存草稿上限(可用 env 调整;与 skill 清单缺省值同源语义。
+ *  2026-10-16 拍板:全自动同步下 3 次/天不够开篇多章+日更叠加,提到 10) */
 function fanqieDailyLimit(): number {
   const n = Number(process.env.AGTPILOT_FANQIE_DRAFT_DAILY_LIMIT);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10;
 }
 
 /** GET:托管状态 + 今日用量 + 最近审计(登录徽标/风险明示回显) */

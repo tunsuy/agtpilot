@@ -587,7 +587,7 @@ describe('随包 fanqie-draft.skill.json · 番茄章节存草稿', () => {
     expect(page.click).toHaveBeenCalledWith('button:has-text("存草稿")', expect.anything());
     expect(res.message).toContain('章节管理 → 草稿箱立即可见');
     expect(res.message).toContain('发布/定时发布由你本人');
-    expect(res.message).toContain('今日已用 1/3');
+    expect(res.message).toContain('今日已用 1/10'); // 2026-10-16 拍板:全自动同步下番茄每日上限 3→10
     expect(res.screenshotBase64).toContain('data:image/jpeg;base64,');
     const audit = us.getBrowserAudit(uid);
     expect(audit[0]).toMatchObject({

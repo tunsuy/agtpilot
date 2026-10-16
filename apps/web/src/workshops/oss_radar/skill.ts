@@ -61,6 +61,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         count,
         ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
         ...(ctx?.ossDispatchHistory ? { dispatchHistory: ctx.ossDispatchHistory } : {}),
+        ...(params.targetRepos ? { targetRepos: params.targetRepos as string[] | string } : {}),
       }),
       title: `开源贡献雷达 · ${Math.min(7, Math.max(3, count))} 条机会`,
     };

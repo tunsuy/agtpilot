@@ -276,6 +276,16 @@ const EDGE: GoldenCase[] = [
     params: { stack: '', interests: ['bogus', 'agent'], kinds: ['bogus2'], count: 99 },
     ctx: { scenarioProfile: { ...HOLLOW_PROFILE, scenarioKey: 'oss_radar' } },
   },
+  // 指定项目:归一(owner/repo + GitHub 链接)、畸形过滤(带空格/穿越)、section verbatim 锁定
+  {
+    label: 'edge-target-repos',
+    id: 'oss_radar',
+    params: {
+      stack: '',
+      count: 5,
+      targetRepos: 'milvus-io/milvus\nhttps://github.com/vllm-project/vllm/issues/1\nbogus name\n../evil',
+    },
+  },
   { label: 'edge-clamp', id: 'weibo', params: { topic: '', count: 99, style: '' } },
   { label: 'edge-clamp', id: 'video_douyin', params: { topic: '', count: 99, duration: '' } },
   { label: 'edge-unknown-scope', id: 'email_triage', params: { scope: 'bogus', draft: false } },

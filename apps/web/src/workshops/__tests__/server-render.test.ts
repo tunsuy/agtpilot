@@ -471,6 +471,18 @@ describe('oss_radar 派发历史 loader(去重黑名单服务端现读,milvus #5
     expect(run!.prompt).not.toContain('【派发历史】');
   });
 
+  it('renderWorkshopRunServer:手动扫描 targetRepos 透传渲染【本次指定项目】(服务端权威路径同解析)', () => {
+    const run = renderWorkshopRunServer('u-radar-repos', 'oss_radar', {
+      count: 5,
+      targetRepos: 'milvus-io/milvus\nhttps://github.com/vllm-project/vllm\nbogus token',
+    });
+    expect(run).not.toBeNull();
+    expect(run!.prompt).toContain('【本次指定项目】');
+    expect(run!.prompt).toContain('- milvus-io/milvus');
+    expect(run!.prompt).toContain('- vllm-project/vllm');
+    expect(run!.prompt).not.toContain('bogus token');
+  });
+
   it('resolveCronPromptServer 周扫:档案 + 派发历史同时注入,count 尊重 / 缺省 5', () => {
     const userId = 'u-radar-cron';
     saveUserScenarioProfile(userId, {

@@ -3,6 +3,9 @@ import {
   buildOssRadarPrompt,
   buildContributorProfileSection,
   buildDispatchHistorySection,
+  buildTargetReposSection,
+  parseTargetRepos,
+  TARGET_REPOS_LIMIT,
   OSS_INTERESTS,
   OSS_CONTRIB_KINDS,
   type RadarDispatchHistoryEntry,
@@ -234,5 +237,69 @@ describe('buildOssRadarPrompt · 派发历史注入与静默修复筛查', () =>
     expect(prompt).toContain('未被上游静默修复');
     expect(prompt).toContain('交叉引用');
     expect(prompt).toContain('需先核实是否已修复');
+  });
+});
+
+// ---------- 指定项目(手动扫描聚焦某几个仓库;留空=广扫) ----------
+
+describe('parseTargetRepos(指定项目输入清洗:owner/repo 归一 + 去重 + 上限)', () => {
+  it('裸 owner/repo、GitHub 链接(带 issues/tree 尾巴)、.git 后缀都归一;空白/逗号/换行分隔', () => {
+    expect(parseTargetRepos('milvus-io/milvus')).toEqual(['milvus-io/milvus']);
+    expect(parseTargetRepos('https://github.com/vllm-project/vllm')).toEqual(['vllm-project/vllm']);
+    expect(parseTargetRepos('https://github.com/milvus-io/milvus/issues/52049')).toEqual(['milvus-io/milvus']);
+    expect(parseTargetRepos('github.com/owner/repo/tree/main')).toEqual(['owner/repo']);
+    expect(parseTargetRepos('owner/repo.git')).toEqual(['owner/repo']);
+    expect(parseTargetRepos('a/b, c/d\ne/f   g/h')).toEqual(['a/b', 'c/d', 'e/f', 'g/h']);
+  });
+
+  it('畸形剔除:非 owner/repo、路径穿越、空段、非字符串;大小写去重保留首写法', () => {
+    expect(parseTargetRepos('not a repo')).toEqual([]);
+    expect(parseTargetRepos('a/b/c/d')).toEqual([]); // URL 之外的多段不认
+    expect(parseTargetRepos('../evil/x')).toEqual([]);
+    expect(parseTargetRepos('Owner/Repo\nowner/repo OWNER/REPO')).toEqual(['Owner/Repo']);
+    expect(parseTargetRepos(undefined)).toEqual([]);
+    expect(parseTargetRepos(42)).toEqual([]);
+    expect(parseTargetRepos(['a/b', 7, null])).toEqual(['a/b']);
+  });
+
+  it('超过上限截断到 TARGET_REPOS_LIMIT', () => {
+    const many = Array.from({ length: TARGET_REPOS_LIMIT + 5 }, (_, i) => `o/r${i}`).join('\n');
+    expect(parseTargetRepos(many)).toHaveLength(TARGET_REPOS_LIMIT);
+  });
+});
+
+describe('buildTargetReposSection / buildOssRadarPrompt · 指定项目注入', () => {
+  it('有指定项目:section 点名「只深挖这些仓库、不做话题广扫、不擅自替换」', () => {
+    const section = buildTargetReposSection(['milvus-io/milvus', 'vllm-project/vllm'])!;
+    expect(section).toContain('【本次指定项目】');
+    expect(section).toContain('- milvus-io/milvus');
+    expect(section).toContain('- vllm-project/vllm');
+    expect(section).toContain('不做话题广扫');
+    expect(section).toContain('不要擅自替换成别的项目');
+  });
+
+  it('空列表 → null(模板 {{#if}} 整段不渲染)', () => {
+    expect(buildTargetReposSection([])).toBeNull();
+  });
+
+  it('prompt 带 targetRepos:出现【本次指定项目】与归一后的仓库;留空则整段不渲染不漏占位符', () => {
+    const withRepos = buildOssRadarPrompt({ count: 5, targetRepos: 'milvus-io/milvus' });
+    expect(withRepos).toContain('【本次指定项目】');
+    expect(withRepos).toContain('- milvus-io/milvus');
+    const noRepos = buildOssRadarPrompt({ count: 5 });
+    expect(noRepos).not.toContain('【本次指定项目】');
+    expect(noRepos).not.toContain('{{targetReposSection}}');
+  });
+
+  it('指定项目与档案/派发历史三段可共存(互不挤占)', () => {
+    const prompt = buildOssRadarPrompt({
+      count: 5,
+      profile,
+      targetRepos: 'milvus-io/milvus',
+      dispatchHistory: [{ issueUrl: 'https://github.com/o/r/issues/1', outcome: '已派发但失败' }],
+    });
+    expect(prompt).toContain('【贡献者档案】');
+    expect(prompt).toContain('【本次指定项目】');
+    expect(prompt).toContain('【派发历史】');
   });
 });

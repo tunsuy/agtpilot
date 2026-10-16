@@ -54,6 +54,14 @@ export function OssRadarForm({ workshop, onRun, onClose, scenarioProfile, onEdit
   const [count, setCount] = useState<number>(
     typeof saved.count === 'number' && [3, 5, 7].includes(saved.count) ? saved.count : 5
   );
+  // 指定项目(可选):原始文本形态存取(一行一个 owner/repo,容忍 GitHub 链接);
+  // 仅手动扫描生效,不进周扫订阅(与 stack/interests/kinds 同,触发时按档案广扫)
+  const [reposText, setReposText] = useState<string>(() => {
+    const t = saved.targetRepos;
+    if (typeof t === 'string') return t;
+    if (Array.isArray(t)) return t.filter((x): x is string => typeof x === 'string').join('\n');
+    return '';
+  });
 
   // ---- 每周自动扫描订阅(scenario 型 cron 任务;同 key 全局至多一个) ----
   const [subsJob, setSubsJob] = useState<CronJobItem | null>(null);
@@ -129,7 +137,13 @@ export function OssRadarForm({ workshop, onRun, onClose, scenarioProfile, onEdit
     }
   };
 
-  const params = { stack, interests, kinds, count };
+  const params = {
+    stack,
+    interests,
+    kinds,
+    count,
+    ...(reposText.trim() ? { targetRepos: reposText } : {}),
+  };
   const preview = buildWorkshopRun(workshop.id, params, scenarioProfile ? { scenarioProfile } : undefined);
 
   const handleSubmit = () => {
@@ -167,6 +181,22 @@ export function OssRadarForm({ workshop, onRun, onClose, scenarioProfile, onEdit
           )}
         </div>
       )}
+
+      <div className="space-y-1.5">
+        <FieldLabel optional>指定项目</FieldLabel>
+        <textarea
+          value={reposText}
+          onChange={(e) => setReposText(e.target.value)}
+          rows={3}
+          placeholder={
+            '留空 = 按关注方向广扫;填了 = 只深挖指定仓库。一行一个 owner/repo 或 GitHub 链接,如:\nmilvus-io/milvus\nhttps://github.com/vllm-project/vllm'
+          }
+          className={`${inputClass} resize-y font-mono text-[12px] leading-relaxed`}
+        />
+        <p className="text-[10px] text-zinc-400 leading-relaxed">
+          填了只查这些 repo 的 open Issue(不再话题广扫),最多 10 个、自动去重;仅本次手动扫描生效,不进每周订阅。
+        </p>
+      </div>
 
       <div className="space-y-1.5">
         <FieldLabel optional>主力技术栈</FieldLabel>

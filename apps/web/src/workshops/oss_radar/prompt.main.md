@@ -14,6 +14,10 @@
 机会类型偏好:{{kindNames}}
 产出数量:{{count}} 条机会
 
+{{#if targetReposSection}}
+{{targetReposSection}}
+
+{{/if}}
 调研路径(已连接哪个用哪个,按顺序降级,发生降级须在清单末尾注明):
 1. GitHub 首选固定工具 github_scan:topics 传关注方向对应话题(如 agent / llm / rag / devtool),一次调用即可拿到按 star 排序的活跃候选仓库与未认领的 good first issue(star 数/最近推送/Issue 链接都已核验,直接用于筛选);返回里的 degraded 说明与 searchRateRemaining 额度要尊重,额度不足就到此为止。已连接 mcp_github_mcp_* 工具时可用 MCP 补充检索(help wanted 标签、特定仓库深入查询),不要自己写代码调 GitHub API
 2. DeepWiki(若已连接 mcp_deepwiki_* 工具):对候选仓库提问,快速理解架构、贡献流程与测试方式,判断上手成本

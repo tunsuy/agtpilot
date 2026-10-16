@@ -51,6 +51,73 @@ export interface OssRadarInput {
    * 由服务端(server-render oss_radar loader)现读任务记录注入;客户端预览缺省不注入。
    */
   dispatchHistory?: RadarDispatchHistoryEntry[];
+  /**
+   * 指定项目(可选):只深挖这些仓库、不做话题广扫。接受原始文本(一行一个
+   * owner/repo,也容忍 GitHub 链接)或已解析的 string[];留空 = 不限(维持广扫)。
+   * 仅手动扫描生效,不进周扫订阅(与 stack/interests/kinds 同:订阅触发按档案广扫)。
+   */
+  targetRepos?: string[] | string;
+}
+
+/** 指定项目单次上限(防 prompt 被塞爆;超出截断,前端同口径提示) */
+export const TARGET_REPOS_LIMIT = 10;
+
+/** owner/repo 合法性(与 runner-dispatch REPO_RE 同口径,避免接受畸形仓库名) */
+const TARGET_REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
+
+/**
+ * 原始输入 → 规范化 owner/repo 列表。
+ * 容忍:一行一个、逗号/空格分隔、完整 GitHub 链接(https://github.com/owner/repo/…)、
+ * 带 .git 后缀。逐个抽 owner/repo 过 REPO_RE + 拒 ./..,大小写去重(保留首个写法),截上限。
+ * 非字符串/数组 → []。解析是幂等纯函数,客户端预览与服务端 skill.run 同一入口。
+ */
+export function parseTargetRepos(raw: unknown): string[] {
+  const tokens: string[] = [];
+  if (typeof raw === 'string') {
+    tokens.push(...raw.split(/[\s,]+/));
+  } else if (Array.isArray(raw)) {
+    for (const x of raw) if (typeof x === 'string') tokens.push(...x.split(/[\s,]+/));
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of tokens) {
+    const repo = extractRepo(t.trim());
+    if (!repo) continue;
+    const key = repo.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(repo);
+    if (out.length >= TARGET_REPOS_LIMIT) break;
+  }
+  return out;
+}
+
+/** 单个 token → owner/repo 或 null(GitHub 链接抽路径段;裸 owner/repo 直接校验) */
+function extractRepo(token: string): string | null {
+  if (!token) return null;
+  let candidate = token;
+  const ghPrefix = /^(?:https?:\/\/)?(?:www\.)?github\.com\//i;
+  if (ghPrefix.test(token)) {
+    // 去掉协议/域名前缀,再按 / ? # 切段,取前两段 owner/repo(丢掉 issues/tree/query 尾巴)
+    const segs = token.replace(ghPrefix, '').split(/[/?#]/).filter(Boolean);
+    candidate = segs.length >= 2 ? `${segs[0]}/${segs[1]}` : '';
+  }
+  candidate = candidate.replace(/\.git$/i, '');
+  if (!TARGET_REPO_RE.test(candidate)) return null;
+  if (candidate.split('/').some((s) => s === '.' || s === '..')) return null;
+  return candidate;
+}
+
+/**
+ * 指定项目 → Prompt 注入段(无指定 → null,模板 {{#if}} 整段不渲染)。
+ * 明确改写发现模式:只查这些 repo 的 open Issue,不话题广扫、不擅自换成别的项目。
+ */
+export function buildTargetReposSection(repos: string[]): string | null {
+  if (repos.length === 0) return null;
+  const lines = repos.map((r) => `- ${r}`);
+  return `【本次指定项目】只深挖以下仓库,不做话题广扫(上面的关注方向仅作背景参考):
+${lines.join('\n')}
+调研路径第 1 步相应改为:直接用 github_scan / GitHub MCP 查这些 repo 的 open Issue(优先 good first issue、help wanted 标签与近期活跃 Issue),star 数 / 最近推送 / Issue 链接照常核验;指定项目产不出足够机会就少给、不凑数,也不要擅自替换成别的项目。`;
 }
 
 /** 派发历史单条:Issue 链接 + 处置结果话术(runner-dispatch radarDispatchHistory 产出) */
@@ -97,17 +164,19 @@ const interestName = (id: string): string | null =>
 const kindName = (id: string): string | null =>
   OSS_CONTRIB_KINDS.find((k) => k.id === id)?.name || null;
 
-export function buildOssRadarPrompt({ stack, interests, kinds, count, profile, dispatchHistory }: OssRadarInput): string {
+export function buildOssRadarPrompt({ stack, interests, kinds, count, profile, dispatchHistory, targetRepos }: OssRadarInput): string {
   const n = Math.min(7, Math.max(3, Math.round(count ?? 5) || 5));
   const profileSection = profile ? buildContributorProfileSection(profile) : null;
   const stackText =
     (stack || '').trim() || profile?.positioning.niche?.trim() || '未指定(按 AI 通用方向,结合档案与检索结果自行判断)';
   const interestNames = (interests || []).map(interestName).filter((s): s is string => Boolean(s));
   const kindNames = (kinds || []).map(kindName).filter((s): s is string => Boolean(s));
+  const repos = parseTargetRepos(targetRepos);
   return renderTemplate(prompt, {
     count: n,
     profileSection: profileSection || '',
     historySection: buildDispatchHistorySection(dispatchHistory) || '',
+    targetReposSection: buildTargetReposSection(repos) || '',
     stackText,
     interestNames: interestNames.length > 0 ? interestNames.join('、') : '不限,AI 领域均可',
     kindNames: kindNames.length > 0 ? kindNames.join('、') : '不限',

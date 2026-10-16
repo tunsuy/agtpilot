@@ -17,6 +17,8 @@ export interface ConnectorInfo {
   customModelName?: string;
   modelNameEnvVar?: string;
   platformType?: 'web' | 'mobile' | 'both';
+  /** 官网 / Key 获取页：配置弹窗内展示「打开官网获取 Key」跳转 */
+  websiteUrl?: string;
   mobileAction?: {
     scheme?: string;
     actionName?: string;
@@ -40,6 +42,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     baseUrlEnvVar: 'DEEPSEEK_BASE_URL',
     modelNameEnvVar: 'DEEPSEEK_MODEL_NAME',
     description: 'DeepSeek 官方或中转推理核心，支持 DeepSeek-V3 与 R1 深度思考模型。',
+    websiteUrl: 'https://platform.deepseek.com/api_keys',
+    configHint: '打开 DeepSeek 开放平台登录，在 API Keys 页创建 Key 后粘贴到下方。用中转站时 Key 填中转的，并在下方 Base URL 填中转地址。',
     isModel: true,
   },
   {
@@ -51,6 +55,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     baseUrlEnvVar: 'OPENAI_BASE_URL',
     modelNameEnvVar: 'OPENAI_MODEL_NAME',
     description: '官方或中转 OpenAI 接口，支持 GPT-4o、o1、o3-mini 等任意模型。',
+    websiteUrl: 'https://platform.openai.com/api-keys',
+    configHint: '打开 OpenAI 平台登录，在 API Keys 页创建 Key 后粘贴到下方。国内中转站请把 Key 与 Base URL 都换成中转的。',
     isModel: true,
   },
   {
@@ -70,6 +76,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     icon: 'Terminal',
     category: 'AI & MicroVM',
     envVar: 'E2B_API_KEY',
+    websiteUrl: 'https://e2b.dev/dashboard?tab=keys',
+    configHint: '打开 E2B 控制台登录，在 API Keys 页复制 Key 粘贴到下方（有免费额度）。',
     description: 'Firecracker isolated microVM for secure multi-language code execution.',
   },
   {
@@ -87,6 +95,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Communication',
     envVar: 'SLACK_WEBHOOK_URL',
     platformType: 'both',
+    websiteUrl: 'https://api.slack.com/messaging/webhooks',
     description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 推送到 Slack 频道。',
   },
   {
@@ -96,6 +105,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Communication',
     envVar: 'FEISHU_WEBHOOK_URL',
     platformType: 'both',
+    websiteUrl: 'https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot',
     description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以卡片推送到飞书群。',
   },
   {
@@ -105,6 +115,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Communication',
     envVar: 'DINGTALK_WEBHOOK_URL',
     platformType: 'both',
+    websiteUrl: 'https://open.dingtalk.com/document/robots/custom-robot-access',
     description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以 Markdown 推送到钉钉群（群设置 → 智能群助手 → 添加自定义机器人获取地址）。',
   },
   {
@@ -114,6 +125,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Communication',
     envVar: 'WECOM_WEBHOOK_URL',
     platformType: 'both',
+    websiteUrl: 'https://developer.work.weixin.qq.com/document/path/99110',
     description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以 Markdown 推送到企业微信群（群聊 → 右键群机器人 → 添加获取地址）。',
   },
   {
@@ -147,6 +159,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Productivity',
     envVar: 'EXA_API_KEY',
     platformType: 'web',
+    websiteUrl: 'https://dashboard.exa.ai/onboarding-guest',
+    configHint: '打开 Exa 注册页（每月 $10 免费额度，无需绑卡），按引导注册后在 Dashboard 复制 API Key 粘贴到下方。',
     description: 'Semantic neural search engine for real-time web intelligence.',
   },
   {
@@ -156,6 +170,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Productivity',
     envVar: 'TAVILY_API_KEY',
     platformType: 'web',
+    websiteUrl: 'https://app.tavily.com/home',
+    configHint: '打开 Tavily 控制台注册（有免费额度），在 Home 页复制 API Key 粘贴到下方。',
     description: 'Search engine designed for autonomous agent RAG scraping.',
   },
   {
@@ -165,6 +181,8 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Productivity',
     envVar: 'FIRECRAWL_API_KEY',
     platformType: 'web',
+    websiteUrl: 'https://www.firecrawl.dev/app/api-keys',
+    configHint: '打开 Firecrawl 的 API Keys 页注册（有免费额度），复制 API Key 粘贴到下方。',
     description: 'Deep web scraping, dynamic JS rendering, and markdown distillation.',
   },
   {
@@ -188,6 +206,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'Communication',
     envVar: 'WECHAT_MP_CREDENTIAL',
     platformType: 'both',
+    websiteUrl: 'https://mp.weixin.qq.com/',
     mobileAction: {
       scheme: 'weixin://',
       actionName: '唤起微信直接分享',

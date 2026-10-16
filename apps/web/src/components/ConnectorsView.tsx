@@ -194,6 +194,7 @@ function renderConnectorIcon(id: string, className = 'h-5 w-5') {
       return <Zap className={`${className} text-blue-600`} />;
     case 'wecom':
       return <Bell className={`${className} text-blue-500`} />;
+    case 'email':
     case 'email_smtp':
       return <Mail className={`${className} text-violet-600`} />;
     case 'email_imap':
@@ -227,7 +228,7 @@ const CONNECTOR_TABS: Array<{ key: string; label: string; ids: string[] }> = [
   { key: 'edu', label: '学习教研', ids: ['openalex', 'alphaxiv', 'huggingface_mcp', 'deepl_mcp', 'deepwiki'] },
   { key: 'travel', label: '地图出行', ids: ['amap', 'baidu_map', 'didi', 'flyai'] },
   { key: 'life', label: '生活服务', ids: ['kuaidi100'] },
-  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email_smtp', 'email_imap', 'wechat_mp', 'xiaohongshu', 'zhihu'] },
+  { key: 'publish', label: '通知与发布', ids: ['slack', 'feishu', 'dingtalk', 'wecom', 'email', 'wechat_mp', 'xiaohongshu', 'zhihu'] },
   { key: 'dev', label: '开发与云', ids: ['github', 'github_mcp', 'e2b', 'browser_auto'] },
 ];
 const TABBED_IDS = new Set(CONNECTOR_TABS.flatMap((t) => t.ids));
@@ -261,6 +262,9 @@ export function ConnectorsView({
   const [tab, setTab] = useState('all');
   const [configuringApp, setConfiguringApp] = useState<ConnectorApp | null>(null);
   const [keyInput, setKeyInput] = useState('');
+  // 合并卡片「电子邮件」专用:发信必填、收信可选(留空复用发信凭证)
+  const [smtpKeyInput, setSmtpKeyInput] = useState('');
+  const [imapKeyInput, setImapKeyInput] = useState('');
   const [baseUrlInput, setBaseUrlInput] = useState('');
   const [modelNameInput, setModelNameInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -662,14 +666,46 @@ export function ConnectorsView({
 
   const filtered = connectors.filter((c) => inTab(c.id) && matchSearch(c.id, c.name, c.description, c.category));
 
+  // ---- 电子邮件合并展示:后端保持 SMTP/IMAP 双凭证键(收发权限边界),
+  // 前端合并为一张「电子邮件」卡片,弹窗内分「发信/收信」两节 ----
+  const emailSmtp = connectors.find((c) => c.id === 'email_smtp');
+  const emailImap = connectors.find((c) => c.id === 'email_imap');
+  const emailMerged: ConnectorApp | null =
+    emailSmtp || emailImap
+      ? {
+          ...(emailSmtp ?? emailImap!),
+          id: 'email',
+          name: '电子邮件',
+          description:
+            'Agent 用你的邮箱发信与读信：email_send 发任务报告与内容投递，email_list / email_read 读收件箱（默认不改已读）。只配发信则仅能往外发，收信留空自动复用发信凭证。',
+        }
+      : null;
+  // 原始双卡片从列表剔除,由合并卡片替代;搜索命中任一原始 id/名称也定位到合并卡片
+  const displayFiltered = filtered
+    .filter((c) => c.id !== 'email_smtp' && c.id !== 'email_imap')
+    .concat(
+      emailMerged && inTab('email') &&
+        (matchSearch(emailMerged.id, emailMerged.name, emailMerged.description, emailMerged.category) ||
+          ['email_smtp', 'email_imap', 'smtp', 'imap', '发信', '收信'].some((k) =>
+            searchQuery.toLowerCase().includes(k.toLowerCase())
+          ))
+        ? [emailMerged]
+        : []
+    );
+
+  // 原生双键合并为单卡片计数:email_smtp/email_imap 不单独计数,由合并卡片计 1
+  const displayHit = (id: string) => id !== 'email_smtp' && id !== 'email_imap';
   const tabCount = (key: string) => {
     const ids = key === 'all' ? null : CONNECTOR_TABS.find((t) => t.key === key)?.ids ?? null;
     const hit = (id: string) =>
       key === 'all' || (key === 'other' ? !TABBED_IDS.has(id) : Boolean(ids?.includes(id)));
-    return connectors.filter((c) => hit(c.id)).length + mcpConnectors.filter((c) => hit(c.id)).length;
+    const nativeCount =
+      connectors.filter((c) => displayHit(c.id) && hit(c.id)).length +
+      (emailMerged && hit('email') ? 1 : 0);
+    return nativeCount + mcpConnectors.filter((c) => hit(c.id)).length;
   };
   const hasOther =
-    connectors.some((c) => !TABBED_IDS.has(c.id)) || mcpConnectors.some((c) => !TABBED_IDS.has(c.id));
+    connectors.some((c) => displayHit(c.id) && !TABBED_IDS.has(c.id)) || mcpConnectors.some((c) => !TABBED_IDS.has(c.id));
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -693,12 +729,36 @@ export function ConnectorsView({
     }
   };
 
+  // 合并卡片「电子邮件」保存:发信必填单独存 SMTP 键;收信非空才存 IMAP 键(留空=复用发信,后端已兜底)
+  const handleSaveEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!smtpKeyInput.trim() && emailSmtp?.status !== 'connected') return;
+    setIsSaving(true);
+    try {
+      if (smtpKeyInput.trim()) {
+        await onSaveKey('EMAIL_SMTP_CREDENTIAL', smtpKeyInput.trim());
+      }
+      if (imapKeyInput.trim()) {
+        await onSaveKey('EMAIL_IMAP_CREDENTIAL', imapKeyInput.trim());
+      }
+      setConfiguringApp(null);
+      setSmtpKeyInput('');
+      setImapKeyInput('');
+      setKeyInput('');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // 已就绪统计:原生连接器与 MCP 连接器合并计数(两者同页混排,漏算 MCP 会虚低;
   // mcpConnectors 异步加载完成后自动刷新)
   const connectedCount =
-    connectors.filter((c) => c.status === 'connected').length +
+    connectors.filter((c) => (c.id === 'email_smtp' || c.id === 'email_imap' ? false : c.status === 'connected')).length +
+    (emailSmtp?.status === 'connected' || emailImap?.status === 'connected' ? 1 : 0) +
     mcpConnectors.filter((c) => c.status === 'connected').length;
-  const totalConnectors = connectors.length + mcpConnectors.length;
+  const totalConnectors = connectors.length - (emailSmtp && emailImap ? 1 : 0) + mcpConnectors.length;
 
   // 番茄卡片右上角徽标数据源:扫码登录态(托管记录 lastLoginAt),不是 MCP 连接态。
   // 本地 MCP 已撤、servers 为空,MCP 侧永远是「未配置」——已扫码的用户看到灰徽标
@@ -1153,7 +1213,7 @@ export function ConnectorsView({
 
       {/* Connectors Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filtered.map((app) => (
+        {displayFiltered.map((app) => (
           <div
             key={app.id}
             className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between"
@@ -1203,6 +1263,28 @@ export function ConnectorsView({
                   ) : app.noCredential ? (
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap bg-emerald-50 text-emerald-700 border border-emerald-200">
                       免凭证
+                    </span>
+                  ) : app.id === 'email' ? (
+                    <span className="flex items-center gap-1 flex-shrink-0">
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
+                          emailSmtp?.status === 'connected'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-zinc-100 text-zinc-500'
+                        }`}
+                      >
+                        {emailSmtp?.status === 'connected' ? '发信已配' : '发信未配'}
+                      </span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
+                          emailImap?.status === 'connected' || emailSmtp?.status === 'connected'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-zinc-100 text-zinc-500'
+                        }`}
+                        title={emailImap?.status === 'connected' ? '已单独配置收信凭证' : emailSmtp?.status === 'connected' ? '复用发信凭证读信' : '未配置'}
+                      >
+                        {emailImap?.status === 'connected' ? '收信已配' : emailSmtp?.status === 'connected' ? '收信复用' : '收信未配'}
+                      </span>
                     </span>
                   ) : (
                     <span
@@ -1359,6 +1441,9 @@ export function ConnectorsView({
                     onClick={() => {
                       setConfiguringApp(app);
                       setKeyInput('');
+                      // 合并卡片:预填收信凭证掩码提示,发信走通用输入
+                      setSmtpKeyInput('');
+                      setImapKeyInput('');
                       setBaseUrlInput(app.baseUrl || '');
                       setModelNameInput(app.customModelName || '');
                     }}
@@ -1377,7 +1462,7 @@ export function ConnectorsView({
       </div>
 
       {/* 空分组/无搜索结果占位 */}
-      {filtered.length === 0 && filteredMcp.length === 0 && (
+      {displayFiltered.length === 0 && filteredMcp.length === 0 && (
         <div className="text-center py-10 text-xs text-zinc-400">
           该分组下没有匹配的连接器{searchQuery ? `(搜索「${searchQuery}」无结果)` : ''}
         </div>
@@ -1631,10 +1716,16 @@ export function ConnectorsView({
                   <h3 className="text-sm font-semibold text-zinc-900">
                     配置 {configuringApp.name}
                   </h3>
-                  {configuringApp.envVar && (
+                  {configuringApp.id === 'email' ? (
                     <p className="text-xs text-zinc-500 font-mono mt-0.5">
-                      环境变量: {configuringApp.envVar}
+                      EMAIL_SMTP_CREDENTIAL / EMAIL_IMAP_CREDENTIAL
                     </p>
+                  ) : (
+                    configuringApp.envVar && (
+                      <p className="text-xs text-zinc-500 font-mono mt-0.5">
+                        环境变量: {configuringApp.envVar}
+                      </p>
+                    )
                   )}
                 </div>
               </div>
@@ -1646,6 +1737,62 @@ export function ConnectorsView({
               </button>
             </div>
 
+            {configuringApp.id === 'email' ? (
+              <form onSubmit={handleSaveEmail} className="space-y-4">
+                <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200/70 text-[11px] text-amber-800 leading-relaxed">
+                  按 账号:授权码 格式填写（QQ/163/Gmail/Outlook 自动识别服务器）。QQ：邮箱设置→账户→开启 SMTP 并生成授权码；163：设置→POP3/SMTP→开启并获取授权码；Gmail：开启两步验证后生成应用专用密码——均不是登录密码。
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-700 block">
+                    发信凭证（SMTP） <span className="text-red-500">*</span>
+                    {emailSmtp?.status === 'connected' && (
+                      <span className="ml-1 text-[10px] font-normal text-emerald-600">已配置，不填则保留</span>
+                    )}
+                  </label>
+                  <input
+                    type="password"
+                    value={smtpKeyInput}
+                    onChange={(e) => setSmtpKeyInput(e.target.value)}
+                    placeholder={emailSmtp?.keyMasked || '账号:授权码，如 user@qq.com:abcd1234'}
+                    className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                  />
+                  <p className="text-[10px] text-zinc-400">开通 email_send：发任务报告、内容投递、通知提醒</p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-700 block">
+                    收信凭证（IMAP） <span className="text-zinc-400 font-normal">可选</span>
+                    {emailImap?.status === 'connected' && (
+                      <span className="ml-1 text-[10px] font-normal text-emerald-600">已配置，不填则保留</span>
+                    )}
+                  </label>
+                  <input
+                    type="password"
+                    value={imapKeyInput}
+                    onChange={(e) => setImapKeyInput(e.target.value)}
+                    placeholder={emailImap?.keyMasked || '留空则复用发信凭证'}
+                    className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500"
+                  />
+                  <p className="text-[10px] text-zinc-400">开通 email_list / email_read：读收件箱（默认不改已读）。QQ/163/Gmail 的授权码收发通用，留空即可；仅自建邮箱收发服务器不同时才需单独填。</p>
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setConfiguringApp(null)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={(!smtpKeyInput.trim() && emailSmtp?.status !== 'connected') || isSaving}
+                    className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-medium transition shadow-xs"
+                  >
+                    {isSaving && <RotateCw className="h-3.5 w-3.5 animate-spin" />}
+                    <span>保存连接</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
             <form onSubmit={handleSave} className="space-y-4">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-zinc-700 block">
@@ -1662,7 +1809,29 @@ export function ConnectorsView({
                 {configuringApp.configHint && (
                   <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 leading-relaxed">
                     {configuringApp.configHint}
+                    {configuringApp.websiteUrl && (
+                      <a
+                        href={configuringApp.websiteUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1.5 flex items-center gap-1 font-medium text-amber-900 underline underline-offset-2"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        打开官网获取 Key
+                      </a>
+                    )}
                   </p>
+                )}
+                {!configuringApp.configHint && configuringApp.websiteUrl && (
+                  <a
+                    href={configuringApp.websiteUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-[11px] font-medium text-zinc-600 underline underline-offset-2 hover:text-zinc-900"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    打开官网获取 Key
+                  </a>
                 )}
               </div>
 
@@ -1733,6 +1902,7 @@ export function ConnectorsView({
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

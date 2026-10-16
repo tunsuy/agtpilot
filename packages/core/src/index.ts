@@ -63,7 +63,7 @@ export {
 } from './sandbox-fence';
 export type { SandboxSessionPolicy, CredentialDecision, FenceDecision } from './sandbox-fence';
 export { AgentService } from './agent-service';
-export { OrchestratorService, DEFAULT_SYSTEM_PROMPT, isEmptyToolOutput } from './orchestrator';
+export { OrchestratorService, DEFAULT_SYSTEM_PROMPT, isEmptyToolOutput, isCutOffToolCall } from './orchestrator';
 export type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
 // ---- Cordis 模块增强：内核依赖的服务契约 ----

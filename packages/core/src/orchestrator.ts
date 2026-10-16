@@ -49,6 +49,17 @@ export function isEmptyToolOutput(out: any): boolean {
   return false;
 }
 
+/** 输出截断判定：finishReason=length（单轮输出上限触顶）且文本里留有未闭合的
+ *  tool_call 标签 = 模型在「写工具调用」途中被截停。残段若被当最终答复收口，
+ *  任务会零工具执行、零交付物却落 DONE（生产实例 2026-10-16：PPT 演示稿任务，
+ *  reasoning 吃掉输出预算，tool_call 标签写到一半被截，解析器一个调用也提不出）。 */
+export function isCutOffToolCall(finishReason: string, text: string): boolean {
+  if (finishReason !== 'length' || !text) return false;
+  const open = (text.match(/<tool_call>/g) || []).length;
+  const close = (text.match(/<\/tool_call>/g) || []).length;
+  return open > close;
+}
+
 /** 高危操作审批等待上限（毫秒），超时自动拒绝并释放任务，杜绝永久悬挂。0 = 永不超时 */
 const APPROVAL_TIMEOUT_MS = Math.max(0, Number(process.env.AGTPILOT_APPROVAL_TIMEOUT_MS) || 5 * 60_000);
 
@@ -584,6 +595,9 @@ export class OrchestratorService extends Service {
 
       const stepsCount = Math.max(1, loopResult.stepsCount || 1);
       let finalAnswer: string = loopResult.text || '';
+      // 单轮输出截顶且残段留着未闭合 tool_call = 工具调用写到一半被截停:
+      // 收口成最终答复会零工具执行零交付物却落 DONE,转强制总结如实交代
+      const cutOff = isCutOffToolCall(loopResult.finishReason || '', finalAnswer);
 
       // 会话历史 = 输入消息 + SDK 产出的标准 assistant/tool 消息
       const conversation: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = [
@@ -593,12 +607,18 @@ export class OrchestratorService extends Service {
 
       // 步数耗尽（模型仍想调工具被 stopWhen 截停）或没有文本产出：
       // 追加一轮【禁用工具】的强制总结，尽力交付结论而非报错
-      const needsWrapUp = Boolean(loopResult.stepsExhausted) || !finalAnswer;
+      const needsWrapUp = Boolean(loopResult.stepsExhausted) || !finalAnswer || cutOff;
       if (needsWrapUp) {
         if (loopResult.stepsExhausted) {
           broadcast({
             type: 'thought',
             payload: { step: stepsCount, text: `已达步数上限（${maxSteps} 步），正在做最终总结…` },
+            timestamp: Date.now(),
+          });
+        } else if (cutOff) {
+          broadcast({
+            type: 'thought',
+            payload: { step: stepsCount, text: '上一轮输出被单轮上限截断（工具调用写到一半被截），正在做强制总结…' },
             timestamp: Date.now(),
           });
         }
@@ -610,9 +630,16 @@ export class OrchestratorService extends Service {
           timestamp: Date.now(),
         });
         try {
+          // 截断收尾与步数耗尽的交代口径不同:截断意味着工具调用根本没执行,
+          // 总结必须如实说明未交付,不得把残段当成果
+          const wrapReason = loopResult.stepsExhausted
+            ? `可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`
+            : cutOff
+              ? `上一轮输出被单轮输出上限截断（工具调用写到一半被截，该调用未执行），禁止再调用任何工具。请基于以上信息如实说明：已完成什么、因截断未完成什么（含工具调用未执行的事实）、用户下一步该怎么做（重跑或拆小任务）。不得编造交付物或宣称成功。`
+              : `未产出文本结论，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`;
           const wrapResult: ModelStepResult = await model.invokeStep({
             model: options.model,
-            system: `${systemPrompt}\n\n【重要】可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。若此前已按任务要求的格式(字段头/清单结构)产出过完整交付物，最终总结必须按原格式完整保留该交付物正文，状态说明只可附加在其后，不得改写或省略。`,
+            system: `${systemPrompt}\n\n【重要】${wrapReason}若此前已按任务要求的格式(字段头/清单结构)产出过完整交付物，最终总结必须按原格式完整保留该交付物正文，状态说明只可附加在其后，不得改写或省略。`,
             messages: conversation as any,
             configOverride: options.configOverride,
             disableTools: true,
@@ -625,7 +652,11 @@ export class OrchestratorService extends Service {
             emitUsageDelta(wrapResult.usage);
           }
         } catch {
-          // 总结调用失败时，回退到已有的最后一段文本
+          // 总结调用失败时，回退到已有的最后一段文本；截断残段补如实附注，
+          // 防止未执行工具调用的残篇被误读成完整交付
+          if (cutOff) {
+            finalAnswer += '\n\n（注：本任务上一轮输出被单轮上限截断，工具调用未执行，以上内容可能不完整。请重跑或拆小任务重试。）';
+          }
         }
       }
 
@@ -642,6 +673,7 @@ export class OrchestratorService extends Service {
       const lastMessage: any = conversation[conversation.length - 1];
       const endsWithFinalAssistant =
         !loopResult.stepsExhausted &&
+        !cutOff &&
         Boolean(loopResult.text) &&
         lastMessage &&
         lastMessage.role === 'assistant';
@@ -667,6 +699,7 @@ export class OrchestratorService extends Service {
           stepsCount,
           finalAnswer,
           stepsExhausted: Boolean(loopResult.stepsExhausted),
+          outputTruncated: cutOff,
           efficiency,
         },
         timestamp: Date.now(),

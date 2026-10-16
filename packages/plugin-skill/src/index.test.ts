@@ -167,6 +167,75 @@ describe('validateScriptSkill · 清单校验', () => {
       )
     ).toBeNull();
   });
+
+  it('captureUrl/extractText 校验:合法通过;pattern 非法正则 / output 名非法 / extractText 缺 selector → 拒收', () => {
+    expect(
+      validateScriptSkill(sampleSkill({ steps: [{ kind: 'captureUrl', pattern: 'works/(\\d+)', output: 'bid' }] }))
+    ).toBeNull();
+    expect(
+      validateScriptSkill(
+        sampleSkill({ steps: [{ kind: 'extractText', selector: '#id', pattern: '(\\d+)', output: 'bid' }] })
+      )
+    ).toBeNull();
+    expect(validateScriptSkill(sampleSkill({ steps: [{ kind: 'captureUrl', pattern: '(', output: 'bid' }] }))).toContain('正则');
+    expect(validateScriptSkill(sampleSkill({ steps: [{ kind: 'captureUrl', pattern: 'x' }] }))).toContain('output 名非法');
+    expect(validateScriptSkill(sampleSkill({ steps: [{ kind: 'captureUrl', pattern: 'x', output: '1bad' }] }))).toContain('output 名非法');
+    expect(validateScriptSkill(sampleSkill({ steps: [{ kind: 'captureUrl', pattern: 'x', output: 'a-b' }] }))).toContain('output 名非法');
+    expect(
+      validateScriptSkill(sampleSkill({ steps: [{ kind: 'extractText', pattern: '(\\d+)', output: 'bid' }] }))
+    ).toContain('selector 缺失');
+  });
+
+  it('发布围栏覆盖 output 字段:借捕获名夹带发布词 → 拒收', () => {
+    expect(
+      validateScriptSkill(sampleSkill({ steps: [{ kind: 'captureUrl', pattern: 'x', output: 'publishId' }] }))
+    ).toContain('发布');
+  });
+
+  it('选择器插值 params:必须是闭集 enum 参数;enum 值含发布词拒收;未声明拒收', () => {
+    const enumParams = {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        channel: { type: 'string', enum: ['male', 'female'] },
+      },
+      required: ['title'],
+    };
+    // 合法:闭集 enum
+    expect(
+      validateScriptSkill(
+        sampleSkill({
+          parameters: enumParams,
+          steps: [{ kind: 'clickOrFocus', selector: '.tab-{channel}', params: ['channel'] }],
+        })
+      )
+    ).toBeNull();
+    // 非 enum 参数(自由字符串)→ 拒收(选择器注入面)
+    expect(
+      validateScriptSkill(
+        sampleSkill({ steps: [{ kind: 'fill', selector: '#{title}', param: 'title', params: ['title'] }] })
+      )
+    ).toContain('闭集 enum');
+    // 未声明参数 → 拒收
+    expect(
+      validateScriptSkill(
+        sampleSkill({ parameters: enumParams, steps: [{ kind: 'waitForSelector', selector: '.x', params: ['nope'] }] })
+      )
+    ).toContain('未声明的参数 nope');
+    // enum 值本身过发布围栏
+    const smuggle = {
+      type: 'object',
+      properties: { title: { type: 'string' }, ch: { type: 'string', enum: ['ok', '发布'] } },
+      required: ['title'],
+    };
+    expect(
+      validateScriptSkill(sampleSkill({ parameters: smuggle, steps: [{ kind: 'clickOrFocus', selector: '.{ch}', params: ['ch'] }] }))
+    ).toContain('发布');
+    // params 不是字符串数组 → 拒收
+    expect(
+      validateScriptSkill(sampleSkill({ parameters: enumParams, steps: [{ kind: 'clickOrFocus', selector: '.x', params: 'channel' }] }))
+    ).toContain('params 必须是参数名字符串数组');
+  });
 });
 
 describe('loadScriptSkills · 目录热加载', () => {
@@ -397,6 +466,112 @@ describe('runSkillSteps · 执行器', () => {
     const out = await runSkillSteps(page, skill, { body: '**纯文本**兜底' });
     expect(out.flags.richPaste).toBe(false);
     expect(page.keyboard.insertText).toHaveBeenCalledWith('「纯文本」兜底');
+  });
+});
+
+describe('runSkillSteps · 引擎扩展(captureUrl / extractText / clickOrFocus optional / 选择器插值)', () => {
+  it('选择器插值:params 声明的占位符按 args 原样替换(不 URI 编码),未声明占位符原样保留', async () => {
+    const skill = sampleSkill({
+      parameters: { type: 'object', properties: { channel: { type: 'string', enum: ['male', 'female'] } }, required: [] },
+      steps: [{ kind: 'fill', selector: '.tab-{channel} #{other}', param: 'title', params: ['channel'] }],
+    }) as any;
+    const page = fakePage();
+    await runSkillSteps(page, skill, { channel: 'male', title: 'x' });
+    expect(page.fill).toHaveBeenCalledWith('.tab-male #{other}', 'x', expect.anything());
+  });
+
+  it('clickOrFocus optional:元素不存在 → 静默跳过,旗标 false,不点击;存在 → 点击且旗标 true', async () => {
+    const skill = sampleSkill({
+      steps: [{ kind: 'clickOrFocus', selector: '#ai-declare', optional: true, flag: 'aiDeclared' }],
+    }) as any;
+    const page = fakePage(); // locator 只认 #editor → #ai-declare count=0
+    const out = await runSkillSteps(page, skill, {});
+    expect(out.flags.aiDeclared).toBe(false);
+    expect(page.click).not.toHaveBeenCalled();
+
+    const skill2 = sampleSkill({
+      steps: [{ kind: 'clickOrFocus', selector: '#editor-btn', optional: true, flag: 'aiDeclared' }],
+    }) as any;
+    const page2 = fakePage();
+    const out2 = await runSkillSteps(page2, skill2, {});
+    expect(out2.flags.aiDeclared).toBe(true);
+    expect(page2.click).toHaveBeenCalledWith('#editor-btn', expect.anything());
+  });
+
+  it('captureUrl:命中即取组1;SPA 延迟跳转靠轮询等到;超时非 optional 抛错,optional 静默', async () => {
+    // ① 立即命中:正则组 1 → captures
+    const skill = sampleSkill({
+      steps: [{ kind: 'captureUrl', pattern: 'works/(\\d+)', output: 'bid' }],
+    }) as any;
+    const page = fakePage();
+    (page.url as any) = vi.fn(() => 'https://writer.example.com/works/7123456/chapter');
+    const out = await runSkillSteps(page, skill, {});
+    expect(out.captures.bid).toBe('7123456');
+
+    // ② 无捕获组:整段匹配兜底
+    const skill2 = sampleSkill({ steps: [{ kind: 'captureUrl', pattern: 'created-ok', output: 'done' }] }) as any;
+    const page2 = fakePage();
+    (page2.url as any) = vi.fn(() => 'https://x.com/created-ok');
+    expect((await runSkillSteps(page2, skill2, {})).captures.done).toBe('created-ok');
+
+    // ③ 轮询:第一次未命中,后续跳转命中(真实耗时 ~500ms)
+    const page3 = fakePage();
+    let n = 0;
+    (page3.url as any) = vi.fn(() => (++n >= 2 ? 'https://x.com/works/999' : 'https://x.com/creating'));
+    const out3 = await runSkillSteps(page3, sampleSkill({
+      steps: [{ kind: 'captureUrl', pattern: 'works/(\\d+)', output: 'bid', timeoutMs: 3000 }],
+    }) as any, {});
+    expect(out3.captures.bid).toBe('999');
+
+    // ④ 超时:非 optional 抛错;optional 静默且无捕获
+    const miss = sampleSkill({ steps: [{ kind: 'captureUrl', pattern: 'works/(\\d+)', output: 'bid', timeoutMs: 0 }] }) as any;
+    await expect(runSkillSteps(fakePage(), miss, {})).rejects.toThrow(/URL 捕获超时/);
+    const opt = sampleSkill({
+      steps: [{ kind: 'captureUrl', pattern: 'works/(\\d+)', output: 'bid', timeoutMs: 0, optional: true }],
+    }) as any;
+    const out4 = await runSkillSteps(fakePage(), opt, {});
+    expect(out4.captures).toEqual({});
+  });
+
+  it('extractText:innerText 按 pattern 提取;不匹配非 optional 抛错,optional 静默', async () => {
+    const skill = sampleSkill({
+      steps: [{ kind: 'extractText', selector: '#book-id', pattern: '书号[:：]\\s*(\\d+)', output: 'bid' }],
+    }) as any;
+    const page = fakePage({ editorText: '作品书号：7123456 已创建' });
+    const out = await runSkillSteps(page, skill, {});
+    expect(out.captures.bid).toBe('7123456');
+
+    const miss = sampleSkill({
+      steps: [{ kind: 'extractText', selector: '#book-id', pattern: '不存在(\\d+)', output: 'bid' }],
+    }) as any;
+    await expect(runSkillSteps(fakePage({ editorText: '别的' }), miss, {})).rejects.toThrow(/文本捕获失败/);
+    const opt = sampleSkill({
+      steps: [{ kind: 'extractText', selector: '#book-id', pattern: '不存在(\\d+)', output: 'bid', optional: true }],
+    }) as any;
+    expect((await runSkillSteps(fakePage({ editorText: '别的' }), opt, {})).captures).toEqual({});
+  });
+
+  it('execute 端到端:captures 透出到工具结果,successMessage 渲染 {capture:name}', async () => {
+    const skill = sampleSkill({
+      name: 'create_book_demo',
+      steps: [
+        { kind: 'goto', url: 'https://example.com/works/555' },
+        { kind: 'captureUrl', pattern: 'works/(\\d+)', output: 'bid' },
+        { kind: 'screenshot' },
+      ],
+      successMessage: '已开书,书号 {capture:bid};{capture:nope} 保留。',
+    }) as ScriptSkillManifest;
+    const store = fakeStore();
+    const res: any = await buildScriptSkillTool(skill, 'u8', fakeBrowser(fakePage()), store).execute({ title: 't' }, {});
+    expect(res.success).toBe(true);
+    expect(res.captures).toEqual({ bid: '555' });
+    expect(res.message).toBe('已开书,书号 555;{capture:nope} 保留。');
+    expect(store.auditLog.at(-1)).toMatchObject({ tool: 'create_book_demo', result: 'success' });
+
+    // 无捕获时结果不带 captures 键(调用方判空语义清晰)
+    const plain: any = await buildScriptSkillTool(sampleSkill() as ScriptSkillManifest, 'u8', fakeBrowser(fakePage()), store).execute({ title: 't' }, {});
+    expect(plain.success).toBe(true);
+    expect(plain.captures).toBeUndefined();
   });
 });
 

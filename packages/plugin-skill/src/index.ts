@@ -103,6 +103,12 @@ export type SkillStep =
       abortIfUrl?: string;
       abortAs?: string;
       timeoutError?: string;
+      /**
+       * 选择器参数化(原样替换,不 URI 编码):selector 里的 {name} 占位符按 args
+       * 替换。仅限引用 parameters 中带**闭集 enum** 的参数(加载校验强制)——
+       * 值来自白名单,选择器注入面为零。用于 频道/分类 这类动态选项点击。
+       */
+      params?: string[];
     }
   | {
       kind: 'fill';
@@ -116,8 +122,25 @@ export type SkillStep =
        * 记号剥除、列表转 •、链接保地址、代码块内容原样)。
        */
       transform?: 'markdown-plain';
+      /** 同 waitForSelector.params:enum 闭集参数原样替换进 selector */
+      params?: string[];
     }
-  | { kind: 'clickOrFocus'; selector: string; clickTimeoutMs?: number; focusTimeoutMs?: number }
+  | {
+      kind: 'clickOrFocus';
+      selector: string;
+      clickTimeoutMs?: number;
+      focusTimeoutMs?: number;
+      /** 同 waitForSelector.params:enum 闭集参数原样替换进 selector */
+      params?: string[];
+      /**
+       * true = 元素不存在时静默跳过(不点不炸),用于「可能出现也可能不出现」的
+       * 条件 UI(如平台改版后才有的 AI 辅助声明勾选框)。跳过时 flag 记 false,
+       * 点成时记 true —— notes 机制据此出附注,绝不让条件元素卡死整个流程。
+       */
+      optional?: boolean;
+      /** 结果旗标名(供 successMessage 的 {note:flag} 与审计附注引用) */
+      flag?: string;
+    }
   | { kind: 'pressKeys'; keys: string }
   | {
       kind: 'insertText';
@@ -154,6 +177,33 @@ export type SkillStep =
       /** 结果旗标名(供 successMessage 的 {note:flag} 与审计附注引用) */
       flag?: string;
     }
+  | {
+      /**
+       * URL 捕获(读回页面值,闭集词汇表里唯一的「取数」动作):轮询 page.url()
+       * 直到 pattern 命中(SPA 跳转有延迟),捕获组 1(无组则整个匹配)写入
+       * captures[output],经工具结果透出、供 successMessage 的 {capture:name}
+       * 引用。番茄建作品后从落地 URL 抓作品 ID 即此用途。
+       */
+      kind: 'captureUrl';
+      /** 对 page.url() 匹配的正则(捕获组 1 优先) */
+      pattern: string;
+      /** 捕获值输出名(^[A-Za-z_]\\w*$,≤64 字) */
+      output: string;
+      /** 轮询截止毫秒(500ms 间隔;缺省 15000) */
+      timeoutMs?: number;
+      /** true = 超时不算失败只跳过(捕获缺失由调用方语义兜底) */
+      optional?: boolean;
+    }
+  | {
+      /** 文本捕获:读 selector 首元素的 innerText,按 pattern 提取写入 captures[output] */
+      kind: 'extractText';
+      selector: string;
+      pattern: string;
+      output: string;
+      /** innerText 超时毫秒(缺省 10000) */
+      timeoutMs?: number;
+      optional?: boolean;
+    }
   | { kind: 'screenshot'; quality?: number };
 
 export interface ScriptSkillManifest {
@@ -178,7 +228,7 @@ export interface ScriptSkillManifest {
   /** 审计 action 字段(缺省 = 工具名) */
   auditAction?: string;
   steps: SkillStep[];
-  /** 成功消息模板:{参数名}(值 ≤100 字才替换)/ {todayCount} / {dailyLimit} / {note:flag} */
+  /** 成功消息模板:{参数名}(值 ≤100 字才替换)/ {todayCount} / {dailyLimit} / {note:flag} / {capture:输出名} */
   successMessage?: string;
   /** 旗标文案:present/missing 进 {note:flag};auditMissing 进「成功但旗标缺失」的审计附注 */
   notes?: Record<string, { present: string; missing: string; auditMissing?: string }>;
@@ -234,6 +284,8 @@ const STEP_KINDS = new Set([
   'insertText',
   'pasteRich',
   'waitForText',
+  'captureUrl',
+  'extractText',
   'screenshot',
 ]);
 
@@ -271,13 +323,34 @@ export function validateScriptSkill(raw: any): string | null {
   }
 
   const props = raw.parameters?.properties || {};
+  /**
+   * 非 goto 步骤的 params(选择器插值)只允许引用带**闭集 enum** 的参数:
+   * 值来自白名单,选择器注入面为零;enum 值本身也过发布围栏(不许借枚举夹带)。
+   */
+  const validateSelectorParams = (s: any, at: string): string | null => {
+    if (s.params === undefined) return null;
+    if (!Array.isArray(s.params) || s.params.some((p: unknown) => typeof p !== 'string' || !p)) {
+      return `${at} params 必须是参数名字符串数组`;
+    }
+    for (const p of s.params) {
+      const schema = props[p];
+      if (!schema) return `${at} params 引用了未声明的参数 ${p}`;
+      if (!Array.isArray(schema.enum) || schema.enum.length === 0) {
+        return `${at} params[${p}] 必须是闭集 enum 参数(选择器插值只吃白名单值)`;
+      }
+      for (const v of schema.enum) {
+        if (typeof v !== 'string' || PUBLISH_FENCE.test(v)) return `${at} params[${p}] 的 enum 值非法或含发布词`;
+      }
+    }
+    return null;
+  };
   for (let i = 0; i < raw.steps.length; i++) {
     const s = raw.steps[i];
     const at = `steps[${i}]`;
     if (!s || typeof s !== 'object') return `${at} 不是对象`;
     if (!STEP_KINDS.has(s.kind)) return `${at} 未知动作 ${String(s.kind)}(词汇表是闭集)`;
     // 发布围栏(加载时):任何步骤字符串里出现发布词即拒收 —— 词汇表本无发布动作,这里是双保险
-    const strings = [s.url, s.selector, s.value, s.pattern, s.keys, s.abortIfUrl]
+    const strings = [s.url, s.selector, s.value, s.pattern, s.keys, s.abortIfUrl, s.output]
       .filter((v) => typeof v === 'string') as string[];
     for (const str of strings) {
       if (PUBLISH_FENCE.test(str)) return `${at} 含发布词,拒收(托管终点是草稿箱)`;
@@ -297,14 +370,26 @@ export function validateScriptSkill(raw: any): string | null {
         break;
       case 'waitForSelector':
         if (typeof s.selector !== 'string' || !s.selector.trim()) return `${at} selector 缺失`;
+        {
+          const err = validateSelectorParams(s, at);
+          if (err) return err;
+        }
         break;
       case 'fill':
         if (typeof s.selector !== 'string' || !s.selector.trim()) return `${at} selector 缺失`;
         if (!s.param && !s.value) return `${at} fill 需要 param 或 value`;
         if (s.transform !== undefined && s.transform !== 'markdown-plain') return `${at} fill.transform 仅支持 markdown-plain`;
+        {
+          const err = validateSelectorParams(s, at);
+          if (err) return err;
+        }
         break;
       case 'clickOrFocus':
         if (typeof s.selector !== 'string' || !s.selector.trim()) return `${at} selector 缺失`;
+        {
+          const err = validateSelectorParams(s, at);
+          if (err) return err;
+        }
         break;
       case 'pressKeys':
         if (typeof s.keys !== 'string' || !s.keys.trim()) return `${at} keys 缺失`;
@@ -325,6 +410,22 @@ export function validateScriptSkill(raw: any): string | null {
           return `${at} pattern 不是合法正则`;
         }
         break;
+      case 'captureUrl':
+      case 'extractText': {
+        if (typeof s.pattern !== 'string' || !s.pattern.trim()) return `${at} pattern 缺失`;
+        try {
+          new RegExp(s.pattern);
+        } catch {
+          return `${at} pattern 不是合法正则`;
+        }
+        if (typeof s.output !== 'string' || !/^[A-Za-z_]\w{0,63}$/.test(s.output)) {
+          return `${at} output 名非法(字母/下划线开头,仅字母数字下划线,≤64 字)`;
+        }
+        if (s.kind === 'extractText' && (typeof s.selector !== 'string' || !s.selector.trim())) {
+          return `${at} selector 缺失`;
+        }
+        break;
+      }
       case 'screenshot':
         break;
     }
@@ -421,13 +522,15 @@ export function skillGateAllows(
 
 /**
  * 渲染成功消息模板:{key} 依次尝试 运行变量(todayCount/dailyLimit)→ 参数值
- * (≤100 字才替换,防止把整篇正文灌进消息);{note:flag} 按旗标取 notes 文案。
+ * (≤100 字才替换,防止把整篇正文灌进消息);{note:flag} 按旗标取 notes 文案;
+ * {capture:输出名} 替换为 captureUrl/extractText 捕获的值。
  */
 export function renderSkillMessage(
   skill: ScriptSkillManifest,
   args: Record<string, any>,
   vars: { todayCount: number; dailyLimit: number },
-  flags: Record<string, boolean>
+  flags: Record<string, boolean>,
+  captures: Record<string, string> = {}
 ): string {
   const tpl = skill.successMessage || '操作完成。';
   let msg = tpl.replace(/\{note:(\w+)\}/g, (_m, flag: string) => {
@@ -435,6 +538,9 @@ export function renderSkillMessage(
     if (!note) return '';
     return flags[flag] ? note.present : note.missing;
   });
+  msg = msg.replace(/\{capture:(\w+)\}/g, (m, name: string) =>
+    typeof captures[name] === 'string' && captures[name] ? captures[name] : m
+  );
   msg = msg.replace(/\{(\w+)\}/g, (m, key: string) => {
     if (key === 'todayCount') return String(vars.todayCount);
     if (key === 'dailyLimit') return String(vars.dailyLimit);
@@ -471,15 +577,30 @@ function stepValue(step: any, args: Record<string, any>): string {
 }
 
 /**
+ * 选择器参数化:selector 里的 {name} 占位符按 args **原样替换**(不 URI 编码——
+ * 选择器不是 URL)。安全前提由加载校验保证:非 goto 步骤的 params 只能引用
+ * 闭集 enum 参数,值域是白名单,注入面为零。
+ */
+function stepSelector(step: any, args: Record<string, any>): string {
+  let sel = String(step.selector ?? '');
+  for (const p of step.params || []) {
+    sel = sel.replaceAll(`{${p}}`, String(args?.[p] ?? ''));
+  }
+  return sel;
+}
+
+/**
  * 在页面上顺序执行步骤序列。失败抛 Error(消息即审计内容);
  * 登录态失效抛 SkillAbort(结构化:审计码 + 用户引导文案)。
+ * 返回:flags(旗标)+ screenshotBase64(末张截图)+ captures(captureUrl/extractText 取回的值)。
  */
 export async function runSkillSteps(
   page: any,
   skill: ScriptSkillManifest,
   args: Record<string, any>
-): Promise<{ flags: Record<string, boolean>; screenshotBase64?: string }> {
+): Promise<{ flags: Record<string, boolean>; screenshotBase64?: string; captures: Record<string, string> }> {
   const flags: Record<string, boolean> = {};
+  const captures: Record<string, string> = {};
   let screenshotBase64: string | undefined;
 
   for (const step of skill.steps) {
@@ -498,10 +619,11 @@ export async function runSkillSteps(
         // SPA 首屏渲染数秒:轮询等待(缺省 12×2s)
         const retries = step.retries ?? 12;
         const interval = step.intervalMs ?? 2000;
+        const selector = stepSelector(step, args);
         let ready = false;
         for (let i = 0; i < retries; i++) {
           await sleep(interval);
-          if ((await page.locator(step.selector).count()) > 0) {
+          if ((await page.locator(selector).count()) > 0) {
             ready = true;
             break;
           }
@@ -514,25 +636,32 @@ export async function runSkillSteps(
           }
         }
         if (!ready) {
-          throw new Error(step.timeoutError || `等待选择器超时: ${step.selector}(页面改版或结构变化,需人工核查)`);
+          throw new Error(step.timeoutError || `等待选择器超时: ${selector}(页面改版或结构变化,需人工核查)`);
         }
         break;
       }
 
       case 'fill':
-        await page.fill(step.selector, stepValue(step, args), { timeout: step.timeoutMs || 20000 });
+        await page.fill(stepSelector(step, args), stepValue(step, args), { timeout: step.timeoutMs || 20000 });
         break;
 
       case 'clickOrFocus': {
+        const selector = stepSelector(step, args);
         // 发布围栏(运行时):双保险,加载校验之后这里再拦一道
-        if (PUBLISH_FENCE.test(step.selector)) {
-          throw new Error(`发布围栏拦截: 选择器含发布词(${step.selector})`);
+        if (PUBLISH_FENCE.test(selector)) {
+          throw new Error(`发布围栏拦截: 选择器含发布词(${selector})`);
+        }
+        // 条件元素(optional):不存在 → 静默跳过,旗标记 false(notes 出附注,不炸流程)
+        if (step.optional && (await page.locator(selector).count().catch(() => 0)) === 0) {
+          if (step.flag) flags[step.flag] = false;
+          break;
         }
         try {
-          await page.click(step.selector, { timeout: step.clickTimeoutMs || 10000 });
+          await page.click(selector, { timeout: step.clickTimeoutMs || 10000 });
         } catch {
-          await page.locator(step.selector).first().focus({ timeout: step.focusTimeoutMs || 5000 });
+          await page.locator(selector).first().focus({ timeout: step.focusTimeoutMs || 5000 });
         }
+        if (step.flag) flags[step.flag] = true;
         break;
       }
 
@@ -603,6 +732,41 @@ export async function runSkillSteps(
         break;
       }
 
+      case 'captureUrl': {
+        // 轮询 page.url() 直到正则命中(SPA 跳转/落地重定向有延迟),500ms 间隔
+        const re = new RegExp(step.pattern);
+        const deadline = Date.now() + (step.timeoutMs ?? 15000);
+        let value = '';
+        for (;;) {
+          const m = re.exec(String(page.url?.() || ''));
+          const v = m ? m[1] || m[0] : '';
+          if (v) {
+            value = v;
+            break;
+          }
+          if (Date.now() >= deadline) break;
+          await sleep(500);
+        }
+        if (value) captures[step.output] = value;
+        else if (!step.optional) throw new Error(`URL 捕获超时: ${step.pattern}(落地页改版或流程未走完,需人工核查)`);
+        break;
+      }
+
+      case 'extractText': {
+        const re = new RegExp(step.pattern);
+        let text = '';
+        try {
+          text = await page.locator(step.selector).first().innerText({ timeout: step.timeoutMs ?? 10000 });
+        } catch {
+          text = '';
+        }
+        const m = re.exec(text);
+        const v = m ? m[1] || m[0] : '';
+        if (v) captures[step.output] = v;
+        else if (!step.optional) throw new Error(`文本捕获失败: ${step.selector} 未匹配 ${step.pattern}(页面改版,需人工核查)`);
+        break;
+      }
+
       case 'screenshot':
         // 截图随结果返回(用户在审批/任务页可肉眼核对);失败静默,不影响成败
         try {
@@ -612,7 +776,7 @@ export async function runSkillSteps(
         break;
     }
   }
-  return { flags, screenshotBase64 };
+  return { flags, screenshotBase64, captures };
 }
 
 // ---- flow 形态:清单 → 工具 ----
@@ -687,16 +851,24 @@ export function buildScriptSkillTool(
 
         const page = await browser.acquirePage(userId);
         // ④ 逐步执行声明式步骤(白名单动作;发布围栏见 runSkillSteps)
-        const { flags, screenshotBase64 } = await runSkillSteps(page, skill, args || {});
+        const { flags, screenshotBase64, captures } = await runSkillSteps(page, skill, args || {});
 
         // ⑤ 审计(步骤走完即成功;旗标缺失只是附加信息)
         audit('success', auditNotesForFlags(skill, flags));
 
         const result: any = {
           success: true,
-          message: renderSkillMessage(skill, args || {}, { todayCount: todayCount + 1, dailyLimit: limit }, flags),
+          message: renderSkillMessage(
+            skill,
+            args || {},
+            { todayCount: todayCount + 1, dailyLimit: limit },
+            flags,
+            captures
+          ),
           screenshotBase64: screenshotBase64 || undefined,
         };
+        // 捕获值透出(captureUrl/extractText):调用方(如同步运行器)据此写回映射
+        if (Object.keys(captures).length > 0) result.captures = captures;
         if (typeof args?.title === 'string') result.title = args.title;
         return result;
       } catch (err: any) {

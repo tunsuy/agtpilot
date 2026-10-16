@@ -25,7 +25,6 @@ import {
   NOVEL_REVIEW_FOCUS,
   STYLE_SAMPLES_MAX,
   clampChapterWords,
-  clampOpeningChapters,
 } from '@/workshops/novel/context';
 import type { NovelBook, NovelBookSummary } from '@/lib/novel-context';
 import { isReviewDue, REVIEW_EVERY_N } from '@/lib/novel-context';
@@ -56,7 +55,6 @@ const MODES: Array<{ id: NovelMode; name: string; icon: typeof BookOpen }> = [
 ];
 
 const CHAPTER_WORDS = [1000, 2000, 3000, 5000];
-const OPENING_CHAPTERS = [1, 2, 3, 5];
 /** 日更时刻 chip(cron 整点触发:`0 H * * *`) */
 const SUB_HOURS = [6, 9, 12, 18, 21];
 
@@ -89,7 +87,6 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
       : ''
   );
   const [chapterWords, setChapterWords] = useState<number>(clampChapterWords(saved.chapterWords));
-  const [openingChapters, setOpeningChapters] = useState<number>(clampOpeningChapters(saved.openingChapters));
 
   // ---- 文风学习(P2):样文必填,绑书可选 ----
   const [samples, setSamples] = useState<string>(typeof saved.samples === 'string' ? saved.samples : '');
@@ -184,20 +181,22 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
     };
   }, [mode, bookId]);
 
+  // 开书三段化:表单「开新书」发的是 genesis_bible(设定包,第一步);后续
+  // 大纲包/逐章续写由结果卡片上的「继续」按钮串,不再回表单。旧 genesis
+  // (单次全量)只留给历史重跑,本表单不再产。
   const params = useMemo(
     () => ({
-      mode,
+      mode: mode === 'genesis' ? 'genesis_bible' : mode,
       genre: customGenre.trim() || genre,
       premise,
       // 续写走书自己的文风锚(含「文风学习」写回的);表单风格选择只属于开书
       style: mode === 'continue' ? '' : customStyle.trim() || style,
       chapterWords,
-      openingChapters,
       bookId,
       focus,
       samples,
     }),
-    [mode, genre, customGenre, premise, style, customStyle, chapterWords, openingChapters, bookId, focus, samples]
+    [mode, genre, customGenre, premise, style, customStyle, chapterWords, bookId, focus, samples]
   );
 
   // 预览:续写/审查在书快照到位前不拼;文风学习绑了书同样等快照,不绑直接拼
@@ -396,30 +395,18 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
             <p className="text-[10px] text-zinc-400 leading-relaxed">{customStyle.trim() || style}</p>
           </div>
 
-          <div className="flex gap-4">
-            <div className="space-y-1.5 flex-1">
-              <FieldLabel>每章字数</FieldLabel>
-              <ChipGroup
-                options={CHAPTER_WORDS.map((n) => ({ id: n, name: `${n}` }))}
-                value={chapterWords}
-                onChange={setChapterWords}
-                accent={workshop.accent}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <FieldLabel>开篇章数</FieldLabel>
-              <ChipGroup
-                options={OPENING_CHAPTERS.map((n) => ({ id: n, name: `${n}` }))}
-                value={openingChapters}
-                onChange={setOpeningChapters}
-                accent={workshop.accent}
-              />
-            </div>
+          <div className="space-y-1.5">
+            <FieldLabel>每章字数</FieldLabel>
+            <ChipGroup
+              options={CHAPTER_WORDS.map((n) => ({ id: n, name: `${n}` }))}
+              value={chapterWords}
+              onChange={setChapterWords}
+              accent={workshop.accent}
+            />
           </div>
 
           <p className="text-[11px] text-zinc-500 leading-relaxed rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5">
-            开书产出「六件套」(设定集/人物卡/三层大纲/伏笔台账/时间线/文风锚)+ 开篇正文。
-            任务完成后在结果卡片上点「存入书库」,之后就能续写与体检。
+            开书分三步走:① 本任务产「设定包」(书名/卖点/设定集/人物卡),点「存入书库」建书;② 卡片上点「继续:生成大纲」产粗纲/细纲/伏笔/时间线并入书;③ 再点「继续:写第 1 章」,此后逐章续写。每步结果都先给你审,不满意可重跑。
           </p>
         </>
       )}

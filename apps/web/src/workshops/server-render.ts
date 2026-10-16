@@ -25,7 +25,8 @@ const STATE_LOADERS: Partial<Record<WorkshopId, (userId: string, params: Record<
     const bookId = typeof params.bookId === 'string' ? params.bookId.trim() : '';
     // 文风学习可以不绑书(纯提炼);绑了书号则必须现读到书,否则拒绝渲染
     if (mode === 'style' && !bookId) return {};
-    if (mode !== 'continue' && mode !== 'review' && mode !== 'style') return {};
+    if (mode !== 'continue' && mode !== 'review' && mode !== 'style' && mode !== 'genesis_outline') return {};
+    // 开书第二步(大纲包)同样要书状态:第一步入库的设定集/人物卡是注入源
     const book = bookId ? getNovelBook(userId, bookId) : null;
     if (!book) throw new Error(`小说不存在或无权访问: ${bookId || '(缺 bookId)'}`);
     return { novelState: book };

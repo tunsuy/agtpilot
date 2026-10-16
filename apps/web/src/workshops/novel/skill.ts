@@ -13,6 +13,8 @@
 import { BookOpen } from 'lucide-react';
 import {
   buildNovelGenesisPrompt,
+  buildNovelGenesisBiblePrompt,
+  buildNovelGenesisOutlinePrompt,
   buildNovelContinuePrompt,
   buildNovelReviewPrompt,
   buildNovelStylePrompt,
@@ -103,8 +105,41 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       });
       return { prompt, title: `《${book.title}》第${nextIndex}章` };
     }
-    // genesis(开新书)
+    // 开书第二步:大纲包(粗纲/细纲/伏笔/时间线)。必须拿到第一步入库的书
+    // 状态——设定集/人物卡是注入源,没有就拒绝渲染(服务端 loader 保证,
+    // 客户端预览无书状态时诚实抛错)
+    if (mode === 'genesis_outline') {
+      const book: NovelBook | undefined = ctx?.novelState;
+      if (!book) {
+        throw new Error('缺少小说状态:开书第二步需要第一步已入库的书(缺 bookId 或书不存在)');
+      }
+      return {
+        prompt: buildNovelGenesisOutlinePrompt({
+          book,
+          style: str(params.style),
+          chapterWords: clampChapterWords(params.chapterWords),
+          profile: ctx?.scenarioProfile ?? null,
+        }),
+        title: `《${book.title}》大纲规划`,
+      };
+    }
+    // 开书第一步:设定包(书名/卖点/设定集/人物卡)。这是唯一无书状态依赖的
+    // 开书模式;旧的单次全量 genesis 保留给历史重跑(local history 参数兼容),
+    // 新表单不再产它
     const genre = str(params.genre, NOVEL_GENRES[0]);
+    if (mode === 'genesis_bible') {
+      return {
+        prompt: buildNovelGenesisBiblePrompt({
+          genre,
+          premise: str(params.premise),
+          style: str(params.style, '爽文快节奏:短段落、强钩子、三章一小爽五章一大爽'),
+          chapterWords: clampChapterWords(params.chapterWords),
+          profile: ctx?.scenarioProfile ?? null,
+        }),
+        title: `网文开书:${genre}`,
+      };
+    }
+    // genesis(旧单次全量,兼容历史重跑)
     return {
       prompt: buildNovelGenesisPrompt({
         genre,

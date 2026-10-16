@@ -16,6 +16,7 @@
  * 分配(模型数数不可信);书号入库前按当前用户书库校验(见 /api/novels 与入库卡片)。
  */
 import type { NovelCharacter, DetailedChapter } from '@/lib/novel-context';
+import { clampChapterWords } from './context';
 
 // ---- 解析结果类型 ----
 
@@ -30,6 +31,31 @@ export interface NovelGenesisPackage {
   ledgerSeeds: Array<{ content: string; plantedChapter: number }>;
   timelineSeeds: string[];
   chapters: Array<{ title: string; content: string; summary?: string }>;
+}
+
+/** 开书三段化 · 第一步设定包:书名/卖点/设定集/人物卡(无正文,锚=设定集+人物卡) */
+export interface NovelGenesisBiblePackage {
+  kind: 'genesis_bible';
+  title: string;
+  premise: string;
+  bible: string;
+  characters: NovelCharacter[];
+  /** 回显的表单值(题材/文风锚/每章字数):卡片「继续:生成大纲」按钮串下一步用;
+   *  模型漏回显时缺省,卡片走各自的兜底 */
+  genre?: string;
+  style?: string;
+  chapterWords?: number;
+}
+
+/** 开书三段化 · 第二步大纲包:粗纲/细纲/伏笔/时间线(锚=粗纲+细纲,无正文) */
+export interface NovelGenesisOutlinePackage {
+  kind: 'genesis_outline';
+  /** 目标书号(服务端渲染时注入 prompt 的 bookId 回显;入库前按用户书库校验) */
+  bookId: string;
+  outline: string;
+  detailed: DetailedChapter[];
+  ledgerSeeds: Array<{ content: string; plantedChapter: number }>;
+  timelineSeeds: string[];
 }
 
 export interface NovelContinuePackage {
@@ -59,7 +85,12 @@ export interface NovelStylePackage {
   style: string;
 }
 
-export type NovelPackage = NovelGenesisPackage | NovelContinuePackage | NovelStylePackage;
+export type NovelPackage =
+  | NovelGenesisPackage
+  | NovelContinuePackage
+  | NovelStylePackage
+  | NovelGenesisBiblePackage
+  | NovelGenesisOutlinePackage;
 
 // ---- 字段头 ----
 
@@ -85,7 +116,9 @@ type HeaderKey =
   | 'nextDetailed'
   | 'volumeSummary'
   | 'styleAnchor'
-  | 'chapter';
+  | 'chapter'
+  | 'genre'
+  | 'chapterWords';
 
 /** 字段头正则(允许行尾追加说明,如【第3章 · 3000字】) */
 const HEADERS: Array<[HeaderKey, RegExp]> = [
@@ -106,6 +139,9 @@ const HEADERS: Array<[HeaderKey, RegExp]> = [
   ['nextDetailed', /^\s*【\s*下章细纲\s*[^】]*】\s*$/],
   ['volumeSummary', /^\s*【\s*总纲更新\s*[^】]*】\s*$/],
   ['styleAnchor', /^\s*【\s*文风锚\s*[^】]*】\s*$/],
+  // 三段化回显段(设定包:题材/文风锚/每章字数——表单值经模型回显,卡片据此串下一步)
+  ['genre', /^\s*【\s*题材\s*[^】]*】\s*$/],
+  ['chapterWords', /^\s*【\s*每章字数\s*[^】]*】\s*$/],
 ];
 
 /** 动态章头:【第N章】(N 支持阿拉伯数字;章头允许追加标题,如【第3章 夜袭】) */
@@ -343,8 +379,14 @@ function buildChapter(seg: Segment, nextSegs: Segment[]): { title: string; conte
 // ---- 主解析 ----
 
 /**
- * 解析小说包:先试开书包(【设定集】+【粗纲】锚),再试续写包(【书号】+【本章摘要】锚)。
- * 都不满足返回 null(调用方降级 markdown 渲染)。
+ * 解析小说包:按锚依次判定——
+ * 1) 开书包(genesis,旧单次全量):【设定集】+【粗纲】+ 至少一章正文;
+ * 2) 设定包(genesis_bible,三段化第一步):【设定集】+【人物卡】,无章正文;
+ * 3) 大纲包(genesis_outline,三段化第二步):【粗纲】+【细纲】,无设定集无章正文;
+ * 4) 续写包(continue):【书号】(nv_ 前缀)+【本章摘要】+ 章节正文;
+ * 5) 文风锚包(style):【文风锚】。
+ * 互斥性:设定包 vs 开书包靠「有无章正文段」区分;大纲包无【设定集】不与
+ * 前两者相撞。都不满足返回 null(调用方降级 markdown 渲染)。
  */
 export function parseNovelPackage(text: string): NovelPackage | null {
   if (!text || typeof text !== 'string') return null;
@@ -356,9 +398,10 @@ export function parseNovelPackage(text: string): NovelPackage | null {
   const outline = joinLines(byKey('outline')?.lines);
   const bookIdRaw = normalizeTitle(firstLine(byKey('bookId')?.lines));
   const hasSummarySeg = Boolean(byKey('summary'));
+  const hasChapterSeg = segs.some((s) => s.key === 'chapter');
 
-  // ---- 开书包 ----
-  if (bible && outline) {
+  // ---- 开书包(旧单次全量) ----
+  if (bible && outline && hasChapterSeg) {
     const chapters: Array<{ title: string; content: string; summary?: string }> = [];
     segs.forEach((seg, i) => {
       if (seg.key !== 'chapter') return;
@@ -380,6 +423,37 @@ export function parseNovelPackage(text: string): NovelPackage | null {
       ledgerSeeds: seeds,
       timelineSeeds: parseTimelineLines(joinLines(byKey('timeline')?.lines)),
       chapters,
+    };
+  }
+
+  // ---- 设定包(三段化第一步):有设定集+人物卡,无章正文 ----
+  if (bible && !hasChapterSeg && byKey('characters')) {
+    const title = normalizeTitle(firstLine(byKey('title')?.lines)) || '无题';
+    // 表单值回显段(题材/文风锚/每章字数):模型漏回显时为空,卡片给缺省
+    const styleEcho = joinLines(byKey('styleAnchor')?.lines);
+    const wordsEcho = firstLine(byKey('chapterWords')?.lines).replace(/[^0-9]/g, '');
+    return {
+      kind: 'genesis_bible',
+      title,
+      premise: joinLines(byKey('premise')?.lines),
+      bible,
+      characters: parseCharacters(joinLines(byKey('characters')?.lines)),
+      genre: joinLines(byKey('genre')?.lines) || undefined,
+      style: styleEcho || undefined,
+      chapterWords: wordsEcho ? clampChapterWords(wordsEcho) : undefined,
+    };
+  }
+
+  // ---- 大纲包(三段化第二步):粗纲+细纲,无设定集无章正文 ----
+  if (outline && byKey('detailed') && !bible && !hasChapterSeg) {
+    const { seeds } = parseLedgerLines(joinLines(byKey('ledger')?.lines), 'genesis');
+    return {
+      kind: 'genesis_outline',
+      bookId: BOOK_ID_RE.test(bookIdRaw) ? bookIdRaw : '',
+      outline,
+      detailed: parseDetailed(joinLines(byKey('detailed')?.lines)),
+      ledgerSeeds: seeds,
+      timelineSeeds: parseTimelineLines(joinLines(byKey('timeline')?.lines)),
     };
   }
 
@@ -409,9 +483,11 @@ export function parseNovelPackage(text: string): NovelPackage | null {
     };
   }
 
-  // ---- 文风锚包(P2 文风学习):无正文段,靠【文风锚】锚与前两种互斥 ----
+  // ---- 文风锚包(P2 文风学习):无正文段,靠【文风锚】锚与前几种互斥。
+  // 设定包(三段化第一步)也回显【文风锚】——有【设定集】或【人物卡】的输出
+  // 绝不是文风锚包,拒吞(宁可降级 null,不渲染成文风卡误导写回)
   const styleSeg = byKey('styleAnchor');
-  if (styleSeg) {
+  if (styleSeg && !bible && !byKey('characters')) {
     const styleText = joinLines(styleSeg.lines);
     if (styleText.replace(/\s/g, '').length < MIN_STYLE_CHARS) return null;
     return {

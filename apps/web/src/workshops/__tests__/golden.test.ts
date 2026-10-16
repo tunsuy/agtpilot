@@ -228,6 +228,24 @@ const FILLED: GoldenCase[] = [
     params: { mode: 'review', bookId: GOLDEN_NOVEL_BOOK.bookId, focus: '伏笔盘点' },
     ctx: { novelState: GOLDEN_NOVEL_BOOK },
   },
+  // 开书三段化:第一步设定包(无书状态依赖)/ 第二步大纲包(吃第一步入库的书)
+  {
+    label: 'filled-genesis-bible',
+    id: 'novel',
+    params: {
+      mode: 'genesis_bible',
+      genre: '玄幻',
+      premise: '废柴少年觉醒吞天魔骨',
+      style: NOVEL_GOLDEN_STYLE,
+      chapterWords: 2500,
+    },
+  },
+  {
+    label: 'filled-genesis-outline',
+    id: 'novel',
+    params: { mode: 'genesis_outline', bookId: GOLDEN_NOVEL_BOOK.bookId, chapterWords: 2500, style: NOVEL_GOLDEN_STYLE },
+    ctx: { novelState: GOLDEN_NOVEL_BOOK },
+  },
 ];
 
 /** 边界:钳制与非法枚举(count 0/99、未知 style/mode、数组里混入非法 id) */

@@ -22,6 +22,7 @@ import {
   countWords,
   markNovelReviewed,
   updateNovelStyle,
+  mergeNovelOutline,
   MAX_STYLE_CHARS,
   isReviewDue,
   REVIEW_EVERY_N,
@@ -103,8 +104,89 @@ describe('createNovelBook · 开书落盘', () => {
   });
 });
 
-describe('listNovelBooks · 书库列表', () => {
-  it('按更新时间倒序;损坏目录静默跳过', () => {
+describe('mergeNovelOutline · 大纲包并书(开书三段化第二步)', () => {
+  /** 第一步产出:设定包建书(0 章正文,只有地基) */
+  function seedBibleOnly(userId = 'u1'): NovelBook {
+    return createNovelBook(userId, {
+      title: '铁拳少年',
+      genre: '都市',
+      premise: '外卖骑手捡到预知差评的手机',
+      style: '爽文快节奏',
+      bible: '力量体系:青铜→白银→黄金,严格逐级不可跳级。',
+      characters: [{ name: '林凡', role: '主角', currentState: '右手骨折' }],
+    });
+  }
+
+  it('粗纲覆盖(第一步没大纲),细纲/伏笔/时间线入库,章正文与人物卡不动', () => {
+    const book = seedBibleOnly();
+    const merged = mergeNovelOutline('u1', book.bookId, {
+      outline: '第一卷·崛起(1-30章):获得手机,卷入教团阴谋。',
+      detailed: [
+        { index: 1, title: '雨夜差评', events: '捡到手机', hook: '暴雨夜' },
+        { index: 2, events: '夜探仓库' },
+      ],
+      ledgerSeeds: [{ content: '手机屏幕裂纹的来历', plantedChapter: 1 }],
+      timelineSeeds: ['第1章|周五雨夜|林凡捡到手机'],
+    });
+    expect(merged.outline).toContain('第一卷·崛起');
+    expect(merged.detailed).toHaveLength(2);
+    expect(merged.ledger).toHaveLength(1);
+    expect(merged.timeline).toEqual(['第1章|周五雨夜|林凡捡到手机']);
+    // 0 章建书:合并大纲不动进度指针,下一章仍是第 1 章
+    expect(merged.progress).toEqual({ chapterCount: 0, wordCount: 0, nextChapter: 1 });
+    // 地基不动:设定/人物是第一步的产物
+    expect(merged.bible).toContain('不可跳级');
+    expect(merged.characters).toHaveLength(1);
+    // 落盘可复读(重读是续写 prompt 的注入源)
+    const reread = getNovelBook('u1', book.bookId)!;
+    expect(reread.outline).toContain('第一卷·崛起');
+    expect(reread.detailed).toHaveLength(2);
+  });
+
+  it('重复合并:粗纲替换,细纲按章号去重追加,伏笔/时间线不重不漏', () => {
+    const book = seedBibleOnly();
+    mergeNovelOutline('u1', book.bookId, {
+      outline: '旧粗纲。',
+      detailed: [{ index: 1, events: '捡到手机' }, { index: 2, events: '夜探仓库' }],
+      ledgerSeeds: [{ content: '伏笔A', plantedChapter: 1 }],
+      timelineSeeds: ['第1章|雨夜|捡手机'],
+    });
+    const again = mergeNovelOutline('u1', book.bookId, {
+      outline: '新粗纲(重跑修订)。',
+      detailed: [{ index: 2, events: '夜探仓库(修订)' }, { index: 3, events: '对决' }],
+      ledgerSeeds: [{ content: '伏笔A', plantedChapter: 1 }, { content: '伏笔B', plantedChapter: 2 }],
+      timelineSeeds: ['第1章|雨夜|捡手机', '第2章|周日|夜探'],
+    });
+    expect(again.outline).toBe('新粗纲(重跑修订)。');
+    // 细纲 dedup-by-index:第2章修订替换,第3章追加
+    const d2 = again.detailed.find((d) => d.index === 2);
+    expect(d2?.events).toBe('夜探仓库(修订)');
+    expect(again.detailed).toHaveLength(3);
+    // 伏笔不重不漏
+    expect(again.ledger.map((f) => f.content).sort()).toEqual(['伏笔A', '伏笔B']);
+    expect(again.timeline).toHaveLength(2);
+  });
+
+  it('信任边界:书不存在/空粗纲抛错,不落半截规划', () => {
+    expect(() => mergeNovelOutline('u1', 'nv_nope_000000', { outline: 'x' })).toThrow();
+    const book = seedBibleOnly();
+    expect(() =>
+      mergeNovelOutline('u1', book.bookId, {
+        outline: '   ',
+        detailed: [{ index: 1, events: '捡到手机' }],
+      })
+    ).toThrow();
+    // 失败后书状态未被污染(仍无大纲)
+    expect(getNovelBook('u1', book.bookId)!.outline).toBe('');
+  });
+
+  it('用户隔离:合并别人的书号抛错', () => {
+    const book = seedBibleOnly('u1');
+    expect(() => mergeNovelOutline('u2', book.bookId, { outline: '偷书大纲。' })).toThrow();
+  });
+});
+
+describe('listNovelBooks · 书库列表', () => {  it('按更新时间倒序;损坏目录静默跳过', () => {
     const a = seedBook('u1');
     const b = createNovelBook('u1', { title: '第二本', chapters: [{ title: 't', content: LONG_BODY, summary: 's' }] });
     // 同毫秒建书 updatedAt 会撞(排序平局),显式把 b 拨晚 1s,确定性验证倒序语义

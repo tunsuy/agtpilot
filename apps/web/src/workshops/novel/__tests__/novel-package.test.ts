@@ -278,6 +278,133 @@ ${STYLE_TEXT}`;
   });
 });
 
+describe('parseNovelPackage · 设定包(开书三段化第一步)', () => {
+  const BIBLE_FIXTURE = `【题材】
+都市异能
+
+【文风锚】
+爽文快节奏:短段落、强钩子、三章一小爽五章一大爽
+
+【每章字数】
+3000
+
+【书名】
+铁拳少年
+
+【卖点】
+外卖骑手捡到预知差评的手机,每躲开一单差评就变强。
+
+【设定集】
+世界观:近未来江城,灵气复苏初期。
+力量体系:青铜→白银→黄金→宗师,严格逐级,不可跳级。
+
+【人物卡】
+## 林凡
+- 定位:主角
+- 性格:隐忍、机灵
+- 动机:还清家里的债
+- 口癖:这单我接了
+
+## 苏晚
+- 定位:女主
+- 性格:毒舌心软
+- 动机:查清父亲失踪真相`;
+
+  it('契约样例完整解析:回显段(题材/文风锚/每章字数)+ 书名/卖点/设定集/人物卡,无章正文', () => {
+    const pkg = parseNovelPackage(BIBLE_FIXTURE);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('genesis_bible');
+    if (pkg!.kind !== 'genesis_bible') return;
+    expect(pkg!.title).toBe('铁拳少年');
+    expect(pkg!.premise).toContain('预知差评的手机');
+    expect(pkg!.bible).toContain('不可跳级');
+    expect(pkg!.characters).toHaveLength(2);
+    expect(pkg!.characters[0].name).toBe('林凡');
+    expect(pkg!.characters[1].speech).toBeUndefined();
+    expect(pkg!.genre).toBe('都市异能');
+    expect(pkg!.style).toContain('三章一小爽五章一大爽');
+    expect(pkg!.chapterWords).toBe(3000);
+  });
+
+  it('模型漏回显段:回显字段缺省(undefined),主锚(设定集+人物卡)仍解析', () => {
+    const pkg = parseNovelPackage(
+      BIBLE_FIXTURE.replace('【题材】\n都市异能\n\n', '').replace('【每章字数】\n3000\n\n', '')
+    );
+    expect(pkg!.kind).toBe('genesis_bible');
+    if (pkg!.kind !== 'genesis_bible') return;
+    expect(pkg!.genre).toBeUndefined();
+    expect(pkg!.chapterWords).toBeUndefined();
+    expect(pkg!.bible).toContain('不可跳级');
+  });
+
+  it('与文风锚包互斥:回显的【文风锚】不吞设定包(有设定集/人物卡就不是文风锚包)', () => {
+    const pkg = parseNovelPackage(BIBLE_FIXTURE);
+    expect(pkg!.kind).toBe('genesis_bible');
+    expect(parseNotePackages(BIBLE_FIXTURE).packages).toEqual([]);
+    expect(parseArticlePackages(BIBLE_FIXTURE).packages).toEqual([]);
+  });
+});
+
+describe('parseNovelPackage · 大纲包(开书三段化第二步)', () => {
+  const OUTLINE_FIXTURE = `【书号】
+nv_m3k9x2_a1b2c3
+
+【粗纲】
+第一卷·崛起(1-30章):林凡获得手机,躲差评变强,卷入教团阴谋。
+第二卷·白银(31-80章):正面抗衡教团,揭开苏晚父亲失踪案。
+
+【细纲】
+### 第1章 雨夜差评
+- 钩子:暴雨夜,林凡接到一个送不到的订单
+- 事件:捡到预知手机,躲开第一单差评
+- 情绪点:憋屈后第一次爽
+- 伏笔:埋手机屏裂纹
+- 字数:3000
+
+### 第2章 室友
+- 钩子:回家发现新室友是苏晚
+- 事件:两人冲突又和解
+
+【伏笔】
+- [埋设] 手机屏幕裂纹的来历 @第1章
+- [埋设] 苏晚父亲失踪与教团有关 @第2章
+
+【时间线】
+- 第1章|周五雨夜|林凡捡到手机
+- 第2章|周六|苏晚搬入合租`;
+
+  it('契约样例完整解析:书号回显 + 粗纲/细纲/伏笔/时间线,无设定集无章正文', () => {
+    const pkg = parseNovelPackage(OUTLINE_FIXTURE);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('genesis_outline');
+    if (pkg!.kind !== 'genesis_outline') return;
+    expect(pkg!.bookId).toBe('nv_m3k9x2_a1b2c3');
+    expect(pkg!.outline).toContain('第一卷·崛起');
+    expect(pkg!.detailed).toHaveLength(2);
+    expect(pkg!.detailed[0].index).toBe(1);
+    expect(pkg!.detailed[0].hook).toContain('送不到的订单');
+    expect(pkg!.detailed[0].targetWords).toBe(3000);
+    expect(pkg!.ledgerSeeds).toHaveLength(2);
+    expect(pkg!.ledgerSeeds[0].plantedChapter).toBe(1);
+    expect(pkg!.timelineSeeds).toHaveLength(2);
+  });
+
+  it('漏回显书号:bookId 为空串(卡片给下拉指认,不猜)', () => {
+    const pkg = parseNovelPackage(OUTLINE_FIXTURE.replace('【书号】\nnv_m3k9x2_a1b2c3\n\n', ''));
+    expect(pkg!.kind).toBe('genesis_outline');
+    if (pkg!.kind !== 'genesis_outline') return;
+    expect(pkg!.bookId).toBe('');
+    expect(pkg!.outline).toContain('第一卷·崛起');
+  });
+
+  it('与笔记包/文章包互斥,不当续写包(无【本章摘要】无章正文)', () => {
+    const pkg = parseNovelPackage(OUTLINE_FIXTURE);
+    expect(pkg!.kind).toBe('genesis_outline');
+    expect(parseNotePackages(OUTLINE_FIXTURE).packages).toEqual([]);
+    expect(parseArticlePackages(OUTLINE_FIXTURE).packages).toEqual([]);
+  });
+});
+
 describe('格式互斥 · 与笔记包/文章包双向不碰撞', () => {
   const NOTE_FIXTURE = `【标题候选】
 1. 秋冬通勤穿搭三件套

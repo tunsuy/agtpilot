@@ -1266,6 +1266,7 @@ export default function Workspace() {
               rightTab={rightTab}
               onRightTabChange={setRightTab}
               onRunMission={handleRun}
+              onRunNovelChain={(workshop, display) => handleRun(display.prompt, display.title, null, workshop)}
               onStopMission={handleStopMission}
               onDeleteMission={handleDeleteMission}
               onNewSession={() => setActiveMissionId(null)}

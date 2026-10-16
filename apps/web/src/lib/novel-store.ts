@@ -28,6 +28,7 @@ import type {
   ForeshadowItem,
   CreateNovelInput,
   AppendChapterInput,
+  DetailedChapter,
 } from './novel-context';
 import { isReviewDue } from './novel-context';
 
@@ -318,6 +319,67 @@ export function markNovelReviewed(userId: string, bookId: string): NovelBook {
   const book = readBookJson(userId, bookId);
   if (!book) throw new Error(`书不存在: ${bookId}`);
   book.lastReviewedChapter = book.progress.chapterCount;
+  book.updatedAt = Date.now();
+  atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
+  return book;
+}
+
+/** 大纲包合并输入(开书三段化第二步的入库载荷) */
+export interface OutlineMergeInput {
+  outline: string;
+  detailed?: DetailedChapter[];
+  ledgerSeeds?: Array<{ content: string; plantedChapter: number }>;
+  timelineSeeds?: string[];
+}
+
+/**
+ * 大纲包合并入库(开书三段化第二步):粗纲/细纲池/伏笔台账/时间线并入
+ * 第一步建的书。只写规划层,不动正文与人物卡。合并语义:
+ * - outline:整体替换(第二步是全书规划的权威产出);
+ * - detailed:按章号去重并入(不覆盖第一步可能已有的条目);
+ * - ledgerSeeds / timelineSeeds:追加(时间线并集去重)。
+ * 书不存在抛错;大纲为空抛错(空规划没有合并意义)。
+ */
+export function mergeNovelOutline(userId: string, bookId: string, input: OutlineMergeInput): NovelBook {
+  const book = readBookJson(userId, bookId);
+  if (!book) throw new Error(`书不存在: ${bookId}`);
+  const outline = String(input.outline || '').trim();
+  if (!outline) throw new Error('大纲包没有粗纲内容,拒绝合并(不落半截状态)');
+
+  book.outline = outline;
+
+  if (input.detailed?.length) {
+    // dedup-by-index:同章号的细纲以本次包为准(重跑修订要能覆盖旧条目——粗纲
+    // 整体替换了,细纲留着旧版会跟新粗纲打架);新章号追加后按序排
+    const byIndex = new Map(book.detailed.map((d) => [d.index, d]));
+    for (const d of input.detailed) byIndex.set(d.index, d);
+    book.detailed = [...byIndex.values()].sort((a, b) => a.index - b.index);
+  }
+
+  // 伏笔按内容去重:重跑大纲包会重发同一批种子,重复条目会污染续写上下文
+  // 与体检回收率统计(同一条伏笔显示两次)
+  const seenForeshadow = new Set(book.ledger.map((f) => f.content.trim()));
+  for (const s of input.ledgerSeeds || []) {
+    const content = String(s?.content || '').trim();
+    if (!content || seenForeshadow.has(content)) continue;
+    seenForeshadow.add(content);
+    book.ledger.push({
+      id: `fs_${Date.now().toString(36)}_${book.ledger.length}`,
+      content,
+      plantedChapter: Math.max(1, Math.floor(Number(s.plantedChapter)) || 1),
+      status: 'planted',
+    });
+  }
+
+  const seen = new Set(book.timeline.map((t) => t.trim()));
+  for (const t of input.timelineSeeds || []) {
+    const line = String(t || '').trim();
+    if (line && !seen.has(line)) {
+      book.timeline.push(line);
+      seen.add(line);
+    }
+  }
+
   book.updatedAt = Date.now();
   atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
   return book;

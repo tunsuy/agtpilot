@@ -6,6 +6,7 @@ import {
   getChapterContent,
   createNovelBook,
   appendChapter,
+  mergeNovelOutline,
   deleteNovelBook,
   markNovelReviewed,
   updateNovelStyle,
@@ -22,8 +23,8 @@ import { buildNovelTxt, buildNovelEpub } from '@/lib/novel-export';
  * GET  ?无参 → 书库列表(轻量摘要);?bookId= → 全书状态(不含正文,
  *      续写/审查表单的服务端现读同源数据);&chapter=N → 附该章正文;
  *      &export=txt|epub → 全书导出直下(P1,附件流,不落 artifact-files)。
- * POST action=create(开书包入库)/ append(续写包反思写回)/ delete /
- *      markReviewed(体检提醒落点)/ updateStyle(文风锚)。
+ * POST action=create(设定包建书)/ mergeOutline(大纲包并书)/ append(续写包反思写回) /
+ *      delete / markReviewed(体检提醒落点)/ updateStyle(文风锚)。
  *
  * 边界:书号入库前按当前登录用户校验(getNovelBook 按 userId 隔离);
  * 章序号永远由 novel-store 按 progress.nextChapter 分配,请求体传什么不算什么;
@@ -97,7 +98,9 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** 请求体是不可信输入:逐字段收敛类型,数组元素逐个校验(novel-store 再做一层防御) */
+/** 请求体是不可信输入:逐字段收敛类型,数组元素逐个校验(novel-store 再做一层防御)。
+ *  开书三段化:设定包建书不带章正文(chapters 可为空——第二步大纲、逐章续写在后面);
+ *  旧开书包带章照收。书名必填。 */
 function toCreateInput(body: any): CreateNovelInput | null {
   const title = typeof body?.title === 'string' ? body.title.trim() : '';
   const chapters = Array.isArray(body?.chapters)
@@ -109,7 +112,7 @@ function toCreateInput(body: any): CreateNovelInput | null {
           ...(typeof c.summary === 'string' && c.summary.trim() ? { summary: c.summary.trim() } : {}),
         }))
     : [];
-  if (!title || chapters.length === 0) return null;
+  if (!title) return null;
   const strField = (v: unknown) => (typeof v === 'string' ? v : '');
   return {
     title,
@@ -212,10 +215,44 @@ export async function POST(req: NextRequest) {
     if (action === 'create') {
       const input = toCreateInput(body);
       if (!input) {
-        return NextResponse.json({ success: false, error: '开书包不完整:需要书名与至少一章正文' }, { status: 400 });
+        return NextResponse.json({ success: false, error: '设定包不完整:需要书名' }, { status: 400 });
       }
       const book = createNovelBook(userId, input);
       return NextResponse.json({ success: true, bookId: book.bookId, progress: book.progress });
+    }
+
+    if (action === 'mergeOutline') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      if (!bookId || !getNovelBook(userId, bookId)) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      const outline = typeof body?.outline === 'string' ? body.outline.trim() : '';
+      if (!outline) {
+        return NextResponse.json({ success: false, error: '大纲包不完整:缺粗纲(拒绝合并半截规划)' }, { status: 400 });
+      }
+      const detailed = Array.isArray(body?.detailed)
+        ? body.detailed
+            .filter((d: any) => d && Number.isFinite(Number(d.index)))
+            .map((d: any) => ({
+              index: Math.max(1, Math.floor(Number(d.index))),
+              events: typeof d.events === 'string' ? d.events : '',
+              ...(typeof d.title === 'string' ? { title: d.title } : {}),
+              ...(typeof d.hook === 'string' ? { hook: d.hook } : {}),
+              ...(typeof d.emotion === 'string' ? { emotion: d.emotion } : {}),
+              ...(typeof d.foreshadow === 'string' ? { foreshadow: d.foreshadow } : {}),
+              ...(Number.isFinite(Number(d.targetWords)) ? { targetWords: Math.floor(Number(d.targetWords)) } : {}),
+            }))
+        : [];
+      const ledgerSeeds = Array.isArray(body?.ledgerSeeds)
+        ? body.ledgerSeeds
+            .filter((s: any) => s && typeof s.content === 'string' && s.content.trim())
+            .map((s: any) => ({ content: String(s.content).trim(), plantedChapter: Math.max(1, Math.floor(Number(s.plantedChapter)) || 1) }))
+        : [];
+      const timelineSeeds = Array.isArray(body?.timelineSeeds)
+        ? body.timelineSeeds.filter((t: any) => typeof t === 'string')
+        : [];
+      const book = mergeNovelOutline(userId, bookId, { outline, detailed, ledgerSeeds, timelineSeeds });
+      return NextResponse.json({ success: true, bookId, progress: book.progress });
     }
 
     if (action === 'append') {

@@ -61,7 +61,8 @@ import { isRunnerTaskActive, runnerStateMeta, type RunnerTaskSummary } from '../
 import { TopicPickList } from './workshops/TopicPickCard';
 import { parseTopicPicks } from '../workshops/xhs/topic-picks';
 import { OssOpportunityList } from './workshops/OssOpportunityCard';
-import { NovelPackageCard } from './workshops/NovelPackageCard';
+import { NovelPackageCard, type NovelChainHandler } from './workshops/NovelPackageCard';
+import type { WorkshopRunPayload } from './workshops/run';
 import { parseNovelPackage } from '../workshops/novel/novel-package';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
@@ -128,6 +129,9 @@ interface CockpitViewProps {
   rightTab: 'browser' | 'terminal' | 'artifact' | 'activity';
   onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact' | 'activity') => void;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
+  /** 小说包「下一步」出口(开书三段化串联):工坊载荷走服务端权威渲染,
+   *  prompt 只作乐观气泡展示。续写包/大纲包之外的历史任务不触发。 */
+  onRunNovelChain?: (workshop: WorkshopRunPayload, display: { prompt: string; title?: string }) => void;
   onStopMission?: (missionId: string) => Promise<void> | void;
   /** 删除历史会话(仅已完成/已中断可删;执行中任务先停止再删) */
   onDeleteMission?: (missionId: string) => Promise<void> | void;
@@ -154,6 +158,7 @@ export function CockpitView({
   rightTab,
   onRightTabChange,
   onRunMission,
+  onRunNovelChain,
   onStopMission,
   onDeleteMission,
   onNewSession,
@@ -1060,9 +1065,10 @@ export function CockpitView({
                                   onRunMission={onRunMission}
                                 />
                               ) : st.answer && parsedNovel ? (
-                                /* 小说包(开书/续写):六件套或章节+反思预览,「存入书库」落状态库;
-                                   续写包书号入库前按用户书库校验,未命中给下拉指认(绝不猜归属) */
-                                <NovelPackageCard pkg={parsedNovel} />
+                                /* 小说包(开书三段化):设定包/大纲包/续写包/文风锚包各一张卡,
+                                   「存入书库」落状态库,「继续:下一步」串下一段任务;
+                                   续写包/大纲包书号入库前按用户书库校验,未命中给下拉指认(绝不猜归属) */
+                                <NovelPackageCard pkg={parsedNovel} onChain={onRunNovelChain} />
                               ) : st.answer && ossResult ? (
                                 /* 开源贡献机会:卡片可派发到本地(missionId 关联当前会话,任务↔会话可互跳) */
                                 <OssOpportunityList result={ossResult} missionId={activeMissionId || currentMission?.id} />

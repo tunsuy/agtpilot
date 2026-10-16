@@ -7,6 +7,8 @@
  * novel-store —— 本模块只吃纯数据,不碰 fs(客户端 bundle 安全)。
  */
 import promptGenesis from './prompt.genesis.md';
+import promptGenesisBible from './prompt.genesis-bible.md';
+import promptGenesisOutline from './prompt.genesis-outline.md';
 import promptContinue from './prompt.continue.md';
 import promptReview from './prompt.review.md';
 import promptStyle from './prompt.style.md';
@@ -69,6 +71,76 @@ export function buildNovelGenesisPrompt(input: NovelGenesisInput): string {
     style: String(input.style || '').trim() || NOVEL_STYLES[0],
     chapterWords: clampChapterWords(input.chapterWords),
     openingChapters: clampOpeningChapters(input.openingChapters),
+    profileSection: profileSection || '',
+  });
+}
+
+// ---- 开书三段化(docs/design/novel-workshop.md §5 修订):单次响应塞
+// 「六件套+多章正文」会把推理模型推向 token 上限(rk1yt:52k 思考后
+// 撞 32768 输出顶,正文零字)。拆成 设定包→大纲包→逐章(走续写管线):
+// 每段输出量小、失败粒度细、逐章天然带恒定上下文。三段都用「存入书库
+// 卡片 → 下一步按钮」串联,每步入库后下一步服务端现读书库注入。
+
+export interface NovelGenesisBibleInput {
+  genre: string;
+  premise?: string;
+  style: string;
+  chapterWords?: unknown;
+  profile?: ScenarioProfile | null;
+}
+
+/** 开书第一步:书名/卖点/设定集/人物卡(建书的地基) */
+export function buildNovelGenesisBiblePrompt(input: NovelGenesisBibleInput): string {
+  const profileSection = input.profile ? buildProfileSection(input.profile) : null;
+  return renderTemplate(promptGenesisBible, {
+    genre: String(input.genre || '').trim() || '不限(自行拍板最有张力的方向)',
+    premise: String(input.premise || '').trim(),
+    style: String(input.style || '').trim() || NOVEL_STYLES[0],
+    chapterWords: clampChapterWords(input.chapterWords),
+    profileSection: profileSection || '',
+  });
+}
+
+export interface NovelGenesisOutlineInput {
+  book: NovelBook;
+  style?: string;
+  chapterWords?: unknown;
+  profile?: ScenarioProfile | null;
+}
+
+/** 大纲包注入的设定地基:设定集 + 人物卡(## 段头,不占【】契约命名空间) */
+function assembleBibleBlock(book: NovelBook): string {
+  const castText = book.characters
+    .map((c) =>
+      [
+        `- **${c.name}**${c.role ? `(${c.role})` : ''}`,
+        c.personality ? `  性格:${c.personality}` : '',
+        c.motivation ? `  动机:${c.motivation}` : '',
+        c.speech ? `  口癖:${c.speech}` : '',
+        c.relations ? `  关系:${c.relations}` : '',
+        c.arc ? `  弧光:${c.arc}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    )
+    .join('\n');
+  return [
+    `## 卖点\n${book.premise || '(空)'}`,
+    `## 设定集\n${book.bible || '(空)'}`,
+    `## 人物卡\n${castText || '(空)'}`,
+  ].join('\n\n');
+}
+
+/** 开书第二步:粗纲/细纲/伏笔/时间线(服务端现读第一步入库的书状态) */
+export function buildNovelGenesisOutlinePrompt(input: NovelGenesisOutlineInput): string {
+  const { book } = input;
+  const profileSection = input.profile ? buildProfileSection(input.profile) : null;
+  return renderTemplate(promptGenesisOutline, {
+    bookTitle: book.title,
+    bookId: book.bookId,
+    bibleBlock: assembleBibleBlock(book),
+    style: String(input.style || '').trim() || book.style || NOVEL_STYLES[0],
+    chapterWords: clampChapterWords(input.chapterWords),
     profileSection: profileSection || '',
   });
 }

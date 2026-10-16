@@ -180,6 +180,37 @@ describe('novel loader(书状态服务端现读,docs/design/novel-workshop.md §
     expect(run!.prompt).toContain('【设定集】');
   });
 
+  // 开书三段化:第一步无书状态依赖;第二步必须现读到第一步入库的书
+  it('genesis_bible(第一步设定包)不需要书状态,契约含回显段', () => {
+    const run = renderWorkshopRunServer('u-novel', 'novel', { mode: 'genesis_bible', genre: '玄幻' });
+    expect(run).not.toBeNull();
+    expect(run!.title).toBe('网文开书:玄幻');
+    for (const anchor of ['【题材】', '【文风锚】', '【每章字数】', '【设定集】', '【人物卡】']) {
+      expect(run!.prompt).toContain(anchor);
+    }
+  });
+
+  it('genesis_outline(第二步大纲包):有效 bookId 现读书状态,书号逐字注入;缺书抛错', () => {
+    const userId = 'u-novel-outline';
+    const book = createNovelBook(userId, {
+      title: '铁拳少年',
+      bible: '力量体系:青铜→白银,不可跳级。',
+      characters: [{ name: '林凡', role: '主角' }],
+    });
+    const run = renderWorkshopRunServer(userId, 'novel', { mode: 'genesis_outline', bookId: book.bookId });
+    expect(run!.title).toBe('《铁拳少年》大纲规划');
+    expect(run!.prompt).toContain(book.bookId); // 书号回显注入,入库对账
+    expect(run!.prompt).toContain('青铜→白银'); // 设定集是大纲的约束源
+    expect(run!.prompt).toContain('【粗纲】');
+
+    expect(() =>
+      renderWorkshopRunServer(userId, 'novel', { mode: 'genesis_outline', bookId: 'nv_nope_000000' })
+    ).toThrow(/小说不存在或无权访问/);
+    expect(() => renderWorkshopRunServer(userId, 'novel', { mode: 'genesis_outline' })).toThrow(
+      /小说不存在或无权访问/
+    );
+  });
+
   it('continue/review 缺书或 bookId 无效:抛错带明确原因(调用方 500,绝不静默降级)', () => {
     expect(() => renderWorkshopRunServer('u-novel', 'novel', { mode: 'continue' })).toThrow(/小说不存在或无权访问/);
     expect(() =>

@@ -7,6 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildNovelGenesisPrompt,
+  buildNovelGenesisBiblePrompt,
+  buildNovelGenesisOutlinePrompt,
   buildNovelContinuePrompt,
   buildNovelReviewPrompt,
   buildNovelStylePrompt,
@@ -182,9 +184,7 @@ describe('skill.run() 分发与信任边界', () => {
     const run = WORKSHOP_SKILL.run({});
     expect(run.title).toContain('网文开书');
     expect(run.prompt).toContain(NOVEL_GENRES[0]);
-  });
-
-  it('style 分发(P2):不绑书可跑;绑了 bookId 但缺书状态抛错;绑书标题带书名', () => {
+  });  it('style 分发(P2):不绑书可跑;绑了 bookId 但缺书状态抛错;绑书标题带书名', () => {
     const loose = WORKSHOP_SKILL.run({ mode: 'style', samples: '我的样文片段。' });
     expect(loose.title).toBe('文风学习');
     expect(loose.prompt).toContain('【文风锚】');
@@ -199,6 +199,63 @@ describe('skill.run() 分发与信任边界', () => {
     );
     expect(bound.title).toBe('《铁拳少年》文风学习');
     expect(bound.prompt).toContain('nv_test01_a1b2c3');
+  });
+});
+
+describe('开书三段化 · 第一步设定包 prompt(genesis_bible)', () => {
+  it('注入题材/卖点/文风锚/字数;契约锚只有回显段+书名/卖点/设定集/人物卡,无大纲与正文', () => {
+    const p = buildNovelGenesisBiblePrompt({
+      genre: '都市',
+      premise: '外卖骑手捡到预知差评的手机',
+      style: NOVEL_STYLES[0],
+      chapterWords: 2500,
+    });
+    expect(p).toContain('题材:都市');
+    expect(p).toContain('外卖骑手捡到预知差评的手机');
+    expect(p).toContain('2500');
+    // 回显段(卡片「继续:生成大纲」按钮靠它串表单值)
+    for (const anchor of ['【题材】', '【文风锚】', '【每章字数】', '【书名】', '【卖点】', '【设定集】', '【人物卡】']) {
+      expect(p).toContain(anchor);
+    }
+    // 三段化:第一步只产地基,不出大纲与正文
+    expect(p).not.toContain('【粗纲】');
+    expect(p).not.toContain('【细纲】');
+    expect(p).toContain('严禁调用任何发布/投稿/自动上传类工具');
+    expect(p).toContain('必须原创');
+  });
+
+  it('skill.run() 分发:genesis_bible 不需要书状态,题材缺省取 NOVEL_GENRES[0]', () => {
+    const run = WORKSHOP_SKILL.run({ mode: 'genesis_bible' });
+    expect(run.title).toBe(`网文开书:${NOVEL_GENRES[0]}`);
+    expect(run.prompt).toContain(NOVEL_GENRES[0]);
+    expect(run.prompt).toContain('【设定集】');
+  });
+});
+
+describe('开书三段化 · 第二步大纲包 prompt(genesis_outline)', () => {
+  it('书状态注入(设定集/人物卡)+ 书号/文风锚/字数注入;契约锚为回显书号+粗纲/细纲/伏笔/时间线', () => {
+    const run = WORKSHOP_SKILL.run(
+      { mode: 'genesis_outline', bookId: 'nv_test01_a1b2c3', style: '快节奏爽文', chapterWords: 3000 },
+      { novelState: makeBook() }
+    );
+    expect(run.title).toBe('《铁拳少年》大纲规划');
+    expect(run.prompt).toContain('《铁拳少年》');
+    expect(run.prompt).toContain('青铜→白银→黄金'); // 设定集注入是大纲的约束源
+    expect(run.prompt).toContain('nv_test01_a1b2c3'); // 书号原样注入,入库对账
+    expect(run.prompt).toContain('快节奏爽文');
+    expect(run.prompt).toContain('3000');
+    for (const anchor of ['【书号】', '【粗纲】', '【细纲】', '【伏笔】', '【时间线】']) {
+      expect(run.prompt).toContain(anchor);
+    }
+    // 第二步不产设定与正文(那是第一步/续写的事)
+    expect(run.prompt).not.toContain('【设定集】\n');
+    expect(run.prompt).not.toContain('【人物卡】');
+  });
+
+  it('缺书状态诚实抛错:第二步必须吃第一步入库的书', () => {
+    expect(() => WORKSHOP_SKILL.run({ mode: 'genesis_outline', bookId: 'nv_x_000000' })).toThrow(
+      /缺少小说状态/
+    );
   });
 });
 

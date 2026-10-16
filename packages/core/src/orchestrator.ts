@@ -5,6 +5,7 @@ import {
   ModelGateway,
   PlannerNotifier,
   AgentLoopTool,
+  ModelStreamTelemetry,
 } from './contracts';
 import {
   selectActiveTools,
@@ -544,6 +545,14 @@ export class OrchestratorService extends Service {
           broadcast({
             type: 'assistant_delta',
             payload: { delta, kind: 'reasoning' },
+            timestamp: Date.now(),
+          });
+        },
+        // 模型流遥测 → 广播（前端任务终端日志实时可见；TTFT/静默告警/流错误/看门狗中止）
+        onTelemetry: (info: ModelStreamTelemetry) => {
+          broadcast({
+            type: 'model_telemetry',
+            payload: { ...info },
             timestamp: Date.now(),
           });
         },

@@ -82,7 +82,25 @@ export interface AgentLoopOptions {
   onTextDelta?: (delta: string) => void;
   /** 推理增量回调（reasoning 模型思考过程）；实现可忽略 */
   onReasoningDelta?: (delta: string) => void;
+  /** 模型流遥测回调（TTFT/静默告警/流错误/看门狗中止）；上层转事件广播进任务运行日志 */
+  onTelemetry?: (info: ModelStreamTelemetry) => void;
 }
+
+/**
+ * 模型流遥测（轻量打点）：上游 SSE 假死时任务卡 RUNNING 无任何输出
+ * （生产实测：自定义端点首 token 6 分钟 + 中途流中断），无第三方观测库
+ * 的情况下由模型网关就地埋点 —— 上层广播进任务终端日志，stderr 级同步
+ * 镜像 runtime.log。字段口径：
+ * - ttft：本次调用首个文本/推理增量距流开始的毫秒数（每 runAgentLoop 一次）
+ * - stall-warn：静默告警（awaitingFirstToken 区分「排队等首字」与「中途断流」）
+ * - stream-error：流管道报错（SDK 消费重试耗尽后抛出，先于最终失败事件留下中间痕迹）
+ * - stream-abort：看门狗中止（静默超阈值，主动断流并让任务以明确错误收尾）
+ */
+export type ModelStreamTelemetry =
+  | { kind: 'ttft'; ms: number }
+  | { kind: 'stall-warn'; ms: number; awaitingFirstToken: boolean }
+  | { kind: 'stream-error'; error: string }
+  | { kind: 'stream-abort'; ms: number };
 
 export interface AgentLoopResult {
   /** 最后一步的文本输出 */

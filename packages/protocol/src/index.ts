@@ -68,7 +68,13 @@ export interface AgentEvent {
     /** 每步模型调用开始（前端"正在思考"指示）；payload: { stepNumber?, reason?: 'model-step' | 'wrap-up' } */
     | 'step_started'
     /** 模型流式增量；payload: { delta: string, kind: 'text' | 'reasoning' }。taskId 由编排器统一盖章 */
-    | 'assistant_delta';
+    | 'assistant_delta'
+    /**
+     * 模型流遥测（轻量打点，docs/design/observability.md）：TTFT / 静默告警 / 流错误 /
+     * 看门狗中止；payload: { kind: 'ttft' | 'stall-warn' | 'stream-error' | 'stream-abort',
+     * ms?: number, awaitingFirstToken?: boolean, error?: string }
+     */
+    | 'model_telemetry';
   payload: Record<string, any>;
   timestamp: number;
 }

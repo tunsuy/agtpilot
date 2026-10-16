@@ -11,6 +11,7 @@ import type {
   AgentLoopOptions,
   AgentLoopResult,
   AgentLoopStepInfo,
+  ModelStreamTelemetry,
 } from '@agtpilot/core';
 import '@agtpilot/core';
 
@@ -43,6 +44,22 @@ function enrichModelError(err: any): void {
   }
   if (extras.length > 0) err.message = `${err.message}｜${extras.join(' | ')}`;
 }
+
+/**
+ * 模型流静默看门狗阈值（毫秒，环境变量可覆盖）：
+ * - 静默 ≥ WARN（默认 2 分钟）→ 终端日志告警（等首字=上游排队/重试退避；中途静默=流可能中断）
+ * - 静默 ≥ ABORT（默认 10 分钟）→ 主动断流，任务以「模型连接中断」明确失败收尾，
+ *   不再无限卡 RUNNING（生产实测：自定义端点 SSE 假死，无 in-stream 超时兜底）
+ * 工具执行与 prepareStep（含任务内压缩）期间不算静默 —— 长工具/长压缩是合法静默。
+ */
+const numEnv = (v: string | undefined, d: number) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : d;
+};
+const STALL_WARN_MS = numEnv(process.env.MODEL_STALL_WARN_MS, 120_000);
+const STALL_ABORT_MS = numEnv(process.env.MODEL_STALL_ABORT_MS, 600_000);
+/** 看门狗巡检间隔 */
+const STALL_CHECK_MS = 15_000;
 
 /**
  * 模型驱动服务：实现内核的 ModelGateway 契约（@agtpilot/core contracts）。
@@ -119,12 +136,34 @@ export class ModelService extends Service implements ModelGateway {
     const selectedModel = this.resolveActiveModel(options.model, options.configOverride);
     const maxSteps = Math.max(1, options.maxSteps ?? 10);
 
+    // ---- 流健康遥测状态（打点见 contracts.ModelStreamTelemetry）----
+    const telemetry = (info: ModelStreamTelemetry) => options.onTelemetry?.(info);
+    const runStartedAt = Date.now();
+    // 任意流部件（含 start-step/tool 事件）都算"流还活着"；首 token 单独标记
+    let lastActivityAt = runStartedAt;
+    let firstTokenAt: number | null = null;
+    let lastWarnSilentMs = 0;
+    // 工具执行 / prepareStep（含压缩）期间的静默是合法的，看门狗不计时
+    let activeToolRuns = 0;
+    let preparingStep = false;
+
     const toolsMap: Record<string, any> = {};
     for (const t of options.tools ?? []) {
       toolsMap[t.name] = tool({
         description: t.description,
         inputSchema: toInputSchema(t.parameters), // 透传真实参数定义
-        execute: async (args: any) => t.execute(args),
+        // 长工具（浏览器自动化等）执行期间无流增量是常态 —— 计入活跃期，
+        // 看门狗只盯「模型流本身」的静默
+        execute: async (args: any) => {
+          activeToolRuns++;
+          lastActivityAt = Date.now();
+          try {
+            return await t.execute(args);
+          } finally {
+            activeToolRuns--;
+            lastActivityAt = Date.now();
+          }
+        },
       });
     }
 
@@ -134,6 +173,29 @@ export class ModelService extends Service implements ModelGateway {
       : undefined;
 
     let stepCounter = 0;
+    // 用户中止信号中继：与看门狗共用一条传给 SDK 的信号，任一触发即断流；
+    // 中止后语义分流 —— 用户中止走既有 Cancelled 路径，看门狗走模型连接中断
+    const userSignal = options.abortSignal;
+    const streamController = new AbortController();
+    const relayUserAbort = () => streamController.abort();
+    if (userSignal?.aborted) streamController.abort();
+    else userSignal?.addEventListener('abort', relayUserAbort);
+    let watchdogAbortMs = 0; // >0 = 看门狗已触发（记录触发时的静默时长）
+    const watchdog = setInterval(() => {
+      if (watchdogAbortMs || userSignal?.aborted) return;
+      if (activeToolRuns > 0 || preparingStep) return;
+      const silentMs = Date.now() - lastActivityAt;
+      if (silentMs >= STALL_ABORT_MS) {
+        watchdogAbortMs = silentMs;
+        telemetry({ kind: 'stream-abort', ms: silentMs });
+        streamController.abort();
+        return;
+      }
+      if (silentMs >= STALL_WARN_MS && silentMs - lastWarnSilentMs >= STALL_WARN_MS) {
+        lastWarnSilentMs = silentMs;
+        telemetry({ kind: 'stall-warn', ms: silentMs, awaitingFirstToken: firstTokenAt === null });
+      }
+    }, STALL_CHECK_MS);
     // streamText 与 generateText options 完全同构（stopWhen/prepareStep/onStepFinish
     // 均受支持），但工具 execute 只在流被消费期间执行 —— 必须迭代 fullStream
     // 驱动循环；文本/推理增量同步转发给上层（P1 流式）。
@@ -149,22 +211,35 @@ export class ModelService extends Service implements ModelGateway {
       // 步数上限 + Token 预算双闸门：任一触达即停止循环（预算由 setBudget 设置）
       stopWhen: ({ steps }: { steps: any[] }) =>
         steps.length >= maxSteps || this.isBudgetExceeded(),
-      abortSignal: options.abortSignal,
+      abortSignal: streamController.signal,
       // 每步动态路由 + 任务内压缩：上层可重算本步可见工具（初始 activeTools 仍作默认），
       // 也可重写本步消息（超阈值时压缩历史）；两者都缺省时返回 undefined 不干预
       prepareStep: options.prepareStep
         ? async ({ stepNumber, messages }: any) => {
-            const result = await options.prepareStep!({ stepNumber, messages });
-            if (!result) return undefined;
-            const out: { activeTools?: string[]; messages?: any[] } = {};
-            if (result.activeTools?.length) {
-              const filtered = result.activeTools.filter((n) => n in toolsMap);
-              if (filtered.length > 0) out.activeTools = filtered;
+            // 压缩/路由耗时期间无流部件是合法静默，看门狗跳过
+            preparingStep = true;
+            try {
+              const result = await options.prepareStep!({ stepNumber, messages });
+              if (!result) return undefined;
+              const out: { activeTools?: string[]; messages?: any[] } = {};
+              if (result.activeTools?.length) {
+                const filtered = result.activeTools.filter((n) => n in toolsMap);
+                if (filtered.length > 0) out.activeTools = filtered;
+              }
+              if (result.messages?.length) out.messages = result.messages;
+              return Object.keys(out).length > 0 ? out : undefined;
+            } finally {
+              preparingStep = false;
+              lastActivityAt = Date.now();
             }
-            if (result.messages?.length) out.messages = result.messages;
-            return Object.keys(out).length > 0 ? out : undefined;
           }
         : undefined,
+      // 流管道报错回调（含重试耗尽后的 RetryError）：在最终失败事件之外先留一条
+      // 中间痕迹（何时出错、错的是什么），否则静默重试期间的等待无迹可寻
+      onError: ({ error }: { error: unknown }) => {
+        const err = error as any;
+        telemetry({ kind: 'stream-error', error: err?.message || String(error) });
+      },
       onStepFinish: (step) => {
         stepCounter++;
         // 预算实时记账：每步用量即时累计，stopWhen 下一轮即可感知 ——
@@ -198,34 +273,58 @@ export class ModelService extends Service implements ModelGateway {
 
     // ---- 消费流：驱动工具执行 + 转发增量（start-step 无 stepNumber 字段，自维护计数） ----
     let streamStepNumber = 0;
+    const stallError = () =>
+      new Error(
+        `模型连接中断：已 ${Math.round(watchdogAbortMs / 1000)}s 无任何输出（上游流假死或网络中断），本次调用已由看门狗中止`
+      );
     try {
       for await (const part of result.fullStream) {
+        // 任何部件送达都证明流活着（含 start-step / 工具事件），静默计时清零
+        lastActivityAt = Date.now();
         // 中止后不再转发尾部增量（上层收尾走 error 路径，无需残段）
-        if (options.abortSignal?.aborted) break;
+        if (userSignal?.aborted) break;
         switch (part.type) {
           case 'start-step':
             streamStepNumber++;
             options.onStepStart?.({ stepNumber: streamStepNumber });
             break;
           case 'text-delta':
+            if (firstTokenAt === null) {
+              firstTokenAt = Date.now();
+              telemetry({ kind: 'ttft', ms: firstTokenAt - runStartedAt });
+            }
             options.onTextDelta?.(part.text);
             break;
           case 'reasoning-delta':
+            if (firstTokenAt === null) {
+              firstTokenAt = Date.now();
+              telemetry({ kind: 'ttft', ms: firstTokenAt - runStartedAt });
+            }
             options.onReasoningDelta?.(part.text);
             break;
           case 'error':
+            telemetry({
+              kind: 'stream-error',
+              error: (part.error as any)?.message || String(part.error),
+            });
             throw part.error;
           default:
             break;
         }
       }
     } catch (err: any) {
+      // 看门狗中止：转抛明确语义（区别于用户主动终止），orchestrator → 任务 FAILED
+      if (watchdogAbortMs) throw stallError();
       // abort 时流以 abort part 正常收尾而不抛错 —— 显式转抛，保持与
       // generateText 相同的中止语义（orchestrator catch → 任务已被主动终止）
       if (options.abortSignal?.aborted) throw new Error('Aborted');
       enrichModelError(err);
       throw err;
+    } finally {
+      clearInterval(watchdog);
+      userSignal?.removeEventListener('abort', relayUserAbort);
     }
+    if (watchdogAbortMs) throw stallError();
     if (options.abortSignal?.aborted) throw new Error('Aborted');
 
     // 工具已在流消费期间由 SDK 执行完毕；这里只收集结果（属性均为 Promise）

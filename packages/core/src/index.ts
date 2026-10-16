@@ -21,6 +21,7 @@ export type {
   AgentLoopPrepareStep,
   AgentLoopOptions,
   AgentLoopResult,
+  ModelStreamTelemetry,
 } from './contracts';
 export {
   estimateTextTokens,

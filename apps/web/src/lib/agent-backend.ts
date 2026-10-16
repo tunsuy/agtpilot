@@ -386,6 +386,41 @@ class AgentBackend {
         break;
       }
 
+      case 'model_telemetry': {
+        // 模型流遥测打点（docs/design/observability.md）：TTFT / 静默告警 / 流错误 /
+        // 看门狗中止 → 任务运行日志（任务页「终端」栏实时滚动，mission.terminalLogs
+        // 随检查点落盘，历史任务回看仍在）；stderr 级同步镜像 runtime.log ——
+        // 进程重启后 docker logs 仍有排障线索。归属按事件自带 taskId 解析。
+        const p = event.payload || {};
+        const sec = typeof p.ms === 'number' ? (p.ms / 1000).toFixed(1) : '';
+        const owner = this.resolveMissionFromEvent(event)?.userId;
+        switch (p.kind) {
+          case 'ttft':
+            this.addTerminalLog('system', `[模型] 首 token 延迟 ${sec}s`, owner);
+            break;
+          case 'stall-warn':
+            this.addTerminalLog(
+              'system',
+              p.awaitingFirstToken
+                ? `[模型] 已等待 ${sec}s 未收到模型输出（上游排队或重试退避中），继续等待…`
+                : `[模型] 模型输出已静默 ${sec}s（上游流可能中断），继续等待…`,
+              owner
+            );
+            break;
+          case 'stream-error':
+            this.addTerminalLog('stderr', `[模型] 流错误: ${String(p.error).slice(0, 500)}`, owner);
+            break;
+          case 'stream-abort':
+            this.addTerminalLog(
+              'stderr',
+              `[模型] 看门狗中止: 静默 ${sec}s 超阈值，已断开本次模型调用`,
+              owner
+            );
+            break;
+        }
+        break;
+      }
+
       case 'viewport_update': {
         this.state.viewport.url = event.payload.url || this.state.viewport.url;
         this.state.viewport.title = event.payload.title || this.state.viewport.title;

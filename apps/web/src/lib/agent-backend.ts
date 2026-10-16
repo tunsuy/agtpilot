@@ -783,6 +783,53 @@ class AgentBackend {
             // 进度按真实完成比例呈现（未执行的看板步骤不计入完成）
             const doneCount = mission.steps.filter((st) => st.status === 'DONE').length;
             mission.progress = Math.round((doneCount / (mission.steps.length || 1)) * 100);
+
+            // 内容工坊成品自动落交付库:知乎/公众号/小红书的成稿历来只渲染成对话流
+            // 里的包卡片(CockpitView 解析),不写 mission.artifact —— 而「交付物」库
+            // (DeliverablesView)与「最终交付物」画布只认 mission.artifact(仅
+            // artifact_render / PPT 发布写它),于是成稿永远落不进交付库。收尾时服务端
+            // 复用同一套解析器从最终答复抽出成品,发布成一份 markdown 交付物(与
+            // artifact_render 同一落地通路:mission.artifact + 广播持久化)。模型已自行
+            // 发布过(mission.artifact 已存在)则跳过;非成品格式解析不出包也绝不发布。
+            if (mission.workshopId && !mission.artifact) {
+              try {
+                const { resolveDeliverableKind } = require('@/workshops/registry');
+                const kind = resolveDeliverableKind(mission.workshopId);
+                if (kind) {
+                  const { buildWorkshopDeliverable } = require('@/workshops/shared/deliverable-publish');
+                  const deliv = buildWorkshopDeliverable(
+                    kind,
+                    finalAnswer,
+                    mission.title || '内容工坊成品'
+                  );
+                  const svc = (this.ctx as any)?.artifact;
+                  if (deliv && svc) {
+                    svc.createOrUpdateArtifact(
+                      {
+                        title: deliv.title,
+                        type: 'markdown',
+                        content: deliv.content,
+                        description: `内容工坊成品 · ${deliv.count} 篇(收尾自动落入交付库)`,
+                      },
+                      mission.id
+                    );
+                    this.addTerminalLog(
+                      'system',
+                      `[Agent] 内容工坊成品已落入交付库(${deliv.count} 篇)`,
+                      mission.userId
+                    );
+                  }
+                }
+              } catch (e: any) {
+                // 落地失败不影响收尾主流程(对话流卡片照常可用),仅留痕便于排查
+                this.addTerminalLog(
+                  'stderr',
+                  `[Agent] 交付件自动落地失败: ${e?.message || e}`,
+                  mission.userId
+                );
+              }
+            }
+
             if (mission.viewport) {
               mission.viewport.status = 'idle';
             }

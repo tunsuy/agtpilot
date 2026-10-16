@@ -113,6 +113,23 @@ export function resolveArtifactDraft<K extends 'article-package' | 'note-package
 }
 
 /**
+ * 工坊声明的结构化包交付物类型(article-package / note-package);未声明包类交付物
+ * (PPT / 开源雷达 / 小说 / 视频 / 微博 / 手输任务等)→ null。
+ *
+ * 服务端收尾据此决定是否把成品自动落进交付库(见 shared/deliverable-publish.ts):
+ * 只有声明了包类交付物的内容工坊(知乎/公众号=文章包,小红书=笔记包)才参与,
+ * 声明驱动、不靠任务标题嗅探,新增内容工坊自动纳入。
+ */
+export function resolveDeliverableKind(
+  workshopId: string | undefined
+): 'article-package' | 'note-package' | null {
+  if (!workshopId || !((workshopId as WorkshopId) in WORKSHOP_SKILLS)) return null;
+  const artifacts = WORKSHOP_SKILLS[workshopId as WorkshopId].meta.artifacts || [];
+  const pkg = artifacts.find((a) => a.kind === 'article-package' || a.kind === 'note-package');
+  return pkg ? (pkg.kind as 'article-package' | 'note-package') : null;
+}
+
+/**
  * cron 订阅场景声明(从各包清单汇总;cron-scenario.ts 按此分发,不再硬编码场景)。
  * 新增订阅场景 = 在包的 skill.ts 里声明 cron + 在这里加一行;CronScenarioKey union 由此派生。
  */

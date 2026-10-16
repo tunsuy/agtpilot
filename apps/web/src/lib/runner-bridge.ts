@@ -17,8 +17,10 @@ import {
   normalizeNoAction,
   normalizeRunnerEvent,
   normalizeTaskPack,
+  normalizeDeviceAction,
   type ApprovalRequest,
   type NoActionFinal,
+  type PendingInterject,
   type RunnerApproval,
   type RunnerDeviceInfo,
   type RunnerDeviceAction,
@@ -372,8 +374,9 @@ export function enqueueTask(
     if (!isTerminalRunnerState(t.state) && t.expiresAt <= now && canTransitionRunnerTask(t.state, 'expired')) {
       t.state = 'expired';
       t.updatedAt = now;
-      // 过期也是"离开在飞状态":残留的终止请求一并清掉,UI 不再显示「终止中…」
+      // 过期也是"离开在飞状态":残留的终止请求/待送达插话一并清掉
       t.cancelRequested = undefined;
+      t.pendingInterjects = undefined;
       changed = true;
     }
   }
@@ -406,6 +409,50 @@ export function cancelRunnerTask(userId: string, taskId: string, now: number = D
     return { ok: true, task };
   }
   return { ok: false, error: 'not_cancellable', task };
+}
+
+/** 单任务待送达插话上限(队列满 → 拒绝新插话;正常纠偏场景远够用,防误连发) */
+const PENDING_INTERJECTS_CAP = 10;
+
+/**
+ * 用户中途插话(执行中纠偏;与 cancel 同构的两阶段设计):
+ * dispatched/running 才受理 —— 写入 pendingInterjects 队列,状态不动;
+ * getDeviceActions 据此派生 interject 动作(at-least-once 下行,runner 按
+ * interjectId 去重),直到 runner 上报 interject_ack 按 id 清队。
+ * 正文防线与协议清洗**同源**:构造下行动作形状过 normalizeDeviceAction,
+ * 通过即 runner 侧必能受理(trim 后非空 ≤2000、拒控制字符);拒绝即拒收。
+ */
+export function interjectRunnerTask(
+  userId: string,
+  taskId: string,
+  text: string,
+  now: number = Date.now()
+): { ok: boolean; error?: string; task?: RunnerTaskRecord } {
+  const tasks = readTasks(userId);
+  const task = tasks.find((t) => t.taskId === taskId);
+  if (!task) return { ok: false, error: 'not_found' };
+  if (task.state !== 'dispatched' && task.state !== 'running') {
+    return { ok: false, error: 'not_interjectable', task };
+  }
+  const id = `intj_${now.toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+  const probe = normalizeDeviceAction({
+    taskId,
+    kind: 'interject',
+    repo: task.pack.repo,
+    workBranch: task.pack.workBranch,
+    interjectId: id,
+    text,
+  });
+  if (!probe || probe.kind !== 'interject' || !probe.text) {
+    return { ok: false, error: 'invalid_text', task };
+  }
+  const pending: PendingInterject[] = task.pendingInterjects ?? [];
+  if (pending.length >= PENDING_INTERJECTS_CAP) return { ok: false, error: 'queue_full', task };
+  pending.push({ id, text: probe.text, createdAt: now });
+  task.pendingInterjects = pending;
+  task.updatedAt = now;
+  writeTasks(userId, tasks);
+  return { ok: true, task };
 }
 
 /** runner 领取:FIFO 取最老的可领 queued 任务(无绑定 或 绑定到本设备)→ dispatched 并绑定设备 */
@@ -497,6 +544,9 @@ export function recordRunnerEvents(
       // cancelled、跑到自然终态、或进审批卡),标志即清 —— 旧 runner 不识别 cancel 动作时
       // 任务会跑到自然终态,不清则 UI 永远显示「终止中…」,getDeviceActions 也不再派生
       if (task.cancelRequested && to !== 'dispatched' && to !== 'running') task.cancelRequested = undefined;
+      // 同口径:离开在飞状态即无会话可注,待送达插话整队清空(ack 永不会再来,
+      // 不清则 getDeviceActions 会永远重发、UI 永远显示「送达中…」)
+      if (task.pendingInterjects?.length && to !== 'dispatched' && to !== 'running') task.pendingInterjects = undefined;
       result.stateChanges.push({ taskId: task.taskId, from, to });
     }
 
@@ -515,6 +565,20 @@ export function recordRunnerEvents(
       const noAction = normalizeNoAction(event.payload?.noAction);
       if (noAction) task.noAction = noAction;
       task.updatedAt = now;
+    }
+    if (event.type === 'interject_ack') {
+      // 插话送达回执:按 interjectId 清出待送达队列(at-least-once 下行到此为止;
+      // runner 侧另有去重集兜底重发窗口)。delivered=false(会话已收尾等)同样清 ——
+      // 送达状态与原因已随事件入时间线,UI 据此显示「未送达」而非继续挂「送达中」
+      const ackId = event.payload?.interjectId;
+      const pending = task.pendingInterjects;
+      if (typeof ackId === 'string' && pending?.length) {
+        const rest = pending.filter((p) => p.id !== ackId);
+        if (rest.length !== pending.length) {
+          task.pendingInterjects = rest.length > 0 ? rest : undefined;
+          task.updatedAt = now;
+        }
+      }
     }
 
     events.push(event);
@@ -743,6 +807,21 @@ export function getDeviceActions(userId: string, deviceId: string): RunnerDevice
     // 幂等下发直到 runner 上报 cancelled(recordRunnerEvents 收到终态时清标志)
     if (t.cancelRequested && (t.state === 'dispatched' || t.state === 'running')) {
       actions.push({ taskId: t.taskId, kind: 'cancel', repo: t.pack.repo, workBranch: t.pack.workBranch });
+    }
+    // 用户中途插话(pendingInterjects 队列派生):at-least-once 下行,持续重发
+    // 直到 runner 上报 interject_ack 清队(runner 按 interjectId 去重,不会重复注入);
+    // 老 runner 白名单不识别 interject → 忽略,任务至多跑完,插话自然过期(队列随终态清)
+    if (t.pendingInterjects?.length && (t.state === 'dispatched' || t.state === 'running')) {
+      for (const p of t.pendingInterjects) {
+        actions.push({
+          taskId: t.taskId,
+          kind: 'interject',
+          repo: t.pack.repo,
+          workBranch: t.pack.workBranch,
+          interjectId: p.id,
+          text: p.text,
+        });
+      }
     }
     const a = t.approval;
     if (!a) continue;

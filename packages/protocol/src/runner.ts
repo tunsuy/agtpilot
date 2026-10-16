@@ -157,8 +157,24 @@ export interface RunnerTaskRecord {
    * queued 任务终止时云端直接落 cancelled,不经此标志。
    */
   cancelRequested?: boolean;
+  /**
+   * 待送达插话队列(执行中纠偏,v1 增补字段):用户中途插话先落到这里,
+   * getDeviceActions 据此派生 interject 动作(at-least-once:ack 事件到达前
+   * 持续重发,runner 按 interjectId 去重);runner 上报 interject_ack 后
+   * 按 id 移除。任务离开在飞状态(dispatched/running)时整队清空。
+   */
+  pendingInterjects?: PendingInterject[];
   /** 上行事件(幂等去重后保留最近 N 条,cap 由 runner-bridge 控制) */
   events?: RunnerEvent[];
+}
+
+/** 待送达插话(云端生成 id;正文留在云端库 + runner 本地审计,不进 ack 事件) */
+export interface PendingInterject {
+  /** 幂等键 intj_*(下行 at-least-once 去重依据) */
+  id: string;
+  /** 用户原话(注入正在执行的 agent 会话;≤2000 字符,拒控制字符) */
+  text: string;
+  createdAt: number;
 }
 
 export type RunnerEventType =

@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Square,
   MessageSquare,
+  Send,
 } from 'lucide-react';
 import {
   isRunnerTaskActive,
@@ -72,6 +73,7 @@ function DeviceTaskItem({
   expanded,
   onToggle,
   onCancel,
+  onInterject,
   missionTitle,
   onOpenMission,
 }: {
@@ -80,6 +82,8 @@ function DeviceTaskItem({
   expanded: boolean;
   onToggle: () => void;
   onCancel: (taskId: string) => void;
+  /** 中途插话(执行中纠偏):文本入队下发,runner 注入正在执行的会话后回执清除 */
+  onInterject: (taskId: string, text: string) => Promise<boolean>;
   /** 该任务所属会话的标题(派发时关联;会话已删除则无值,不显示入口) */
   missionTitle?: string;
   onOpenMission?: (missionId: string) => void;
@@ -89,6 +93,19 @@ function DeviceTaskItem({
   const retryable = runnerRetryable(task);
   // 可终止窗口:排队/已领取/执行中(awaiting_approval 走审批卡拒绝,finishing 分钟级不拦)
   const cancellable = task.state === 'queued' || task.state === 'dispatched' || task.state === 'running';
+  // 可插话窗口:只有本地正在执行(dispatched/running)才有会话可注入 ——
+  // 排队中没人跑、审批中 agent 已收工,插了也没人听
+  const interjectable = task.state === 'dispatched' || task.state === 'running';
+  const [interjectText, setInterjectText] = useState('');
+  const [interjectBusy, setInterjectBusy] = useState(false);
+  const submitInterject = async () => {
+    const text = interjectText.trim();
+    if (!text || interjectBusy) return;
+    setInterjectBusy(true);
+    const ok = await onInterject(task.taskId, text);
+    setInterjectBusy(false);
+    if (ok) setInterjectText('');
+  };
   return (
     <div className={`rounded-lg border bg-white ${active ? 'border-sky-200' : 'border-zinc-200'}`}>
       <button
@@ -153,6 +170,16 @@ function DeviceTaskItem({
           >
             PR <ExternalLink className="h-3 w-3" />
           </a>
+        )}
+        {/* 插话送达中徽标:队列里还有未回执的插话(runner ack 后云端清);与「终止中」
+            同门控在飞状态,离开 dispatched/running 后残留计数不再显示 */}
+        {Boolean(task.pendingInterjects) && interjectable && (
+          <span
+            className="flex items-center gap-1 text-[10px] text-sky-600 flex-shrink-0"
+            title="插话已下发,等 runner 保活轮询(约 5s)注入正在执行的会话"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" /> 插话送达中…{task.pendingInterjects! > 1 ? ` ×${task.pendingInterjects}` : ''}
+          </span>
         )}
         {/* 终止中徽标仅在飞状态有意义:runner 上报离开 dispatched/running 后云端即清;
             这里再按状态门控一次,云端升级前已持久化的残留标志也不会把终态任务卡在「终止中…」 */}
@@ -251,6 +278,41 @@ function DeviceTaskItem({
                 </span>
               </div>
             ))
+          )}
+          {/* 中途插话(执行中纠偏):注入正在跑的 agent 会话 —— 看到它把 git 用户名/
+              邮箱写错之类,当场纠正,不用终止重派。Ctrl/Cmd+Enter 快捷发送 */}
+          {interjectable && (
+            <div className="pt-2 mt-1 border-t border-zinc-200/60">
+              <div className="flex items-start gap-2">
+                <textarea
+                  value={interjectText}
+                  onChange={(e) => setInterjectText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                      e.preventDefault();
+                      void submitInterject();
+                    }
+                  }}
+                  rows={2}
+                  maxLength={2000}
+                  placeholder="插一句话给正在执行的 agent(如:git 用户名邮箱写错了,用 xxx 重新 commit)"
+                  className="flex-1 min-w-0 text-[11px] rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 resize-y focus:outline-none focus:border-sky-300 focus:ring-1 focus:ring-sky-200"
+                />
+                <button
+                  type="button"
+                  disabled={interjectBusy || !interjectText.trim()}
+                  onClick={() => void submitInterject()}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition disabled:opacity-40 flex-shrink-0"
+                  title="插话将在 runner 下次保活轮询(约 5s)时注入会话"
+                >
+                  {interjectBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                  发送插话
+                </button>
+              </div>
+              <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
+                Ctrl/Cmd+Enter 发送 · 插话会原样注入本地正在执行的会话(agent 会停下当前动作先处理),≤2000 字
+              </p>
+            </div>
           )}
         </div>
       )}
@@ -431,6 +493,29 @@ export function DevicesView({
     }
   }, [refreshTasks]);
 
+  // 中途插话(执行中纠偏):文本入 pendingInterjects 队列,runner 保活轮询(约 5s)
+  // 领取并注入正在执行的会话,ack 回执后徽标消失。非危险操作,不走确认弹窗;
+  // 返回是否成功(组件据此清空输入框)
+  const interjectTask = useCallback(async (taskId: string, text: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/runner/tasks/interject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, text }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
+        setError(data?.error || '插话失败');
+        return false;
+      }
+      refreshTasks(); // 立即拉最新(行内出现「插话送达中…」徽标)
+      return true;
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      return false;
+    }
+  }, [refreshTasks]);
+
   const copyText = async (text: string, key: string) => {
     // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
     const ok = await copyToClipboard(text);
@@ -591,6 +676,7 @@ export function DevicesView({
                             expanded={expandedTaskId === t.taskId}
                             onToggle={() => setExpandedTaskId(expandedTaskId === t.taskId ? null : t.taskId)}
                             onCancel={(taskId) => setPendingConfirm({ kind: 'cancel-task', taskId })}
+                            onInterject={interjectTask}
                             missionTitle={t.missionId ? missionTitleById[t.missionId] : undefined}
                             onOpenMission={onOpenMission}
                           />

@@ -218,6 +218,20 @@ describe('summarizeRunnerTask(云端任务记录 → 概览行)', () => {
     expect(summarizeRunnerTask({ ...record, missionId: 'mission-9' }).missionId).toBe('mission-9');
     expect('missionId' in summarizeRunnerTask(record)).toBe(false);
   });
+
+  it('待送达插话:只透出条数(正文不进列表轮询,数据最小化);空队列/缺省不含字段', () => {
+    const withPending = summarizeRunnerTask({
+      ...record,
+      pendingInterjects: [
+        { id: 'intj_a', text: 'git 用户名写错了', createdAt: 4 },
+        { id: 'intj_b', text: '邮箱也改一下', createdAt: 5 },
+      ],
+    });
+    expect(withPending.pendingInterjects).toBe(2);
+    expect(JSON.stringify(withPending)).not.toContain('git 用户名写错了');
+    expect('pendingInterjects' in summarizeRunnerTask(record)).toBe(false);
+    expect('pendingInterjects' in summarizeRunnerTask({ ...record, pendingInterjects: [] })).toBe(false);
+  });
 });
 
 describe('taskEventTimeline(事件 → 展示时间线,旧→新,截最近 limit 条)', () => {
@@ -246,6 +260,20 @@ describe('taskEventTimeline(事件 → 展示时间线,旧→新,截最近 limit
     expect(rows.map((r) => r.kind)).toEqual(['state', 'error']);
     expect(taskEventTimeline(undefined)).toEqual([]);
     expect(taskEventTimeline([])).toEqual([]);
+  });
+
+  it('interject_ack → 送达状态行(成功 progress / 未送达 error + 中文原因);正文不回传也不展示', () => {
+    const rows = taskEventTimeline([
+      ev(1, 'interject_ack', { interjectId: 'intj_a', delivered: true }),
+      ev(2, 'interject_ack', { interjectId: 'intj_b', delivered: false, reason: 'finishing' }),
+      ev(3, 'interject_ack', { interjectId: 'intj_c', delivered: false, reason: 'not_started' }),
+      ev(4, 'interject_ack', { interjectId: 'intj_d', delivered: false }),
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(['progress', 'error', 'error', 'error']);
+    expect(rows[0].text).toBe('插话已注入正在执行的会话');
+    expect(rows[1].text).toBe('插话未送达(会话已收尾)');
+    expect(rows[2].text).toBe('插话未送达(会话尚未启动)');
+    expect(rows[3].text).toBe('插话未送达'); // 无 reason 不裸挂括号
   });
 });
 

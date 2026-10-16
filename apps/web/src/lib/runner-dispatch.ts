@@ -65,6 +65,8 @@ export interface RunnerTaskSummary {
   latest?: { text: string; at: number };
   /** 用户已请求终止(runner 确认前 UI 显示「终止中…」) */
   cancelRequested?: boolean;
+  /** 待送达插话条数(runner ack 前 UI 显示「插话送达中…」;正文不进列表轮询,数据最小化) */
+  pendingInterjects?: number;
   /** 派发时所处的驾驶舱会话 id(互跳关联键;工坊外派发缺省) */
   missionId?: string;
 }
@@ -166,6 +168,7 @@ export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
     ...(t.deviceId ? { deviceId: t.deviceId } : {}),
     ...(t.targetDeviceId ? { targetDeviceId: t.targetDeviceId } : {}),
     ...(t.cancelRequested ? { cancelRequested: true } : {}),
+    ...(t.pendingInterjects?.length ? { pendingInterjects: t.pendingInterjects.length } : {}),
     ...(t.missionId ? { missionId: t.missionId } : {}),
     ...(latest ? { latest } : {}),
   };
@@ -264,6 +267,17 @@ export function taskEventTimeline(events?: RunnerEvent[], limit = 60): RunnerTas
     } else if (e.type === 'error') {
       const message = typeof p.message === 'string' ? p.message.slice(0, 300) : '';
       if (message) rows.push({ at: e.at, kind: 'error', text: message });
+    } else if (e.type === 'interject_ack') {
+      // 插话送达回执(runner 注入会话后上报;正文不回传,只显示送达状态与原因)
+      const delivered = p.delivered === true;
+      const reason = typeof p.reason === 'string' ? p.reason : '';
+      const reasonLabel =
+        reason === 'finishing' ? '会话已收尾' : reason === 'not_started' ? '会话尚未启动' : reason === 'write_failed' ? '写入会话失败' : reason;
+      rows.push({
+        at: e.at,
+        kind: delivered ? 'progress' : 'error',
+        text: delivered ? '插话已注入正在执行的会话' : `插话未送达${reasonLabel ? `(${reasonLabel})` : ''}`,
+      });
     }
   }
   return rows;

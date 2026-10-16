@@ -16,6 +16,7 @@ import {
   getRunnerTasks,
   getRunnerTask,
   cancelRunnerTask,
+  interjectRunnerTask,
   getDeviceActions,
 } from '../runner-bridge';
 import { PAIR_CODE_ALPHABET, RUNNER_TASK_TTL_MS, RUNNER_PROTOCOL_VERSION, type RunnerDeviceMeta } from '@agtpilot/protocol';
@@ -646,5 +647,155 @@ describe('用户终止任务(执行中止损,两阶段)', () => {
     const r2 = cancelRunnerTask(USER_A, 'rtask_c5', T0 + 99);
     expect(r2.ok).toBe(true);
     expect(getRunnerTask(USER_A, 'rtask_c5', T0 + 99)!.updatedAt).toBe(T0 + 30); // 未被二次改写
+  });
+});
+
+describe('中途插话(执行中纠偏,pendingInterjects 队列 + interject_ack 闭环)', () => {
+  /** 配对设备 + 任务入队 + 领取 + 上报 running(插话受理前置态);issueNo 区分同测试内多任务(派发防重按 issueUrl) */
+  function runningTask(taskId: string, issueNo = 1) {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId, issueUrl: `https://github.com/owner/repo/issues/${issueNo}` }, T0);
+    claimNextTask(USER_A, r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: `ev_i_${taskId}_run`, taskId, deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+    return r;
+  }
+
+  it('running → 插话入队(状态不动),getDeviceActions 派生 interject 动作下发给归属设备', () => {
+    const r = runningTask('rtask_i1');
+    const res = interjectRunnerTask(USER_A, 'rtask_i1', '  git 用户名邮箱写错了,用 foobar 重新 commit  ', T0 + 30);
+    expect(res.ok).toBe(true);
+    const t = getRunnerTask(USER_A, 'rtask_i1', T0 + 30)!;
+    expect(t.state).toBe('running'); // 状态不动,等 runner 注入 + ack
+    expect(t.pendingInterjects).toHaveLength(1);
+    expect(t.pendingInterjects![0].id).toMatch(/^intj_/);
+    expect(t.pendingInterjects![0].text).toBe('git 用户名邮箱写错了,用 foobar 重新 commit'); // trim 后入库
+
+    const actions = getDeviceActions(USER_A, r.deviceId);
+    expect(actions).toEqual([
+      {
+        taskId: 'rtask_i1',
+        kind: 'interject',
+        repo: 'owner/repo',
+        workBranch: 'contrib/fix-1',
+        interjectId: t.pendingInterjects![0].id,
+        text: 'git 用户名邮箱写错了,用 foobar 重新 commit',
+      },
+    ]);
+    // 多行插话合法(注入的是会话 user 消息,换行不是控制字符)
+    expect(interjectRunnerTask(USER_A, 'rtask_i1', '第一行\n第二行', T0 + 31).ok).toBe(true);
+  });
+
+  it('at-least-once:ack 到达前每次轮询持续派生同一动作(runner 按 id 去重)', () => {
+    const r = runningTask('rtask_i2');
+    interjectRunnerTask(USER_A, 'rtask_i2', '纠正一下', T0 + 30);
+    const a1 = getDeviceActions(USER_A, r.deviceId);
+    const a2 = getDeviceActions(USER_A, r.deviceId);
+    expect(a1).toEqual(a2); // 幂等重发,interjectId 不变
+    expect(a1[0].kind).toBe('interject');
+  });
+
+  it('interject_ack → 按 id 清队,动作不再派生;delivered=false(finishing)同样清', () => {
+    const r = runningTask('rtask_i3');
+    interjectRunnerTask(USER_A, 'rtask_i3', '改一下', T0 + 30);
+    const id = getRunnerTask(USER_A, 'rtask_i3', T0 + 30)!.pendingInterjects![0].id;
+
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_ack1', taskId: 'rtask_i3', deviceId: r.deviceId, at: T0 + 40, type: 'interject_ack', payload: { interjectId: id, delivered: true } },
+    ], T0 + 40);
+    const t = getRunnerTask(USER_A, 'rtask_i3', T0 + 40)!;
+    expect(t.pendingInterjects).toBeUndefined();
+    expect(getDeviceActions(USER_A, r.deviceId)).toEqual([]);
+
+    // delivered=false(会话已收尾等):送达不可能了,同样清队 —— reason 已随事件入时间线
+    interjectRunnerTask(USER_A, 'rtask_i3', '再说一句', T0 + 50);
+    const id2 = getRunnerTask(USER_A, 'rtask_i3', T0 + 50)!.pendingInterjects![0].id;
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_ack2', taskId: 'rtask_i3', deviceId: r.deviceId, at: T0 + 60, type: 'interject_ack', payload: { interjectId: id2, delivered: false, reason: 'finishing' } },
+    ], T0 + 60);
+    expect(getRunnerTask(USER_A, 'rtask_i3', T0 + 60)!.pendingInterjects).toBeUndefined();
+    expect(getDeviceActions(USER_A, r.deviceId)).toEqual([]);
+  });
+
+  it('多条插话:按队列序派生;ack 只清对应 id,其余继续重发;未知 id 的 ack 不动队列', () => {
+    const r = runningTask('rtask_i4');
+    interjectRunnerTask(USER_A, 'rtask_i4', '第一条', T0 + 30);
+    interjectRunnerTask(USER_A, 'rtask_i4', '第二条', T0 + 31);
+    const t = getRunnerTask(USER_A, 'rtask_i4', T0 + 31)!;
+    const [id1, id2] = t.pendingInterjects!.map((p) => p.id);
+    const actions = getDeviceActions(USER_A, r.deviceId);
+    expect(actions.map((a) => a.interjectId)).toEqual([id1, id2]);
+
+    // 未知 id 的 ack(伪造/错乱)不误清
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_ack3', taskId: 'rtask_i4', deviceId: r.deviceId, at: T0 + 40, type: 'interject_ack', payload: { interjectId: 'intj_nope', delivered: true } },
+    ], T0 + 40);
+    expect(getRunnerTask(USER_A, 'rtask_i4', T0 + 40)!.pendingInterjects).toHaveLength(2);
+
+    // ack 第一条 → 只剩第二条继续派生
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_ack4', taskId: 'rtask_i4', deviceId: r.deviceId, at: T0 + 50, type: 'interject_ack', payload: { interjectId: id1, delivered: true } },
+    ], T0 + 50);
+    const rest = getRunnerTask(USER_A, 'rtask_i4', T0 + 50)!.pendingInterjects!;
+    expect(rest.map((p) => p.id)).toEqual([id2]);
+    expect(getDeviceActions(USER_A, r.deviceId).map((a) => a.interjectId)).toEqual([id2]);
+  });
+
+  it('离开在飞状态即清队:跑到 awaiting_approval(老 runner 不识别 interject 的兜底)与懒过期清扫', () => {
+    const r = runningTask('rtask_i5');
+    interjectRunnerTask(USER_A, 'rtask_i5', '插一句', T0 + 30);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_i5_appr', taskId: 'rtask_i5', deviceId: r.deviceId, at: T0 + 50, type: 'state', payload: { state: 'awaiting_approval' } },
+    ], T0 + 50);
+    const t = getRunnerTask(USER_A, 'rtask_i5', T0 + 50)!;
+    expect(t.pendingInterjects).toBeUndefined();
+    expect(getDeviceActions(USER_A, r.deviceId)).toEqual([]); // 不再重发
+
+    const r2 = runningTask('rtask_i6', 2);
+    interjectRunnerTask(USER_A, 'rtask_i6', '插一句', T0 + 30);
+    const expired = getRunnerTask(USER_A, 'rtask_i6', T0 + 8 * 24 * 60 * 60 * 1000)!; // 越过 TTL,读取即清扫
+    expect(expired.state).toBe('expired');
+    expect(expired.pendingInterjects).toBeUndefined();
+    expect(getDeviceActions(USER_A, r2.deviceId)).toEqual([]);
+  });
+
+  it('拒绝路径:不存在 / queued(没人执行)/ 终态 / 审批中 —— 没有会话可注入', () => {
+    const r = pairDevice(USER_A);
+    expect(interjectRunnerTask(USER_A, 'rtask_nope', 'x', T0).error).toBe('not_found');
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_i7' }, T0);
+    expect(interjectRunnerTask(USER_A, 'rtask_i7', 'x', T0 + 1).error).toBe('not_interjectable'); // queued
+    cancelRunnerTask(USER_A, 'rtask_i7', T0 + 2); // queued → cancelled 终态
+    expect(interjectRunnerTask(USER_A, 'rtask_i7', 'x', T0 + 3).error).toBe('not_interjectable');
+    // dispatched(已领取未上报 running)也可插话:runner 领取即起会话
+    claimNextTask(USER_A, r.deviceId, T0 + 4);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_i8' }, T0 + 5);
+    claimNextTask(USER_A, r.deviceId, T0 + 6);
+    expect(interjectRunnerTask(USER_A, 'rtask_i8', 'dispatched 也能插', T0 + 7).ok).toBe(true);
+  });
+
+  it('正文防线(与协议 normalize 同源):空/纯空白/超 2000 字/控制字符拒绝,恰好 2000 字合法', () => {
+    runningTask('rtask_i9');
+    expect(interjectRunnerTask(USER_A, 'rtask_i9', '   ', T0 + 30).error).toBe('invalid_text');
+    expect(interjectRunnerTask(USER_A, 'rtask_i9', 'x'.repeat(2001), T0 + 30).error).toBe('invalid_text');
+    expect(interjectRunnerTask(USER_A, 'rtask_i9', '带\u0000空字符', T0 + 30).error).toBe('invalid_text');
+    expect(interjectRunnerTask(USER_A, 'rtask_i9', '带\u001b转义', T0 + 30).error).toBe('invalid_text');
+    const ok = interjectRunnerTask(USER_A, 'rtask_i9', 'y'.repeat(2000), T0 + 30);
+    expect(ok.ok).toBe(true);
+    expect(getRunnerTask(USER_A, 'rtask_i9', T0 + 30)!.pendingInterjects![0].text).toHaveLength(2000);
+  });
+
+  it('队列上限 10 条:第 11 条 queue_full(ack 清出一条后可再插)', () => {
+    const r = runningTask('rtask_i10');
+    for (let i = 0; i < 10; i++) {
+      expect(interjectRunnerTask(USER_A, 'rtask_i10', `第${i + 1}条`, T0 + 30 + i).ok).toBe(true);
+    }
+    expect(interjectRunnerTask(USER_A, 'rtask_i10', '第11条', T0 + 50).error).toBe('queue_full');
+
+    const first = getRunnerTask(USER_A, 'rtask_i10', T0 + 50)!.pendingInterjects![0].id;
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_ack5', taskId: 'rtask_i10', deviceId: r.deviceId, at: T0 + 60, type: 'interject_ack', payload: { interjectId: first, delivered: true } },
+    ], T0 + 60);
+    expect(interjectRunnerTask(USER_A, 'rtask_i10', '第11条', T0 + 70).ok).toBe(true);
   });
 });

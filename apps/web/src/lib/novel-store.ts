@@ -29,8 +29,9 @@ import type {
   CreateNovelInput,
   AppendChapterInput,
   DetailedChapter,
+  NovelFanqieState,
 } from './novel-context';
-import { isReviewDue } from './novel-context';
+import { isReviewDue, fanqieDigest } from './novel-context';
 
 export type {
   NovelCharacter,
@@ -41,8 +42,16 @@ export type {
   NovelBookSummary,
   CreateNovelInput,
   AppendChapterInput,
+  NovelFanqieState,
+  NovelFanqieDigest,
 } from './novel-context';
-export { assembleChapterContext, assembleReviewContext, isReviewDue, REVIEW_EVERY_N } from './novel-context';
+export {
+  assembleChapterContext,
+  assembleReviewContext,
+  isReviewDue,
+  fanqieDigest,
+  REVIEW_EVERY_N,
+} from './novel-context';
 
 // ---- 路径消毒(artifact-files 同款) ----
 
@@ -96,6 +105,10 @@ function readBookJson(userId: string, bookId: string): NovelBook | null {
     if (typeof parsed.lastReviewedChapter !== 'number' || !Number.isFinite(parsed.lastReviewedChapter)) {
       parsed.lastReviewedChapter = 0;
     }
+    // fanqie 状态是 P2 可选字段:老书没有;脏值(非对象)防御性丢弃,不让同步账本炸书库读取
+    if (parsed.fanqie !== undefined && (typeof parsed.fanqie !== 'object' || parsed.fanqie === null || Array.isArray(parsed.fanqie))) {
+      delete parsed.fanqie;
+    }
     return parsed as NovelBook;
   } catch {
     return null;
@@ -131,6 +144,8 @@ function toSummary(book: NovelBook): NovelBookSummary {
     progress: book.progress,
     openForeshadows: book.ledger.filter((f) => f.status === 'planted').length,
     reviewDue: isReviewDue(book),
+    hasOutline: Boolean(String(book.outline || '').trim()),
+    fanqie: book.fanqie ? fanqieDigest(book.fanqie) : undefined,
   };
 }
 
@@ -150,6 +165,31 @@ export function listNovelBooks(userId: string): NovelBookSummary[] {
   }
   books.sort((a, b) => b.updatedAt - a.updatedAt);
   return books.map(toSummary);
+}
+
+/**
+ * 按书名精确找书(create 幂等 + 卡片「已入库」派生的服务端依据)。
+ * 同名多本时 updatedAt 最新者胜(重复建书本就是要防的事故,命中最近一本
+ * 让幂等返回与用户最后所见一致)。trim 后精确匹配,不做模糊(误合并两本
+ * 不同书的代价远大于多建一本)。
+ */
+export function findNovelBookByTitle(userId: string, title: string): NovelBook | null {
+  const want = String(title || '').trim();
+  if (!userId || !want) return null;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(userRoot(userId));
+  } catch {
+    return null;
+  }
+  let best: NovelBook | null = null;
+  for (const e of entries) {
+    const book = readBookJson(userId, e);
+    if (book && String(book.title || '').trim() === want) {
+      if (!best || book.updatedAt > best.updatedAt) best = book;
+    }
+  }
+  return best;
 }
 
 // ---- 写 ----
@@ -400,6 +440,32 @@ export function updateNovelStyle(userId: string, bookId: string, style: string):
   if (next.length > MAX_STYLE_CHARS) throw new Error(`文风锚超长(> ${MAX_STYLE_CHARS} 字),拒绝写入`);
   book.style = next;
   book.updatedAt = Date.now();
+  atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
+  return book;
+}
+
+/**
+ * 更新一本书的番茄同步状态(P2 自动同步账本的唯一写入口)。
+ *
+ * - patch 对象浅合并,或传函数 `(cur) => patch|null`(读当前态算增量;返回 null
+ *   = 无需变更,不落盘)。chapters 记录按键合并——纯浅合并会把其他章节状态整袋丢掉。
+ * - **不动 updatedAt**:同步状态是系统后台账本,不该扰动书库「最近更新」排序
+ *   (否则日更同步会把没写新章的书顶到列表最前)。
+ * - 书不存在抛错(与 markNovelReviewed/updateNovelStyle 同约定;后台调用方自 catch)。
+ */
+export function updateNovelFanqie(
+  userId: string,
+  bookId: string,
+  patch: Partial<NovelFanqieState> | ((cur: NovelFanqieState) => Partial<NovelFanqieState> | null)
+): NovelBook {
+  const book = readBookJson(userId, bookId);
+  if (!book) throw new Error(`书不存在: ${bookId}`);
+  const cur: NovelFanqieState = book.fanqie || {};
+  const p = typeof patch === 'function' ? patch(cur) : patch;
+  if (!p) return book;
+  const next: NovelFanqieState = { ...cur, ...p };
+  if (cur.chapters || p.chapters) next.chapters = { ...(cur.chapters || {}), ...(p.chapters || {}) };
+  book.fanqie = next;
   atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
   return book;
 }

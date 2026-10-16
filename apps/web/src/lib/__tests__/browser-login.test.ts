@@ -7,6 +7,7 @@ import {
   checkLoginState,
   ensureQrLoginMode,
   resetLoginSessionsForTest,
+  hasActiveLoginSession,
   XHS_CREATOR_HOME,
   XHS_LOGIN_COOKIE_NAMES,
   XHS_SMS_INPUT_SELECTOR,
@@ -433,5 +434,24 @@ describe('知乎可扫性:二维码元素级截图(qrCaptureSelector)', () => {
     });
     expect(ok).toBe(false);
     expect(clickCalls).toEqual([]);
+  });
+});
+
+describe('hasActiveLoginSession · 同步运行器软避让依据', () => {
+  it('无会话 false;进行中 true;终态后(retention 窗口内映射仍在)false', async () => {
+    expect(hasActiveLoginSession('u-ha')).toBe(false);
+
+    const { browser } = makeMockBrowser(); // 永不命中 cookie → 停在 waiting
+    const { sessionId } = startBrowserLogin('u-ha', baseDeps(browser, { timeoutMs: 60_000 }));
+    // startBrowserLogin 同步登记会话 → 立即可判活跃(登录中同步运行器必须避让)
+    expect(hasActiveLoginSession('u-ha')).toBe(true);
+
+    cancelBrowserLogin(sessionId);
+    await waitUntil(() => !!getLoginSession(sessionId)?.final);
+    // retentionMs=100s:会话对象与 userSessionIds 映射都还在,但已不占页面 → 不再算活跃
+    expect(getLoginSession(sessionId)).toBeTruthy();
+    expect(hasActiveLoginSession('u-ha')).toBe(false);
+    // 别的用户不受影响
+    expect(hasActiveLoginSession('u-other')).toBe(false);
   });
 });

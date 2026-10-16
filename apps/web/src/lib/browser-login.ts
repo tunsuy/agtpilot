@@ -226,6 +226,20 @@ export function resetLoginSessionsForTest() {
   userSessionIds.clear();
 }
 
+/**
+ * 该用户是否有「进行中」的扫码登录会话(番茄同步运行器的软避让依据:
+ * 登录与同步共用每用户单 Page,登录中绝不去抢)。
+ * userSessionIds 有映射不等于活跃——终态后保留窗口内映射仍在(供晚连 SSE
+ * 回放 done),只有 session.final === null 才是真的在占页面。
+ */
+export function hasActiveLoginSession(userId: string): boolean {
+  const sid = userSessionIds.get(userId);
+  if (!sid) return false;
+  const session = sessions.get(sid);
+  if (!session) return false;
+  return session.final === null;
+}
+
 function emit(session: LoginSession, event: LoginEvent) {
   // 终态后只允许 done 本身;防止清理竞态里的迟发事件
   if (session.final && event.type !== 'done') return;

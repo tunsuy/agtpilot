@@ -23,6 +23,9 @@ import {
   markNovelReviewed,
   updateNovelStyle,
   mergeNovelOutline,
+  findNovelBookByTitle,
+  updateNovelFanqie,
+  fanqieDigest,
   MAX_STYLE_CHARS,
   isReviewDue,
   REVIEW_EVERY_N,
@@ -451,5 +454,92 @@ describe('updateNovelStyle · 文风锚写回(P2)', () => {
     expect(() => updateNovelStyle('u1', book.bookId, 'x'.repeat(MAX_STYLE_CHARS + 1))).toThrow(/文风锚超长/);
     expect(() => updateNovelStyle('u1', 'nv_nope_000000', 'x')).toThrow(/书不存在/);
     expect(getNovelBook('u1', book.bookId)!.style).toBe('爽文快节奏'); // 原值未被污染
+  });
+});
+
+describe('findNovelBookByTitle / updateNovelFanqie · 番茄同步数据层(P2)', () => {
+  it('findNovelBookByTitle:trim 后精确匹配;同名多本 updatedAt 最新者胜;未命中/空参返回 null', async () => {
+    const b1 = seedBook();
+    expect(findNovelBookByTitle('u1', ' 铁拳少年 ')?.bookId).toBe(b1.bookId);
+    expect(findNovelBookByTitle('u1', '铁拳')).toBeNull(); // 不做模糊匹配
+    expect(findNovelBookByTitle('u2', '铁拳少年')).toBeNull(); // 用户隔离
+    expect(findNovelBookByTitle('u1', '  ')).toBeNull();
+    expect(findNovelBookByTitle('', '铁拳少年')).toBeNull();
+
+    // 同名第二本(事故重演):updatedAt 更新者胜 —— 幂等返回与用户最后所见一致
+    await new Promise((r) => setTimeout(r, 5)); // 保证时间戳严格更新(同毫秒会打平)
+    const b2 = createNovelBook('u1', { title: '铁拳少年', chapters: [{ title: 't', content: LONG_BODY, summary: 's' }] });
+    expect(b2.updatedAt).toBeGreaterThan(b1.updatedAt);
+    expect(findNovelBookByTitle('u1', '铁拳少年')?.bookId).toBe(b2.bookId);
+  });
+
+  it('updateNovelFanqie:patch 浅合并落盘,chapters 按键合并;updatedAt 不动(同步不扰动书库排序)', () => {
+    const book = seedBook();
+    const before = getNovelBook('u1', book.bookId)!.updatedAt;
+
+    updateNovelFanqie('u1', book.bookId, { createStatus: 'pending', syncEnabled: true });
+    let cur = getNovelBook('u1', book.bookId)!;
+    expect(cur.fanqie).toMatchObject({ createStatus: 'pending', syncEnabled: true });
+    expect(cur.updatedAt).toBe(before);
+
+    // chapters 逐次 patch 按键合并,不整袋覆盖
+    updateNovelFanqie('u1', book.bookId, { fanqieBookId: '7123', createStatus: 'created', chapters: { '1': { status: 'synced' } } });
+    updateNovelFanqie('u1', book.bookId, { chapters: { '2': { status: 'pending' } } });
+    cur = getNovelBook('u1', book.bookId)!;
+    expect(cur.fanqie!.fanqieBookId).toBe('7123');
+    expect(cur.fanqie!.createStatus).toBe('created');
+    expect(cur.fanqie!.chapters!['1'].status).toBe('synced');
+    expect(cur.fanqie!.chapters!['2'].status).toBe('pending');
+    expect(cur.updatedAt).toBe(before);
+  });
+
+  it('updateNovelFanqie:函数 patch 读当前态算增量,返回 null 不变更;书不存在抛错', () => {
+    const book = seedBook();
+    updateNovelFanqie('u1', book.bookId, { createStatus: 'failed', createAttempts: 1 });
+    const bumped = updateNovelFanqie('u1', book.bookId, (cur) => ({ createAttempts: (cur.createAttempts || 0) + 1 }));
+    expect(bumped.fanqie!.createAttempts).toBe(2);
+    const unchanged = updateNovelFanqie('u1', book.bookId, () => null);
+    expect(unchanged.fanqie!.createAttempts).toBe(2);
+    expect(() => updateNovelFanqie('u1', 'nv_nope_000000', {})).toThrow(/书不存在/);
+  });
+
+  it('老书无 fanqie 读时容忍;脏值(非对象)防御性丢弃不炸书库', () => {
+    const book = seedBook();
+    expect(getNovelBook('u1', book.bookId)!.fanqie).toBeUndefined();
+
+    // 手工注入脏 fanqie(半截写坏/手改事故)→ 读取丢弃,书本身完好
+    const file = path.join(dataDir, 'novels', 'u1', book.bookId, 'book.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    raw.fanqie = 'garbage';
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const read = getNovelBook('u1', book.bookId)!;
+    expect(read).toBeTruthy();
+    expect(read.fanqie).toBeUndefined();
+  });
+
+  it('listNovelBooks 摘要:hasOutline + fanqie 摘要计数(fanqieDigest 同源)', () => {
+    const book = seedBook(); // 带 outline
+    let s = listNovelBooks('u1').find((x) => x.bookId === book.bookId)!;
+    expect(s.hasOutline).toBe(true);
+    expect(s.fanqie).toBeUndefined(); // 从未同步 → 摘要不出(卡片按「未开同步」渲染)
+
+    const bare = createNovelBook('u1', { title: '无纲书' });
+    expect(listNovelBooks('u1').find((x) => x.bookId === bare.bookId)!.hasOutline).toBe(false);
+
+    updateNovelFanqie('u1', book.bookId, {
+      fanqieBookId: '7123',
+      createStatus: 'created',
+      chapters: { '1': { status: 'synced' }, '2': { status: 'pending' }, '3': { status: 'failed' } },
+    });
+    s = listNovelBooks('u1').find((x) => x.bookId === book.bookId)!;
+    expect(s.fanqie).toMatchObject({ syncEnabled: true, fanqieBookId: '7123', createStatus: 'created', synced: 1, pending: 1, failed: 1 });
+
+    // 关开关后摘要如实反映
+    updateNovelFanqie('u1', book.bookId, { syncEnabled: false });
+    s = listNovelBooks('u1').find((x) => x.bookId === book.bookId)!;
+    expect(s.fanqie!.syncEnabled).toBe(false);
+
+    // fanqieDigest 纯函数口径:undefined = 从未同步(开关视为开、零计数)
+    expect(fanqieDigest(undefined)).toEqual({ syncEnabled: true, fanqieBookId: undefined, createStatus: undefined, createError: undefined, synced: 0, pending: 0, failed: 0 });
   });
 });

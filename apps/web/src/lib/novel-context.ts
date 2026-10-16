@@ -58,6 +58,60 @@ export interface ChapterMeta {
   createdAt: number;
 }
 
+/**
+ * 番茄自动同步状态(书级,持久化在 book.json.fanqie;P2 全自动同步的意图账本)。
+ *
+ * 设计不变量:
+ * - **意图先落盘再入队**:create/append 钩子先把 pending 写进这里,内存队列只是
+ *   执行器;进程重启后 sweeper 按本状态恢复,不丢同步意图。
+ * - **create 成功但未捕获书号 = 终态 failed**:绝不自动重试建书(防番茄侧重复
+ *   建书),引导人工核对后走 bindFanqieBook 手动绑定。
+ * - chapters 的 key 是本地章号字符串(与服务端 progress 序号同源)。
+ */
+export interface NovelFanqieState {
+  /** 书级同步开关(缺省视为开:全自动是默认姿态) */
+  syncEnabled?: boolean;
+  /** 番茄侧作品书号(captureUrl 捕获或手动绑定写入;有值 = 映射已建立) */
+  fanqieBookId?: string;
+  /** 番茄开书状态机:pending 排队 → creating 执行中 → created 成功 / failed 终态 */
+  createStatus?: 'pending' | 'creating' | 'created' | 'failed';
+  createError?: string;
+  createAttempts?: number;
+  /** 建书成功(或手动绑定)时间 */
+  createAt?: number;
+  /** 逐章同步状态:key = 本地章号字符串 */
+  chapters?: Record<
+    string,
+    { status: 'pending' | 'synced' | 'failed'; attempts?: number; error?: string; at?: number }
+  >;
+}
+
+/** 列表页用的番茄同步摘要(NovelBookSummary 轻量口径,由 fanqieDigest 派生) */
+export interface NovelFanqieDigest {
+  syncEnabled: boolean;
+  fanqieBookId?: string;
+  createStatus?: NovelFanqieState['createStatus'];
+  createError?: string;
+  /** 已同步/排队中/失败的章节计数 */
+  synced: number;
+  pending: number;
+  failed: number;
+}
+
+/** 状态 → 摘要(纯派生;undefined 视为「从未同步」:开关开、零计数) */
+export function fanqieDigest(state?: NovelFanqieState | null): NovelFanqieDigest {
+  const chapters = Object.values(state?.chapters || {});
+  return {
+    syncEnabled: state?.syncEnabled !== false,
+    fanqieBookId: state?.fanqieBookId || undefined,
+    createStatus: state?.createStatus,
+    createError: state?.createError,
+    synced: chapters.filter((c) => c.status === 'synced').length,
+    pending: chapters.filter((c) => c.status === 'pending').length,
+    failed: chapters.filter((c) => c.status === 'failed').length,
+  };
+}
+
 export interface NovelBook {
   bookId: string;
   title: string;
@@ -85,6 +139,8 @@ export interface NovelBook {
   volumeSummary: string;
   /** 上次全书体检时写到的章号(0=从未体检;每 N 章体检提醒的依据,P1) */
   lastReviewedChapter: number;
+  /** 番茄自动同步状态(可选:P2 之前的老书没有,读时容忍) */
+  fanqie?: NovelFanqieState;
   chapters: ChapterMeta[];
 }
 
@@ -102,6 +158,10 @@ export interface NovelBookSummary {
   openForeshadows: number;
   /** 是否到了建议体检的节点(距上次体检新写章节 ≥ REVIEW_EVERY_N) */
   reviewDue: boolean;
+  /** 大纲是否已入库(卡片派生「已存大纲」用,免去拉全量 book) */
+  hasOutline: boolean;
+  /** 番茄同步摘要(卡片 FanqieSyncRow 用) */
+  fanqie?: NovelFanqieDigest;
 }
 
 /** 开书输入(来自开书包契约解析结果) */

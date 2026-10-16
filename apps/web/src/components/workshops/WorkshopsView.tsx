@@ -141,6 +141,14 @@ export function WorkshopsView({
     if (depId === 'tomato_writer') {
       return loginBadgeInfo(fanqieRecord || undefined).loggedIn;
     }
+    // 电子邮件(合并卡片):发信/收信任一已配即算连接(收信可复用发信凭证)
+    if (depId === 'email') {
+      return (
+        connectors.some(
+          (c) => (c.id === 'email_smtp' || c.id === 'email_imap') && c.status === 'connected'
+        ) || mcpConnectors.some((c) => c.id === 'email' && c.status === 'connected')
+      );
+    }
     return (
       connectors.some((c) => c.id === depId && c.status === 'connected') ||
       mcpConnectors.some((c) => c.id === depId && c.status === 'connected')

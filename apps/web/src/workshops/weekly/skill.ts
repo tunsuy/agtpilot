@@ -19,7 +19,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'github_mcp', name: 'GitHub' },
       { id: 'lark_suite', name: '飞书' },
       { id: 'dingtalk_mcp', name: '钉钉' },
-      { id: 'email_imap', name: '邮箱' },
+      { id: 'email', name: '邮箱' },
     ],
     note: '生成后跳转任务页,Agent 从你已连接的 Jira/GitHub/飞书/钉钉/腾讯会议/邮箱自动取材,输出结构化周报(概览/重点工作/数据看板/风险/下周计划)。先展示全文,投递(邮件/群机器人)需你确认;数据源都不可用时按补充要点整理。',
   },

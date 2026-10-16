@@ -167,9 +167,15 @@ export function setFanqieSyncEnabled(userId: string, bookId: string, enabled: bo
   const updated = updateNovelFanqie(userId, bookId, { syncEnabled: enabled });
   if (enabled) {
     // 有映射:补全账本(关开关期间入库的章没有意图记录,重开即整体翻入);
-    // 无映射:只捞已落盘意图(create/pending 章),缺记录的章等建书成功后统一翻入
-    if (updated.fanqie?.fanqieBookId) enqueuePendingChapters(userId, updated);
-    else enqueuePendingWork(userId, bookId);
+    // 无映射:先补建书意图 —— 同步功能上线前入库的旧书没有 fanqie 记录,
+    // 打开开关即是「开始为这本书建番茄书」(maybeEnqueue 自带幂等/failed 终态守卫),
+    // 再捞已落盘意图;缺记录的章等建书成功后统一翻入
+    if (updated.fanqie?.fanqieBookId) {
+      enqueuePendingChapters(userId, updated);
+    } else {
+      maybeEnqueueFanqieBookCreate(userId, bookId);
+      enqueuePendingWork(userId, bookId);
+    }
     scheduleDrain();
   }
   return updated.fanqie || {};

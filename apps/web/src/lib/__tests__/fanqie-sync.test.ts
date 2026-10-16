@@ -163,6 +163,21 @@ describe('入队守卫矩阵', () => {
     await __fanqieSyncTest.waitIdle();
     expect(fanqieOf(bookId)?.fanqieBookId).toBe('7123');
   });
+
+  it('无 fanqie 记录的旧书:打开开关即补建书意图并执行(同步上线前入库的书由此接入)', async () => {
+    bothSkills();
+    mocks.executeImpl = async (name) =>
+      name === CREATE_SKILL ? { success: true, captures: { fanqieBookId: '777' } } : { success: true };
+    const bookId = seedBook('旧稿', 1);
+    expect(fanqieOf(bookId)).toBeUndefined(); // 上线前入库:账本无记录,sweep 不会碰它
+
+    setFanqieSyncEnabled(USER, bookId, true);
+    expect(fanqieOf(bookId)?.createStatus).toBe('pending'); // 意图已落盘
+    await __fanqieSyncTest.waitIdle();
+    expect(fanqieOf(bookId)?.fanqieBookId).toBe('777');
+    // 建书成功后,无记录的章整体翻入并完成存草稿
+    expect(fanqieOf(bookId)?.chapters?.['1']?.status).toBe('synced');
+  });
 });
 
 describe('create 项状态机', () => {
@@ -396,8 +411,10 @@ describe('sweeper · 重启恢复与冷却重试', () => {
     setFanqieSyncEnabled(USER, bookId, true);
     __fanqieSyncTest.reset();
     __fanqieSyncTest.setTiming({ rearmMs: 10, sweepMs: 3_600_000 });
-    // 有意图记录的章捞回;第2章没记录不自动补(映射已建时由钩子/绑定记意图)
-    expect(runFanqieSyncSweep([USER]).enqueued).toBe(1);
+    // 重开开关:无映射 → 补建书意图(create pending)+ 捞回有记录的章;
+    // 第2章没记录不自动补(建书成功/绑定时由 enqueuePendingChapters 整体翻入)
+    expect(fanqieOf(bookId)?.createStatus).toBe('pending');
+    expect(runFanqieSyncSweep([USER]).enqueued).toBe(2); // create + 章1
   });
 });
 

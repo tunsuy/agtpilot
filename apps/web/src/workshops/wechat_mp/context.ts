@@ -11,6 +11,7 @@ import { renderTemplate } from '../engine';
 import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
 import { WECHAT_MD_THEMES, DEFAULT_WECHAT_MD_THEME_ID } from '@/lib/wechat-md-themes';
 import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
+import { buildMaterialsSection, parseMaterials, type WorkshopMaterial } from '../shared/materials';
 
 export const WECHAT_MP_ARTICLE_STYLES = ['深度长文', '干货教程', '热点解读', '观点评论'] as const;
 
@@ -39,19 +40,23 @@ export interface WechatMpWorkshopInput {
   theme?: string;
   /** 场景档案;无档案或档案为空时不注入(prompt 与无档案时逐字节一致) */
   profile?: ScenarioProfile;
+  /** 参考资料(会话交付物勾选);缺省/空时不拼接,prompt 与原来逐字节一致 */
+  materials?: WorkshopMaterial[];
 }
 
-export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profile }: WechatMpWorkshopInput): string {
+export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profile, materials }: WechatMpWorkshopInput): string {
   const t = (topic || '').trim();
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
   const profileSection = profile ? buildProfileSection(profile) : null;
   const themeId = WECHAT_MD_THEMES.some((x) => x.id === (theme || '').trim()) ? (theme || '').trim() : DEFAULT_WECHAT_MD_THEME_ID;
-  return renderTemplate(prompt, {
-    topic: t,
-    style,
-    count: n,
-    theme: themeId,
-    profileSection: profileSection || '',
-    sources: TOPIC_RESEARCH_SOURCES,
-  });
+  return (
+    renderTemplate(prompt, {
+      topic: t,
+      style,
+      count: n,
+      theme: themeId,
+      profileSection: profileSection || '',
+      sources: TOPIC_RESEARCH_SOURCES,
+    }) + buildMaterialsSection(parseMaterials(materials))
+  );
 }

@@ -12,6 +12,7 @@ import prompt from './prompt.main.md';
 import { renderTemplate } from '../engine';
 import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
 import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
+import { buildMaterialsSection, parseMaterials, type WorkshopMaterial } from '../shared/materials';
 
 export const ZHIHU_ARTICLE_STYLES = ['专业干货', '深度分析', '热点解读', '经验分享'] as const;
 
@@ -33,17 +34,21 @@ export interface ZhihuWorkshopInput {
   count: number;
   /** 场景档案;无档案或档案为空时不注入(prompt 与无档案时逐字节一致) */
   profile?: ScenarioProfile;
+  /** 参考资料(会话交付物勾选);缺省/空时不拼接,prompt 与原来逐字节一致 */
+  materials?: WorkshopMaterial[];
 }
 
-export function buildZhihuWorkshopPrompt({ topic, style, count, profile }: ZhihuWorkshopInput): string {
+export function buildZhihuWorkshopPrompt({ topic, style, count, profile, materials }: ZhihuWorkshopInput): string {
   const t = (topic || '').trim();
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
   const profileSection = profile ? buildProfileSection(profile) : null;
-  return renderTemplate(prompt, {
-    topic: t,
-    style,
-    count: n,
-    profileSection: profileSection || '',
-    sources: TOPIC_RESEARCH_SOURCES,
-  });
+  return (
+    renderTemplate(prompt, {
+      topic: t,
+      style,
+      count: n,
+      profileSection: profileSection || '',
+      sources: TOPIC_RESEARCH_SOURCES,
+    }) + buildMaterialsSection(parseMaterials(materials))
+  );
 }

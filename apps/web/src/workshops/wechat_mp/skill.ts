@@ -5,6 +5,7 @@ import { Newspaper } from 'lucide-react';
 import { buildWechatMpWorkshopPrompt } from './context';
 import { buildWechatMpDraftReplyText } from './draft';
 import { str, num } from '../shared/params';
+import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill } from '../types';
 
 export const WORKSHOP_SKILL: WorkshopSkill = {
@@ -42,6 +43,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         topic: str(params.topic),
         style,
         count: num(params.count),
+        materials: parseMaterials(params.materials),
         ...(params.theme ? { theme: str(params.theme) } : {}),
         ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
       }),

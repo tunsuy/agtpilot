@@ -8,10 +8,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { QrCode } from 'lucide-react';
 import { ZHIHU_ARTICLE_STYLES, ZHIHU_TOPIC_PRESETS } from '@/workshops/zhihu/context';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
+import type { Mission } from '../../../types/agent';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
-import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass } from './shared';
+import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass, DeliverablePicker } from './shared';
+import { collectWorkshopMaterials, resolveMaterials, MATERIAL_COUNT_LIMIT } from '@/workshops/shared/materials';
 
 interface Props {
   workshop: WorkshopDef;
@@ -23,6 +25,8 @@ interface Props {
   onEditProfile?: () => void;
   /** 未登录/未托管时跳连接器页配置(知乎卡片) */
   onOpenConnectors?: (depId?: string) => void;
+  /** 全量任务列表(WorkshopsView 下传):参考资料勾选会话交付物 */
+  missions?: Mission[];
 }
 
 interface ManagedState {
@@ -32,13 +36,25 @@ interface ManagedState {
   todayCount?: number;
 }
 
-export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile, onOpenConnectors }: Props) {
+export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile, onOpenConnectors, missions }: Props) {
   const saved = lastRunOf(workshop.id)?.params || {};
   const [topic, setTopic] = useState(typeof saved.topic === 'string' ? saved.topic : '');
   const [style, setStyle] = useState<string>(
     typeof saved.style === 'string' ? saved.style : ZHIHU_ARTICLE_STYLES[0]
   );
   const [count, setCount] = useState<number>(typeof saved.count === 'number' ? saved.count : 1);
+
+  // ---- 参考资料:会话交付物勾选,收进 params.materials 拼进 prompt ----
+  const materialOptions = collectWorkshopMaterials((missions || []) as Parameters<typeof collectWorkshopMaterials>[0]);
+  const [materialIds, setMaterialIds] = useState<string[]>(
+    Array.isArray(saved.materialIds)
+      ? (saved.materialIds as unknown[]).filter((v): v is string => typeof v === 'string')
+      : []
+  );
+  const toggleMaterial = (id: string) =>
+    setMaterialIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id].slice(0, MATERIAL_COUNT_LIMIT)
+    );
 
   // ---- 托管状态(只读;登录/开关都在连接器页,此处 GET /api/zhihu-managed 查状态) ----
   const [managed, setManaged] = useState<ManagedState | null>(null); // null = 加载中
@@ -66,7 +82,8 @@ export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
     loadManaged();
   }, [loadManaged]);
 
-  const params = { topic, style, count };
+  const materials = resolveMaterials(materialOptions, materialIds);
+  const params = { topic, style, count, ...(materials.length > 0 ? { materials } : {}) };
   const preview = buildWorkshopRun(
     workshop.id,
     params,
@@ -165,6 +182,14 @@ export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
           ))}
         </div>
       </div>
+
+      {/* 参考资料:会话交付物作为本次创作的背景资料 */}
+      <DeliverablePicker
+        options={materialOptions}
+        selectedIds={materialIds}
+        onToggle={toggleMaterial}
+        maxCount={MATERIAL_COUNT_LIMIT}
+      />
 
       {/* 托管状态行:登录/开关在连接器页;此处只看状态(未开启不阻塞创作) */}
       <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 space-y-2">

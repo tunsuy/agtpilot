@@ -51,6 +51,7 @@ export const TOOL_PROVIDERS: ToolProviderEntry[] = [
   { id: 'github_scan', load: () => import('@/lib/github-scan') },
   { id: 'xhs', load: () => import('@/lib/xhs-managed') },
   { id: 'zhihu', load: () => import('@/lib/zhihu-managed') },
+  { id: 'reference', load: () => import('@/lib/reference-materials') },
 ];
 
 export type ProviderLog = (level: 'system' | 'stderr', message: string) => void;

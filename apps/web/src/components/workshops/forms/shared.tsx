@@ -3,8 +3,9 @@
  * 各工坊表单只声明字段,视觉与交互节奏在这里统一。
  */
 import React, { useEffect, useState } from 'react';
-import { X, Sparkles, ShieldCheck, Eye, TriangleAlert } from 'lucide-react';
+import { X, Sparkles, ShieldCheck, Eye, TriangleAlert, FileText, ChevronDown } from 'lucide-react';
 import type { WorkshopDef, WorkshopAccent } from '../registry';
+import type { MaterialOption } from '@/workshops/shared/materials';
 
 // ---- 服务端覆盖标志(预览诚实) ----
 
@@ -145,6 +146,77 @@ export function FieldLabel({ children, optional }: { children: React.ReactNode; 
       {children}
       {optional && <span className="ml-1.5 text-[10px] text-zinc-400 font-normal">可选</span>}
     </label>
+  );
+}
+
+/**
+ * 参考资料选择器:把平时会话的交付物勾选为本次工坊任务的背景资料。
+ * 无交付物时整节隐藏,不打扰;有则折叠展示,勾选 id 由表单收进 params.materials。
+ */
+export function DeliverablePicker({
+  options,
+  selectedIds,
+  onToggle,
+  maxCount,
+}: {
+  options: MaterialOption[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  maxCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  if (options.length === 0) return null;
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs font-medium text-zinc-700 hover:text-zinc-900 transition"
+      >
+        <span>
+          参考资料
+          <span className="ml-1.5 text-[10px] text-zinc-400 font-normal">
+            可选{selectedIds.length > 0 ? ` · 已选 ${selectedIds.length}` : ` · 会话交付物${options.length}份`}
+          </span>
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 text-zinc-400 transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="max-h-44 overflow-y-auto rounded-xl border border-zinc-200 divide-y divide-zinc-100">
+          {options.map((o) => {
+            const checked = selectedIds.includes(o.id);
+            const disabled = !checked && selectedIds.length >= maxCount;
+            return (
+              <label
+                key={o.id}
+                className={`flex items-start gap-2 px-3 py-2 cursor-pointer transition ${
+                  disabled ? 'opacity-40' : 'hover:bg-zinc-50'
+                } ${checked ? 'bg-zinc-50' : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={() => onToggle(o.id)}
+                  className="mt-0.5 h-3.5 w-3.5 rounded border-zinc-300"
+                />
+                <span className="min-w-0">
+                  <span className="flex items-center gap-1.5 text-xs text-zinc-800 font-medium truncate">
+                    <FileText className="h-3 w-3 shrink-0 text-zinc-400" />
+                    <span className="truncate">{o.title}</span>
+                  </span>
+                  {o.missionTitle && o.missionTitle !== o.title && (
+                    <span className="block text-[10px] text-zinc-400 truncate mt-0.5">
+                      来自任务「{o.missionTitle}」
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

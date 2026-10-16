@@ -22,7 +22,8 @@ import type { WorkshopDef } from '../registry';
 import { TopicPickList } from '../TopicPickCard';
 import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
-import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass } from './shared';
+import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass, DeliverablePicker } from './shared';
+import { collectWorkshopMaterials, resolveMaterials, MATERIAL_COUNT_LIMIT } from '@/workshops/shared/materials';
 
 interface Props {
   workshop: WorkshopDef;
@@ -75,6 +76,20 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
   const [count, setCount] = useState<number>(
     typeof saved.count === 'number' ? saved.count : 1
   );
+
+  // ---- 参考资料:会话交付物勾选,收进 params.materials 拼进 prompt ----
+  const materialOptions = collectWorkshopMaterials(
+    ((missions || []) as Array<{ id: string; title: string; startedAt: number; artifact?: { title?: string; content?: string; type?: string } | null }>)
+  );
+  const [materialIds, setMaterialIds] = useState<string[]>(
+    Array.isArray(saved.materialIds)
+      ? (saved.materialIds as unknown[]).filter((v): v is string => typeof v === 'string')
+      : []
+  );
+  const toggleMaterial = (id: string) =>
+    setMaterialIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id].slice(0, MATERIAL_COUNT_LIMIT)
+    );
 
   // ---- 真机唤起(免凭证平台):手机端可拉起已登录的原生 App;桌面端 scheme 打不开,给灰提示 ----
   const launch = APP_LAUNCH[workshop.id];
@@ -166,7 +181,8 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
     }
   };
 
-  const params = { topic, style, duration, count };
+  const materials = resolveMaterials(materialOptions, materialIds);
+  const params = { topic, style, duration, count, ...(materials.length > 0 ? { materials } : {}) };
   const preview = buildWorkshopRun(
     workshop.id,
     params,
@@ -257,8 +273,7 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
       )}
 
       <div className="space-y-1.5">
-        <FieldLabel>{isVideo ? '产出脚本数' : '产出篇数'}</FieldLabel>
-        <div className="flex gap-1.5">
+        <FieldLabel>{isVideo ? '产出脚本数' : '产出篇数'}</FieldLabel>        <div className="flex gap-1.5">
           {[1, 2, 3].map((n) => (
             <button
               key={n}
@@ -275,6 +290,14 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
           ))}
         </div>
       </div>
+
+      {/* 参考资料:会话交付物作为本次创作的背景资料 */}
+      <DeliverablePicker
+        options={materialOptions}
+        selectedIds={materialIds}
+        onToggle={toggleMaterial}
+        maxCount={MATERIAL_COUNT_LIMIT}
+      />
 
       {/* 本周选题:立即出选题 + 弹窗内勾选成稿(不用回会话页;定时订阅与任务页手动触发保留) */}
       {isXhs && (

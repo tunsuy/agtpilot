@@ -7,6 +7,7 @@ import { Share2 } from 'lucide-react';
 import { buildXhsWorkshopPrompt, buildXhsWeeklyTopicsPrompt } from './context';
 import { buildXhsDraftReplyText } from './draft';
 import { str, num } from '../shared/params';
+import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill, CronScenarioSpec } from '../types';
 
 /** cron 每周选题场景 key(注册表汇入 CRON_SCENARIOS,派生 CronScenarioKey union) */
@@ -61,6 +62,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         topic: str(params.topic),
         style,
         count: num(params.count),
+        materials: parseMaterials(params.materials),
         ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
       }),
       title: `小红书内容工坊 · ${style}`,

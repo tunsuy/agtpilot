@@ -5,6 +5,7 @@ import { PenLine } from 'lucide-react';
 import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES } from './context';
 import { buildZhihuDraftReplyText } from './draft';
 import { str, num } from '../shared/params';
+import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill } from '../types';
 
 export const WORKSHOP_SKILL: WorkshopSkill = {
@@ -45,6 +46,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         topic: str(params.topic),
         style,
         count: num(params.count),
+        materials: parseMaterials(params.materials),
         ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
       }),
       title: `知乎专栏工坊 · ${style}`,

@@ -9,10 +9,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
 import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS, WECHAT_MP_THEME_OPTIONS } from '@/workshops/wechat_mp/context';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
+import type { Mission } from '../../../types/agent';
 import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
-import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass } from './shared';
+import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass, DeliverablePicker } from './shared';
+import { collectWorkshopMaterials, resolveMaterials, MATERIAL_COUNT_LIMIT } from '@/workshops/shared/materials';
 
 interface Props {
   workshop: WorkshopDef;
@@ -24,6 +26,8 @@ interface Props {
   onEditProfile?: () => void;
   /** 未配置凭证时跳连接器页配置(公众号凭证卡片) */
   onOpenConnectors?: (depId?: string) => void;
+  /** 全量任务列表(WorkshopsView 下传):参考资料勾选会话交付物 */
+  missions?: Mission[];
 }
 
 interface CredState {
@@ -33,7 +37,7 @@ interface CredState {
   todayCount?: number;
 }
 
-export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile, onOpenConnectors }: Props) {
+export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile, onOpenConnectors, missions }: Props) {
   const saved = lastRunOf(workshop.id)?.params || {};
   const [topic, setTopic] = useState(typeof saved.topic === 'string' ? saved.topic : '');
   const [style, setStyle] = useState<string>(
@@ -44,6 +48,18 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
   const [theme, setTheme] = useState<string>(
     typeof saved.theme === 'string' ? saved.theme : WECHAT_MP_THEME_OPTIONS[0].id
   );
+
+  // ---- 参考资料:会话交付物勾选,收进 params.materials 拼进 prompt ----
+  const materialOptions = collectWorkshopMaterials((missions || []) as Parameters<typeof collectWorkshopMaterials>[0]);
+  const [materialIds, setMaterialIds] = useState<string[]>(
+    Array.isArray(saved.materialIds)
+      ? (saved.materialIds as unknown[]).filter((v): v is string => typeof v === 'string')
+      : []
+  );
+  const toggleMaterial = (id: string) =>
+    setMaterialIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id].slice(0, MATERIAL_COUNT_LIMIT)
+    );
 
   // ---- 凭证状态(只读;读写都在连接器页,此处 GET /api/wechat-mp 查状态/测试) ----
   const [cred, setCred] = useState<CredState | null>(null); // null = 加载中
@@ -95,7 +111,8 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
     }
   };
 
-  const params = { topic, style, count, theme };
+  const materials = resolveMaterials(materialOptions, materialIds);
+  const params = { topic, style, count, theme, ...(materials.length > 0 ? { materials } : {}) };
   const preview = buildWorkshopRun(
     workshop.id,
     params,
@@ -205,6 +222,14 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
           ))}
         </div>
       </div>
+
+      {/* 参考资料:会话交付物作为本次创作的背景资料 */}
+      <DeliverablePicker
+        options={materialOptions}
+        selectedIds={materialIds}
+        onToggle={toggleMaterial}
+        maxCount={MATERIAL_COUNT_LIMIT}
+      />
 
       {/* 凭证状态行:配置在连接器页;此处只看状态/测试(未配置不阻塞创作) */}
       <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 space-y-2">

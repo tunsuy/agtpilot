@@ -65,13 +65,14 @@ export interface ExecutorAdapter {
    * opts.baseBranch = prepareRepo 实探基线(master 默认仓库的回落值),供 git 基线校验与 prompt 展示;
    * opts.continuation = 续跑模式(工作分支已有上次成果,renderTaskPrompt 注入续跑指令:
    * 先看 git log/status/diff 认清现场,接着做,不重做已完成的);
-   * opts.abortSignal = 云端终止指令(用户止损),触发即杀 claude 进程树并带 aborted 返回。
+   * opts.abortSignal = 云端终止指令(用户止损),触发即杀 claude 进程树并带 aborted 返回;
+   * opts.interjectHandle = 云端插话注入手柄(用户中途纠偏),会话存活期间写入 stdin。
    */
   run(
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal }
+    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal; interjectHandle?: InterjectHandle }
   ): Promise<Phase1Result>;
 }
 
@@ -95,8 +96,11 @@ const ALLOWED_BASE = [
 /** 固化的禁用清单:对外副作用与网络一律封死(发布走云端审批门) */
 export const DISALLOWED_TOOLS = 'Bash(git push:*),Bash(gh:*),WebFetch,WebSearch';
 
-/** 纯函数:任务包 → claude CLI 参数(测试直接断言白名单与红线缺席) */
-export function buildClaudeArgs(pack: RunnerTaskPack, repoDir: string, prompt: string): string[] {
+/** 纯函数:任务包 → claude CLI 参数(测试直接断言白名单与红线缺席)
+ *  prompt 不再走 argv(流式输入模式:首条 user 消息与后续插话都经 stdin
+ *  写入,见 buildUserMessageLine)——argv 里的超长 prompt 会撞 E2BIG,
+ *  且中途插话必须有常驻输入通道。 */
+export function buildClaudeArgs(pack: RunnerTaskPack, repoDir: string): string[] {
   const allowed = [...ALLOWED_BASE];
   const test = pack.acceptance.testCommand;
   if (test) {
@@ -105,7 +109,9 @@ export function buildClaudeArgs(pack: RunnerTaskPack, repoDir: string, prompt: s
   }
   return [
     '-p',
-    prompt,
+    // 流式输入:会话常驻,首条 prompt 与用户中途插话都以 stream-json user 消息写入 stdin
+    '--input-format',
+    'stream-json',
     '--output-format',
     'stream-json',
     // print 模式下 stream-json 需要 --verbose(CLI 硬性要求)
@@ -121,6 +127,33 @@ export function buildClaudeArgs(pack: RunnerTaskPack, repoDir: string, prompt: s
     '--add-dir',
     repoDir,
   ];
+}
+
+/** 纯函数:文本 → stream-json user 消息行(claude --input-format stream-json 契约) */
+export function buildUserMessageLine(text: string): string {
+  return (
+    JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text }] },
+    }) + '\n'
+  );
+}
+
+/** 插话送达结果(reason 供 interject_ack 回执与云端 UI 展示) */
+export interface InterjectOutcome {
+  delivered: boolean;
+  /** not_started=会话未起/已收;finishing=agent 已出 result 正在收尾;write_failed=stdin 写入失败 */
+  reason?: 'not_started' | 'finishing' | 'write_failed';
+}
+
+/**
+ * 插话注入手柄:bin 主循环创建并随 runTask 下传,executor spawn claude 后填入
+ * send(会话存活期间可注),close/收尾后置回 null。云端的 interject 指令到达时
+ * bin 调 send —— 写入 stdin 即成为会话里的下一条 user 消息(实测:agent 会
+ * 立刻处理插话再继续原任务)。
+ */
+export interface InterjectHandle {
+  send: ((text: string) => InterjectOutcome) | null;
 }
 
 /** stream-json 逐行解析(宽容:非 JSON / 未知结构 → null,不中断流) */
@@ -306,17 +339,17 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal }
+    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal; interjectHandle?: InterjectHandle }
   ): Promise<Phase1Result> {
     const prompt = renderTaskPrompt(pack, {
       continuation: opts?.continuation === true,
       ...(opts?.baseBranch ? { baseBranch: opts.baseBranch } : {}),
     });
-    const args = buildClaudeArgs(pack, repoDir, prompt);
+    const args = buildClaudeArgs(pack, repoDir);
 
-    // ---- 1. headless 跑 agent(流式解析 stream-json → 进度事件) ----
+    // ---- 1. headless 跑 agent(流式解析 stream-json → 进度事件;prompt 经 stdin 注入) ----
     const timeoutMs = this.timeoutMs ?? Math.max(1, pack.executor.timeoutMinutes) * 60_000;
-    const agent = await this.runClaude(args, repoDir, timeoutMs, onProgress, opts?.abortSignal);
+    const agent = await this.runClaude(args, prompt, repoDir, timeoutMs, onProgress, opts?.abortSignal, opts?.interjectHandle);
     // claude 进程级失败:标注是否瞬时 API/网关错误(供 task-run 自动重试 + 云端标可重试)。
     // 其余 ok:false 分支(git 校验 / 验收)是确定性失败,不带 retryable(缺省即 false)。
     // 用户中止(aborted)优先:终止就是终止,不进自动重试、不标可重试。
@@ -393,13 +426,18 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
   }
 
   /** spawn claude 并流式消费 stdout;超时 tree-kill(SIGTERM→5s→SIGKILL,整进程组);
-   *  abortSignal(云端终止指令)同用 tree-kill,带 aborted=true 返回 */
+   *  abortSignal(云端终止指令)同用 tree-kill,带 aborted=true 返回。
+   *  流式输入会话:prompt 作为首条 user 消息写 stdin;首个 result 到达(agent 认为
+   *  做完)即关 stdin → claude 自然退出 → 进 git 校验/验收;result 前到达的插话
+   *  经 interjectHandle 注入(写入即成会话下一条 user 消息,agent 立刻处理)。 */
   private runClaude(
     args: string[],
+    prompt: string,
     repoDir: string,
     timeoutMs: number,
     onProgress?: (e: ParsedStreamEvent) => void,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    interjectHandle?: InterjectHandle
   ): Promise<{ ok: boolean; resultText?: string; error?: string; aborted?: boolean }> {
     return new Promise((resolve) => {
       if (abortSignal?.aborted) {
@@ -409,7 +447,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       const child = this.spawnImpl(this.bin, args, {
         cwd: repoDir,
         env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         // 独立进程组:超时可整树 kill(见 killTree)
         detached: true,
       });
@@ -421,6 +459,15 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       let timedOut = false;
       let aborted = false;
       let settled = false;
+
+      // stdin 写入通道:首条 prompt + 后续插话。EPIPE(claude 已退出/正在退出)
+      // 不能让进程崩——吞掉,写入方按 write 返回值/异常如实回执 write_failed。
+      child.stdin?.on('error', () => {});
+      try {
+        child.stdin?.write(buildUserMessageLine(prompt));
+      } catch {
+        /* 启动即失败会走 child.on('error')/close 分支,这里不重复处理 */
+      }
 
       const killTimer = setTimeout(() => {
         timedOut = true;
@@ -440,11 +487,25 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       };
       abortSignal?.addEventListener('abort', onAbort, { once: true });
 
+      // 插话注入口:会话存活(未出 result、未 close)才可注;其余如实回执未送达
+      if (interjectHandle) {
+        interjectHandle.send = (text: string): InterjectOutcome => {
+          if (settled || sawResult) return { delivered: false, reason: 'finishing' };
+          try {
+            child.stdin?.write(buildUserMessageLine(text));
+            return { delivered: true };
+          } catch {
+            return { delivered: false, reason: 'write_failed' };
+          }
+        };
+      }
+
       const finish = (r: { ok: boolean; resultText?: string; error?: string; aborted?: boolean }) => {
         if (settled) return;
         settled = true;
         clearTimeout(killTimer);
         abortSignal?.removeEventListener('abort', onAbort);
+        if (interjectHandle) interjectHandle.send = null;
         resolve(r);
       };
 
@@ -460,6 +521,14 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
             sawResult = true;
             resultText = ev.text;
             resultIsError = ev.isError;
+            // 首个 result = agent 认为任务完成:关闭输入,claude 走完当前输出即退。
+            // result 前已写入 stdin 的插话仍会被处理(排队消息在 EOF 前有效),
+            // 若因此多出一轮,新 result 覆盖 resultText —— 最终以最后一轮为准。
+            try {
+              child.stdin?.end();
+            } catch {
+              /* 已关/已退,EPIPE 由 error 监听吞掉 */
+            }
           } else {
             onProgress?.(ev);
           }

@@ -25,7 +25,7 @@ export interface RunnerDeviceAction {
    * normalizeDeviceAction 会拒收该形状,忽略即可(无本地副作用)。
    */
   approvalId?: string;
-  kind: 'publish' | 'cancel';
+  kind: 'publish' | 'cancel' | 'interject';
   /** owner/repo(runner 侧据此在 workspaceRoot 内解析仓库目录,再过路径围栏) */
   repo: string;
   workBranch: string;
@@ -37,6 +37,13 @@ export interface RunnerDeviceAction {
   forkRepo?: string;
   /** kind='publish' 必有:审批时刻固化的命令集 */
   commands?: FrozenCommand[];
+  /**
+   * kind='interject' 必有:插话幂等键(云端生成;runner 按此去重——
+   * 下行是 at-least-once,ack 事件到达前云端会持续重发同一条)。
+   */
+  interjectId?: string;
+  /** kind='interject' 必有:插话正文(用户原话,注入正在执行的 agent 会话) */
+  text?: string;
 }
 
 /** 审批单(随任务记录持久化;审批卡展示快照 + 批准时固化命令) */
@@ -205,7 +212,7 @@ export function normalizeDeviceAction(input: unknown): RunnerDeviceAction | null
   if (!taskId) return null;
   // approvalId 可选:审批链路动作必有;用户终止任务的 cancel 无审批单
   const approvalId = typeof o.approvalId === 'string' && o.approvalId.length <= 128 ? o.approvalId : undefined;
-  if (o.kind !== 'publish' && o.kind !== 'cancel') return null;
+  if (o.kind !== 'publish' && o.kind !== 'cancel' && o.kind !== 'interject') return null;
   const repo = typeof o.repo === 'string' && o.repo.length <= 201 ? o.repo : null;
   const workBranch = typeof o.workBranch === 'string' && o.workBranch.length <= 200 ? o.workBranch : null;
   if (!repo || !workBranch) return null;
@@ -216,6 +223,17 @@ export function normalizeDeviceAction(input: unknown): RunnerDeviceAction | null
     if (typeof o.forkRepo !== 'string' || !FORK_REPO_RE.test(o.forkRepo)) return null;
     if (o.forkRepo.split('/').some((seg) => seg === '.' || seg === '..')) return null;
     forkRepo = o.forkRepo;
+  }
+  if (o.kind === 'interject') {
+    // 插话:interjectId(幂等键,runner 去重)+ text(正文)必带。
+    // 正文防线与 PR 正文同款:trim 后非空、≤2000 字、控制字符(除 \t\n\r)拒绝
+    // —— 注入的是 agent 会话的 user 消息,换行合法(多行插话),NUL/ESC 可伪造输出拒收。
+    const interjectId = typeof o.interjectId === 'string' && o.interjectId.trim().length <= 128 ? o.interjectId.trim() : '';
+    if (!interjectId) return null;
+    if (typeof o.text !== 'string') return null;
+    const text = o.text.trim();
+    if (!text || text.length > 2000 || CONTROL_CHARS_RE.test(o.text)) return null;
+    return { taskId, kind: 'interject', repo, workBranch, interjectId, text };
   }
   if (o.kind === 'cancel') {
     // cancel 允许无审批单(用户终止任务);publish 必带 approvalId(审批链路关联)

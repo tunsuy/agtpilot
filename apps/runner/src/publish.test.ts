@@ -188,6 +188,27 @@ describe('handleDeviceActions(审批动作 → 事件编排)', () => {
     expect(deps.posted).toHaveLength(0);
   });
 
+  it('interject 动作在主循环静默跳过:不执行、不产生事件(插话只由保活轮询注入会话)', async () => {
+    const { calls, exec } = fakeExec();
+    const deps = makeDeps(exec);
+    const n = await handleDeviceActions(
+      [
+        {
+          taskId: 'rtask_1',
+          kind: 'interject',
+          repo: 'owner/repo',
+          workBranch: 'contrib/x',
+          interjectId: 'intj_1',
+          text: '改一下用户名邮箱',
+        },
+      ],
+      deps
+    );
+    expect(n).toBe(0); // 不计 handled(没做任何事)
+    expect(calls).toHaveLength(0); // 绝不落入 publish 分支执行命令
+    expect(deps.posted).toHaveLength(0); // 不产生事件(ack 由保活轮询侧负责)
+  });
+
   it('事件上行失败不外抛(离线队列已缓冲,云端会幂等重发指令),handled 照常计数', async () => {
     const { exec } = fakeExec();
     const deps = makeDeps(exec);

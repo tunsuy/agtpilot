@@ -131,6 +131,16 @@ describe('normalizeRunnerEvent', () => {
     expect(e.at).toBe(1760000000000);
   });
 
+  it('interject_ack(插话送达回执)在白名单内,payload 透传', () => {
+    const e = normalizeRunnerEvent({
+      ...validEvent,
+      type: 'interject_ack',
+      payload: { interjectId: 'intj_1', delivered: true },
+    })!;
+    expect(e.type).toBe('interject_ack');
+    expect(e.payload).toEqual({ interjectId: 'intj_1', delivered: true });
+  });
+
   it('type 白名单外 → null;身份字段缺失/畸形 → null', () => {
     expect(normalizeRunnerEvent({ ...validEvent, type: 'raw_output' })).toBeNull();
     expect(normalizeRunnerEvent({ ...validEvent, eventId: '' })).toBeNull();

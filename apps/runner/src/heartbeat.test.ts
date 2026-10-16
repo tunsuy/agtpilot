@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pollTick, runHeartbeatLoop, isCancelForTask, type TickOutcome } from './heartbeat';
+import { pollTick, runHeartbeatLoop, isCancelForTask, extractInterjectActions, type TickOutcome } from './heartbeat';
 import { RunnerAuthError, RunnerUpgradeError } from './client';
 
 function fakeClient(result: unknown) {
@@ -141,5 +141,48 @@ describe('isCancelForTask(保活轮询终止指令检测)', () => {
     expect(isCancelForTask(['garbage', null, {}], 'rtask_1')).toBe(false);
     expect(isCancelForTask(undefined, 'rtask_1')).toBe(false);
     expect(isCancelForTask([cancel('rtask_1')], '')).toBe(false);
+  });
+});
+
+describe('extractInterjectActions(保活轮询插话指令提取)', () => {
+  const interject = (taskId: string, interjectId: string, text: string) => ({
+    taskId,
+    kind: 'interject',
+    repo: 'o/r',
+    workBranch: 'b',
+    interjectId,
+    text,
+  });
+
+  it('命中:当前任务的合法 interject 按到达顺序返回(幂等键 + 正文)', () => {
+    const out = extractInterjectActions(
+      [interject('rtask_1', 'intj_b', '第二条'), interject('rtask_1', 'intj_a', '第一条')],
+      'rtask_1'
+    );
+    expect(out).toEqual([
+      { interjectId: 'intj_b', text: '第二条' },
+      { interjectId: 'intj_a', text: '第一条' },
+    ]);
+  });
+
+  it('过滤:别的任务 / cancel / publish / 畸形条目(缺键、空文、超 2000 字、控制字符)全部不进列表', () => {
+    const actions = [
+      interject('rtask_2', 'intj_x', '别的任务'),
+      { taskId: 'rtask_1', kind: 'cancel', repo: 'o/r', workBranch: 'b' },
+      { taskId: 'rtask_1', kind: 'interject', repo: 'o/r', workBranch: 'b', text: '缺幂等键' },
+      { taskId: 'rtask_1', kind: 'interject', repo: 'o/r', workBranch: 'b', interjectId: 'intj_y' },
+      { taskId: 'rtask_1', kind: 'interject', repo: 'o/r', workBranch: 'b', interjectId: 'intj_z', text: '   ' },
+      { taskId: 'rtask_1', kind: 'interject', repo: 'o/r', workBranch: 'b', interjectId: 'intj_w', text: 'a'.repeat(2001) },
+      { taskId: 'rtask_1', kind: 'interject', repo: 'o/r', workBranch: 'b', interjectId: 'intj_v', text: '坏\u001b字' },
+      'garbage',
+      null,
+      interject('rtask_1', 'intj_ok', '合法的一条'),
+    ];
+    expect(extractInterjectActions(actions, 'rtask_1')).toEqual([{ interjectId: 'intj_ok', text: '合法的一条' }]);
+  });
+
+  it('畸形输入安全降级:非数组 / 空 taskId → 空列表', () => {
+    expect(extractInterjectActions(undefined, 'rtask_1')).toEqual([]);
+    expect(extractInterjectActions([interject('rtask_1', 'intj_a', 'x')], '')).toEqual([]);
   });
 });

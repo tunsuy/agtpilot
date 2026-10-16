@@ -21,6 +21,27 @@ export function isCancelForTask(actions: unknown, taskId: string): boolean {
   });
 }
 
+/**
+ * 提取「当前执行任务的插话指令」(用户中途纠偏,与 cancel 同一条保活轮询通道)。
+ * 清洗走 normalizeDeviceAction(interject 必带 interjectId + text,畸形条目静默
+ * 丢弃);按到达顺序返回列表。下行是 at-least-once(云端重发直到收到 ack),
+ * 调用方按 interjectId 去重后注入会话并回执 interject_ack 事件。
+ */
+export function extractInterjectActions(
+  actions: unknown,
+  taskId: string
+): { interjectId: string; text: string }[] {
+  if (!Array.isArray(actions) || !taskId) return [];
+  const out: { interjectId: string; text: string }[] = [];
+  for (const raw of actions) {
+    const a = normalizeDeviceAction(raw);
+    if (a !== null && a.kind === 'interject' && a.taskId === taskId && a.interjectId && a.text) {
+      out.push({ interjectId: a.interjectId, text: a.text });
+    }
+  }
+  return out;
+}
+
 export type TickOutcome = 'ok' | 'auth' | 'upgrade';
 
 export interface TickResult {

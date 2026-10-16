@@ -6,12 +6,14 @@ import { fileURLToPath } from 'node:url';
 import type { RunnerTaskPack } from '@agtpilot/protocol';
 import {
   buildClaudeArgs,
+  buildUserMessageLine,
   parseStreamLine,
   summarizeToolInput,
   tail2k,
   isRetryableClaudeFailure,
   ClaudeCodeAdapter,
   DISALLOWED_TOOLS,
+  type InterjectHandle,
   type ParsedStreamEvent,
 } from './executor';
 import type { ExecAsync } from './repo';
@@ -54,21 +56,28 @@ function fakeGitExec(over?: { ahead?: string; testFail?: boolean; testOut?: stri
   };
 }
 
-const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_NO_ACTION', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT', 'FAKE_CLAUDE_STDERR'];
+const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_STDIN_FILE', 'FAKE_CLAUDE_AWAIT_INTERJECT', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_NO_ACTION', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT', 'FAKE_CLAUDE_STDERR'];
 afterEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
 });
 
 describe('buildClaudeArgs(§6.1 固化命令行,纯函数直测)', () => {
-  const args = buildClaudeArgs(pack, '/ws/repo', 'PROMPT');
+  const args = buildClaudeArgs(pack, '/ws/repo');
 
-  it('headless + stream-json + default 权限模式 + 轮次上限 + add-dir', () => {
-    expect(args.slice(0, 2)).toEqual(['-p', 'PROMPT']);
+  it('headless + 流式输入/输出 stream-json + default 权限模式 + 轮次上限 + add-dir', () => {
+    expect(args[0]).toBe('-p');
+    expect(args[args.indexOf('--input-format') + 1]).toBe('stream-json');
     expect(args).toContain('--output-format');
     expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json');
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
     expect(args[args.indexOf('--max-turns') + 1]).toBe('42');
     expect(args[args.indexOf('--add-dir') + 1]).toBe('/ws/repo');
+  });
+
+  it('prompt 不再进 argv(流式输入:首条消息与插话都走 stdin,超长 prompt 不撞 E2BIG)', () => {
+    expect(args.join(' ')).not.toContain('PROMPT');
+    // -p 后紧跟的是 flag 而不是 prompt 文本
+    expect(args[args.indexOf('-p') + 1]).toBe('--input-format');
   });
 
   it('白名单固化:读写 + 只读/本地 git 子命令 + 验收命令(精确+前缀)', () => {
@@ -93,7 +102,7 @@ describe('buildClaudeArgs(§6.1 固化命令行,纯函数直测)', () => {
   });
 
   it('无验收命令 → 白名单不注入 Bash(pytest…)', () => {
-    const a2 = buildClaudeArgs({ ...pack, acceptance: {} }, '/ws/repo', 'P');
+    const a2 = buildClaudeArgs({ ...pack, acceptance: {} }, '/ws/repo');
     expect(a2[a2.indexOf('--allowedTools') + 1]).not.toContain('pytest');
   });
 });
@@ -207,6 +216,7 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
   it('成功路径:进度事件流 + commit/diffstat/验收尾部 + pr-final 提取;实收参数无红线', async () => {
     const dir = tmpDir();
     process.env.FAKE_CLAUDE_ARGS_FILE = path.join(dir, 'argv.json');
+    process.env.FAKE_CLAUDE_STDIN_FILE = path.join(dir, 'stdin.json');
     const adapter = new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() });
     const progress: ParsedStreamEvent[] = [];
     const r = await adapter.run(pack, dir, (e) => progress.push(e));
@@ -223,21 +233,24 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(progress.some((p) => p.kind === 'tool' && p.tool === 'Bash')).toBe(true);
     expect(progress.some((p) => p.kind === 'result')).toBe(false);
 
-    // 真实 argv 复核红线:无 dangerously,禁用清单在场,prompt 是渲染后的任务指令
+    // 真实 argv 复核红线:无 dangerously,禁用清单在场;prompt 经 stdin 首条 user 消息送入
     const argv: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
     expect(argv).not.toContain('--dangerously-skip-permissions');
     expect(argv).toContain('--disallowedTools');
-    expect(argv[argv.indexOf('-p') + 1]).toContain('严禁 git push');
+    expect(argv[argv.indexOf('-p') + 1]).toBe('--input-format');
+    const stdinTexts: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8'));
+    expect(stdinTexts[0]).toContain('严禁 git push'); // 渲染后的任务指令
   }, 20_000);
 
   it('续跑模式:opts.continuation → prompt 注入续跑指令(先看 git 记录再做);缺省不注入,红线不变', async () => {
     const dir = tmpDir();
     process.env.FAKE_CLAUDE_ARGS_FILE = path.join(dir, 'argv.json');
+    process.env.FAKE_CLAUDE_STDIN_FILE = path.join(dir, 'stdin.json');
     const adapter = new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() });
 
     await adapter.run(pack, dir, undefined, { continuation: true, baseBranch: 'main' });
     const argv: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
-    const prompt = argv[argv.indexOf('-p') + 1];
+    const prompt = (JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8')) as string[])[0];
     expect(prompt).toContain('【续跑模式】');
     expect(prompt).toContain('git log origin/main..HEAD');
     expect(prompt).toContain('已完成的工作不要重做');
@@ -246,8 +259,8 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(argv[argv.indexOf('--disallowedTools') + 1]).toBe(DISALLOWED_TOOLS);
 
     await adapter.run(pack, dir);
-    const argv2: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
-    expect(argv2[argv2.indexOf('-p') + 1]).not.toContain('续跑模式');
+    const prompt2 = (JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8')) as string[])[0];
+    expect(prompt2).not.toContain('续跑模式');
   }, 20_000);
 
   it('detect:--version 可执行 → installed + 版本;抛错 → installed=false', async () => {
@@ -351,6 +364,7 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     const dir = tmpDir();
     process.env.FAKE_CLAUDE_NO_ACTION = '1';
     process.env.FAKE_CLAUDE_ARGS_FILE = path.join(dir, 'argv.json');
+    process.env.FAKE_CLAUDE_STDIN_FILE = path.join(dir, 'stdin.json');
     const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec({ ahead: '0' }) }).run(pack, dir);
     expect(r.ok).toBe(true);
     expect(r.noAction?.reason).toBe('already_fixed');
@@ -358,9 +372,10 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(r.commitHash).toBeUndefined(); // 零 commit 路径,无产出字段
     expect(r.retryable).toBeUndefined(); // 非失败,不进重试语义
 
-    // agent 确实收到了例外出口指令(围栏约定随 prompt 下发)
+    // agent 确实收到了例外出口指令(围栏约定随 prompt 下发,prompt 经 stdin 首条消息)
     const argv: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
-    const prompt = argv[argv.indexOf('-p') + 1];
+    expect(argv[argv.indexOf('-p') + 1]).toBe('--input-format');
+    const prompt = (JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8')) as string[])[0];
     expect(prompt).toContain('例外出口(与第 5 步二选一)');
     expect(prompt).toContain('```no-action');
     expect(prompt).toContain('不许拿这个当逃避干活的出口');
@@ -399,5 +414,64 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(r.error).toContain('验收命令未通过');
     expect(r.testTail).toContain('FAILED tests/test_sampling.py');
     expect(r.commitHash).toBe('abc123def456'); // 产出信息仍回流,便于人工介入
+  }, 20_000);
+});
+
+describe('buildUserMessageLine(stream-json user 消息行,纯函数直测)', () => {
+  it('形状:单行 JSON(换行被转义),type=user + content text 原样;换行结尾', () => {
+    const line = buildUserMessageLine('第一行\n第二行');
+    expect(line.endsWith('\n')).toBe(true);
+    expect(line.slice(0, -1)).not.toContain('\n'); // 多行文本仍是单条消息行(不撕裂流协议)
+    expect(JSON.parse(line)).toEqual({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '第一行\n第二行' }] },
+    });
+  });
+});
+
+describe('中途插话(流式输入会话 · interjectHandle 注入)', () => {
+  it('prompt 走 stdin 首条;执行中插话被注入会话;会话结束注入口关闭', async () => {
+    const dir = tmpDir();
+    process.env.FAKE_CLAUDE_STDIN_FILE = path.join(dir, 'stdin.json');
+    process.env.FAKE_CLAUDE_AWAIT_INTERJECT = '1';
+    const adapter = new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() });
+    const handle: InterjectHandle = { send: null };
+
+    const runP = adapter.run(pack, dir, undefined, { interjectHandle: handle });
+    // 会话起来后注入口就位(spawn 完成、假 claude 正在等插话)
+    for (let i = 0; i < 100 && handle.send === null; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(handle.send).not.toBeNull();
+    const outcome = handle.send!('git 邮箱写错了,改用 bot@x.dev 重新提交');
+    expect(outcome).toEqual({ delivered: true });
+
+    const r = await runP;
+    expect(r.ok).toBe(true);
+    // 插话文本缀在 result 后(假 claude INTERJECTED 标记),pr-final 围栏提取不受影响
+    expect(r.prFinal).toEqual({ title: 'fix: 采样参数越界校验', body: '关联 #12345\n\n增加温度参数范围校验,补充单测。' });
+    // stdin 实收:首条 = 渲染后 prompt,第二条 = 插话原文
+    const stdinTexts: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8'));
+    expect(stdinTexts[0]).toContain('严禁 git push');
+    expect(stdinTexts[1]).toBe('git 邮箱写错了,改用 bot@x.dev 重新提交');
+    // 会话结束:注入口关闭(此后云端插话由 bin 回执 not_started,绝不注死会话)
+    expect(handle.send).toBeNull();
+  }, 20_000);
+
+  it('无插话时正常收尾:首个 result 即关 stdin,会话自然退出(不等插话、不悬挂)', async () => {
+    const dir = tmpDir();
+    process.env.FAKE_CLAUDE_STDIN_FILE = path.join(dir, 'stdin.json');
+    const adapter = new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() });
+    const handle: InterjectHandle = { send: null };
+    const r = await adapter.run(pack, dir, undefined, { interjectHandle: handle });
+    expect(r.ok).toBe(true);
+    expect(r.prFinal).not.toBeNull();
+    const stdinTexts: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8'));
+    expect(stdinTexts).toHaveLength(1); // 只有首条 prompt,没有多余写入
+  }, 20_000);
+
+  it('未提供 handle 也照常执行(旧调用形状兼容)', async () => {
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() }).run(pack, tmpDir());
+    expect(r.ok).toBe(true);
   }, 20_000);
 });

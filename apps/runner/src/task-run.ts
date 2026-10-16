@@ -5,7 +5,7 @@ import {
   type RunnerEventType,
   type RunnerTaskPack,
 } from '@agtpilot/protocol';
-import type { ExecutorAdapter, ParsedStreamEvent } from './executor';
+import type { ExecutorAdapter, InterjectHandle, ParsedStreamEvent } from './executor';
 import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } from './repo';
 
 /**
@@ -55,6 +55,8 @@ export interface TaskRunDeps {
   retryDelayMs?: number;
   /** 云端终止指令(用户止损;bin 侧保活轮询检测到 cancel 动作时触发) */
   abortSignal?: AbortSignal;
+  /** 云端插话注入手柄(用户中途纠偏;bin 侧保活轮询检测到 interject 动作时写入会话) */
+  interjectHandle?: InterjectHandle;
 }
 
 export type TaskRunOutcome = 'awaiting_approval' | 'no_action' | 'failed' | 'cancelled';
@@ -142,6 +144,7 @@ export async function runTask(
       baseBranch: repo.baseBranch,
       ...(continuation ? { continuation: true } : {}),
       ...(deps.abortSignal ? { abortSignal: deps.abortSignal } : {}),
+      ...(deps.interjectHandle ? { interjectHandle: deps.interjectHandle } : {}),
     });
   const checkPristine =
     deps.checkPristine ?? ((dir: string, base: string) => isWorktreePristine(dir, base, defaultExecAsync));

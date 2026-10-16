@@ -161,7 +161,14 @@ export interface RunnerTaskRecord {
   events?: RunnerEvent[];
 }
 
-export type RunnerEventType = 'state' | 'progress' | 'phase1_result' | 'phase2_result' | 'error';
+export type RunnerEventType =
+  | 'state'
+  | 'progress'
+  | 'phase1_result'
+  | 'phase2_result'
+  | 'error'
+  /** 插话送达回执(payload:{interjectId, delivered, reason?})—— 云端据此清 pending、UI 时间线展示 */
+  | 'interject_ack';
 
 /** 上行事件(§5.3;数据最小化分级 minimal/standard/verbose 由 payload 内容体现) */
 export interface RunnerEvent {
@@ -218,7 +225,7 @@ export interface RunnerPairCodeRecord {
 
 // ---------- 清洗函数(纯函数,脏输入 → null,不抛错) ----------
 
-const EVENT_TYPES: RunnerEventType[] = ['state', 'progress', 'phase1_result', 'phase2_result', 'error'];
+const EVENT_TYPES: RunnerEventType[] = ['state', 'progress', 'phase1_result', 'phase2_result', 'error', 'interject_ack'];
 
 function str(v: unknown, max: number): string | null {
   if (typeof v !== 'string') return null;

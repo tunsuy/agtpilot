@@ -1,9 +1,10 @@
 #!/usr/bin/env tsx
+import { randomUUID } from 'node:crypto';
 import { parseArgs, USAGE } from './args';
 import { RunnerClient, RunnerAuthError, deviceMeta } from './client';
 import { clearCredentials, loadCredentials, saveCredentials, credentialsFile, credentialsDir } from './credentials';
-import { pollTick, runHeartbeatLoop, isCancelForTask } from './heartbeat';
-import { ClaudeCodeAdapter } from './executor';
+import { pollTick, runHeartbeatLoop, isCancelForTask, extractInterjectActions } from './heartbeat';
+import { ClaudeCodeAdapter, type InterjectHandle } from './executor';
 import { runTask } from './task-run';
 import { handleDeviceActions } from './publish';
 import { workspaceRoot } from './config';
@@ -139,9 +140,13 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
         if (r.outcome === 'ok' && r.claimed) {
           // 任务执行期间主循环被占用:另起保活轮询,维持 lastSeenAt(设备不被判离线);
           // 同时检测终止指令(用户止损,云端由 cancelRequested 标记派生 cancel 动作)
-          // —— 命中即 abort,executor tree-kill claude 进程树,task-run 上报 cancelled
+          // —— 命中即 abort,executor tree-kill claude 进程树,task-run 上报 cancelled;
+          // 以及插话指令(用户中途纠偏,interject 动作)—— 注入正在执行的 claude
+          // 会话(executor 写 stdin),并回执 interject_ack(云端据此清 pending)。
           const abort = new AbortController();
           const currentTaskId = r.claimed.taskId;
+          const interjectHandle: InterjectHandle = { send: null };
+          const seenInterjects = new Set<string>(); // 下行 at-least-once,按 interjectId 去重
           const keepAlive = setInterval(() => {
             client
               .poll({})
@@ -149,6 +154,38 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
                 if (!abort.signal.aborted && isCancelForTask(pr.actions, currentTaskId)) {
                   log(`任务 ${currentTaskId} 收到终止指令,停止本地执行…`);
                   abort.abort();
+                }
+                for (const inj of extractInterjectActions(pr.actions, currentTaskId)) {
+                  if (seenInterjects.has(inj.interjectId)) continue; // 重发的同一条,已处理过
+                  seenInterjects.add(inj.interjectId);
+                  const outcome =
+                    interjectHandle.send?.(inj.text) ?? { delivered: false, reason: 'not_started' as const };
+                  log(
+                    `任务 ${currentTaskId} 收到插话 ${inj.interjectId}:${outcome.delivered ? '已注入会话' : `未送达(${outcome.reason})`}`
+                  );
+                  audit({
+                    kind: 'interject',
+                    taskId: currentTaskId,
+                    interjectId: inj.interjectId,
+                    delivered: outcome.delivered,
+                    textHead: inj.text.slice(0, 200),
+                  });
+                  // ack 上行(不带正文,云端自有原文):清 pending、时间线显示送达状态。
+                  // 失败走 ReliableEventPoster 离线缓冲,恢复后补发;期间云端重发由去重集兜住。
+                  postEvents([
+                    {
+                      eventId: randomUUID(),
+                      taskId: currentTaskId,
+                      deviceId: creds.deviceId,
+                      at: Date.now(),
+                      type: 'interject_ack',
+                      payload: {
+                        interjectId: inj.interjectId,
+                        delivered: outcome.delivered,
+                        ...(outcome.reason ? { reason: outcome.reason } : {}),
+                      },
+                    },
+                  ]).catch(() => {});
                 }
               })
               .catch(() => {});
@@ -162,11 +199,13 @@ async function cmdStart(flags: Record<string, string>): Promise<number> {
               log,
               audit,
               abortSignal: abort.signal,
+              interjectHandle,
             });
           } catch (e) {
             log(`任务执行器异常(任务已在云端标记流程内,心跳继续):${(e as Error)?.message || e}`);
           } finally {
             abort.abort(); // 收尾清理:解掉可能残留的 abort 监听
+            interjectHandle.send = null;
             clearInterval(keepAlive);
           }
         }

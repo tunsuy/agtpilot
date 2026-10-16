@@ -201,4 +201,33 @@ describe('normalizeDeviceAction(下行动作清洗)', () => {
     expect(normalizeDeviceAction({ ...publish, kind: 'cancel', approvalId: undefined })).toMatchObject({ kind: 'cancel' });
     expect('approvalId' in normalizeDeviceAction({ ...publish, kind: 'cancel', approvalId: undefined })!).toBe(false);
   });
+
+  it('interject(中途插话)合法形状通过:interjectId + text 必带,正文 trim 后透传', () => {
+    const interject = {
+      taskId: 'rtask_1',
+      kind: 'interject' as const,
+      repo: 'owner/repo',
+      workBranch: 'contrib/x',
+      interjectId: 'intj_1',
+      text: 'git 用户名邮箱写错了,改用 xxx <x@y.z> 重新提交',
+    };
+    expect(normalizeDeviceAction(interject)).toEqual(interject);
+    // 多行插话合法(注入的是 user 消息,\n 无注入面)
+    expect(normalizeDeviceAction({ ...interject, text: '第一行\n第二行' })!.text).toBe('第一行\n第二行');
+    expect(normalizeDeviceAction({ ...interject, text: '  前后空白  ' })!.text).toBe('前后空白');
+  });
+
+  it('interject 畸形拒绝:缺幂等键/缺正文/空正文/超 2000 字/控制字符', () => {
+    const base = { taskId: 'rtask_1', kind: 'interject', repo: 'o/r', workBranch: 'b', interjectId: 'intj_1', text: '纠正一下' };
+    expect(normalizeDeviceAction({ ...base, interjectId: undefined })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, interjectId: '' })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, interjectId: 'x'.repeat(129) })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, text: undefined })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, text: 42 })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, text: '   ' })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, text: 'a'.repeat(2001) })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, text: 'a'.repeat(2000) })).not.toBeNull(); // 恰好 2000 合法
+    expect(normalizeDeviceAction({ ...base, text: '坏\u0000字' })).toBeNull();
+    expect(normalizeDeviceAction({ ...base, text: '坏\u001b[31m字' })).toBeNull(); // ESC 可伪造终端输出
+  });
 });

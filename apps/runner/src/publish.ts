@@ -129,6 +129,11 @@ export async function handleDeviceActions(rawActions: unknown[], deps: PublishDe
       log('忽略畸形审批指令下行(normalize 拒绝)');
       continue;
     }
+    if (action.kind === 'interject') {
+      // 插话只在任务执行期由保活轮询注入会话;流落到主循环的(执行已结束/ack 丢失
+      // 云端仍在重发)没有会话可注,静默忽略 —— 绝不落入下方 publish 分支执行。
+      continue;
+    }
     handled++;
 
     const events: Array<Record<string, unknown>> = [];

@@ -15,6 +15,9 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     icon: Inbox,
     accent: 'sky',
     deps: [{ id: 'email', name: '电子邮件', required: true }],
+    // 工具白名单(docs §9.1):封闭数据源工坊 —— 不挂检索组(none);
+    // email_list/email_read/email_send 由 deps 的 email 特例映射自动并入
+    searchGroup: 'none',
     note: '生成后跳转任务页,Agent 用 email_list/email_read 读取收件箱,输出总览 + 四级分诊清单(🔴立即/🟠今日/🟡稍后/⚪可忽略)与回复草稿。发送任何回复、改动邮件状态都需你逐封确认。需先在「电子邮件」配置凭证(只配发信即可读信,收信自动复用)。',
   },
   run: (params) => {

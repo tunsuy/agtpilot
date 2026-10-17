@@ -22,6 +22,9 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'twitterapi_io', name: 'X / Twitter' },
       { id: 'exa', name: '网络搜索' },
     ],
+    // 工具白名单 D 层(docs §9.1):托管存草稿固定工具;选题调研的热榜/搜索 MCP
+    // 走缺省 full 档 + deps 自动映射
+    activeTools: ['zhihu_save_article_draft'],
     note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议(含话题)。满意的一篇点「存入知乎草稿」——经你逐次审批后填进知乎专栏编辑器并停在草稿箱(每日有次数上限,跨端可见),最终发布由你在知乎草稿箱人工完成,Agent 不碰任何发布动作。无需凭证:到连接器页「知乎」卡片扫码登录网页版并开启托管模式即可;知乎官方 MCP(搜索/热榜)可选配,用于选题调研。',
     profileSlot: 'zhihu',
     artifacts: [

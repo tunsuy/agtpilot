@@ -1723,6 +1723,30 @@ class AgentBackend {
               .map((st: any) => ({ role: 'user' as const, content: st.userPrompt as string }));
           }
 
+          // 工坊工具白名单(docs/design/token-consumption-and-tool-loading.md §9.1):
+          // 工坊任务(含续聊,workshopId 跟着 mission 走)按注册表四层派生显式挂载集,
+          // 不再参与关键词路由 —— 雷达选题任务实测被「正则磁铁」拖到 80~100 个工具、
+          // 单步 schema 10~27k tokens(73 万事件最大单项放大器)。白名单在 routing.ts
+          // 的 explicit 通道生效(baseline 自动并入、前缀通配、目录序稳定保缓存);
+          // AGTPILOT_WORKSHOP_TOOLS=0 整体回退原路由(灰度保险丝)
+          const workshopIdForTools = options.workshopId || targetMission.workshopId;
+          let workshopActiveTools: string[] | undefined;
+          if (workshopIdForTools && process.env.AGTPILOT_WORKSHOP_TOOLS !== '0') {
+            try {
+              const { resolveWorkshopActiveTools } = require('@/workshops/registry');
+              workshopActiveTools = resolveWorkshopActiveTools(workshopIdForTools);
+              if (workshopActiveTools) {
+                this.addTerminalLog(
+                  'system',
+                  `[Tools] 工坊白名单生效(${workshopIdForTools}): ${workshopActiveTools.length} 项声明(baseline 另计)`,
+                  options.userId
+                );
+              }
+            } catch (e: any) {
+              this.addTerminalLog('stderr', `[Tools] 工坊白名单解析失败,回退关键词路由: ${e?.message || e}`);
+            }
+          }
+
           // 调用真正的大模型 + 工具链编排 (Vercel AI SDK + Cordis 工具集)
           const result = await this.ctx.orchestrator.runTask({
             taskId: targetMission.id,
@@ -1734,6 +1758,7 @@ class AgentBackend {
             taskTools,
             taskEnv,
             taskSandbox,
+            activeTools: workshopActiveTools,
             // 回退弧感知通道:每步 prepareStep 前取一条排队的治理提示注入
             getStepNotice: () => this.taskRuntimes.get(targetMission.id)?.notices.shift() ?? null,
             // 用户追加消息通道(同款拉取式):任务进行中排队的追问在此

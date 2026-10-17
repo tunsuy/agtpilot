@@ -471,7 +471,17 @@ export class OrchestratorService extends Service {
               .slice(-8)
               .map((m) => messageText(m.content))
               .join('\n');
-            const next = selectActiveTools(recentText, allTools, this.ctx.agent.getToolRoutes());
+            // explicit(工坊白名单)必须同步传入:prepareStep 重算若不带它,
+            // 关键词路由会把白名单外的工具组(如雷达任务命中「网页/执行」拖进
+            // browser/sandbox 全组)经 widenMountedTools 扩容回挂载面,白名单
+            // 形同虚设。带上 explicit 后重算结果恒等于白名单∩目录,widen 无
+            // 新增可并 —— 声明前缀跨步字节稳定,缓存不破。
+            const next = selectActiveTools(
+              recentText,
+              allTools,
+              this.ctx.agent.getToolRoutes(),
+              options.activeTools
+            );
             const widened = widenMountedTools(mountedNames, next);
             if (widened) {
               adjust.activeTools = widened;

@@ -133,8 +133,55 @@ describe('selectActiveTools', () => {
     expect(widened).toContain('memory_store'); // 基线还在
   });
 
-  it('显式指定工具子集时直接生效', () => {
-    expect(selectActiveTools('任意', TOOLS, ROUTES, ['search_web', '不存在的工具'])).toEqual(['search_web']);
+  it('显式白名单:精确名生效、未知名静默跳过、baseline 自动并入、按目录序返回', () => {
+    expect(selectActiveTools('任意', TOOLS, ROUTES, ['search_web', '不存在的工具'])).toEqual([
+      'search_web',
+      'memory_store', // baseline 自动并入(工坊无需声明任务骨架工具)
+      'planner_create_plan',
+    ]);
+  });
+
+  it('显式白名单:前缀通配(mcp_deepwiki_*)整组匹配,精确名与通配可混用', () => {
+    const mcpTools = [
+      ...TOOLS,
+      mkTool('mcp_deepwiki_ask_question'),
+      mkTool('mcp_deepwiki_read_wiki'),
+      mkTool('mcp_github_mcp_create_issue'),
+      mkTool('mcp_github_mcp_search_issues'),
+    ];
+    const result = selectActiveTools('任意', mcpTools, ROUTES, [
+      'mcp_deepwiki_*',
+      'mcp_github_mcp_search_issues',
+    ])!;
+    expect(result).toContain('mcp_deepwiki_ask_question');
+    expect(result).toContain('mcp_deepwiki_read_wiki');
+    expect(result).toContain('mcp_github_mcp_search_issues');
+    expect(result).not.toContain('mcp_github_mcp_create_issue'); // 未声明的同台写工具不进
+    expect(result).not.toContain('browser_navigate');
+  });
+
+  it('显式白名单:结果与 prompt 无关且跨步字节稳定(重算不触发 widen,缓存不破)', () => {
+    const explicit = ['mcp_deepwiki_*', 'search_web'];
+    const tools = [...TOOLS, mkTool('mcp_deepwiki_ask_question')];
+    const first = selectActiveTools('扫描 github 仓库并浏览网页', tools, ROUTES, explicit)!;
+    const second = selectActiveTools('完全无关的后续步骤文本', tools, ROUTES, explicit)!;
+    expect(second).toEqual(first);
+    const mounted = new Set(first);
+    expect(widenMountedTools(mounted, second)).toBeNull(); // 无新增可并 → 不写回
+  });
+
+  it('显式白名单零命中(全拼错且目录无 baseline)→ 保守回退全量', () => {
+    const noBaseline = [mkTool('browser_navigate'), mkTool('search_web')];
+    expect(selectActiveTools('任意', noBaseline, ROUTES, ['typo_*', 'also_typo'])).toBeUndefined();
+  });
+
+  it('显式白名单不受路由开关与阈值门影响(业务强约束,非路由启发式)', () => {
+    process.env.AGTPILOT_TOOL_ROUTING = '0';
+    expect(selectActiveTools('任意', TOOLS, ROUTES, ['search_web'])).toEqual([
+      'search_web',
+      'memory_store',
+      'planner_create_plan',
+    ]);
   });
 
   it('路由开关关闭时全量挂载', () => {

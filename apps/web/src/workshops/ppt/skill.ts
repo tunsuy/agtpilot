@@ -16,6 +16,17 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     icon: Presentation,
     accent: 'sky',
     deps: [],
+    // 工具白名单(docs §9.1):检索裁到 web 档(成稿数据要真实检索,不需要社媒热榜);
+    // D 层 = PPT 三件固定工具 + sandbox 两件(prompt 明确引用的构建通道,
+    // 全产品唯一保留 sandbox 的工坊)
+    searchGroup: 'web',
+    activeTools: [
+      'ppt_check_env',
+      'ppt_publish_deck',
+      'ppt_publish_pptx',
+      'sandbox_run_command',
+      'sandbox_write_file',
+    ],
     note: '生成后跳转任务页,双路线按「输出形态」选择:① 网页演示页——镜像内置 qiaomu-bento-ppt skill(MIT,构建全程无需联网)产出单文件 .bento.html,中央画布直接放映,下载后双击离线放映、浏览器内可继续编辑;② PPTX 文件——镜像内置 ppt-master skill(MIT,Quick 无交互流程)手写 SVG 经质检导出原生可编辑 .pptx,画布下载卡片一键保存,PowerPoint/WPS/Keynote 可直接二改。大纲先行再排版;数据必须真实并注明来源,严禁编造;不引用外链媒体,保持交付物离线可用。',
   },
   run: (params) => {

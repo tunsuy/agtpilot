@@ -38,6 +38,9 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'twitterapi_io', name: 'X / Twitter' },
       { id: 'exa', name: '网络搜索' },
     ],
+    // 工具白名单 D 层(docs §9.1):托管读热榜/存草稿固定工具;检索走缺省 full 档,
+    // 社媒热榜 MCP 由 deps 自动映射。续聊投递同 mission 继承本白名单
+    activeTools: ['xhs_read_creator_data', 'xhs_save_note_draft'],
     note: 'Agent 产出标题/正文/标签/配图建议。复制满意的一篇 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布。已连接热榜/搜索类连接器时选题走实时热点。',
     profileSlot: 'xhs',
     artifacts: [

@@ -48,6 +48,8 @@ export {
 } from './compaction';
 export type { CompactOptions, DigestSummarizer } from './compaction';
 export { appendStepNotice, STEP_NOTICE_PREFIX } from './notice';
+export { stripReasoningParts, reasoningStripEnabled } from './reasoning';
+export type { ReasoningMessageLike, StripReasoningResult } from './reasoning';
 export { ToolGate } from './tool-gate';
 export type { StepNoticeMessage } from './notice';
 export { isPrivateOrReservedIp, guardUrlHost } from './net-guard';

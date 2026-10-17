@@ -85,6 +85,24 @@ export interface WorkshopDef {
   profileSlot?: string;
   /** 结构化交付物声明 */
   artifacts?: ArtifactSpec[];
+  /**
+   * 工具白名单 · D 层追加(docs/design/token-consumption-and-tool-loading.md §9.1):
+   * 本工坊专属的固定工具精确名与 MCP 精确工具名(如 'github_scan'、
+   * 'mcp_github_mcp_search_issues')。A 层 baseline 由内核自动并入、B 层检索组按
+   * searchGroup 口径、C 层由 deps 自动映射 `mcp_<id>_*`,三层都不用手写;
+   * 这里只写派生不出来的部分。整台 MCP 服务器进白名单用 '*' 结尾前缀通配。
+   */
+  activeTools?: string[];
+  /**
+   * 工具白名单 · B 层检索组口径(缺省 'full'):
+   * - full:内容工坊标准检索梯度(shared/sources.ts 同源)——search 三件套 +
+   *   newsnow/zhihu/twitter MCP + research_subagent + firecrawl + 参考资料;
+   * - research:去掉社媒热榜 MCP,保留 search 三件套 + research_subagent +
+   *   firecrawl + 参考资料(调研型工坊:雷达/投研/教研);
+   * - web:仅 search 三件套(纯生成型:小说/PPT);
+   * - none:不挂检索组(封闭数据源工坊:邮件分诊/周报)。
+   */
+  searchGroup?: 'full' | 'research' | 'web' | 'none';
 }
 
 export const WORKSHOP_CATEGORIES: Array<{ key: string; label: string; accent: WorkshopAccent }> = [

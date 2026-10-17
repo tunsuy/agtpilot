@@ -86,6 +86,57 @@ export function buildWorkshopRun(
   return WORKSHOP_SKILLS[id].run(params, ctx);
 }
 
+/**
+ * 工坊工具白名单解析(四层并集,docs/design/token-consumption-and-tool-loading.md §9.1):
+ * A. baseline 常驻 —— 内核 routing.resolveExplicitTools 自动并入,这里不管;
+ * B. 通用检索组 —— 按 meta.searchGroup 口径(full/research/web/none);
+ * C. deps 映射 —— meta.deps 连接器 id → `mcp_<id>_*` 前缀通配(deps 是单一事实源,
+ *    新工坊声明 deps 即自动获得对应 MCP 组;非 MCP / 整台禁入的走 DEPS_TOOL_OVERRIDES);
+ * D. 工坊追加 —— meta.activeTools 原样并入(固定工具精确名 / MCP 精确工具名 / 前缀通配)。
+ *
+ * 返回值交给 runMission → orchestrator options.activeTools(routing.ts explicit 通道):
+ * 白名单任务不参与关键词路由,挂载面从「正则磁铁拖进 80~100 个」收敛到声明集。
+ * 未声明白名单的工坊(理论上不存在,防御)返回 undefined → 走原路由。
+ */
+const SEARCH_WEB_TOOLS = ['search_web', 'search_exa', 'search_tavily'];
+/** 调研增强件:并行子 agent + 网页正文抓取 + 参考资料库(full/research 两档共用) */
+const RESEARCH_TOOLS = ['research_subagent', 'browser_firecrawl_scrape', 'read_reference_material'];
+/** 社媒热榜 MCP(仅 full 档;与 shared/sources.ts 的 TOPIC_RESEARCH_SOURCES 梯度同源) */
+const SOCIAL_MCP_GROUPS = ['mcp_newsnow_*', 'mcp_zhihu_*', 'mcp_twitterapi_io_*'];
+
+const SEARCH_GROUPS: Record<NonNullable<WorkshopDef['searchGroup']>, string[]> = {
+  full: [...SEARCH_WEB_TOOLS, ...SOCIAL_MCP_GROUPS, ...RESEARCH_TOOLS],
+  research: [...SEARCH_WEB_TOOLS, ...RESEARCH_TOOLS],
+  web: [...SEARCH_WEB_TOOLS],
+  none: [],
+};
+
+/**
+ * deps id → 工具映射特例(缺省规则 = `mcp_<id>_*`):
+ * - email:固定工具提供器(email_imap/email_smtp),不是 MCP;
+ * - tomato_writer:本地 MCP 已撤(novel/skill.ts 注释),映射为空;
+ * - github_mcp:整台 30~40 个大 schema 是 73 万事件的最大单项放大器,默认整台
+ *   禁入;需要 GitHub 的工坊在 meta.activeTools 里按精确名声明(oss_radar 3 个、
+ *   weekly 5 个),检索主力走 github_scan 固定工具。
+ */
+const DEPS_TOOL_OVERRIDES: Record<string, string[]> = {
+  email: ['email_list', 'email_read', 'email_send'],
+  tomato_writer: [],
+  github_mcp: [],
+};
+
+export function resolveWorkshopActiveTools(id: WorkshopId): string[] | undefined {
+  const meta = WORKSHOP_SKILLS[id]?.meta;
+  if (!meta) return undefined;
+  const tools = new Set<string>(SEARCH_GROUPS[meta.searchGroup ?? 'full']);
+  for (const dep of meta.deps || []) {
+    const mapped = dep.id in DEPS_TOOL_OVERRIDES ? DEPS_TOOL_OVERRIDES[dep.id] : [`mcp_${dep.id}_*`];
+    for (const name of mapped) tools.add(name);
+  }
+  for (const name of meta.activeTools || []) tools.add(name);
+  return Array.from(tools);
+}
+
 /** 交付物 kind → 其包格式对应的结构类型(解析结果的 pkg) */
 type ArtifactPkg<K extends 'article-package' | 'note-package'> =
   K extends 'article-package' ? ArticlePackage : NotePackage;

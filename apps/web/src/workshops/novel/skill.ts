@@ -68,6 +68,10 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'fanqie_radar', name: '番茄小说榜单' },
       { id: 'tomato_writer', name: '番茄作家后台' },
     ],
+    // 工具白名单(docs §9.1):纯生成型工坊 —— 检索组裁到 web 档(search 三件套,
+    // 不挂社媒热榜);榜单选题 MCP 由 deps 映射 mcp_fanqie_radar_*;写作/入库走
+    // 服务端解析不经工具,tomato_writer 已撤映射为空
+    searchGroup: 'web',
     note: '按职业作者方法论(设定集/人物卡/三层大纲/伏笔台账/时间线/文风锚)建库,每章生成只注入恒定上下文,写后反思写回,长篇前后一致。产出存入你的书库(可手改);入库后自动同步到番茄草稿箱(AI 辅助声明如实代勾「AI辅助」)——发布永远由你人工确认,不存在全自动发布。',
     profileSlot: 'novel',
   },

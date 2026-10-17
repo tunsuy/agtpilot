@@ -44,6 +44,18 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'deepwiki', name: 'DeepWiki' },
       { id: 'exa', name: '网络搜索' },
     ],
+    // 工具白名单(docs §9.1,73 万 token 事件事发地):检索裁到 research 档
+    // (search 三件套 + research_subagent + firecrawl,不挂社媒热榜);
+    // GitHub MCP 整台禁入(deps 特例映射为空,30~40 个大 schema 是最大单项
+    // 放大器)——扫描主力走 github_scan 固定工具,MCP 只留 3 个只读精确名
+    // 补充检索(help wanted 标签/特定仓库深入);DeepWiki 由 deps 映射整组
+    searchGroup: 'research',
+    activeTools: [
+      'github_scan',
+      'mcp_github_mcp_search_issues',
+      'mcp_github_mcp_get_issue',
+      'mcp_github_mcp_list_commits',
+    ],
     note: '生成后跳转任务页,Agent 用 GitHub MCP 搜活跃仓库与 good first issue、DeepWiki 理解代码库、网页搜索补充社区动态(缺哪个自动降级并注明),产出结构化「贡献机会」卡片:项目/机会类型/Issue 直达链接/为什么适合你/建议第一步/难度。全程只读:不 fork、不建 Issue、不评论;链接必须来自真实检索并在清单末尾注明检索时间与数据源。想贡献哪条:链接直达 Issue 人工核对,或让 Agent 起草认领留言/PR 描述——对外发送前逐条经你审批,代码由你本地动手。',
     profileSlot: 'oss_radar',
     artifacts: [{ kind: 'oss-opportunity', label: '贡献机会清单' }],

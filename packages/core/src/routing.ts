@@ -77,6 +77,33 @@ export function isSmalltalkPrompt(text: string): boolean {
 }
 
 /**
+ * 显式白名单解析(工坊工具白名单,docs/design/token-consumption-and-tool-loading.md §9):
+ * - 精确名:`github_scan` 逐字匹配;
+ * - 前缀通配:以 `*` 结尾(`mcp_deepwiki_*`)按前缀匹配整组 —— 工坊声明 MCP
+ *   连接器时不逐工具枚举(远端工具清单动态,枚举必然腐烂);
+ * - baseline 工具(ToolDefinition.baseline)自动并入,工坊无需声明 —— 看板/记忆/
+ *   交付/路由等常驻件是任务骨架,漏了会让白名单反而打断基本工作流;
+ * - 返回序 = allTools 声明序(与 prompt 无关,跨步/跨任务字节稳定,保 provider
+ *   前缀缓存);白名单里的名字/前缀在目录中零命中时静默跳过(工具可能因缺 Key
+ *   未注册或 MCP 未连接,不算错误)。
+ */
+export function resolveExplicitTools(explicit: string[], allTools: RoutableTool[]): string[] {
+  const exact = new Set<string>();
+  const prefixes: string[] = [];
+  for (const entry of explicit) {
+    if (entry.endsWith('*')) prefixes.push(entry.slice(0, -1));
+    else exact.add(entry);
+  }
+  const matched: string[] = [];
+  for (const t of allTools) {
+    if (t.baseline || exact.has(t.name) || prefixes.some((p) => t.name.startsWith(p))) {
+      matched.push(t.name);
+    }
+  }
+  return matched;
+}
+
+/**
  * 依据阈值与 prompt 选出本次任务需要声明的工具子集。
  * 返回 undefined 表示全量挂载（未超阈值 / 未命中任何规则 / 路由被关闭）。
  *
@@ -84,6 +111,11 @@ export function isSmalltalkPrompt(text: string): boolean {
  * 全量挂载，前缀恒定跨任务共享缓存）> 闲聊短路（纯问候/自我介绍只挂基线）
  * > 插件注册的关键词规则路由。
  * 基线工具（ToolDefinition.baseline）无论如何都挂载。
+ *
+ * explicit(显式白名单)语义:调用方(如工坊任务)声明的确定性工具集,支持
+ * `前缀*` 通配,baseline 自动并入;它**不受阈值门与路由开关影响**——白名单是
+ * 业务层「这个任务只该看到这些工具」的强约束,不是路由启发式。目录中零命中
+ * 时返回 undefined 保守回退全量(白名单全拼错不至于让模型赤手空拳)。
  */
 export function selectActiveTools(
   prompt: string,
@@ -91,11 +123,11 @@ export function selectActiveTools(
   routes: ToolRoute[],
   explicit?: string[]
 ): string[] | undefined {
-  const allToolNames = allTools.map((t) => t.name);
   if (explicit && explicit.length > 0) {
-    const filtered = explicit.filter((n) => allToolNames.includes(n));
+    const filtered = resolveExplicitTools(explicit, allTools);
     return filtered.length > 0 ? filtered : undefined;
   }
+  const allToolNames = allTools.map((t) => t.name);
   if (process.env.AGTPILOT_TOOL_ROUTING === '0') return undefined;
 
   // 阈值门：工具目录还小 → 全量挂载，保证前缀稳定

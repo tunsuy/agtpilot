@@ -18,6 +18,9 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'twitterapi_io', name: 'X / Twitter' },
       { id: 'exa', name: '网络搜索' },
     ],
+    // 工具白名单 D 层(docs §9.1):中央 feed 只读拉取固定工具;降级自取路径
+    // (X 连接器/网页搜索)由缺省 full 档检索组 + deps 映射覆盖
+    activeTools: ['follow_builders_fetch_feed'],
     note: '数据来自 follow-builders 开源项目(MIT)的公共中央 feed,上游每日用 X 官方 API + 播客转写 + 博客抓取更新,读取无需任何凭证。Agent 用只读工具拉取素材后按你选的语言/时间范围/类别改写成日报:同一人多条动态合并、每条带原文链接、结尾注明数据时间;上游超 48 小时未更新会在日报开头明示数据可能过期,并可降级到已连接的 X 连接器/网页搜索自取(注明降级)。全程只读、无任何发布动作。',
   },
   run: (params) => {

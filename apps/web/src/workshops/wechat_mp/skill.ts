@@ -22,6 +22,9 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'twitterapi_io', name: 'X / Twitter' },
       { id: 'exa', name: '网络搜索' },
     ],
+    // 工具白名单 D 层(docs §9.1):草稿箱直连固定工具(环境自检 + 存草稿);
+    // 检索走缺省 full 档,热榜 MCP 由 deps 自动映射
+    activeTools: ['wechat_mp_check_setup', 'wechat_mp_create_draft'],
     note: 'Agent 产出标题候选/摘要/Markdown 正文/封面建议/发布建议。满意的一篇点「投草稿箱」——经你逐次审批后写入公众号草稿箱(每日有次数上限),最终发布由你在公众平台后台人工完成,Agent 不碰任何发布/群发接口。凭证(AppID:AppSecret,需已认证公众号 + IP 白名单)在连接器页「微信公众号(草稿箱直连)」卡片配置,表单内可查看状态并测试连接。',
     profileSlot: 'wechat_mp',
     artifacts: [

@@ -502,6 +502,12 @@ export function deleteUserMission(userId: string, missionId: string) {
   const data = getUserData(userId);
   data.missions = (data.missions || []).filter((m: any) => m.id !== missionId);
   saveUserData(data);
+  // 级联清理该任务的超长工具输出落盘目录(docs/design/tool-output-spill.md §4.5)。
+  // 动态 import 避免与 tool-output-store(其静态依赖本模块的 getDataDir)成环;
+  // 尽力而为不阻塞删除 —— 清理失败还有预算 LRU 与 TTL 兜底
+  import('./tool-output-store')
+    .then((m) => m.cleanupTaskToolOutputs(userId, missionId))
+    .catch(() => {});
   return data.missions;
 }
 

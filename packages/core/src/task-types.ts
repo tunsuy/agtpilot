@@ -53,6 +53,22 @@ export interface TaskOptions {
    * 抛错时内核静默跳过。
    */
   getUserMessages?: () => string | null | undefined | Promise<string | null | undefined>;
+  /**
+   * 超长工具输出全量落盘回调(docs/design/tool-output-spill.md):
+   * 工具结果序列化后超过 TOOL_OUTPUT_LIMIT 时,内核先经本回调尝试把全量原文
+   * 写入调用方管理的存储(web 层 = 用户上下文目录 v2/<userId>/tool-output/)。
+   * 返回非空字符串(= 存储引用 id)时模型收到「头尾预览 + 指针」而非纯截断,
+   * 被截部分可经 read_tool_output(callId, offset) 续读(可恢复);
+   * 无回调 / 返回 null / 抛错 → 回退现行头尾截断,绝不因落盘失败工具调用。
+   * 内核侧受 AGTPILOT_TOOL_SPILL=0 保险丝门控(关闭时不调用本回调)。
+   * CLI/runner 不注入 = 行为与上线前一致。
+   */
+  spillToolOutput?: (info: {
+    taskId: string;
+    callId: string;
+    toolName: string;
+    fullText: string;
+  }) => string | null | Promise<string | null>;
 }
 
 /** 单任务执行效率统计（识别"本该 2 步却跑了很多步"的空转任务） */
@@ -82,6 +98,12 @@ export interface TaskEfficiency {
   /** 本次剥离的 assistant reasoning 部件数(闸1 入口/闸2 循环内/闸3 装配合计;
    *  可选:历史落盘的旧 mission 与 AGTPILOT_STRIP_REASONING=0 回退时无此字段) */
   reasoningPartsStripped?: number;
+  /** 本次全量落盘并替换为「预览+指针」的超长工具输出条数
+   *  (可选:无落盘/保险丝关闭时无此字段 —— 对齐 reasoningPartsStripped 先例,
+   *  历史 mission 与 strict-equal 测试不受影响) */
+  spilledOutputs?: number;
+  /** 落盘输出的原始字符总量(可恢复量级观测:这些内容此前会被截断永久丢失) */
+  spilledChars?: number;
   /** 本次运行消耗的输入 tokens（工具声明 + 历史前缀；成本可观测的前提） */
   promptTokens: number;
   /** 本次运行消耗的输出 tokens */

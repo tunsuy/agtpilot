@@ -38,7 +38,10 @@ export {
   isToolCallMessage,
   truncateText,
   truncateToolOutput,
+  buildSpillPointer,
+  toolSpillEnabled,
   TOOL_OUTPUT_LIMIT,
+  SPILL_PREVIEW_LIMIT,
 } from './text';
 export {
   compactConversationMessages,

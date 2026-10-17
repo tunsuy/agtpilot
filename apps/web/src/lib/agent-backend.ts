@@ -1480,6 +1480,12 @@ class AgentBackend {
         let taskTools: any[] | undefined;
         let taskEnv: Record<string, string> | undefined;
         let taskSandbox: import('@agtpilot/core').SandboxSessionPolicy | undefined;
+        // 超长工具输出全量落盘回调(docs/design/tool-output-spill.md):内核在
+        // 16KB 截断点先试落盘,成功则模型收「预览+指针」,截掉部分经
+        // read_tool_output 续读;保险丝 AGTPILOT_TOOL_SPILL=0 由内核侧门控
+        let spillToolOutput:
+          | ((info: { taskId: string; callId: string; toolName: string; fullText: string }) => string | null | Promise<string | null>)
+          | undefined;
         if (options.userId) {
           const uid = options.userId;
 
@@ -1492,6 +1498,16 @@ class AgentBackend {
             taskTools = [...(taskTools || []), ...buildUserMemoryTools(uid)];
           } catch (e: any) {
             this.addTerminalLog('stderr', `[Memory] 用户记忆工具挂载异常: ${e?.message || e}`, uid);
+          }
+
+          // 2.41 超长工具输出:落盘回调 + 续读工具(read_tool_output,baseline
+          // 常驻挂载)—— 与回调共用同一存储(tool-output-store),按 uid 分区
+          try {
+            const { buildToolOutputTools, spillToolOutput: spillImpl } = await import('@/lib/tool-output-store');
+            taskTools = [...(taskTools || []), ...buildToolOutputTools(uid)];
+            spillToolOutput = (info) => spillImpl(uid, info);
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[ToolOutput] 超长输出落盘/续读工具挂载异常: ${e?.message || e}`, uid);
           }
 
           // 2.45 用户级定时巡航工具（同名命名空间 cron_*，与插件路由前缀约定一致）：
@@ -1758,6 +1774,7 @@ class AgentBackend {
             taskTools,
             taskEnv,
             taskSandbox,
+            spillToolOutput,
             activeTools: workshopActiveTools,
             // 回退弧感知通道:每步 prepareStep 前取一条排队的治理提示注入
             getStepNotice: () => this.taskRuntimes.get(targetMission.id)?.notices.shift() ?? null,

@@ -14,7 +14,7 @@ import {
   stableStringify,
   estimateTextTokens,
 } from './routing';
-import { messageText, truncateToolOutput, TOOL_OUTPUT_LIMIT } from './text';
+import { messageText, truncateToolOutput, buildSpillPointer, toolSpillEnabled, TOOL_OUTPUT_LIMIT } from './text';
 import { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 import { compactConversationMessages } from './compaction';
 import { appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
@@ -161,7 +161,7 @@ export class OrchestratorService extends Service {
     let consecutiveFailures = 0;
     const FAILURE_GUARD_THRESHOLD = 3;
     // 效率统计（识别空转任务）；emptyCalls = 成功口径下的空返回,dedupedCalls = 只读复用
-    const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0, emptyCalls: 0, dedupedCalls: 0 };
+    const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0, emptyCalls: 0, dedupedCalls: 0, spilledOutputs: 0, spilledChars: 0 };
     // 只读工具结果缓存：TTL 内同签名（工具名 + 归一化参数）直接复用,不重新执行。
     // 非只读工具绝不入缓存（两次 email_send 可能都是合法的）。
     const toolResultCache = new Map<string, { at: number; output: any }>();
@@ -365,23 +365,53 @@ export class OrchestratorService extends Service {
           }
         }
 
+        // 超长结果治理(docs/design/tool-output-spill.md):先试全量落盘换
+        // 「预览+指针」(可恢复,read_tool_output 续读),无回调/落盘失败/保险丝关
+        // → 回退头尾混合截断(truncateToolOutput —— 尾 > 头 > 中间的注意力分布
+        // + 报错在尾部的经验)。落盘决策先于广播,tool_result 事件得以携带
+        // spilled 元数据;广播的 output 始终为全量原文 —— UI 展示不受截断影响
+        const serialized = typeof output === 'string' ? output : JSON.stringify(output);
+        let finalOutput: any = output;
+        let spillInfo: { callId: string; originalChars: number } | undefined;
+        if (serialized.length > TOOL_OUTPUT_LIMIT) {
+          let storedRef: string | null = null;
+          if (toolSpillEnabled() && options.spillToolOutput) {
+            try {
+              const r = await options.spillToolOutput({
+                taskId,
+                callId,
+                toolName: toolDef.name,
+                fullText: serialized,
+              });
+              if (typeof r === 'string' && r.length > 0) storedRef = r;
+            } catch {
+              storedRef = null; // 落盘失败绝不失败工具调用 —— 降级为现行截断
+            }
+          }
+          if (storedRef !== null) {
+            stats.spilledOutputs++;
+            stats.spilledChars += serialized.length;
+            spillInfo = { callId, originalChars: serialized.length };
+            finalOutput = buildSpillPointer(serialized, toolDef.name, callId);
+          } else {
+            finalOutput = truncateToolOutput(serialized, toolDef.name, TOOL_OUTPUT_LIMIT);
+          }
+        }
+
         // 广播工具执行结果（compensation 透传：持久化层随步骤快照落盘回滚把手，
-        // 治理不变量 I5 —— 每个行动都要留下可回滚/可追责的元数据）
+        // 治理不变量 I5 —— 每个行动都要留下可回滚/可追责的元数据;
+        // spilled = 本次输出已全量落盘的元数据,前端「已保存」徽章用）
         broadcast({
           type: 'tool_result',
-          payload: toolDef.compensation
-            ? { tool: toolDef.name, output, compensation: toolDef.compensation, callId }
-            : { tool: toolDef.name, output, callId },
+          payload: {
+            tool: toolDef.name,
+            output,
+            callId,
+            ...(toolDef.compensation ? { compensation: toolDef.compensation } : {}),
+            ...(spillInfo ? { spilled: spillInfo } : {}),
+          },
           timestamp: Date.now(),
         });
-
-        // 超长结果截断（头尾混合，防上下文膨胀导致模型退化）：
-        // 见 truncateToolOutput —— 尾 > 头 > 中间的注意力分布 + 报错在尾部的经验
-        const serialized = typeof output === 'string' ? output : JSON.stringify(output);
-        const finalOutput =
-          serialized.length > TOOL_OUTPUT_LIMIT
-            ? truncateToolOutput(serialized, toolDef.name, TOOL_OUTPUT_LIMIT)
-            : output;
         // 只读且拿到非空数据的调用入缓存（缓存的是模型实际拿到的 finalOutput,
         // 复用时不再二次截断）；空返回不缓存 —— 可能是瞬时故障,重试可能成功
         if (toolDef.readOnly && !callFailed && !callSkippedOrRejected && !callEmpty) {
@@ -451,6 +481,11 @@ export class OrchestratorService extends Service {
       toolsTotal: allTools.length,
       routed: Boolean(routedTools),
       reasoningPartsStripped,
+      // spill 计数仅在实际发生时携带(可选字段语义,零落盘时不扰动既有
+      // efficiency 形状 —— 历史 mission 与 strict-equal 测试零漂移)
+      ...(stats.spilledOutputs > 0
+        ? { spilledOutputs: stats.spilledOutputs, spilledChars: stats.spilledChars }
+        : {}),
       promptTokens: usageAcc.promptTokens,
       completionTokens: usageAcc.completionTokens,
     });

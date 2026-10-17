@@ -331,8 +331,10 @@ email_triage 按裁剪口径。
 **配套的 token 治理(与挂载专题独立,见第一部分放大器 3~8)**
 - P0:browser_navigate 剥离 screenshotBase64;DeepWiki/GitHub MCP 源头字段裁剪;
   任务级 token 预算闸(usedTokens 先改任务级);
-- P1:重发前剥离历史 reasoning(**已实施**,见 §9.2);近期 10 条窗口内超大 tool_result 二次截断(~4KB);
-  子 agent/蒸馏 usage 计入 mission.usage;
+- P1:重发前剥离历史 reasoning(**已实施**,见 §9.2);近期 10 条窗口内超大 tool_result 二次截断(~4KB)
+  (**已实施**,由 spill-to-file 方案覆盖并超出:超限输出全量落盘 + 进历史的换成
+  ~4.5KB「预览+指针」,保护窗最坏 160KB→45KB,截断部分从永久丢失变可恢复续读,
+  见 `tool-output-spill.md`);子 agent/蒸馏 usage 计入 mission.usage;
 - P2:UI 分列缓存命中/全价;环节级 token 看板(schema/历史/system/工具结果四栏)。
 
 ### 9.2 reasoning 剥离(2026-10-17 负责人点题「思考剥离吧」,方案确认后实施)

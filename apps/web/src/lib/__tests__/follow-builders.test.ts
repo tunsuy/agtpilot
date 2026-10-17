@@ -8,7 +8,11 @@ import {
   type FbFeedRaw,
 } from '../follow-builders';
 
-const NOW = Date.parse('2026-10-11T12:00:00Z');
+// 时钟基准 = 真实当前时间:工具 execute 路径内部走 Date.now()(不接受注入),
+// 钉死历史日期会让「168h 窗」类断言随日历漂移过期(2026-10-17 生产实例:
+// 钉死 10-11 后 t2(30h 前)实际已 174h+ → 掉出窗口,counts 3≠2)。
+// fixture 全部是相对偏移(iso(msAgo)),动态基准下所有窗口断言依旧确定。
+const NOW = Date.now();
 const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString();
 
 /** 三个 feed 的最小合法样本(字段形状对齐上游 generate-feed.js 输出) */

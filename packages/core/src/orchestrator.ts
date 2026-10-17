@@ -15,6 +15,7 @@ import {
   estimateTextTokens,
 } from './routing';
 import { messageText, truncateToolOutput, TOOL_OUTPUT_LIMIT } from './text';
+import { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 import { compactConversationMessages } from './compaction';
 import { appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
 import { ToolGate } from './tool-gate';
@@ -130,9 +131,23 @@ export class OrchestratorService extends Service {
       }
     };
 
-    const baseMessages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> =
+    // reasoning 剥离计数(三道闸合计,进 TaskEfficiency 供生产验证节省效果)
+    let reasoningPartsStripped = 0;
+    // 闸1(入口):剥离存量历史里的 reasoning 部件 —— 剥离上线前落盘的 mission
+    // 续聊轮不再把历史思考重发回 provider;新历史(闸3 已剥)幂等零开销。
+    // 保险丝 AGTPILOT_STRIP_REASONING=0 时三道闸整体回退(见 reasoning.ts)
+    let historyIn =
       options.historyMessages && options.historyMessages.length > 0
-        ? [...options.historyMessages, { role: 'user', content: options.prompt }]
+        ? options.historyMessages
+        : [];
+    if (reasoningStripEnabled() && historyIn.length > 0) {
+      const r = stripReasoningParts(historyIn);
+      reasoningPartsStripped += r.stripped;
+      historyIn = r.messages;
+    }
+    const baseMessages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> =
+      historyIn.length > 0
+        ? [...historyIn, { role: 'user', content: options.prompt }]
         : [{ role: 'user', content: options.prompt }];
 
     // 死循环熔断状态：滑动窗口签名计数。窗口内同一签名（工具名 + 归一化参数）
@@ -435,6 +450,7 @@ export class OrchestratorService extends Service {
       toolsMounted,
       toolsTotal: allTools.length,
       routed: Boolean(routedTools),
+      reasoningPartsStripped,
       promptTokens: usageAcc.promptTokens,
       completionTokens: usageAcc.completionTokens,
     });
@@ -488,8 +504,21 @@ export class OrchestratorService extends Service {
               toolsMounted = widened.length;
             }
           }
+          // reasoning 剥离(闸2·循环内):provider 会把消息状态里历史 assistant 的
+          // reasoning 部件序列化回本步请求 —— 不剥则单轮思考在 20 步任务里全量
+          // 重发 ×19(73 万事件放大器 4)。放在压缩之前:蒸馏输入(messageText 对
+          // 数组 content 做 JSON.stringify)同步干净,不再为思考文本二次付费。
+          // 只在剥到部件时写回;幂等性保证改写只发生在最新一条 assistant 消息上
+          // (上一步已剥的前缀字节稳定),前缀缓存只在尾部破一次,不破 append-only。
+          if (reasoningStripEnabled()) {
+            const r = stripReasoningParts(adjust.messages ?? messages);
+            if (r.stripped > 0) {
+              adjust.messages = r.messages;
+              reasoningPartsStripped += r.stripped;
+            }
+          }
           try {
-            const compacted = await this.compactConversation(messages, options, 'in-loop');
+            const compacted = await this.compactConversation(adjust.messages ?? messages, options, 'in-loop');
             if (compacted) adjust.messages = compacted;
           } catch {
             // 压缩失败继续用原消息
@@ -609,10 +638,21 @@ export class OrchestratorService extends Service {
       // 收口成最终答复会零工具执行零交付物却落 DONE,转强制总结如实交代
       const cutOff = isCutOffToolCall(loopResult.finishReason || '', finalAnswer);
 
-      // 会话历史 = 输入消息 + SDK 产出的标准 assistant/tool 消息
+      // 会话历史 = 输入消息 + SDK 产出的标准 assistant/tool 消息。
+      // reasoning 剥离(闸3·装配):SDK responseMessages 保留着最后一步的 reasoning
+      // 部件(闸2 只覆盖 prepareStep 可见的步前消息)—— 装配前剥离,保证强制总结
+      // invokeStep、task-end 压缩、result.messages 落盘(mission.conversationMessages)
+      // 与跨轮续聊重发全部不带思考文本
+      let responseMsgs: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> =
+        loopResult.responseMessages || [];
+      if (reasoningStripEnabled()) {
+        const r = stripReasoningParts(responseMsgs);
+        reasoningPartsStripped += r.stripped;
+        responseMsgs = r.messages;
+      }
       const conversation: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = [
         ...baseMessages,
-        ...(loopResult.responseMessages || []),
+        ...responseMsgs,
       ];
 
       // 步数耗尽（模型仍想调工具被 stopWhen 截停）或没有文本产出：

@@ -3,7 +3,7 @@
 > 记录日期:2026-10-17。触发事件:开源贡献雷达「选题」扫描任务单次 mission.usage 达 ~73 万
 > prompt tokens(未到派发阶段)。本文两部分:①73 万的逐环节归因;②工具挂载专题
 > (现状 / 业界对照 / 改造方案)。所有代码结论均附文件:行号,业界数字附来源链接。
-> 状态:分析已定稿,改造方案待负责人拍板。
+> 状态:分析已定稿;工坊白名单(§9.1)与 reasoning 剥离(§9.2)已实施,余待拍板。
 
 ---
 
@@ -46,7 +46,7 @@
    常驻历史 → 历史长期骑在 30k 阈值上,中间区太小时压缩直接返回 null
    (`compaction.ts:75`),**骑线时每步重复触发蒸馏**,蒸馏调用的 usage 被丢弃不入账
    (`orchestrator.ts:775-784`)。
-4. **reasoning 回流入上下文,永不截断。**
+4. **reasoning 回流入上下文,永不截断。**(已治理,见 §9.2)
    生产实测单轮思考 10.8 万字(`task-system-prompt.ts:16-19` 注释);
    `@ai-sdk/deepseek`(dist:314-355)与 `@ai-sdk/openai-compatible`(dist:94-124)会把
    历史 assistant 消息里的 reasoning 部件重新序列化回后续每次请求,全仓无剥离代码;
@@ -320,14 +320,58 @@ email_triage 按裁剪口径。
 - GitHub MCP 等大户走 Code Mode(我们有 sandbox;把「搜 issue/查 repo」合并成 1~2 个
   胖工具后整台服务器可以不挂);
 - 关键词正则 → embedding 语义检索(bigtool/RAG-MCP 式);
-- 对齐 Anthropic mid-conversation tool changes 的「控制」语义(权限回收/模式切换)。
+- 对齐 Anthropic mid-conversation tool changes 的「控制」语义(权限回收/模式切换);
+- 会话数据「单一事实源 + 双投影」重构(2026-10-17 负责人提议):只存一份原始
+  消息/事件流,UI steps 与模型上下文都做成动态组装的投影视图(发模型时才剥
+  reasoning、压缩——Claude Code transcript 同形态)。前置约束:①事实源必须无损
+  (现有 steps 是展示有损投影,不能直接当源);②conversationMessages 现兼崩溃
+  检查点续跑状态与压缩纪要存放,需一并重构;③收益是磁盘与架构纯度,token
+  端已由 §9.2 剥离解决(reasoning 大头不再双份)。
 
 **配套的 token 治理(与挂载专题独立,见第一部分放大器 3~8)**
 - P0:browser_navigate 剥离 screenshotBase64;DeepWiki/GitHub MCP 源头字段裁剪;
   任务级 token 预算闸(usedTokens 先改任务级);
-- P1:重发前剥离历史 reasoning;近期 10 条窗口内超大 tool_result 二次截断(~4KB);
+- P1:重发前剥离历史 reasoning(**已实施**,见 §9.2);近期 10 条窗口内超大 tool_result 二次截断(~4KB);
   子 agent/蒸馏 usage 计入 mission.usage;
 - P2:UI 分列缓存命中/全价;环节级 token 看板(schema/历史/system/工具结果四栏)。
+
+### 9.2 reasoning 剥离(2026-10-17 负责人点题「思考剥离吧」,方案确认后实施)
+
+> 放大器 4 的治理。实施记录:分支 feat/strip-reasoning(基于工坊白名单分支)。
+
+**机制**:`packages/core/src/reasoning.ts` 纯函数 `stripReasoningParts(messages)`
+→ `{messages, stripped}`:只删 assistant 消息数组 content 里的 `type:'reasoning'`
+部件,text/tool-call 原样保留(工具配对不破);浅拷贝不改原对象;幂等 —— 无可剥
+内容返回原数组引用,调用方以引用相等免写回。
+
+**orchestrator 三道闸**:
+- 闸1 入口:`historyMessages` 拼 baseMessages 前剥离 —— 剥离上线前落盘的存量
+  mission 续聊轮不再把历史思考重发回 provider;
+- 闸2 循环内:prepareStep 每步剥离,**放在压缩之前** —— 蒸馏输入(messageText
+  对数组 content 做 JSON.stringify)同步干净,不再为思考文本二次付费;幂等性
+  保证改写只发生在最新一条 assistant 消息,已剥历史前缀跨步字节稳定,
+  provider 前缀缓存只在尾部破一次(append-only 教义不冲突);
+- 闸3 装配:`responseMessages` 并入 conversation 前剥离(SDK 返回的 responseMessages
+  保留全部步的 reasoning,闸2 只覆盖步前可见消息)→ 强制总结 invokeStep、
+  task-end 压缩、result.messages 落盘(mission.conversationMessages)、跨轮重发全干净。
+
+**安全性核实**(实施前逐路查证):
+- DeepSeek 官方口径 reasoning_content 多轮无需回传;当前 thinking.ts 三分支
+  (openai/deepseek/openai-compatible)均不依赖历史 reasoning;
+- UI「思考过程」展示走 assistant_delta 事件流(kind:'reasoning')实时累积进
+  mission steps,**不读消息历史** —— 剥离后前端照常显示思考;
+- ⚠️ 边界:未来接 Anthropic(thinking+tool_use 要求保留 thinking 块)或
+  OpenAI o 系列(加密 reasoning items)必须按 provider 分支门控,勿全局放开
+  (reasoning.ts 头注已留标记)。
+
+**保险丝**:`AGTPILOT_STRIP_REASONING=0` 三道闸整体回退原行为。
+**可观测**:`TaskEfficiency.reasoningPartsStripped`(可选字段,三闸合计)随
+done 事件落 mission,生产可验证剥离量。
+**测试**:reasoning.test.ts 9 例(纯函数不变量)+ orchestrator-reasoning.test.ts
+6 例(三道闸行为、前缀引用稳定、保险丝、tool-call 配对完好);core 141 /
+web 1206 全绿,golden 快照零漂移。
+**范围注记**:plugin-subagent 子循环未经 orchestrator 三道闸,其 reasoning 仍在
+子循环内回传(≤8 步、报告 ≤8000 字符回流,量级小)—— 列为后续独立小项。
 
 ---
 

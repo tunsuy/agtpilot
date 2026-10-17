@@ -79,6 +79,9 @@ export interface TaskEfficiency {
   toolsTotal: number;
   /** 是否启用了按需挂载（false = 全量声明） */
   routed: boolean;
+  /** 本次剥离的 assistant reasoning 部件数(闸1 入口/闸2 循环内/闸3 装配合计;
+   *  可选:历史落盘的旧 mission 与 AGTPILOT_STRIP_REASONING=0 回退时无此字段) */
+  reasoningPartsStripped?: number;
   /** 本次运行消耗的输入 tokens（工具声明 + 历史前缀；成本可观测的前提） */
   promptTokens: number;
   /** 本次运行消耗的输出 tokens */

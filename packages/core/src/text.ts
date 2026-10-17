@@ -43,18 +43,63 @@ export function truncateText(text: string, limit: number): string {
  * 而不是整体重取（重取是步数空转的典型来源）。
  */
 export function truncateToolOutput(text: string, toolName: string, limit: number): string {
-  const tailFirst = TAIL_FIRST_PREFIXES.some((p) => toolName.startsWith(p));
-  const headRatio = tailFirst ? 0.3 : 0.7;
-  const headLen = Math.floor(limit * headRatio);
-  const tailLen = limit - headLen;
+  const { tailFirst, headLen, tailLen, head, tail } = headTailSplit(text, toolName, limit);
   const omitted = text.length - headLen - tailLen;
-  const head = text.slice(0, headLen);
-  const tail = text.slice(text.length - tailLen);
   return (
     `${head}\n` +
     `…[输出过长已截断（原始 ${text.length} 字符）：${tailFirst ? '命令/日志类输出，尾优先' : '内容类输出，头优先'}——` +
     `保留头部 ${headLen} 字符 + 尾部 ${tailLen} 字符，中间省略 ${omitted} 字符。` +
     `若工具支持 offset 参数可携带 offset 续读；需要中间内容时请用更精确的参数缩小输出范围，不要整体重取]…\n` +
+    `${tail}`
+  );
+}
+
+// ---- 超长输出 spill-to-file(docs/design/tool-output-spill.md)----
+
+/** spill 后进历史的头尾预览上限：指针版整体 ~4.5KB,压缩保护窗 10 条
+ *  最坏占用从 16KB×10=160KB 降到 ~45KB(骑线病理缓解,见方案 §4.3) */
+export const SPILL_PREVIEW_LIMIT = 4 * 1024;
+
+/** 工具输出落盘总开关(缺省启用;'0' 关闭 —— 内核不再调注入的落盘回调,
+ *  全链路回退现行头尾截断,行为与上线前逐字节一致) */
+export function toolSpillEnabled(): boolean {
+  return process.env.AGTPILOT_TOOL_SPILL !== '0';
+}
+
+/** 头尾混合切分(truncateToolOutput 与 buildSpillPointer 共用同一注意力模型) */
+function headTailSplit(text: string, toolName: string, limit: number) {
+  const tailFirst = TAIL_FIRST_PREFIXES.some((p) => toolName.startsWith(p));
+  const headRatio = tailFirst ? 0.3 : 0.7;
+  const headLen = Math.floor(limit * headRatio);
+  const tailLen = limit - headLen;
+  return {
+    tailFirst,
+    headLen,
+    tailLen,
+    head: text.slice(0, headLen),
+    tail: text.slice(text.length - tailLen),
+  };
+}
+
+/**
+ * 落盘成功后的指针消息:头尾预览 + 全量保存声明 + 续读指引。
+ * 红线(业界共识):不静默截断 —— 必须告知原始大小与如何继续获取,
+ * 否则模型基于残缺数据自信作答。截断部分经 read_tool_output(callId, offset)
+ * 可恢复(= Manus「丢正文保引用」的可恢复压缩形态)。
+ */
+export function buildSpillPointer(
+  text: string,
+  toolName: string,
+  callId: string,
+  limit: number = SPILL_PREVIEW_LIMIT
+): string {
+  const { headLen, tailLen, head, tail } = headTailSplit(text, toolName, limit);
+  return (
+    `${head}\n` +
+    `…[原输出共 ${text.length} 字符,过长,全量已保存(引用 ref=${callId})。` +
+    `以上仅为头尾预览(头 ${headLen} + 尾 ${tailLen} 字符)。` +
+    `需要中间或指定位置内容:调用 read_tool_output(callId="${callId}", offset=起始字符位置) 窗口续读;` +
+    `或用更精确参数缩小范围重查,不要整体重取]…\n` +
     `${tail}`
   );
 }

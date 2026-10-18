@@ -184,6 +184,9 @@ export function apply(ctx: Context, config: SubagentPluginConfig = {}) {
     readOnly: true,
     // 进路由:调研类 prompt 命中才挂载,闲聊不浪费 token
     baseline: false,
+    // 零命中收敛兜底(§9.5):自由任务没猜中关键词时广域调研能力仍在
+    // (闲聊短路档不挂——那条分支只含 baseline)
+    fallback: true,
     parameters: {
       type: 'object',
       properties: {

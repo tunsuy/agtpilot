@@ -60,6 +60,9 @@ export function buildReferenceTools(userId: string): ToolDefinition[] {
         '事实、数据、观点优先采用引用内容。只能读你自己的任务交付物,无权读他人任务。',
       dangerLevel: 'low',
       readOnly: true, // 只读并行门控:纯读自己任务的 artifact,无副作用
+      // 零命中收敛兜底(token 文档 §9.5):带参考资料的任务不保证命中检索关键词,
+      // 兜底档常驻本工具,防止「有引用却读不到」
+      fallback: true,
       parameters: {
         type: 'object',
         properties: {

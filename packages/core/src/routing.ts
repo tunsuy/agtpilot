@@ -11,7 +11,8 @@ import { ToolDefinition, ToolRoute } from './contracts';
  * （只挂基线工具，不进插件路由）。
  *
  * 可调参数：AGTPILOT_TOOL_ROUTING=0 整体关闭；
- * AGTPILOT_CONTEXT_WINDOW（默认 64000）；AGTPILOT_TOOL_SEARCH_THRESHOLD（默认 10，单位 %）。
+ * AGTPILOT_CONTEXT_WINDOW（默认 64000）；AGTPILOT_TOOL_SEARCH_THRESHOLD（默认 10，单位 %）；
+ * AGTPILOT_ROUTE_FALLBACK=full 时零命中恢复全量兜底（默认 lean = baseline+fallback 收敛，§9.5）。
  */
 
 /** 估算一段文本的 tokens（CJK 按 1 token/字，其余按 1 token/4 字符） */
@@ -29,6 +30,8 @@ export interface RoutableTool {
   description?: string;
   parameters?: Record<string, any>;
   baseline?: boolean;
+  /** 零命中收敛兜底声明(§9.5):路由零命中时随 baseline 一并挂载 */
+  fallback?: boolean;
 }
 
 /**
@@ -105,11 +108,12 @@ export function resolveExplicitTools(explicit: string[], allTools: RoutableTool[
 
 /**
  * 依据阈值与 prompt 选出本次任务需要声明的工具子集。
- * 返回 undefined 表示全量挂载（未超阈值 / 未命中任何规则 / 路由被关闭）。
+ * 返回 undefined 表示全量挂载（未超阈值 / 路由被关闭 / 零命中且目录无可依赖项）。
  *
  * 决策顺序：显式指定 > 路由开关 > 阈值门（工具 tokens < 上下文 10% 时
  * 全量挂载，前缀恒定跨任务共享缓存）> 闲聊短路（纯问候/自我介绍只挂基线）
- * > 插件注册的关键词规则路由。
+ * > 插件注册的关键词规则路由 > 零命中收敛兜底（baseline+fallback 检索组,
+ * §9.5;保险丝 AGTPILOT_ROUTE_FALLBACK=full 恢复全量）。
  * 基线工具（ToolDefinition.baseline）无论如何都挂载。
  *
  * explicit(显式白名单)语义:调用方(如工坊任务)声明的确定性工具集,支持
@@ -152,7 +156,22 @@ export function selectActiveTools(
       }
     }
   }
-  if (matched.size === 0) return undefined; // 拿不准 → 全量，保守兜底
+  if (matched.size === 0) {
+    // 零命中收敛兜底(快速止血 A,token 文档 §9.5):旧行为返回 undefined 全量
+    // 挂载——生产上内置 48 把 + MCP 连接器 135 把的 schema ≈35k tokens/步
+    // (「讲个笑话」「你是谁的作者」全落这档,45.8k 闲聊账单的主放大器)。
+    // 改为 baseline + fallback 检索组 + prompt 显式提到的工具名;返回序 =
+    // 声明序(跨任务字节稳定,保 provider 前缀缓存)。漏挂工具由 prepareStep
+    // 每步重算「只扩不缩」补救;MCP 工具自由任务侧统一不挂,等层0 目录卡片
+    // (§9.4)给自助通道。保险丝 AGTPILOT_ROUTE_FALLBACK=full 恢复全量兜底
+    // (调用时读 env,热切)。
+    if ((process.env.AGTPILOT_ROUTE_FALLBACK || 'lean') === 'full') return undefined;
+    const lean = allTools
+      .filter((t) => t.baseline || t.fallback || prompt.includes(t.name))
+      .map((t) => t.name);
+    // 目录里没有任何可依赖项(理论边界)→ 保守回全量,不让模型赤手空拳
+    return lean.length > 0 ? lean : undefined;
+  }
 
   // prompt 里显式提到的工具名直接保留
   for (const name of allToolNames) {

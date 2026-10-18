@@ -168,6 +168,14 @@ export interface ToolSession {
   env?: Record<string, string>;
   userId?: string;
   /**
+   * 任务级显式工具白名单(工坊四层声明,含 `前缀*` 通配,TaskOptions.activeTools
+   * 原样透传):子系统(plugin-subagent 等)据此把工具挂载面与主循环对齐 ——
+   * 主循环整台禁入的 MCP,子循环同样禁入。缺省 = 无工坊约束(闲聊/关键词路由
+   * 任务),子系统维持自身白名单语义。匹配复用 routing.resolveExplicitTools
+   * (精确名 / 前缀通配 / baseline 自动并入),单一事实源。
+   */
+  activeTools?: readonly string[];
+  /**
    * 任务级沙箱策略(docs/design/sandbox-control-hardening.md §4.2):
    * 子进程环境暴露白名单 / 凭据-端点绑定 / bwrap 围栏模式 / 出站网络开关。
    * web 层构建后持有活引用 —— 权限提案批准即原地热更新,in-flight 任务下一步生效。
@@ -215,6 +223,15 @@ export interface ToolDefinition {
    * 插件 config 已带 Key 时不声明此项。
    */
   requiredEnv?: string[];
+  /**
+   * 工具级输出上限(字符数,层1 源头裁剪 ②):本工具返回进入模型上下文的限额,
+   * 生效值 = min(outputCap, TOOL_OUTPUT_LIMIT)(text.effectiveOutputLimit,编排器
+   * 截断点与 plugin-subagent 内部截断共用)。超限走既有治理管道:先试 spill 全量
+   * 落盘换「预览+指针」(无损可续读),回退头尾截断;tool_result 广播仍带全量原文。
+   * 声明场景:已知输出肥大但对模型只需摘要级的工具(如 MCP 连接器按服务器裁剪,
+   * plugin-mcp 注册时代设)。缺省 = 沿用 TOOL_OUTPUT_LIMIT,行为与从前逐字节一致。
+   */
+  outputCap?: number;
 }
 
 /**

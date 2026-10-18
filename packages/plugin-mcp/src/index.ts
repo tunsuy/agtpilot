@@ -7,6 +7,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import { capMcpToolResult, mcpOutputLimit } from './output-cap';
 
 export const name = 'agtpilot-plugin-mcp';
 export const inject = ['agent'];
@@ -366,11 +367,16 @@ class UserConnection {
 
       const originalName = tool.name;
       const serverName = this.config.name;
+      // 层1 源头裁剪 ③:客户端统一输出治理(output-cap.ts)。execute 内已按
+      // per-server/统一 cap 裁剪;这里再把同一限额声明为 outputCap,让编排器
+      // 截断点与 plugin-subagent 内部截断对 MCP 工具同源生效(effectiveOutputLimit)。
+      const outLimit = mcpOutputLimit(serverName);
       defs.push({
         name: toolName,
         description: `[MCP连接器: ${serverName}] ${tool.description || originalName}`,
         parameters: (tool.inputSchema as any) || { type: 'object', properties: {} },
         dangerLevel: 'medium',
+        ...(outLimit > 0 ? { outputCap: outLimit } : {}),
         // 只读分类(default-deny,见 classify.ts):① 服务器注解权威 → ② 注解沉默时按名称动词启发 → ③ 拿不准拒绝。
         // 判只读才带 readOnly(子 agent 白名单信号 + 主循环只读并行门);其余保持现状(不带 readOnly,主循环走独占门、子 agent 不可见)。
         // readOnlyBasis 记录判定依据(annotation/heuristic),供详情页「名称判定」拆档与审计。
@@ -394,13 +400,13 @@ class UserConnection {
             client.callTool({ name: originalName, arguments: args || {} });
           try {
             const client = await this.connect();
-            return await call(client);
+            return capMcpToolResult(await call(client), serverName);
           } catch (err: any) {
             // 连接类错误：重连重试一次；仍失败（或 401 未授权）则返回带指引的错误
             if (isConnectionError(err)) {
               try {
                 const fresh = await this.reconnect();
-                return await call(fresh);
+                return capMcpToolResult(await call(fresh), serverName);
               } catch (err2: any) {
                 return {
                   error: `MCP 连接器 [${serverName}] 调用失败: ${err2?.message || err2}`,

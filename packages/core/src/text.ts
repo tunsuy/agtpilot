@@ -5,6 +5,18 @@
 /** 单个工具结果回填模型上下文的字符上限，超长截断，防止上下文膨胀导致模型退化。 */
 export const TOOL_OUTPUT_LIMIT = 16 * 1024;
 
+/**
+ * 工具级输出限额(层1 源头裁剪 ②,docs/design/token-consumption-and-tool-loading.md §9.3):
+ * ToolDefinition.outputCap 声明时取 min(outputCap, TOOL_OUTPUT_LIMIT),未声明/非法(≤0)
+ * → TOOL_OUTPUT_LIMIT。编排器截断点与 plugin-subagent 内部截断共用本函数(单一事实源)。
+ * cap 只压「进模型」的一份:spill 落盘仍是全量原文(无损),tool_result 广播不受影响。
+ */
+export function effectiveOutputLimit(outputCap?: number): number {
+  return typeof outputCap === 'number' && Number.isFinite(outputCap) && outputCap > 0
+    ? Math.min(Math.floor(outputCap), TOOL_OUTPUT_LIMIT)
+    : TOOL_OUTPUT_LIMIT;
+}
+
 /** 头尾混合截断时，尾部优先的工具组前缀（命令执行/版本控制输出：错误与结论在尾部） */
 const TAIL_FIRST_PREFIXES = ['sandbox_', 'git_'];
 

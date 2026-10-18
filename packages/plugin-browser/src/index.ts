@@ -313,6 +313,9 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           timestamp: Date.now(),
         });
 
+        // 层1 源头裁剪 ①:截图只走 viewport_update 事件(驾驶舱视口读事件流,
+        // agent-backend.ts viewport_update 分支),不再随工具返回进模型上下文 ——
+        // ~12KB base64 对文本模型是零信息量噪音(截断后连预览价值都没有)
         return {
           success: true,
           url: result.url,
@@ -320,7 +323,6 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           content: result.content,
           nextOffset: result.nextOffset,
           totalLength: result.totalLength,
-          screenshotBase64: dataUri || undefined,
         };
       } catch (err: any) {
         ctx.agent.emitEvent({
@@ -411,11 +413,12 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           },
           timestamp: Date.now(),
         });
+        // 层1 源头裁剪 ①:base64 不随结果返回(对文本模型零信息量)——
+        // 视觉核对走 viewport_update 事件(驾驶舱视口),文件核对走 savePath
         return {
           success: true,
           savePath,
-          message: `截图已保存至: ${savePath}`,
-          screenshotBase64: `data:image/jpeg;base64,${screenshotBase64}`,
+          message: `截图已保存至: ${savePath}(画面已同步到驾驶舱视口)`,
         };
       } catch (err: any) {
         return {

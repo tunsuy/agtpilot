@@ -14,7 +14,7 @@ import {
   stableStringify,
   estimateTextTokens,
 } from './routing';
-import { messageText, truncateToolOutput, buildSpillPointer, toolSpillEnabled, TOOL_OUTPUT_LIMIT } from './text';
+import { messageText, truncateToolOutput, buildSpillPointer, toolSpillEnabled, effectiveOutputLimit } from './text';
 import { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 import { compactConversationMessages } from './compaction';
 import { appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
@@ -320,6 +320,7 @@ export class OrchestratorService extends Service {
               userId: options.userId,
               sandbox: options.taskSandbox,
               callId,
+              ...(options.activeTools ? { activeTools: options.activeTools } : {}),
             });
           } catch (err: any) {
             return { error: err.message };
@@ -369,11 +370,14 @@ export class OrchestratorService extends Service {
         // 「预览+指针」(可恢复,read_tool_output 续读),无回调/落盘失败/保险丝关
         // → 回退头尾混合截断(truncateToolOutput —— 尾 > 头 > 中间的注意力分布
         // + 报错在尾部的经验)。落盘决策先于广播,tool_result 事件得以携带
-        // spilled 元数据;广播的 output 始终为全量原文 —— UI 展示不受截断影响
+        // spilled 元数据;广播的 output 始终为全量原文 —— UI 展示不受截断影响。
+        // 限额 = 工具级 outputCap(层1 源头裁剪 ②)与 TOOL_OUTPUT_LIMIT 的较小者
+        // (effectiveOutputLimit);未声明 outputCap 的工具行为与从前逐字节一致。
         const serialized = typeof output === 'string' ? output : JSON.stringify(output);
+        const outputLimit = effectiveOutputLimit(toolDef.outputCap);
         let finalOutput: any = output;
         let spillInfo: { callId: string; originalChars: number } | undefined;
-        if (serialized.length > TOOL_OUTPUT_LIMIT) {
+        if (serialized.length > outputLimit) {
           let storedRef: string | null = null;
           if (toolSpillEnabled() && options.spillToolOutput) {
             try {
@@ -394,7 +398,7 @@ export class OrchestratorService extends Service {
             spillInfo = { callId, originalChars: serialized.length };
             finalOutput = buildSpillPointer(serialized, toolDef.name, callId);
           } else {
-            finalOutput = truncateToolOutput(serialized, toolDef.name, TOOL_OUTPUT_LIMIT);
+            finalOutput = truncateToolOutput(serialized, toolDef.name, outputLimit);
           }
         }
 

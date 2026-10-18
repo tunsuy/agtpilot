@@ -22,6 +22,34 @@ export const inject = ['agent'];
 export type { ModelStepResult };
 
 /**
+ * 上层 prepareStep 返回值 → AI SDK 的适配(按本次调用工具表过滤 + 空数组语义透传)。
+ *
+ * 关键语义:`activeTools: []`(显式空数组)是**合法收敛信号** ——
+ * plugin-subagent token 预算闸的「收掉全部工具 + 注入收敛提示」依赖它强制子循环
+ * 停止检索;按 falsy 丢弃会让收敛闸在生产静默失效(存量 bug,2026-10-18 修复,
+ * 此前只有注入的收敛提示消息在起作用,工具照挂)。
+ * 非空声明但名字全部不在本次工具表 = 无效输入,不输出 activeTools 维持现状
+ * (不得误发空数组把工具全收掉)。导出供单测。
+ */
+export function adaptPrepareStepResult(
+  result: { activeTools?: string[]; messages?: any[] } | undefined | null,
+  toolsMap: Record<string, unknown>,
+): { activeTools?: string[]; messages?: any[] } | undefined {
+  if (!result) return undefined;
+  const out: { activeTools?: string[]; messages?: any[] } = {};
+  if (result.activeTools) {
+    if (result.activeTools.length === 0) {
+      out.activeTools = [];
+    } else {
+      const filtered = result.activeTools.filter((n) => n in toolsMap);
+      if (filtered.length > 0) out.activeTools = filtered;
+    }
+  }
+  if (result.messages?.length) out.messages = result.messages;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
  * 模型调用错误信息增稠。APICallError 的顶层 message 常是「Failed to
  * process successful response」这类无操作性的文案(HTTP 200 但响应体解析
  * 失败),真实死因 —— 自定义中转/兼容端点返回的错误体(配额耗尽、速率
@@ -225,14 +253,8 @@ export class ModelService extends Service implements ModelGateway {
             preparingStep = true;
             try {
               const result = await options.prepareStep!({ stepNumber, messages });
-              if (!result) return undefined;
-              const out: { activeTools?: string[]; messages?: any[] } = {};
-              if (result.activeTools?.length) {
-                const filtered = result.activeTools.filter((n) => n in toolsMap);
-                if (filtered.length > 0) out.activeTools = filtered;
-              }
-              if (result.messages?.length) out.messages = result.messages;
-              return Object.keys(out).length > 0 ? out : undefined;
+              // 适配(含 activeTools: [] 收敛信号透传)抽为纯函数,见 adaptPrepareStepResult
+              return adaptPrepareStepResult(result, toolsMap);
             } finally {
               preparingStep = false;
               lastActivityAt = Date.now();

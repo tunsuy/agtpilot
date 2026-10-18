@@ -1,5 +1,30 @@
 import { describe, it, expect } from 'vitest';
-import { truncateToolOutput, messageText, isToolCallMessage } from './text';
+import {
+  truncateToolOutput,
+  messageText,
+  isToolCallMessage,
+  effectiveOutputLimit,
+  TOOL_OUTPUT_LIMIT,
+} from './text';
+
+describe('effectiveOutputLimit(工具级 outputCap,层1 源头裁剪 ②)', () => {
+  it('未声明/非法(0、负数、NaN、非有限)→ TOOL_OUTPUT_LIMIT', () => {
+    expect(effectiveOutputLimit(undefined)).toBe(TOOL_OUTPUT_LIMIT);
+    expect(effectiveOutputLimit(0)).toBe(TOOL_OUTPUT_LIMIT);
+    expect(effectiveOutputLimit(-100)).toBe(TOOL_OUTPUT_LIMIT);
+    expect(effectiveOutputLimit(NaN)).toBe(TOOL_OUTPUT_LIMIT);
+    expect(effectiveOutputLimit(Infinity)).toBe(TOOL_OUTPUT_LIMIT);
+  });
+
+  it('声明值小于限额 → 取声明值(向下取整)', () => {
+    expect(effectiveOutputLimit(8000)).toBe(8000);
+    expect(effectiveOutputLimit(2000.7)).toBe(2000);
+  });
+
+  it('声明值大于 TOOL_OUTPUT_LIMIT → 被 16KB 压顶(cap 不能放宽内核限额)', () => {
+    expect(effectiveOutputLimit(999_999)).toBe(TOOL_OUTPUT_LIMIT);
+  });
+});
 
 describe('truncateToolOutput', () => {
   // A/M/B 各留足余量，确保截取的头/尾段落完整落在同一段字符内

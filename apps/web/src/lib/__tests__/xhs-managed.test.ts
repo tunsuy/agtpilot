@@ -478,6 +478,30 @@ describe('xhs_read_creator_data execute', () => {
     expect(r2.page).toBe('overview');
   });
 
+  it('层1 源头裁剪 ①:读路径截图不进工具返回(服务层给了 screenshotBase64 也剥掉)', async () => {
+    const uid = 'xhs-r1b';
+    writeRecord(uid, { lastLoginAt: Date.now() });
+    const page = fakePublishPage();
+    const browser: XhsBrowserService = {
+      acquirePage: vi.fn(async () => page),
+      navigateAndDistill: vi.fn(async (_u: string | undefined, url: string) => ({
+        url,
+        title: '创作中心',
+        content: '昨日浏览 1234',
+        totalLength: 100,
+        screenshotBase64: 'SHOTB64SHOTB64',
+      })),
+      hasCookies: vi.fn(async () => true),
+    };
+    const readTool = xm.buildXhsManagedTools(uid, browser).find((t) => t.name === 'xhs_read_creator_data')!;
+
+    const r = await readTool.execute({ page: 'overview' }, { taskId: 'm', step: 1 });
+    expect(r.success).toBe(true);
+    expect(r.content).toContain('昨日浏览');
+    expect('screenshotBase64' in r).toBe(false);
+    expect(JSON.stringify(r)).not.toContain('SHOTB64');
+  });
+
   it('登录态失效:返回引导文案,不导航', async () => {
     const uid = 'xhs-r2';
     writeRecord(uid, { lastLoginAt: Date.now() });

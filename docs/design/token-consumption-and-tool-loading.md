@@ -3,7 +3,9 @@
 > 记录日期:2026-10-17。触发事件:开源贡献雷达「选题」扫描任务单次 mission.usage 达 ~73 万
 > prompt tokens(未到派发阶段)。本文两部分:①73 万的逐环节归因;②工具挂载专题
 > (现状 / 业界对照 / 改造方案)。所有代码结论均附文件:行号,业界数字附来源链接。
-> 状态:分析已定稿;工坊白名单(§9.1)与 reasoning 剥离(§9.2)已实施,余待拍板。
+> 状态:分析已定稿;工坊白名单(§9.1)、reasoning 剥离(§9.2)与层1 源头裁剪
+> (§9.3)已实施;层0 工具卡片化(§9.4)测量工具已实施、静态数据已出,
+> 机制立项待服务器端 MCP 补测 + 命中分布数据。余待拍板。
 
 ---
 
@@ -39,7 +41,7 @@
    全部 route,把 GitHub 官方 MCP 全服务器(~30-40 个大 schema)+ browser(11)+
    sandbox(8)+ git(7)+ search(4)+ subagent 等全部拖进来;任务内「只扩不缩」
    (`orchestrator.ts:401-406`、`routing.ts:148-158`)。
-3. **DeepWiki / GitHub MCP 输出无源头裁剪,压缩骑线压不动。**
+3. **DeepWiki / GitHub MCP 输出无源头裁剪,压缩骑线压不动。**(已治理,见 §9.3)
    两者原样返回长文档/全字段 JSON(`plugin-mcp:396-399` `return await call(client)`),
    只有 16KB 统一兜底截断(`text.ts:6` `TOOL_OUTPUT_LIMIT = 16*1024`,头 70%/尾 30%),
    每条 ≈4k tokens;「最近 10 条原样保留」的保护窗(`compaction.ts:38`)让 3~5 个这种块
@@ -52,7 +54,7 @@
    历史 assistant 消息里的 reasoning 部件重新序列化回后续每次请求,全仓无剥离代码;
    reasoning 还进 `mission.conversationMessages`(`orchestrator.ts:603-606`)跨轮重发。
 5. **browser_navigate 把 screenshotBase64 塞进工具结果**(`plugin-browser:31,164-178`):
-   每次导航 ~12KB base64 噪音 ≈3k tokens 纯浪费(截断后对模型零信息量)。
+   每次导航 ~12KB base64 噪音 ≈3k tokens 纯浪费(截断后对模型零信息量)。(已治理,见 §9.3)
 6. **强制总结轮**:步数耗尽后全量(未压缩)历史再发一次
    (`orchestrator.ts:603-653`),+30~50k。
 7. **research_subagent 并行派发**:`prompt.main.md:29` 教模型「独立调研路一轮内并行派发」,
@@ -306,6 +308,14 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
 已拍板(2026-10-17「按你建议来吧」):① weekly GitHub 走精确名;② novel /
 email_triage 按裁剪口径。
 
+**增补(2026-10-17 负责人:「子agent的工具绑定逻辑也要跟主agent一样吧」)**:
+plugin-subagent 挂载面与工坊白名单对齐 —— `TaskOptions.activeTools` 透传进
+`ToolSession.activeTools`,子 agent 在只读双层白名单之上再取「候选 ∩ 工坊白名单」,
+匹配复用 core `resolveExplicitTools`(精确名 / `前缀*` 通配 / baseline 自动并入,
+与主循环单一事实源)。主循环整台禁入的 github_mcp 子循环同样禁入(此前子 agent
+经双钥匙可达其只读件,是唯一绕过工坊白名单的口子);非工坊任务不受影响。
+详见 `subagent-plugin-spec.md` §4.3 对齐条目。
+
 **第二步 · 自有 tool_search 元工具(provider 无关,照 Anthropic GA 形态)**
 - 超阈值后非 baseline 工具全部不挂,挂一个 `tool_search`(目录 = name+一句话描述紧凑
   索引,114 个 ≈3~4k);BM25/关键词检索,命中 top-5 以 **append** 方式并入 mounted
@@ -329,8 +339,8 @@ email_triage 按裁剪口径。
   端已由 §9.2 剥离解决(reasoning 大头不再双份)。
 
 **配套的 token 治理(与挂载专题独立,见第一部分放大器 3~8)**
-- P0:browser_navigate 剥离 screenshotBase64;DeepWiki/GitHub MCP 源头字段裁剪;
-  任务级 token 预算闸(usedTokens 先改任务级);
+- P0:browser_navigate 剥离 screenshotBase64(**已实施**,§9.3 ①);DeepWiki/GitHub MCP
+  源头字段裁剪(**已实施**,§9.3 ②③);任务级 token 预算闸(usedTokens 先改任务级,待拍板);
 - P1:重发前剥离历史 reasoning(**已实施**,见 §9.2);近期 10 条窗口内超大 tool_result 二次截断(~4KB)
   (**已实施**,由 spill-to-file 方案覆盖并超出:超限输出全量落盘 + 进历史的换成
   ~4.5KB「预览+指针」,保护窗最坏 160KB→45KB,截断部分从永久丢失变可恢复续读,
@@ -372,8 +382,142 @@ done 事件落 mission,生产可验证剥离量。
 **测试**:reasoning.test.ts 9 例(纯函数不变量)+ orchestrator-reasoning.test.ts
 6 例(三道闸行为、前缀引用稳定、保险丝、tool-call 配对完好);core 141 /
 web 1206 全绿,golden 快照零漂移。
-**范围注记**:plugin-subagent 子循环未经 orchestrator 三道闸,其 reasoning 仍在
-子循环内回传(≤8 步、报告 ≤8000 字符回流,量级小)—— 列为后续独立小项。
+**范围注记**:plugin-subagent 子循环最初未经三道闸(其 reasoning 仍在子循环内回传);
+2026-10-17 负责人点题「子agent也把思考剥离吧」已补齐 —— 子循环闸:runner.ts
+prepareStep 步前剥离(**放在 60k token 闸之前**,思考文本不再虚占预算)+ 强制收敛
+invokeStep 消息同剥(闸3 同款);transcript 落盘保持无损原文(观测记录不回传模型,
+事实源无损原则);保险丝 `AGTPILOT_STRIP_REASONING=0` 对子循环同样生效;
+可观测:`SubagentRunMeta.reasoningPartsStripped`(>0 才写)。测试 runner.test.ts
+「3.5 reasoning 剥离」6 例。
+
+**配套修复(2026-10-18 负责人拍板「修」)**:plugin-model 的 prepareStep 包装层
+旧实现 `if (result.activeTools?.length)` 把返回的 `activeTools` 按 falsy 丢弃 ——
+子 agent token 预算闸的「收掉全部工具」收敛信号(`activeTools: []`)在生产静默
+失效(只剩注入的收敛提示消息起作用,工具照挂,预算触顶后模型仍可继续检索)。
+修复:适配逻辑抽为纯函数 `adaptPrepareStepResult`(plugin-model/src/index.ts)——
+显式空数组透传;非空声明但名字全部不在本次工具表 = 无效输入,维持现状(不得
+误发收工具语义);主循环不受影响(routing prepareStep 从不返回空数组)。
+测试:plugin-model prepare-step.test.ts 6 例。
+
+### 9.3 层1 源头裁剪(2026-10-17 负责人拍板「那就把层1完整的做完」,已实施)
+
+> 三层漏斗的层1:在噪音**产生的地方**就不让它进模型上下文。此前仓内只有
+> github_scan 一个成功案例(胖工具,单次 2~4.5k);spill-to-file(§9 P1)是层2
+> 兜底 —— 但 16KB 以下的噪音(截图 base64 ~12KB、GitHub 全字段 JSON)够不着
+> spill 阈值,原样常驻历史,且通用头尾截断不是语义裁剪,模型续读一次
+> read_tool_output 又是一整步 16~25k。本节三件套补齐层1。
+
+**① 截图剥离(放大器 5 治理)**
+- `browser_navigate` / `browser_screenshot`(plugin-browser)与 `xhs_read_creator_data`
+  (web 托管读工具)的**工具返回值**不再携带 `screenshotBase64`(~12KB base64 ≈3k
+  tokens,对文本模型零信息量)。
+- UI 安全性核实(实施前逐路查证):驾驶舱视口读的是 `viewport_update` **事件流**
+  (`agent-backend.ts` viewport_update 分支 → `state.viewport` → CockpitView),
+  全仓组件对工具返回里的 base64 **零消费**(仅 XhsWebLoginModal 读登录帧事件);
+  服务层 `navigateAndDistill`/`captureFrame` 契约不变(登录通道、事件通道照常拿截图)。
+- **有意保留**:存草稿类写工具(xhs_save_note_draft / zhihu_save_article_draft /
+  fanqie_save_chapter_draft / script-skills)的截图是**人工核对交付物**(测试锁死的
+  产品契约),且写路径低频(每日上限)—— 不剥。读路径高频才是治理对象。
+- 测试:plugin-browser 首个测试文件 `index.test.ts` 3 例(playwright 全 mock;
+  返回值零 base64 + 事件通道携带 data URI + 服务层契约不变);
+  web `xhs-managed.test.ts` 增读路径剥离断言。
+
+**② ToolDefinition.outputCap(工具级输出限额机制)**
+- `contracts.ts` 新增可选 `outputCap?: number`;生效限额 =
+  `min(outputCap, TOOL_OUTPUT_LIMIT)`(`text.effectiveOutputLimit`,单一事实源),
+  编排器截断点与 plugin-subagent 内部截断**共用同一函数**。
+- 语义:cap 只压「进模型」的一份 —— 超限仍**先试 spill 全量落盘**(无损、可
+  read_tool_output 续读),回退头尾截断按 cap;`tool_result` 广播始终全量原文
+  (UI 不受影响)。未声明 outputCap 的工具行为与从前逐字节一致。
+- 声明方:MCP 连接器注册时代设(见 ③,与客户端 cap 同值双保险);内置工具
+  按需自选(现无 —— 读路径均有 4000 字符窗口/github_scan 已瘦身)。
+- 测试:core `text.test.ts` effectiveOutputLimit 3 例 + `orchestrator-outputcap.test.ts`
+  5 例(cap 截断/ spill 优先/未声明不变/低于 cap 不触发/超 16KB 压顶);
+  plugin-subagent `runner.test.ts` 子循环同源限额 1 例。
+
+**③ MCP 客户端统一输出治理(放大器 3 治理,业界同构)**
+- `plugin-mcp/src/output-cap.ts`:`callTool` 返回后、进编排器前统一裁剪
+  (`capMcpToolResult`,纯函数,首调 + 重连重试两处都包)。三层动作,全部带
+  「不静默截断」标记:
+  1. 非文本 content(image/audio/二进制 resource)→ 文本占位(文本模型面,
+     base64 帧与 ① 同一裁定);
+  2. JSON 文本字段压缩:content.text 可解析为 JSON 时递归截短超长字符串字段
+     (GitHub MCP 的 body/body_html 是典型肥大字段),结构/数字/短字段原样;
+     `structuredContent` 同治(编排器 JSON.stringify 整个返回对象,双投影双份付费);
+  3. 文本总量 cap:统一 env `AGTPILOT_MCP_OUTPUT_LIMIT`(默认 12000 字符,
+     0 = 关闭;业界锚 Claude Code `MAX_MCP_OUTPUT_TOKENS`=25k tokens)+
+     per-server 规则表 `SERVER_OUTPUT_RULES`(deepwiki 8000 头保留;
+     github_mcp 字段压缩 400)。
+- 被裁剪时返回值附 `_agtpilotTrim` 元数据(server/originalChars/limit),审计可见。
+- 无损性取舍:cap 后 MCP 输出不再触发 16KB spill(已小于阈值)—— 有意为之,
+  MCP 查询只读可重放,与 Claude Code 客户端侧截断同构;标记内写明「携带更精确
+  参数缩小范围重查」。
+- 测试:`output-cap.test.ts` 14 例(env 保险丝/per-server 上限/纯函数不动入参/
+  短输出零变化/头保留标记/多段预算分配/非文本占位/github JSON 字段压缩 +
+  structuredContent/Markdown 不字段压缩/isError 不豁免)。
+
+**层1 完成度自查(对照 §9 第一步~第四步)**:读路径截图 ✅、工具级限额机制 ✅、
+MCP 统一 cap + deepwiki/GitHub 裁剪 ✅。余(不在本次范围):任务级预算闸
+(放大器 1)、search 类结果字段瘦身、层1 规则表随新连接器扩充。
+
+### 9.4 层0 工具卡片化(schema 渐进披露)——测量先行(2026-10-18 负责人点题「能否将工具做成跟 skill 一样,只把卡片加到上下文,需要时再加 schema」,拍板「搞」)
+
+**机制设计(尚未实施,等动态数据拍板)**:
+
+- 业界锚:Anthropic Tool Search Tool(`defer_loading`,官方宣称大 MCP 工具集省
+  ~85% 上下文)、Claude Code 的 MCP 工具按需检索、OpenAI Tool Search(§7.2);
+  终局形态 = Code Mode(工具变运行时函数,schema 彻底退出 prompt,负责人 backlog)。
+- 与 skill 渐进披露的本质差异:skill 是纯文本内容,任意时刻可注入;工具 schema
+  必须进 API tools 块模型才能发合法 tool_call。但 **AI SDK `activeTools` 语义
+  (不在名单的工具不上线)+ plugin-model 每步 prepareStep 重算可见集**就是现成
+  通道(2026-10-18 修复的 `adaptPrepareStepResult` 透传即此通道):
+  1. 工具分两档:baseline+高频常驻全量 schema;长尾/MCP 大户只进「目录卡片」
+     (名字+一行用途,实测均值 ≈37 tokens/把,见下);
+  2. 新增 `load_tools` 元工具:模型看目录点名 → execute 记入共享状态 → 下一步
+     prepareStep 将其并入 activeTools,schema 才真正上线;
+  3. core 零改动,全在包装层;与现有关键词路由/工坊白名单是同一机制,只是把
+     「谁决定挂什么」从关键词换成模型自己。
+- 三个坑(立项前必须量化):① 额外一跳(load = 多一步延迟+token,常驻集选不准
+  就倒亏);② tools 块步间变化破前缀缓存(API 请求布局 tools 在最前,一变则
+  system+messages 全部 cache miss;Anthropic 官方方案保 tools 块稳定、把检索到的
+  schema 以 tool_result 文本喂回,可借鉴;deepseek 隐式缓存净损益需实测);
+  ③ 目录纪律(一行描述不够短,省的被吃回去)。
+
+**测量工具(已实施,2026-10-18)**:两段式,可重复跑——
+- 第 1 段 `npx tsx scripts/tool-schema-measure.mts`:启动 app-kit 真实注册表
+  (EXA/TAVILY/FIRECRAWL 假 key 对齐生产注册面;只读注册表,不执行工具),按
+  「name+description+parameters 序列化」计每把工具上线成本;估算口径
+  CJK 字符 ×1.0 + 其余 ÷4;产物 `scripts/out/tool-registry-measure.json`(不入库);
+- 第 2 段 apps/web vitest `src/workshops/__tests__/tool-schema-cost.measure.test.ts`:
+  消费 JSON,用与生产同一代码路径(`resolveWorkshopActiveTools` 四层并集 + 内核
+  `resolveExplicitTools`)算每坊每步 tools 块成本与卡片化理论上限;`MEASURE=1`
+  打印表格,JSON 缺席自动 skip(不影响常规测试)。
+
+**静态测量结果(2026-10-18,内置口径——本地无 MCP 连接器,mcp_* 缺席)**:
+
+| 口径 | ≈tokens/步 |
+|---|---:|
+| 内置注册表 48 把全量挂载(最坏情形,回到白名单之前) | 7658 |
+| 内容/调研工坊白名单挂载(16 把,xhs/雷达/投研/教研等同值) | 3105 |
+| novel/ppt(web/生成档,14~16 把) | 2634~2995 |
+| email_triage/weekly(none 档,仅 baseline 11 把) | 2131 |
+| baseline 常驻块(每任务固定成本) | 2131 |
+| 内置全部非常驻工具卡片化(理论上限,零 load 假设) | 省 ≤791(≈25%) |
+
+单工具前 5 贵:sandbox_http_request 433、planner_create_plan 397(baseline)、
+artifact_render 393(baseline)、search_web 312、research_subagent 302。
+
+**静态结论(数据说话)**:
+1. 工坊白名单(§9.1)已把内置 tools 块从 ~7.7k 压到 ~3.1k/步;**内置工具再
+   卡片化的理论上限只有 ~791 tokens/步(25%)**,扣掉 load 额外一跳与缓存破裂
+   成本,内置侧不值得全面卡片化;
+2. 真正的大头在 **MCP 侧**:73 万事件已证 github_mcp 30~40 个大 schema 是最大
+   单项放大器(白名单已把整台禁入收敛到精确名 3 个),newsnow/deepwiki/
+   twitter 等检索组 MCP 的 schema 成本本地测不到——**生产口径必须服务器端
+   已连接状态重跑第 1 段补测**;
+3. 立项前置数据 = 两个:① MCP 精确名工具的 schema 成本(服务器端补测);
+   ② 工具命中分布(真实 run 里每把工具的调用率——没被用的 schema 才是纯浪费,
+   命中率高的就该常驻)。②需要 run 事件数据或加打点,拿到后再定卡片化名单。
 
 ---
 

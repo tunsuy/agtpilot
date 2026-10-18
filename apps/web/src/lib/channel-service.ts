@@ -155,7 +155,7 @@ class ChannelManager {
       '👋 我是 AgtPilot 智能体。你还没有绑定账号。',
       '',
       '绑定方法:',
-      '1. 在 AgtPilot 网页端生成 6 位绑定码(设置页上线前:登录网页后调用 POST /api/channel/bind-code)',
+      '1. 登录 AgtPilot 网页 → /channel 页面,生成 6 位绑定码',
       '2. 在这里发送:绑定 123456(换成你的码,10 分钟内有效)',
       '',
       '绑定后,发给我的消息会由你的 AgtPilot 智能体处理。',

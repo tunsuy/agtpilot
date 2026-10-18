@@ -63,6 +63,9 @@ importers:
       '@agtpilot/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@agtpilot/plugin-channel':
+        specifier: workspace:*
+        version: link:../../packages/plugin-channel
       '@agtpilot/plugin-mcp':
         specifier: workspace:*
         version: link:../../packages/plugin-mcp
@@ -220,6 +223,9 @@ importers:
       '@agtpilot/plugin-browser':
         specifier: workspace:*
         version: link:../plugin-browser
+      '@agtpilot/plugin-channel':
+        specifier: workspace:*
+        version: link:../plugin-channel
       '@agtpilot/plugin-cron':
         specifier: workspace:*
         version: link:../plugin-cron
@@ -321,6 +327,31 @@ importers:
         specifier: ^7.2.4
         version: 7.2.4
     devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.6.4)(jiti@1.21.7)(tsx@4.23.15)(yaml@2.9.1)
+
+  packages/plugin-channel:
+    dependencies:
+      '@agentoryhq/im-channel-contract':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@agentoryhq/im-channel-wechat-personal':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@agtpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.12
+        version: 8.18.2
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@26.6.4)(jiti@1.21.7)(tsx@4.23.15)(yaml@2.9.1)
@@ -682,6 +713,14 @@ packages:
     resolution: {integrity: sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
+
+  '@agentoryhq/im-channel-contract@0.1.0':
+    resolution: {integrity: sha512-8dNxwAxlNPwcT2d6tFUp0WVDKU498RU2ZMZl3+vPXaGcTfMDZcKyhZGToj343d6bfkywxo6jaW9AWlaWvxBmYQ==}
+    engines: {node: '>=20'}
+
+  '@agentoryhq/im-channel-wechat-personal@0.1.0':
+    resolution: {integrity: sha512-H7nkSezQbr8j1BJLcm6xcAbU2ivz+kooPqz80XmZW/dXq9CQLZxUEI6Dj8fGX60jgFUxHumutg6Jlafi4DAsLg==}
+    engines: {node: '>=20'}
 
   '@ai-sdk/anthropic@2.0.108':
     resolution: {integrity: sha512-mJbksqjU81Gj5tjK4LXWwQBepFgQRcS0TqSCmvDs5ydJdw7b4LGKjvzhF0SQd7KLrZOrYlQf9ZKK1+sgVjWRSw==}
@@ -9375,6 +9414,12 @@ snapshots:
   '@agentclientprotocol/sdk@1.4.0(zod@4.6.5)':
     dependencies:
       zod: 4.6.5
+
+  '@agentoryhq/im-channel-contract@0.1.0': {}
+
+  '@agentoryhq/im-channel-wechat-personal@0.1.0':
+    dependencies:
+      '@agentoryhq/im-channel-contract': 0.1.0
 
   '@ai-sdk/anthropic@2.0.108(zod@3.25.76)':
     dependencies:

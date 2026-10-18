@@ -11,6 +11,7 @@
     "@agtpilot/core": "workspace:*",
     "@agtpilot/plugin-artifact": "workspace:*",
     "@agtpilot/plugin-browser": "workspace:*",
+    "@agtpilot/plugin-channel": "workspace:*",
     "@agtpilot/plugin-cron": "workspace:*",
     "@agtpilot/plugin-desktop": "workspace:*",
     "@agtpilot/plugin-git": "workspace:*",

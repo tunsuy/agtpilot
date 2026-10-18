@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { verifyLoginCode } from '../../../../lib/wechat-store';
+import { getChannelManager } from '../../../../lib/channel-service';
 
 const WECHAT_TOKEN = process.env.WECHAT_TOKEN || 'agtpilot_token';
 
@@ -48,18 +49,29 @@ export async function POST(req: NextRequest) {
     let replyMessage = '';
 
     if (msgType === 'text') {
-      // 用户回复了 6 位数字验证码
-      const success = verifyLoginCode(content, fromUserName);
-
-      if (success) {
-        replyMessage = `✅ 验证成功！\n\n已成功为您完成 AgtPilot 网页登录授权，浏览器页面已自动跳转进入工作台。`;
+      // 6 位纯数字 → 网页登录验证码流程(既有语义,优先)
+      if (/^\d{6}$/.test(content)) {
+        const success = verifyLoginCode(content, fromUserName);
+        if (success) {
+          replyMessage = `✅ 验证成功！\n\n已成功为您完成 AgtPilot 网页登录授权，浏览器页面已自动跳转进入工作台。`;
+        } else {
+          replyMessage = `收到消息：${content}\n\n若您正在登录 AgtPilot，请确认验证码是否已过期或输入有误。如需登录，请在网页重新获取最新的 6 位验证码。`;
+        }
+      } else if (getChannelManager().wechatMpAttached()) {
+        // 对话消息 → 通道服务后台处理(绑定/派发/客服消息回复)。
+        // 平台要求 5s 内响应而 agent 任务远超此时长:被动回复静默('success'),
+        // 处理在响应后继续(fire-and-forget),重推由通道层按 MsgId 去重兜底。
+        void getChannelManager().ingestWechatMpWebhook(rawXml);
+        return new NextResponse('success');
       } else {
         replyMessage = `收到消息：${content}\n\n若您正在登录 AgtPilot，请确认验证码是否已过期或输入有误。如需登录，请在网页重新获取最新的 6 位验证码。`;
       }
     } else if (msgType === 'event') {
       const event = getTagValue(rawXml, 'Event');
       if (event === 'subscribe') {
-        replyMessage = `欢迎关注 AgtPilot 自主数字员工助手！\n\n请在公众号中发送网页端展示的 6 位数字验证码完成快速登录。`;
+        replyMessage = getChannelManager().wechatMpAttached()
+          ? `欢迎关注 AgtPilot 自主数字员工助手！\n\n· 网页登录:发送网页端展示的 6 位验证码\n· 直接对话:先在网页端生成绑定码,再发送「绑定 <6位码>」\n\n绑定后发消息即可与你的智能体对话。`
+          : `欢迎关注 AgtPilot 自主数字员工助手！\n\n请在公众号中发送网页端展示的 6 位数字验证码完成快速登录。`;
       }
     }
 

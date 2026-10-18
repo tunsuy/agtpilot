@@ -12,6 +12,7 @@ import * as ArtifactPlugin from '@agtpilot/plugin-artifact';
 import * as PlannerPlugin from '@agtpilot/plugin-planner';
 import * as MemoryPlugin from '@agtpilot/plugin-memory';
 import * as CronPlugin from '@agtpilot/plugin-cron';
+import * as ChannelPlugin from '@agtpilot/plugin-channel';
 import * as ObservabilityPlugin from '@agtpilot/plugin-observability';
 import * as GitPlugin from '@agtpilot/plugin-git';
 import * as NotifyPlugin from '@agtpilot/plugin-notify';
@@ -95,6 +96,7 @@ export async function createAgentRuntime(options: CreateAgentOptions = {}): Prom
   await mount('plugin-git', GitPlugin);
   await mount('plugin-desktop', DesktopPlugin);
   await mount('plugin-cron', CronPlugin);
+  await mount('plugin-channel', ChannelPlugin);
   await mount('plugin-notify', NotifyPlugin);
   await mount('plugin-rag', RagPlugin);
   await mount('plugin-mcp', MCPPlugin);

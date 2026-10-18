@@ -83,6 +83,7 @@ agtpilot/
 │   ├── plugin-mcp/        # MCP connector registry + OAuth connector center
 │   ├── plugin-git/        # Git checkpoints, patches, codebase symbol search
 │   ├── plugin-cron/       # Headless scheduling engine (croner)
+│   ├── plugin-channel/    # Headless IM channel engine (WeChat MP / WeChat personal iLink / QQ OneBot)
 │   ├── plugin-notify/     # Desktop & webhook notifications
 │   ├── plugin-desktop/    # Desktop automation (clipboard, apps, screenshots)
 │   ├── plugin-observability/ # Traces, metrics, event forwarding
@@ -115,6 +116,7 @@ agtpilot/
 | `plugin-mcp` | MCP tool registry & connectors | — (tool exposure is app-level) |
 | `plugin-git` | Code & version control | `git_status/diff`, checkpoints, patches, `codebase_search_symbols` |
 | `plugin-cron` | Scheduling engine | — (exposed as `cron_schedule_task` by the apps) |
+| `plugin-channel` | IM channel engine (WeChat MP / personal / QQ OneBot) | — (binding & dispatch are app-level, see `apps/web/src/lib/channel-service.ts`) |
 | `plugin-notify` | Notifications | `notify_send_desktop`, `notify_send_webhook` |
 | `plugin-desktop` | Desktop automation | clipboard read/write, open app, screenshot, system info |
 | `plugin-observability` | Observability | `observability_get_trace`, `observability_get_metrics` |

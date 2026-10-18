@@ -16,6 +16,7 @@
   "dependencies": {
     "@agtpilot/app-kit": "workspace:*",
     "@agtpilot/core": "workspace:*",
+    "@agtpilot/plugin-channel": "workspace:*",
     "@agtpilot/plugin-mcp": "workspace:*",
     "@agtpilot/plugin-search": "workspace:*",
     "@agtpilot/plugin-skill": "workspace:*",

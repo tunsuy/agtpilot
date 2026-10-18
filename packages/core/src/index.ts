@@ -28,6 +28,7 @@ export {
   estimateToolTokens,
   toolSearchTokenThreshold,
   selectActiveTools,
+  resolveExplicitTools,
   widenMountedTools,
   filterToolsByEnv,
   stableStringify,
@@ -40,6 +41,7 @@ export {
   truncateToolOutput,
   buildSpillPointer,
   toolSpillEnabled,
+  effectiveOutputLimit,
   TOOL_OUTPUT_LIMIT,
   SPILL_PREVIEW_LIMIT,
 } from './text';

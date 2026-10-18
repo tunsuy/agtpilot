@@ -5,6 +5,9 @@
  * - 边界红线:子 agent 消息数组私有持有,跨界只回 final report + 小 meta(spec §4.1);
  * - 三重预算闸:步数(runAgentLoop maxSteps)/ token(prepareStep 自记账,超限下一步
  *   收工具 + 注入收敛提示,自然收口)/ 墙钟(AbortController + setTimeout);
+ * - reasoning 剥离(子循环闸,与 orchestrator 闸2/闸3 同款语义):prepareStep 每步
+ *   剥离思考部件再进模型与 token 闸记账;强制收敛 invokeStep 消息同剥;
+ *   保险丝 AGTPILOT_STRIP_REASONING=0 整体回退(token 文档 §9.2 范围注记项落地);
  * - 内部工具直取注册表原始 execute,绕过编排器包装层 —— 必须自行合成子 session、
  *   自行 catch(错误以 { error } 对象回填,不 throw)、自行 16KB 截断(spec §4.3);
  * - 强制收敛:stepsExhausted 或预算触顶且无报告文本时,追加一次 invokeStep
@@ -13,12 +16,15 @@
  * - 纯类实现,不依赖 cordis,可单测(窄接口 SubagentModel,仿 plugin-skill SkillCardModel)。
  */
 import {
+  effectiveOutputLimit,
   estimateTextTokens,
   filterToolsByEnv,
   messageText,
+  reasoningStripEnabled,
+  resolveExplicitTools,
+  stripReasoningParts,
   truncateText,
   truncateToolOutput,
-  TOOL_OUTPUT_LIMIT,
 } from '@agtpilot/core';
 import type {
   AgentLoopOptions,
@@ -68,6 +74,8 @@ export interface SubagentRunMeta {
   truncated?: boolean;
   /** token 自记账曾触顶(报告为收敛后产物) */
   budgetHit?: boolean;
+  /** 子循环剥离的 reasoning 部件数(prepareStep + 强制收敛合计;0 时不写字段) */
+  reasoningPartsStripped?: number;
   /** 仅失败时:'timeout' | 'budget' | 'model-error' | 'internal-error' */
   reason?: 'timeout' | 'budget' | 'model-error' | 'internal-error';
 }
@@ -240,14 +248,27 @@ export class SubagentEngine {
         // 宿主解析失败(如 user-store 读盘异常)→ 回退静态配置
       }
     }
-    const resolved = resolveReadonlyTools(this.deps.listTools(), {
+    let resolved = resolveReadonlyTools(this.deps.listTools(), {
       whitelist: this.cfg.whitelist,
       mcpServers,
       mcpAllowTools: this.cfg.mcpAllowTools,
     });
+    // 工坊白名单对齐(2026-10-17 负责人:「子agent的工具绑定逻辑也要跟主agent一样」):
+    // 主循环带显式白名单(session.activeTools,TaskOptions 原样透传)时,子 agent
+    // 挂载面 = 只读候选 ∩ 白名单。匹配复用 core resolveExplicitTools,与主循环
+    // 语义逐字一致(精确名 / 前缀* 通配 / baseline 自动并入)—— 主循环整台禁入的
+    // MCP(如雷达的 github_mcp)子循环同样禁入,工坊裁剪(如 novel 不要热榜)同样生效。
+    // 缺省(闲聊/关键词路由任务)= 无工坊约束,维持自身双层白名单语义。
+    if (session.activeTools && session.activeTools.length > 0) {
+      const allowed = new Set(resolveExplicitTools([...session.activeTools], resolved));
+      resolved = resolved.filter((t) => allowed.has(t.name));
+    }
     const { mounted } = filterToolsByEnv(resolved, session.env);
     if (mounted.length === 0) {
-      return fail('无可用只读白名单工具(注册表未挂载或缺依赖 Key),子 agent 无法派发', 'internal-error');
+      return fail(
+        '无可用只读白名单工具(注册表未挂载、缺依赖 Key,或与任务工具白名单交集为空),子 agent 无法派发',
+        'internal-error',
+      );
     }
 
     const maxSteps = clampSteps(args.max_steps, this.cfg.maxSteps);
@@ -262,6 +283,7 @@ export class SubagentEngine {
 
     let currentStep = 0;
     let budgetHit = false;
+    let reasoningStripped = 0;
 
     // 内部工具:合成子 session + catch→{error} + 16KB 截断(spec §4.3)
     const internalTools: AgentLoopTool[] = mounted.map((def) => ({
@@ -283,22 +305,34 @@ export class SubagentEngine {
           return { error: err?.message ?? String(err) };
         }
         const serialized = typeof output === 'string' ? output : JSON.stringify(output);
-        if (typeof serialized === 'string' && serialized.length > TOOL_OUTPUT_LIMIT) {
-          return truncateToolOutput(serialized, def.name, TOOL_OUTPUT_LIMIT);
+        // 限额与主循环同源(effectiveOutputLimit):工具声明的 outputCap(如 MCP
+        // 连接器按服务器裁剪)在子循环同样生效,未声明者沿用 TOOL_OUTPUT_LIMIT
+        const limit = effectiveOutputLimit(def.outputCap);
+        if (typeof serialized === 'string' && serialized.length > limit) {
+          return truncateToolOutput(serialized, def.name, limit);
         }
         return output;
       },
     }));
 
-    // token 自记账闸:超限的下一步收掉全部工具 + 注入收敛提示,让循环自然收口(无需 abort)
+    // reasoning 剥离(子循环闸)+ token 自记账闸:每步先剥思考部件再记账 ——
+    // 剥离放闸前,60k 体积闸不再被思考文本虚占;剥离幂等(orchestrator 闸2 同款),
+    // 每步只改写最新 assistant 尾部,前缀字节稳定不破 provider 缓存。
+    // 超限的下一步收掉全部工具 + 注入收敛提示,让循环自然收口(无需 abort)。
     const prepareStep: AgentLoopOptions['prepareStep'] = ({ stepNumber, messages }) => {
       currentStep = stepNumber;
-      if (this.cfg.maxTokens > 0 && !budgetHit && sumMessageTokens(messages) > this.cfg.maxTokens) {
+      let msgs = messages;
+      if (reasoningStripEnabled()) {
+        const r = stripReasoningParts(messages);
+        reasoningStripped += r.stripped;
+        msgs = r.messages;
+      }
+      if (this.cfg.maxTokens > 0 && !budgetHit && sumMessageTokens(msgs) > this.cfg.maxTokens) {
         budgetHit = true;
         return {
           activeTools: [],
           messages: [
-            ...messages,
+            ...msgs,
             {
               role: 'user',
               content:
@@ -307,7 +341,7 @@ export class SubagentEngine {
           ],
         };
       }
-      return undefined;
+      return msgs === messages ? undefined : { messages: msgs };
     };
 
     let loopResult: AgentLoopResult;
@@ -340,9 +374,16 @@ export class SubagentEngine {
     // 强制收敛:步数耗尽,或预算触顶但模型没给出报告文本(仿 orchestrator 强制总结模式)
     if (loopResult.stepsExhausted || (budgetHit && !report.trim())) {
       try {
+        // 收敛消息同剥 reasoning(orchestrator 闸3 同款:SDK responseMessages 保留全部步思考)
+        let convMsgs = [...baseMessages, ...loopResult.responseMessages];
+        if (reasoningStripEnabled()) {
+          const r = stripReasoningParts(convMsgs);
+          reasoningStripped += r.stripped;
+          convMsgs = r.messages;
+        }
         const wrap = await model.invokeStep({
           system: `${SUBAGENT_SYSTEM_PROMPT}\n\n【重要】可用步数/预算已用尽,禁止再调用任何工具。请立即基于已获得的资料输出最终调研报告(结论先行、附来源)。`,
-          messages: [...baseMessages, ...loopResult.responseMessages],
+          messages: convMsgs,
           configOverride: this.cfg.configOverride,
           disableTools: true,
         });
@@ -361,6 +402,8 @@ export class SubagentEngine {
       }
     }
 
+    // transcript 落盘保持无损原文(reasoning 不剥):它是只增观测记录,不回传模型,
+    // 剥离只发生在「进模型」的两处(prepareStep / 强制收敛)—— 事实源无损原则
     const transcriptMessages = [...baseMessages, ...loopResult.responseMessages];
     if (this.cfg.appendTranscript) {
       try {
@@ -381,7 +424,12 @@ export class SubagentEngine {
       return fail(
         `子 agent 未产出最终报告(finishReason=${loopResult.finishReason})`,
         budgetHit ? 'budget' : 'internal-error',
-        { stepsCount, finishReason: loopResult.finishReason, usage },
+        {
+          stepsCount,
+          finishReason: loopResult.finishReason,
+          usage,
+          ...(reasoningStripped > 0 ? { reasoningPartsStripped: reasoningStripped } : {}),
+        },
       );
     }
 
@@ -403,6 +451,7 @@ export class SubagentEngine {
         usage,
         ...(truncated ? { truncated } : {}),
         ...(budgetHit ? { budgetHit: true } : {}),
+        ...(reasoningStripped > 0 ? { reasoningPartsStripped: reasoningStripped } : {}),
       },
     };
   }

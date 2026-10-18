@@ -10,3 +10,4 @@ apps/web/out/
 apps/web/android/
 apps/web/ios/
 *.tsbuildinfo
+scripts/out/

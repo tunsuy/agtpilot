@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentLoopOptions, AgentLoopResult, ToolDefinition, ToolSession } from '@agtpilot/core';
 import {
   buildTaskPrompt,
@@ -270,6 +270,192 @@ describe('预算闸(spec §9.3)', () => {
   });
 });
 
+// ---- 3.5 reasoning 剥离(子循环闸,token 文档 §9.2 范围注记项)----
+
+describe('reasoning 剥离(子循环闸)', () => {
+  afterEach(() => {
+    delete process.env.AGTPILOT_STRIP_REASONING;
+  });
+
+  const reasoningAssistant = () => ({
+    role: 'assistant',
+    content: [
+      { type: 'reasoning', text: '深度思考中'.repeat(50) },
+      { type: 'text', text: '我来查一下' },
+      { type: 'tool-call', toolCallId: 'c1', toolName: 'search_web', input: {} },
+    ],
+  });
+
+  it('prepareStep 剥离 assistant reasoning,text/tool-call 保留、原数组不被改动', async () => {
+    let adjustment: any;
+    const { model } = makeFakeModel((o) => {
+      const msgs: any[] = [
+        { role: 'user', content: 'q' },
+        reasoningAssistant(),
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', output: 'ok' }] },
+      ];
+      const before = JSON.stringify(msgs);
+      adjustment = o.prepareStep!({ stepNumber: 2, messages: msgs });
+      expect(JSON.stringify(msgs)).toBe(before); // 纯函数:不改原对象
+      return resultOf();
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const assistant = adjustment.messages.find((m: any) => m.role === 'assistant');
+    expect(assistant.content.some((p: any) => p.type === 'reasoning')).toBe(false);
+    expect(assistant.content.map((p: any) => p.type)).toEqual(['text', 'tool-call']);
+    expect(res.meta.reasoningPartsStripped).toBe(1);
+  });
+
+  it('幂等:已剥消息再进 prepareStep → undefined(不干预),计数不重复', async () => {
+    let adj1: any;
+    let adj2: any;
+    const { model } = makeFakeModel((o) => {
+      adj1 = o.prepareStep!({ stepNumber: 2, messages: [{ role: 'user', content: 'q' }, reasoningAssistant()] });
+      adj2 = o.prepareStep!({ stepNumber: 3, messages: adj1.messages });
+      return resultOf();
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(adj1).toBeDefined();
+    expect(adj2).toBeUndefined();
+    if (res.ok) expect(res.meta.reasoningPartsStripped).toBe(1);
+  });
+
+  it('强制收敛 invokeStep 消息同剥(orchestrator 闸3 同款语义)', async () => {
+    const { model, calls } = makeFakeModel(
+      () =>
+        resultOf({
+          text: '',
+          stepsExhausted: true,
+          stepsCount: 8,
+          responseMessages: [{ role: 'user', content: 'q' }, reasoningAssistant()],
+        }),
+      () => ({ text: '收敛报告' }),
+    );
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const assistant = calls.step[0].messages.find((m: any) => m.role === 'assistant');
+    expect(assistant.content.some((p: any) => p.type === 'reasoning')).toBe(false);
+    expect(res.meta.reasoningPartsStripped).toBe(1);
+  });
+
+  it('剥离先于 token 闸:思考文本不再虚占预算(剥完低于闸 → 不触顶)', async () => {
+    let adjustment: any;
+    const { model } = makeFakeModel((o) => {
+      // 大体积全部在 reasoning 部件里;剥掉后消息体积远低于闸值
+      adjustment = o.prepareStep!({ stepNumber: 2, messages: [{ role: 'user', content: 'q' }, reasoningAssistant()] });
+      return resultOf({ text: '预算内报告' });
+    });
+    const { engine } = makeEngine(model, undefined, { maxTokens: 100 });
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(adjustment.activeTools).toBeUndefined(); // 未触顶:不收工具
+    expect(res.meta.budgetHit).toBeUndefined();
+    expect(res.meta.reasoningPartsStripped).toBe(1);
+  });
+
+  it('保险丝 AGTPILOT_STRIP_REASONING=0 → 不剥,收敛消息保留 reasoning,meta 无字段', async () => {
+    process.env.AGTPILOT_STRIP_REASONING = '0';
+    let adjustment: any = 'not-set';
+    const { model, calls } = makeFakeModel(
+      (o) => {
+        adjustment = o.prepareStep!({ stepNumber: 2, messages: [{ role: 'user', content: 'q' }, reasoningAssistant()] });
+        return resultOf({
+          text: '',
+          stepsExhausted: true,
+          stepsCount: 8,
+          responseMessages: [reasoningAssistant()],
+        });
+      },
+      () => ({ text: '收敛报告' }),
+    );
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(adjustment).toBeUndefined(); // prepareStep 不干预
+    const raw = JSON.stringify(calls.step[0].messages);
+    expect(raw).toContain('深度思考中'); // reasoning 原样回传(旧行为)
+    if (res.ok) expect(res.meta && 'reasoningPartsStripped' in res.meta).toBe(false);
+  });
+
+  it('transcript 落盘保持无损:剥离不进观测记录(reasoning 原文仍在)', async () => {
+    const entries: any[] = [];
+    const { model } = makeFakeModel(() =>
+      resultOf({ responseMessages: [reasoningAssistant()] }),
+    );
+    const { engine } = makeEngine(model, undefined, { appendTranscript: (e) => entries.push(e) });
+    await engine.run({ query: 'q' }, baseSession);
+    expect(entries).toHaveLength(1);
+    expect(JSON.stringify(entries[0].messages)).toContain('深度思考中');
+  });
+});
+
+// ---- 3.6 工坊白名单对齐(session.activeTools 交集)----
+
+describe('工坊白名单对齐(session.activeTools 交集)', () => {
+  const webTool = mkTool('search_web', { readOnly: true });
+  const ragTool = mkTool('rag_search', { readOnly: true });
+  const memTool = mkTool('memory_recall', { readOnly: true, baseline: true });
+  const ghTool = mkTool('mcp_github_mcp_search_issues', { readOnly: true });
+  const dwTool = mkTool('mcp_deepwiki_ask_question', {}); // 无 readOnly 声明:走逃生口前缀放行
+
+  const mountedNames = (o: AgentLoopOptions) => o.tools!.map((t) => t.name);
+
+  it('主循环无白名单(session 缺省)→ 维持自身双层白名单,行为不变', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [webTool, ragTool, ghTool], { mcpServers: ['github_mcp'] });
+    await engine.run({ query: 'q' }, baseSession);
+    expect(mountedNames(calls.loop[0])).toEqual(['search_web', 'rag_search', 'mcp_github_mcp_search_issues']);
+  });
+
+  it('精确名交集:白名单外的只读工具被剔除;白名单里零命中的名字静默跳过', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [webTool, ragTool], {});
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web', 'github_scan'] });
+    expect(mountedNames(calls.loop[0])).toEqual(['search_web']);
+  });
+
+  it('GitHub 整台禁入传导:主循环白名单没有 github → 子循环同样禁入;精确名声明 → 保留', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [webTool, ghTool], { mcpServers: ['github_mcp'] });
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web'] });
+    expect(mountedNames(calls.loop[0])).toEqual(['search_web']);
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web', 'mcp_github_mcp_search_issues'] });
+    expect(mountedNames(calls.loop[1])).toEqual(['search_web', 'mcp_github_mcp_search_issues']);
+  });
+
+  it('前缀通配同语义:mcp_deepwiki_* 整组放行(逃生口进来的工具同样过交集)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [webTool, dwTool], { mcpAllowTools: ['mcp_deepwiki_'] });
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['mcp_deepwiki_*'] });
+    expect(mountedNames(calls.loop[0])).toEqual(['mcp_deepwiki_ask_question']);
+  });
+
+  it('baseline 自动并入:未声明的 memory_recall 仍挂载(与主循环 resolveExplicitTools 同款)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [webTool, memTool], {});
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web'] });
+    expect(mountedNames(calls.loop[0])).toEqual(['search_web', 'memory_recall']);
+  });
+
+  it('交集为空 → 无法派发,错误信息如实说明白名单交集,不触模型', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [webTool], {});
+    const res = await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['ppt_publish_deck'] });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.meta.reason).toBe('internal-error');
+    expect(res.error).toContain('白名单交集');
+    expect(calls.loop).toHaveLength(0);
+  });
+});
+
 // ---- 4. 失败语义 ----
 
 describe('失败语义(spec §9.4)', () => {
@@ -339,6 +525,29 @@ describe('内部工具包装(spec §4.3)', () => {
     expect(outputs[0].length).toBeLessThan(20000);
     expect(outputs[0]).toContain('输出过长已截断');
     expect(outputs[1]).toEqual({ error: 'net down' });
+  });
+
+  it('工具声明 outputCap → 子循环限额与主循环同源(min(cap, 16KB),effectiveOutputLimit)', async () => {
+    const tools = [
+      // cap 2000:5000 字符输出在子循环内即按 2000 截断(MCP 连接器形态)
+      mkTool('search_web', { readOnly: true, outputCap: 2000, execute: async () => 'z'.repeat(5000) }),
+      // cap 超 16KB 被压顶:与未声明的 20000 字符输出同样按 TOOL_OUTPUT_LIMIT 治理
+      mkTool('rag_search', { readOnly: true, outputCap: 999_999, execute: async () => 'y'.repeat(20000) }),
+    ];
+    let outputs: any[] = [];
+    const { model } = makeFakeModel(async (o) => {
+      outputs = [];
+      for (const t of o.tools!) outputs.push(await t.execute({ q: 1 }));
+      return resultOf();
+    });
+    const { engine } = makeEngine(model, tools);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(outputs[0].length).toBeLessThan(2400); // 2000 + 截断标记
+    expect(outputs[0]).toContain('输出过长已截断');
+    expect(outputs[0]).toContain('5000');
+    expect(outputs[1].length).toBeLessThan(17 * 1024);
+    expect(outputs[1]).toContain('输出过长已截断');
   });
 
   it('requiredEnv 缺 Key 的白名单工具不挂;全缺 → internal-error', async () => {

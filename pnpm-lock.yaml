@@ -320,6 +320,10 @@ importers:
       turndown:
         specifier: ^7.2.4
         version: 7.2.4
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.6.4)(jiti@1.21.7)(tsx@4.23.15)(yaml@2.9.1)
 
   packages/plugin-compaction:
     dependencies:

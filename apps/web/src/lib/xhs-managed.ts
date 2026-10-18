@@ -321,6 +321,9 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
             missionId,
           });
 
+          // 层1 源头裁剪 ①:读路径截图不进工具返回(~12KB base64 对文本模型
+          // 零信息量);驾驶舱视口另有 browser 插件的 viewport_update 事件通道。
+          // 存草稿类写工具(xhs_save_note_draft 等)的截图是人工核对交付物,保留。
           return {
             success: true,
             page: target.label,
@@ -329,9 +332,6 @@ export function buildXhsManagedTools(userId: string, browser?: XhsBrowserService
             content: result.content,
             nextOffset: result.nextOffset,
             totalLength: result.totalLength,
-            screenshotBase64: result.screenshotBase64
-              ? `data:image/jpeg;base64,${result.screenshotBase64}`
-              : undefined,
           };
         } catch (err: any) {
           // 导航失败的审计 + 护栏计数也认(真实打开过页面)

@@ -4,8 +4,7 @@
 > prompt tokens(未到派发阶段)。本文两部分:①73 万的逐环节归因;②工具挂载专题
 > (现状 / 业界对照 / 改造方案)。所有代码结论均附文件:行号,业界数字附来源链接。
 > 状态:分析已定稿;工坊白名单(§9.1)、reasoning 剥离(§9.2)、层1 源头裁剪
-> (§9.3)与路由零命中收敛兜底(§9.5)已实施;层0 工具卡片化(§9.4)测量工具
-> 已实施、静态数据已出,机制立项待服务器端 MCP 补测 + 命中分布数据。余待拍板。
+> (§9.3)、层0 目录卡片 B v1(§9.4)与路由零命中收敛兜底(§9.5)已实施。余待拍板。
 
 ---
 
@@ -462,7 +461,7 @@ MCP 统一 cap + deepwiki/GitHub 裁剪 ✅。余(不在本次范围):任务级�
 
 ### 9.4 层0 工具卡片化(schema 渐进披露)——测量先行(2026-10-18 负责人点题「能否将工具做成跟 skill 一样,只把卡片加到上下文,需要时再加 schema」,拍板「搞」)
 
-**机制设计(尚未实施,等动态数据拍板)**:
+**机制设计(v1 已按此通道实施,见本节末「B v1 已实施」)**:
 
 - 业界锚:Anthropic Tool Search Tool(`defer_loading`,官方宣称大 MCP 工具集省
   ~85% 上下文)、Claude Code 的 MCP 工具按需检索、OpenAI Tool Search(§7.2);
@@ -519,6 +518,42 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
    ② 工具命中分布(真实 run 里每把工具的调用率——没被用的 schema 才是纯浪费,
    命中率高的就该常驻)。②需要 run 事件数据或加打点,拿到后再定卡片化名单。
 
+**B v1 已实施(2026-10-18 负责人拍板「搞」;此前一问「B 必须要服务端测试后
+才能做吗」→ 结论:补测数据用于调优,不构成门槛,直接开工)**——菜单点菜制,
+范围按批准的 v1 收口:
+
+- **只收编 MCP 工具**:plugin-mcp `buildToolDefs` 给每把连接器工具自声明
+  `catalogable: true` + `catalogGroup: <服务器名>`(contracts.ts 新增字段,与
+  baseline/fallback 同款自声明模式,内核零插件知识);内置工具不动(静态结论 1:
+  内置侧卡片化上限 ~791 tokens 不值得)。
+- **目录注入面**(orchestrator runTask):自由任务(无工坊白名单、路由已启用
+  `routedTools !== undefined`、非闲聊短路)里,未被挂载的 catalogable 工具按
+  服务器分组、一行一把(`- 名字: 用途首句 ≤60 字`,剥 `[MCP连接器: x]` 行内
+  重复标签)进系统提示【按需工具目录】段。零命中与关键词命中档都注入;工坊
+  白名单/全量挂载档/闲聊档不注入。目录每任务构建一次、输入序=声明序,跨步
+  字节稳定(前缀缓存纪律)。
+- **load_tools 元工具**(core/tool-catalog.ts `createLoadToolsDefinition`):
+  任务级合成、不进全局注册表(子 agent 天然不可见,双钥匙语义不变);
+  readOnly+low(纯挂载申报,走只读并行门与既有包装管道——广播/熔断/截断
+  照常);点名只认目录内名字,目录外如实报 unknown 不放行;模型点名 →
+  `loadedToolNames` → 下一步 prepareStep 与 widenMountedTools 共用同一次
+  写回并入挂载面(schema 上线,缓存至多破一次)。
+- **观测**:每次 load_tools 调用发 cordis 自定义事件 `agtpilot/tool-catalog`
+  (`{taskId, step, loaded, unknown}`,不进 SSE、AgentEvent 封闭集不动)——
+  这就是立项前置数据②「命中分布」的自动采集通道,欠的账由 B 自己补上。
+- **保险丝**:`AGTPILOT_TOOL_CATALOG=0` 不注入目录也不注入 load_tools,行为
+  回到 §9.5 止血 A 现状(调用时读 env,热切)。
+- **危险语义零变化**:挂载 ≠ 执行,被点名工具真正调用时仍过既有审批门
+  (dangerLevel high 挂起审批)、MCP 输出治理(outputCap)与只读分类。
+- 静态收益口径:135 把 MCP schema ≈27k tokens/步 → 目录卡片 ≈37 tokens/把
+  ×135 ≈ 5k/步(且只进 system 一次、跨步稳定),自由任务每步净省 ≈22k;
+  点菜一跳的代价 = 一次 load_tools 调用 + 扩容步一次缓存重建。
+- 测试:tool-catalog.test.ts 16 例(保险丝/卡片行/分组/目录字节稳定/点菜
+  语义含 unknown、alreadyMounted、空参)+ orchestrator-catalog.test.ts 10 例
+  (注入面五档 × 点菜流程 × 广播管道 × 效率统计口径);core 191 全绿。
+- v1 明确不做(留给数据说话后的 v2):内置工具卡片化、目录按命中分布自动
+  排序/裁剪、load 的跨任务预取(高频点名工具晋升常驻)。
+
 ### 9.5 路由零命中收敛兜底(快速止血 A,2026-10-18 负责人盘点路由后拍板「搞」= C 方案:A 先落、B 等 §9.4 数据立项)
 
 **诊断(路由全链路盘点)**:自由任务(非工坊白名单、非闲聊短路)的关键词路由是
@@ -547,8 +582,8 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
 
 **明码代价**:自由任务的 MCP 从「零命中全量时碰巧可用」变为「统一不挂」——
 27k tokens 的 MCP schema 磁铁正是本刀要杀的;MCP 的自助通道 = B(§9.4 目录
-卡片 + load_tools,模型看菜单点菜),立项前置数据不变(服务器端 MCP schema
-补测 + 命中分布)。工坊任务不受影响(白名单 C 层 mcp_<id>_* 照旧)。
+卡片 + load_tools,模型看菜单点菜)——**已于同日实施(§9.4 B v1),本代价
+由目录通道闭环**。工坊任务不受影响(白名单 C 层 mcp_<id>_* 照旧)。
 
 **测试**:routing.test.ts 新增「零命中收敛兜底」5 例(baseline+fallback 声明序 /
 点名并入 / widen 兼容 / 空目录保守回全量 / 命中分支不受 fallback 影响)+ 既有

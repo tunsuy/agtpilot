@@ -224,6 +224,17 @@ export interface ToolDefinition {
    */
   fallback?: boolean;
   /**
+   * 层0 目录卡片声明(菜单点菜制 B v1,token 文档 §9.4):「可被按需挂载」。
+   * 自由任务(无显式白名单、路由已启用、非闲聊短路)里未被挂载的 catalogable
+   * 工具,以一行卡片(名字+用途首句)进系统提示【按需工具目录】,模型经
+   * load_tools 元工具点名,下一步 schema 才上线。检索侧插件自声明(当前为
+   * plugin-mcp 的连接器工具),内核不维护任何插件前缀表 —— 与 baseline/
+   * fallback 同一自声明模式。保险丝 AGTPILOT_TOOL_CATALOG=0 回现状。
+   */
+  catalogable?: boolean;
+  /** 目录卡片的分组标签(plugin-mcp = 连接器服务器名);目录按它分组,组按首见序、组内按声明序,跨步字节稳定(保 provider 前缀缓存) */
+  catalogGroup?: string;
+  /**
    * 外部服务 Key 依赖声明(loop 执行优化 P5)：本工具执行依赖的环境变量名
    * (任一存在即视为已配置,如 ['EXA_API_KEY'])。编排器挂载前按
    * taskEnv(用户个人空间,多用户隔离) ∪ process.env 判定,缺 Key 时直接

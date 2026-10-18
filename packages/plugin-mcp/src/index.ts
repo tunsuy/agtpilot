@@ -377,6 +377,13 @@ class UserConnection {
         parameters: (tool.inputSchema as any) || { type: 'object', properties: {} },
         dangerLevel: 'medium',
         ...(outLimit > 0 ? { outputCap: outLimit } : {}),
+        // 层0 目录卡片(菜单点菜制 B v1,token 文档 §9.4):MCP 连接器工具
+        // 自声明「可被按需挂载」—— 自由任务未挂载时以一行卡片进系统提示
+        // 【按需工具目录】(按服务器分组),模型经 load_tools 点名后下一步
+        // schema 才上线。内核零插件知识:只认这两个自声明字段(同 baseline/
+        // fallback 模式)。工坊白名单任务不注入目录,确定性挂载照旧。
+        catalogable: true,
+        catalogGroup: serverName,
         // 只读分类(default-deny,见 classify.ts):① 服务器注解权威 → ② 注解沉默时按名称动词启发 → ③ 拿不准拒绝。
         // 判只读才带 readOnly(子 agent 白名单信号 + 主循环只读并行门);其余保持现状(不带 readOnly,主循环走独占门、子 agent 不可见)。
         // readOnlyBasis 记录判定依据(annotation/heuristic),供详情页「名称判定」拆档与审计。

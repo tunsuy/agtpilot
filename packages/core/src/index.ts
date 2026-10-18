@@ -35,6 +35,15 @@ export {
 } from './routing';
 export type { RoutableTool } from './routing';
 export {
+  LOAD_TOOLS_NAME,
+  toolCatalogEnabled,
+  cardLine,
+  groupCatalogTools,
+  buildToolCatalogNote,
+  createLoadToolsDefinition,
+} from './tool-catalog';
+export type { CatalogableTool, LoadToolsHooks } from './tool-catalog';
+export {
   messageText,
   isToolCallMessage,
   truncateText,
@@ -96,6 +105,12 @@ declare module '@deepseek-ai/cordis' {
      * 进程崩溃/重启后任务可从最近检查点续跑。
      */
     'agtpilot/checkpoint'(payload: { taskId: string; stepNumber: number; messages: any[] }): void;
+    /**
+     * 目录点菜观测(层0 目录卡片 B v1,token 文档 §9.4):load_tools 每次被
+     * 调用发一条(loaded=本次新点名的工具,unknown=目录外名字)。这就是
+     * §9.4 想要的「命中分布」数据 —— 由 B 自身自动采集,不进 SSE。
+     */
+    'agtpilot/tool-catalog'(payload: { taskId: string; step: number; loaded: string[]; unknown: string[] }): void;
   }
 }
 

@@ -9,7 +9,8 @@ import {
   filterToolsByEnv,
   stableStringify,
 } from './routing';
-import type { RoutableTool, ToolRoute } from './contracts';
+import type { RoutableTool } from './routing';
+import type { ToolRoute } from './contracts';
 
 // 断言失败时 inline delete 不会执行 → env 泄漏会级联污染后续用例，
 // 统一在 afterEach 兜底清理
@@ -17,6 +18,7 @@ afterEach(() => {
   delete process.env.AGTPILOT_CONTEXT_WINDOW;
   delete process.env.AGTPILOT_TOOL_SEARCH_THRESHOLD;
   delete process.env.AGTPILOT_TOOL_ROUTING;
+  delete process.env.AGTPILOT_ROUTE_FALLBACK;
   delete process.env.EXA_API_KEY;
   delete process.env.TAVILY_API_KEY;
   delete process.env.FIRECRAWL_API_KEY;
@@ -97,8 +99,18 @@ describe('selectActiveTools', () => {
     expect(result).toContain('sandbox_run_command');
   });
 
-  it('未命中任何路由规则时全量兜底', () => {
+  it('未命中任何路由规则时收敛兜底:baseline(+fallback)而非全量(§9.5)', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    // TOOLS 无 fallback 标记 → 兜底档 = baseline 对,声明序
+    expect(selectActiveTools('讲个笑话', TOOLS, ROUTES)).toEqual([
+      'memory_store',
+      'planner_create_plan',
+    ]);
+  });
+
+  it('零命中兜底的保险丝:AGTPILOT_ROUTE_FALLBACK=full 恢复全量(undefined)', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    process.env.AGTPILOT_ROUTE_FALLBACK = 'full';
     expect(selectActiveTools('讲个笑话', TOOLS, ROUTES)).toBeUndefined();
   });
 
@@ -116,9 +128,15 @@ describe('selectActiveTools', () => {
     const hybrid = selectActiveTools('你好，帮我搜索一下', TOOLS, ROUTES);
     expect(hybrid).toContain('search_web');
     expect(hybrid).not.toContain('browser_navigate');
-    // 无任何路由命中 → 全量兜底
-    expect(selectActiveTools('你是谁的作者', TOOLS, ROUTES)).toBeUndefined();
-    expect(selectActiveTools('介绍一下 RAG 架构', TOOLS, ROUTES)).toBeUndefined();
+    // 无任何路由命中 → 收敛兜底(baseline 对,§9.5;不再全量)
+    expect(selectActiveTools('你是谁的作者', TOOLS, ROUTES)).toEqual([
+      'memory_store',
+      'planner_create_plan',
+    ]);
+    expect(selectActiveTools('介绍一下 RAG 架构', TOOLS, ROUTES)).toEqual([
+      'memory_store',
+      'planner_create_plan',
+    ]);
   });
 
   it('闲聊短路后转入真实任务：只扩不缩机制把工具扩回来', () => {
@@ -196,6 +214,55 @@ describe('selectActiveTools', () => {
     const newRoutes: ToolRoute[] = [...ROUTES, { id: 'weather', prefixes: ['weather_'], test: /天气|weather/i }];
     const result = selectActiveTools('查一下明天天气', newPluginTools, newRoutes);
     expect(result).toContain('weather_query');
+  });
+});
+
+describe('零命中收敛兜底(§9.5 快速止血 A)', () => {
+  // 检索组带 fallback 标记(生产口径:search 三件套/research_subagent/firecrawl/参考资料)
+  const LEAN_TOOLS: RoutableTool[] = [
+    mkTool('browser_navigate'),
+    mkTool('search_web', { fallback: true }),
+    mkTool('research_subagent', { fallback: true }),
+    mkTool('cron_list'), // 无 route 也无标记:零命中时不该挂
+    mkTool('memory_store', { baseline: true }),
+  ];
+
+  it('零命中 → baseline+fallback,声明序返回(不挂无关组、不挂无标记工具)', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    expect(selectActiveTools('帮我把会议纪要整理成文章', LEAN_TOOLS, ROUTES)).toEqual([
+      'search_web',
+      'research_subagent',
+      'memory_store',
+    ]);
+  });
+
+  it('零命中但 prompt 显式提到工具名 → 点名工具并入兜底档', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    const result = selectActiveTools('看看 cron_list 里有什么', LEAN_TOOLS, ROUTES)!;
+    expect(result).toContain('cron_list');
+    expect(result).toContain('memory_store'); // baseline 仍在
+  });
+
+  it('兜底档与 widen 兼容:后续步骤命中关键词 → 只扩不缩并入工具组', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    const mounted = new Set(selectActiveTools('帮我整理点东西', LEAN_TOOLS, ROUTES)!);
+    const next = selectActiveTools('打开网页看看这个链接', LEAN_TOOLS, ROUTES)!;
+    const widened = widenMountedTools(mounted, next);
+    expect(widened).toContain('browser_navigate'); // 浏览器组扩容进来
+    expect(widened).toContain('search_web'); // 兜底档已挂的保留
+  });
+
+  it('目录无 baseline/fallback 可依赖 → 保守回退全量(undefined)', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    const bare = [mkTool('browser_navigate'), mkTool('cron_list')];
+    expect(selectActiveTools('帮我把会议纪要整理成文章', bare, ROUTES)).toBeUndefined();
+  });
+
+  it('命中分支不受 fallback 标记影响(命中 search 不会拖进 fallback 的其它工具)', () => {
+    process.env.AGTPILOT_CONTEXT_WINDOW = '1';
+    const result = selectActiveTools('帮我搜索一下', LEAN_TOOLS, ROUTES)!;
+    expect(result).toContain('search_web'); // search 组本体
+    expect(result).not.toContain('research_subagent'); // fallback 只在零命中档生效
   });
 });
 

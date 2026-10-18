@@ -295,6 +295,8 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   ctx.agent.registerTool({
     name: 'search_web',
     readOnly: true, // 只读并行门控:纯检索,无副作用
+    // 零命中收敛兜底(§9.5):路由没猜中关键词时检索能力仍常驻
+    fallback: true,
     description:
       '在互联网上搜索指定关键词或问题，自动在 Exa 神经语义搜索、Tavily Agent 搜索以及零 Key 多源聚合(Bing 国际区真实摘要 + Google News RSS 时效新闻 + Wikipedia)间进行多层级路由与容灾降级。零 Key 层返回真实内容摘要,多数情况下无需再逐个打开网页。基于检索结果作答时,在相应结论句末以 markdown 链接标注依据来源,链接用该条结果的原始 url(前端会渲染成可点的角标,读者直达原文)',
     dangerLevel: 'low',
@@ -396,6 +398,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   ctx.agent.registerTool({
     name: 'search_exa',
     readOnly: true, // 只读并行门控:纯检索,无副作用
+    fallback: true, // 零命中收敛兜底(§9.5);缺 Key 时仍被 filterToolsByEnv 剔除
     description: '使用 Exa.ai 原生神经网络语义搜索引擎，基于语义 Embedding 精准匹配网页与正文 Highlight',
     dangerLevel: 'low',
     // P5:config 未带 Key 时声明 env 依赖 —— 用户个人空间(taskEnv)或
@@ -431,6 +434,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   ctx.agent.registerTool({
     name: 'search_tavily',
     readOnly: true, // 只读并行门控:纯检索,无副作用
+    fallback: true, // 零命中收敛兜底(§9.5);缺 Key 时仍被 filterToolsByEnv 剔除
     description: '使用 Tavily 官方 API 搜索针对大模型优化的结构化内容',
     dangerLevel: 'low',
     // P5:同 search_exa,缺 Key 不挂载

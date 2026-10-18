@@ -215,6 +215,15 @@ export interface ToolDefinition {
   /** 基线工具：任何任务都挂载（体积小且通用的规划/交付/记忆类），由插件自声明 */
   baseline?: boolean;
   /**
+   * 零命中收敛兜底声明(路由快速止血 A,token 文档 §9.5):关键词路由零命中时
+   * 随 baseline 一并挂载。兜底从「全量挂载」(生产内置+MCP 上百把 schema
+   * ≈35k tokens/步,「你是谁」45.8k 账单的主放大器)收敛为「baseline+fallback
+   * 检索组」。由检索类插件自声明(search 三件套/research_subagent/firecrawl/
+   * 参考资料);漏挂工具由 prepareStep 每步重算「只扩不缩」补救。
+   * 保险丝 AGTPILOT_ROUTE_FALLBACK=full 恢复全量兜底。
+   */
+  fallback?: boolean;
+  /**
    * 外部服务 Key 依赖声明(loop 执行优化 P5)：本工具执行依赖的环境变量名
    * (任一存在即视为已配置,如 ['EXA_API_KEY'])。编排器挂载前按
    * taskEnv(用户个人空间,多用户隔离) ∪ process.env 判定,缺 Key 时直接

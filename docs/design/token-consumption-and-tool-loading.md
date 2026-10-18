@@ -3,9 +3,9 @@
 > 记录日期:2026-10-17。触发事件:开源贡献雷达「选题」扫描任务单次 mission.usage 达 ~73 万
 > prompt tokens(未到派发阶段)。本文两部分:①73 万的逐环节归因;②工具挂载专题
 > (现状 / 业界对照 / 改造方案)。所有代码结论均附文件:行号,业界数字附来源链接。
-> 状态:分析已定稿;工坊白名单(§9.1)、reasoning 剥离(§9.2)与层1 源头裁剪
-> (§9.3)已实施;层0 工具卡片化(§9.4)测量工具已实施、静态数据已出,
-> 机制立项待服务器端 MCP 补测 + 命中分布数据。余待拍板。
+> 状态:分析已定稿;工坊白名单(§9.1)、reasoning 剥离(§9.2)、层1 源头裁剪
+> (§9.3)与路由零命中收敛兜底(§9.5)已实施;层0 工具卡片化(§9.4)测量工具
+> 已实施、静态数据已出,机制立项待服务器端 MCP 补测 + 命中分布数据。余待拍板。
 
 ---
 
@@ -518,6 +518,41 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
 3. 立项前置数据 = 两个:① MCP 精确名工具的 schema 成本(服务器端补测);
    ② 工具命中分布(真实 run 里每把工具的调用率——没被用的 schema 才是纯浪费,
    命中率高的就该常驻)。②需要 run 事件数据或加打点,拿到后再定卡片化名单。
+
+### 9.5 路由零命中收敛兜底(快速止血 A,2026-10-18 负责人盘点路由后拍板「搞」= C 方案:A 先落、B 等 §9.4 数据立项)
+
+**诊断(路由全链路盘点)**:自由任务(非工坊白名单、非闲聊短路)的关键词路由是
+「全有或全无」——
+- 9 条插件正则零命中 → `selectActiveTools` 返回 undefined **全量挂载**:生产
+  内置 48 把 + MCP 连接器 135 把 ≈35k tokens/步,每步重付(「你是谁」45.8k 实测
+  的主放大器;闲聊短路只堵 ≤24 字符全串锚定那一小类,「讲个笑话」「你是谁的
+  作者」都落全量档);
+- 命中任一条 → 只挂命中组 + baseline,但 **135 个 MCP 工具不属于任何 route**
+  (`mcp_connect_` 只管连接器管理件)——自由任务一旦走命中分支,MCP 整体缺席,
+  中途 prepareStep 重算也补不进来(重算用的是同一批正则)。
+
+**修复(A,本次实施)**:零命中分支不再全量,收敛为
+`baseline ∪ fallback ∪ prompt 显式点名的工具`:
+- `ToolDefinition.fallback?: boolean`(contracts.ts,与 baseline 同款插件自声明
+  模式,内核零插件知识):检索组自标——search_web/search_exa/search_tavily
+  (plugin-search)、research_subagent(plugin-subagent)、browser_firecrawl_scrape
+  (plugin-browser)、read_reference_material(web 宿主);缺 Key 的仍被
+  filterToolsByEnv 剔除,fallback 不绕过 Key 门;
+- 返回序 = 目录声明序(跨任务字节稳定,保 provider 前缀缓存);
+- 漏挂补救沿用既有机制:prepareStep 每步用近 8 条消息重算 + widenMountedTools
+  只扩不缩(工具结果里出现 URL → 浏览器组扩进来,扩容步破一次缓存);
+- 保险丝 `AGTPILOT_ROUTE_FALLBACK=full` 恢复旧全量兜底(每次调用读 env,热切;
+  缺省 lean);
+- 命中分支与显式白名单分支语义零变化(fallback 只在零命中档生效)。
+
+**明码代价**:自由任务的 MCP 从「零命中全量时碰巧可用」变为「统一不挂」——
+27k tokens 的 MCP schema 磁铁正是本刀要杀的;MCP 的自助通道 = B(§9.4 目录
+卡片 + load_tools,模型看菜单点菜),立项前置数据不变(服务器端 MCP schema
+补测 + 命中分布)。工坊任务不受影响(白名单 C 层 mcp_<id>_* 照旧)。
+
+**测试**:routing.test.ts 新增「零命中收敛兜底」5 例(baseline+fallback 声明序 /
+点名并入 / widen 兼容 / 空目录保守回全量 / 命中分支不受 fallback 影响)+ 既有
+全量兜底断言 3 处改收敛口径 + full 保险丝 1 例;core 165 全绿。
 
 ---
 

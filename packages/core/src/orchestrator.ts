@@ -13,7 +13,14 @@ import {
   filterToolsByEnv,
   stableStringify,
   estimateTextTokens,
+  isSmalltalkPrompt,
 } from './routing';
+import {
+  LOAD_TOOLS_NAME,
+  toolCatalogEnabled,
+  buildToolCatalogNote,
+  createLoadToolsDefinition,
+} from './tool-catalog';
 import { messageText, truncateToolOutput, buildSpillPointer, toolSpillEnabled, effectiveOutputLimit } from './text';
 import { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 import { compactConversationMessages } from './compaction';
@@ -199,7 +206,82 @@ export class OrchestratorService extends Service {
             .join('、') +
           '。不要尝试调用它们,请直接使用已挂载的替代工具完成任务;确需启用时,在最终答复中提示用户在个人空间配置对应 Key 后重新发起任务。'
         : '';
-    const systemPrompt = (options.system || DEFAULT_SYSTEM_PROMPT) + missingKeyNote;
+    // 工具按需挂载：显式指定 > 阈值门（未超线全量）> 插件注册的关键词规则 > 零命中收敛兜底
+    // 路由依据 = 本次 prompt + 历史中的近期用户消息（多轮任务里"继续/打开刚才那个链接"
+    // 这类跟进指令本身没有关键词，但历史里有）；system 提示词刻意不参与——
+    // 它通篇提到各工具名，参与匹配会让路由永远退化为全量。
+    // 路由计算先于 loopTools/系统提示定型:层0 目录卡片(下方)要按「哪些
+    // catalogable 工具没挂」决定注入与否,load_tools 也要走同一条工具包装管道。
+    const routingText = [
+      options.prompt,
+      ...(options.historyMessages || [])
+        .filter((m) => m.role === 'user')
+        .slice(-5)
+        .map((m) => messageText(m.content)),
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const routedTools = selectActiveTools(
+      routingText,
+      allTools,
+      this.ctx.agent.getToolRoutes(),
+      options.activeTools
+    );
+    // 任务内路由结果「只扩不缩」：mountedNames 冻结为初始路由集合，
+    // 每步重算只并入新增（如工具结果里出现 URL → 把浏览器组扩进来），
+    // 集合不变/缩容都不写回 —— 工具声明前缀跨步稳定，provider 前缀缓存
+    // （DeepSeek/OpenAI 自动缓存）不再每步 miss 全价重付 schema + 历史前缀。
+    const mountedNames = new Set<string>(routedTools || []);
+    let toolsMounted = routedTools ? routedTools.length : allTools.length;
+
+    // ---- 层0 目录卡片(菜单点菜制 B v1,token 文档 §9.4)----
+    // 自由任务(无工坊白名单、路由已启用、非闲聊短路)里,未挂载的 catalogable
+    // 工具(检索侧插件自声明,当前 = plugin-mcp 连接器工具)以一行卡片进系统
+    // 提示【按需工具目录】,并注入 load_tools 元工具:模型点名 → loadedToolNames
+    // → 下一步 prepareStep 并入挂载面(schema 上线)。不注入的档位:工坊白名单
+    // (确定性挂载照旧)、routedTools undefined 的全量挂载档(人人有 schema)、
+    // 闲聊短路档(只挂 baseline,与 MCP 无关)。保险丝 AGTPILOT_TOOL_CATALOG=0。
+    const loadedToolNames = new Set<string>();
+    // 效率统计口径:toolsTotal 不含任务级合成的 load_tools(与历史 mission 可比)
+    const toolsTotalBase = allTools.length;
+    let catalogNote = '';
+    let initialActiveTools = routedTools;
+    if (
+      toolCatalogEnabled() &&
+      routedTools !== undefined &&
+      !(options.activeTools && options.activeTools.length > 0) &&
+      !isSmalltalkPrompt(routingText)
+    ) {
+      const catalogTools = allTools.filter((t) => t.catalogable && !mountedNames.has(t.name));
+      const note = buildToolCatalogNote(catalogTools);
+      if (note) {
+        catalogNote = note;
+        // load_tools 并入 allTools 后走与其他工具完全相同的包装管道(广播/
+        // 熔断/审批门/截断);它不进全局注册表 → 子 agent 不可见,双钥匙不变
+        allTools.push(
+          createLoadToolsDefinition({
+            catalog: catalogTools,
+            isMounted: (n) => mountedNames.has(n) || loadedToolNames.has(n),
+            onLoad: (loaded, unknown) => {
+              for (const n of loaded) loadedToolNames.add(n);
+              // 观测事件:每次点名单一条 = 目录命中分布样本(§9.4 想要的
+              // 服务端数据由 B 自身自动采集);cordis 自定义事件,不进 SSE
+              this.ctx.emit('agtpilot/tool-catalog', {
+                taskId,
+                step: currentStep,
+                loaded,
+                unknown,
+              });
+            },
+          })
+        );
+        mountedNames.add(LOAD_TOOLS_NAME);
+        toolsMounted = mountedNames.size;
+        // 初始挂载面带上 load_tools(routedTools 序 + 尾部追加,字节稳定)
+        initialActiveTools = Array.from(mountedNames);
+      }
+    }
+    const systemPrompt = (options.system || DEFAULT_SYSTEM_PROMPT) + missingKeyNote + catalogNote;
     const loopTools: AgentLoopTool[] = allTools.map((toolDef) => ({
       name: toolDef.name,
       description: toolDef.description,
@@ -428,31 +510,6 @@ export class OrchestratorService extends Service {
       },
     }));
 
-    // 工具按需挂载：显式指定 > 阈值门（未超线全量）> 插件注册的关键词规则 > 全量兜底
-    // 路由依据 = 本次 prompt + 历史中的近期用户消息（多轮任务里"继续/打开刚才那个链接"
-    // 这类跟进指令本身没有关键词，但历史里有）；system 提示词刻意不参与——
-    // 它通篇提到各工具名，参与匹配会让路由永远退化为全量。
-    const routingText = [
-      options.prompt,
-      ...(options.historyMessages || [])
-        .filter((m) => m.role === 'user')
-        .slice(-5)
-        .map((m) => messageText(m.content)),
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const routedTools = selectActiveTools(
-      routingText,
-      allTools,
-      this.ctx.agent.getToolRoutes(),
-      options.activeTools
-    );
-    // 任务内路由结果「只扩不缩」：mountedNames 冻结为初始路由集合，
-    // 每步重算只并入新增（如工具结果里出现 URL → 把浏览器组扩进来），
-    // 集合不变/缩容都不写回 —— 工具声明前缀跨步稳定，provider 前缀缓存
-    // （DeepSeek/OpenAI 自动缓存）不再每步 miss 全价重付 schema + 历史前缀。
-    const mountedNames = new Set<string>(routedTools || []);
-    let toolsMounted = routedTools ? routedTools.length : allTools.length;
     // 用量累计（成本可观测）：loop 主循环 + 步数耗尽后的强制总结轮都要付费；
     // 先声明后赋值 —— buildEfficiency 闭包在收尾时读取最终值
     let usageAcc = { promptTokens: 0, completionTokens: 0 };
@@ -482,7 +539,7 @@ export class OrchestratorService extends Service {
             ) / 100
           : 1,
       toolsMounted,
-      toolsTotal: allTools.length,
+      toolsTotal: toolsTotalBase,
       routed: Boolean(routedTools),
       reasoningPartsStripped,
       // spill 计数仅在实际发生时携带(可选字段语义,零落盘时不扰动既有
@@ -503,7 +560,7 @@ export class OrchestratorService extends Service {
         configOverride: options.configOverride,
         maxSteps,
         tools: loopTools,
-        activeTools: routedTools,
+        activeTools: initialActiveTools,
         // 每步准备回调（AI SDK v5 prepareStep，每一步模型调用前触发）：
         // 1) 动态路由（仅初始路由已启用时生效）：用近期消息（含工具结果——
         //    搜索结果里出现 URL 自然该把浏览器工具组挂进来）重算本步可见工具，
@@ -537,10 +594,19 @@ export class OrchestratorService extends Service {
               this.ctx.agent.getToolRoutes(),
               options.activeTools
             );
-            const widened = widenMountedTools(mountedNames, next);
-            if (widened) {
-              adjust.activeTools = widened;
-              toolsMounted = widened.length;
+            let changed = widenMountedTools(mountedNames, next) !== null;
+            // 目录点菜(§9.4 B):上一步 load_tools 点名的工具在本步并入挂载面
+            // (schema 上线)。与 widen 共用同一次写回 —— 一步内既扩容又点菜
+            // 也只破一次前缀缓存;点名只增不减,集合跨步稳定。
+            for (const n of loadedToolNames) {
+              if (!mountedNames.has(n)) {
+                mountedNames.add(n);
+                changed = true;
+              }
+            }
+            if (changed) {
+              adjust.activeTools = Array.from(mountedNames);
+              toolsMounted = adjust.activeTools.length;
             }
           }
           // reasoning 剥离(闸2·循环内):provider 会把消息状态里历史 assistant 的

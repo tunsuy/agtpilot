@@ -119,6 +119,7 @@ flowchart TD
 | `AGTPILOT_CONTEXT_WINDOW` | 64000 | 上下文窗口估算（阈值门基数，下限 1024） |
 | `AGTPILOT_TOOL_SEARCH_THRESHOLD` | 10 (%) | 工具声明 tokens 超过窗口该比例才启用路由 |
 | `AGTPILOT_ROUTE_FALLBACK` | lean | 关键词路由零命中时的兜底:lean=baseline+fallback 检索组;full=全量挂载(旧行为) |
+| `AGTPILOT_TOOL_CATALOG=0` | 开 | 层0 目录卡片(菜单点菜制):`0` 时自由任务不注入【按需工具目录】与 `load_tools` 元工具,回到零命中收敛兜底现状 |
 | `AGTPILOT_COMPACT_THRESHOLD` | 30000 | 会话压缩触发阈值（tokens，下限 2000） |
 | `AGTPILOT_COMPACT_RECENT` | 10 | 近期保护窗口（消息数，下限 4） |
 | `AGTPILOT_SUBAGENT=0` | 开 | plugin-subagent 总闸：`0` 时不注册 `research_subagent` 工具 |

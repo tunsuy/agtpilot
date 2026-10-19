@@ -14,7 +14,8 @@ import type {
   ModelStreamTelemetry,
 } from '@agtpilot/core';
 import '@agtpilot/core';
-import { thinkingProviderOptions } from './thinking';
+import { thinkingProviderOptions, resolveThinkingEffort } from './thinking';
+import { effortFallbackFetch } from './effort-fallback';
 
 export const name = 'agtpilot-plugin-model';
 export const inject = ['agent'];
@@ -99,9 +100,10 @@ const STALL_CHECK_MS = 15_000;
  */
 export class ModelService extends Service implements ModelGateway {
   /**
-   * 运行时偏好模型（plugin-router 的能级切换写入；优先级高于环境变量默认）。
-   * modelName 按 provider 分域存储：切换到 openai 时不会带着 deepseek 的
-   * 模型名（旧实现整包 merge，deepseek-reasoner 会泄漏进 openai 分支导致 404）。
+   * 运行时偏好模型（setPreferredModel 写入口保留给未来服务端选型;当前无调用方。
+   * 原 plugin-router 的模型自选能级切换已删除——用户连接器部署下 configOverride
+   * 永远压过 preferred,切换实际无效）。modelName 按 provider 分域存储：切换到
+   * openai 时不会带着 deepseek 的模型名（旧实现整包 merge 会泄漏导致 404）。
    */
   private preferred: { activeModelId?: string; modelNames: Record<string, string>; reason?: string } = {
     modelNames: {},
@@ -133,7 +135,11 @@ export class ModelService extends Service implements ModelGateway {
       // 工具循环默认低温：高温会降低工具选择与 JSON 参数生成的稳定性，
       // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
       temperature: options.temperature ?? 0,
-      providerOptions: thinkingProviderOptions(branch),
+      // 思考深度:连接器级配置 > 全局 env > 分支缺省(resolveThinkingEffort 收口)
+      providerOptions: thinkingProviderOptions(
+        branch,
+        resolveThinkingEffort(options.configOverride?.reasoningEffort)
+      ),
       stopWhen: stepCountIs(1), // 严格单步，绝不越权包含循环
     }).catch((err: any) => {
       enrichModelError(err);
@@ -239,8 +245,12 @@ export class ModelService extends Service implements ModelGateway {
       // 引发无效参数报错 → 重试烧步数（这是"2 步任务跑很多步"的隐形推手）
       temperature: options.temperature ?? 0,
       // 思考深度旋钮：单轮输出上限由思考与答复/工具调用共用，思考不设防会
-      // 把额度吃光导致 tool_call 写到一半被截（见 thinkingProviderOptions 注释）
-      providerOptions: thinkingProviderOptions(branch),
+      // 把额度吃光导致 tool_call 写到一半被截（见 thinkingProviderOptions 注释）;
+      // 档位解析:连接器级配置 > 全局 env > 分支缺省(resolveThinkingEffort 收口)
+      providerOptions: thinkingProviderOptions(
+        branch,
+        resolveThinkingEffort(options.configOverride?.reasoningEffort)
+      ),
       // 步数上限 + Token 预算双闸门：任一触达即停止循环（预算由 setBudget 设置）
       stopWhen: ({ steps }: { steps: any[] }) =>
         steps.length >= maxSteps || this.isBudgetExceeded(),
@@ -384,9 +394,9 @@ export class ModelService extends Service implements ModelGateway {
   }
 
   /**
-   * 设置偏好模型（plugin-router 能级切换入口）。
+   * 设置偏好模型（运行时切换入口;原调用方 plugin-router 已删除,契约保留备用）。
    * 优先级：configOverride > 显式 model 参数 > 本偏好 > 环境变量默认。
-   * modelName 按 provider 分域：router 切到 openai 只影响 openai 分支的模型名。
+   * modelName 按 provider 分域：切到 openai 只影响 openai 分支的模型名。
    */
   setPreferredModel(pref: { activeModelId?: string; modelName?: string; reason?: string }): void {
     if (pref.activeModelId !== undefined) {
@@ -468,6 +478,9 @@ export class ModelService extends Service implements ModelGateway {
         name: 'custom-llm',
         apiKey,
         baseURL: baseURL || 'https://api.openai.com/v1',
+        // 中转对 reasoning_effort 档位校验不一(实测有多渠道网关随机 400 拒
+        // medium),fetch 层降级重试一次兜底,任务不因思考参数中断
+        fetch: effortFallbackFetch,
       });
       return { model: provider(modelName), branch: 'custom_llm' };
     }
@@ -487,6 +500,7 @@ export class ModelService extends Service implements ModelGateway {
         name: 'local-llm',
         apiKey,
         baseURL,
+        fetch: effortFallbackFetch, // 本地部署对未知参数容忍度参差,同款兜底
       });
       return { model: provider(modelName), branch: 'local_llm' };
     }
@@ -502,6 +516,7 @@ export class ModelService extends Service implements ModelGateway {
       const provider = createOpenAI({
         apiKey,
         baseURL,
+        fetch: effortFallbackFetch, // OPENAI_BASE_URL 指中转时同样可能拒思考参数
       });
       return { model: provider(modelName), branch: 'openai' };
     }
@@ -523,6 +538,7 @@ export class ModelService extends Service implements ModelGateway {
     const provider = createDeepSeek({
       apiKey,
       baseURL,
+      fetch: effortFallbackFetch, // DEEPSEEK_BASE_URL 指中转时同样可能拒思考参数
     });
     return { model: provider(modelName), branch: 'deepseek' };
   }
@@ -558,4 +574,5 @@ export function apply(ctx: Context) {
   new ModelService(ctx);
 }
 
-export { thinkingProviderOptions } from './thinking';
+export { thinkingProviderOptions, resolveThinkingEffort } from './thinking';
+export { effortFallbackFetch, fetchWithEffortFallback } from './effort-fallback';

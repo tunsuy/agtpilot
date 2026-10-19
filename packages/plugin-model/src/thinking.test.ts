@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { thinkingProviderOptions } from './thinking';
+import { thinkingProviderOptions, resolveThinkingEffort } from './thinking';
 
 describe('thinkingProviderOptions(思考深度旋钮 → providerOptions)', () => {
   it('openai 缺省显式 medium(厂商缺省,行为不变);deepseek 缺省不下发(medium 会被 SDK 转成 high,缺省下发等于悄悄改行为)', () => {
@@ -41,5 +41,37 @@ describe('thinkingProviderOptions(思考深度旋钮 → providerOptions)', () =
 
   it('未知分支即便 env 合法也不下发(没有 provider 键可挂)', () => {
     expect(thinkingProviderOptions('anthropic', 'low')).toBeUndefined();
+  });
+});
+
+describe('resolveThinkingEffort(连接器级配置 > 全局 env > 分支缺省)', () => {
+  it('连接器档位合法(low/medium/high)→ 压过全局 env', () => {
+    expect(resolveThinkingEffort('high', 'low')).toBe('high');
+    expect(resolveThinkingEffort('low', 'high')).toBe('low');
+    expect(resolveThinkingEffort('medium', undefined)).toBe('medium');
+  });
+
+  it('连接器未设置/空串/非法值 → 回落全局 env(含 env 未设置的 undefined)', () => {
+    expect(resolveThinkingEffort(undefined, 'high')).toBe('high');
+    expect(resolveThinkingEffort('', 'medium')).toBe('medium');
+    expect(resolveThinkingEffort('MAX', 'low')).toBe('low');
+    expect(resolveThinkingEffort(undefined, undefined)).toBeUndefined();
+    // env 空串 = 部署方显式关闭,原样透传(thinkingProviderOptions 对 '' 不下发)
+    expect(resolveThinkingEffort(undefined, '')).toBe('');
+  });
+
+  it('端到端:连接器 deepseek medium 仍走 SDK 口径预映射为 high', () => {
+    const effort = resolveThinkingEffort('medium', 'low');
+    expect(thinkingProviderOptions('deepseek', effort)).toEqual({ deepseek: { reasoningEffort: 'high' } });
+  });
+
+  it('端到端:连接器未设置时 env 与分支缺省行为不变(openai 缺省 medium、custom_llm 缺省不下发)', () => {
+    expect(thinkingProviderOptions('openai', resolveThinkingEffort(undefined, undefined))).toEqual({
+      openai: { reasoningEffort: 'medium' },
+    });
+    expect(thinkingProviderOptions('custom_llm', resolveThinkingEffort(undefined, undefined))).toBeUndefined();
+    expect(thinkingProviderOptions('custom_llm', resolveThinkingEffort('high', undefined))).toEqual({
+      'openai-compatible': { reasoningEffort: 'high' },
+    });
   });
 });

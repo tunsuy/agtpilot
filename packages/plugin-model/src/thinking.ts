@@ -13,8 +13,27 @@
  * custom/local 的 provider key 必须用 'openai-compatible'(带连字符的通用键,
  * SDK 会同时解析它;驼峰 openaiCompatible 不是合法 key,发了也会被静默丢弃)。
  * 返回 undefined = 不下发任何思考参数。
+ *
+ * 优先级(三层,resolveThinkingEffort 收口前两层):
+ * 连接器级配置(configOverride.reasoningEffort,用户在模型连接器卡片上选的
+ * 低/中/高)> 全局 env AGTPILOT_REASONING_EFFORT(部署方兜底旋钮)> 上面的
+ * 分支缺省。连接器「默认」= 不存键 = 回落全局配置,与未配置无区别
+ * (saveUserConnector 对空值删键,存储层表达不出「显式关」与「未设置」之差)。
  */
 type Effort = 'low' | 'medium' | 'high';
+
+/**
+ * 连接器级思考深度 → thinkingProviderOptions 的入参。
+ * configValue 合法(low/medium/high)则用它;否则(未设置/空/非法)回落 env。
+ * 显式传 undefined 时 JS 默认参数仍会读 env,两层口径一致、不会重复或漏读。
+ */
+export function resolveThinkingEffort(
+  configValue: string | undefined,
+  env: string | undefined = process.env.AGTPILOT_REASONING_EFFORT
+): string | undefined {
+  if (configValue === 'low' || configValue === 'medium' || configValue === 'high') return configValue;
+  return env;
+}
 
 export function thinkingProviderOptions(
   branch: string,

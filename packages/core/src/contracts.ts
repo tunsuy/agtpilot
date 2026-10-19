@@ -17,6 +17,12 @@ export interface ModelConfigOverride {
   apiKey?: string;
   baseURL?: string;
   modelName?: string;
+  /**
+   * 思考深度档位（low|medium|high），来自用户在模型连接器上的「思考深度」选择。
+   * 优先级：本字段 > 全局 env AGTPILOT_REASONING_EFFORT > 分支缺省
+   * （见 plugin-model/thinking.ts resolveThinkingEffort）。缺省/非法值静默回落。
+   */
+  reasoningEffort?: string;
 }
 
 /** 单步无状态调用选项（纯文本场景：总结收尾、会话压缩蒸馏等） */
@@ -125,7 +131,7 @@ export interface ModelGateway {
   /** 完整 agent loop：多步循环、tool-call/result 配对交给 AI SDK */
   runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult>;
   /**
-   * 设置偏好模型（plugin-router 等运行时切换入口使用）。
+   * 设置偏好模型（运行时切换入口,预留;原调用方 plugin-router 已删除）。
    * 优先级：configOverride > 显式 model 参数 > 本偏好 > 环境变量默认。
    */
   setPreferredModel(pref: { activeModelId?: string; modelName?: string; reason?: string }): void;

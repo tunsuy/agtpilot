@@ -134,8 +134,17 @@ export interface SubagentEngineConfig {
   resolveMcpServers?: (userId: string | undefined) => readonly string[] | undefined;
   /** MCP 工具名前缀逃生口(人工担责,不受 readOnly 限制);默认空 */
   mcpAllowTools?: readonly string[];
-  /** per-call 模型覆盖(不动 router 全局档位,spec §4.2) */
+  /** per-call 模型覆盖(静态缺省档;宿主注入 resolveModelOverride 时按用户逐次解析) */
   configOverride?: ModelConfigOverride;
+  /**
+   * 逐用户解析模型覆盖(宿主注入,如 web 按用户连接器配置解析——用户用中转
+   * 连接器时,子代理必须继承同一套 apiKey/baseURL/modelName,否则静态缺省档
+   * 会去摸不存在的 DEEPSEEK_API_KEY 导致派发全挂,2026-10 生产实证)。
+   * 每次 run 以 session.userId 调用;返回值(含空对象语义由宿主定)即整体替代
+   * 静态 configOverride,返回 undefined 回退静态配置 —— env 显式覆盖
+   * (AGTPILOT_SUBAGENT_PROVIDER/_MODEL)优先级由宿主决定是否注入本回调。
+   */
+  resolveModelOverride?: (userId: string | undefined) => ModelConfigOverride | undefined;
   /** M2:宿主注入的 transcript 落盘适配器;缺失静默不落盘 */
   appendTranscript?: (entry: SubagentTranscript) => void;
 }
@@ -248,6 +257,16 @@ export class SubagentEngine {
         // 宿主解析失败(如 user-store 读盘异常)→ 回退静态配置
       }
     }
+    // 模型覆盖:宿主注入 resolveModelOverride 时按当前用户逐次解析(web = 用户
+    // 连接器配置,子代理与主循环同源);返回 undefined / 回调异常回退静态缺省档
+    let configOverride = this.cfg.configOverride;
+    if (this.cfg.resolveModelOverride) {
+      try {
+        configOverride = this.cfg.resolveModelOverride(session.userId) ?? configOverride;
+      } catch {
+        // 宿主解析失败(如 user-store 读盘异常)→ 回退静态配置
+      }
+    }
     let resolved = resolveReadonlyTools(this.deps.listTools(), {
       whitelist: this.cfg.whitelist,
       mcpServers,
@@ -352,7 +371,7 @@ export class SubagentEngine {
         maxSteps,
         tools: internalTools,
         abortSignal: controller.signal,
-        configOverride: this.cfg.configOverride,
+        configOverride,
         prepareStep,
         onStepStart: ({ stepNumber }) => {
           currentStep = stepNumber;
@@ -384,7 +403,7 @@ export class SubagentEngine {
         const wrap = await model.invokeStep({
           system: `${SUBAGENT_SYSTEM_PROMPT}\n\n【重要】可用步数/预算已用尽,禁止再调用任何工具。请立即基于已获得的资料输出最终调研报告(结论先行、附来源)。`,
           messages: convMsgs,
-          configOverride: this.cfg.configOverride,
+          configOverride,
           disableTools: true,
         });
         if (wrap.text) report = wrap.text;

@@ -16,6 +16,9 @@ export interface ConnectorInfo {
   baseUrlEnvVar?: string;
   customModelName?: string;
   modelNameEnvVar?: string;
+  /** 思考深度档位(low|medium|high);空 = 未配置(回落全局 env / 厂商缺省) */
+  reasoningEffort?: string;
+  reasoningEffortEnvVar?: string;
   platformType?: 'web' | 'mobile' | 'both';
   /** 官网 / Key 获取页：配置弹窗内展示「打开官网获取 Key」跳转 */
   websiteUrl?: string;
@@ -41,6 +44,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'DEEPSEEK_API_KEY',
     baseUrlEnvVar: 'DEEPSEEK_BASE_URL',
     modelNameEnvVar: 'DEEPSEEK_MODEL_NAME',
+    reasoningEffortEnvVar: 'DEEPSEEK_REASONING_EFFORT',
     description: 'DeepSeek 官方或中转推理核心，支持 DeepSeek-V3 与 R1 深度思考模型。',
     websiteUrl: 'https://platform.deepseek.com/api_keys',
     configHint: '打开 DeepSeek 开放平台登录，在 API Keys 页创建 Key 后粘贴到下方。用中转站时 Key 填中转的，并在下方 Base URL 填中转地址。',
@@ -54,6 +58,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'OPENAI_API_KEY',
     baseUrlEnvVar: 'OPENAI_BASE_URL',
     modelNameEnvVar: 'OPENAI_MODEL_NAME',
+    reasoningEffortEnvVar: 'OPENAI_REASONING_EFFORT',
     description: '官方或中转 OpenAI 接口，支持 GPT-4o、o1、o3-mini 等任意模型。',
     websiteUrl: 'https://platform.openai.com/api-keys',
     configHint: '打开 OpenAI 平台登录，在 API Keys 页创建 Key 后粘贴到下方。国内中转站请把 Key 与 Base URL 都换成中转的。',
@@ -67,6 +72,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'CUSTOM_LLM_API_KEY',
     baseUrlEnvVar: 'CUSTOM_LLM_BASE_URL',
     modelNameEnvVar: 'CUSTOM_LLM_MODEL_NAME',
+    reasoningEffortEnvVar: 'CUSTOM_LLM_REASONING_EFFORT',
     description: '接入任何兼容 OpenAI 标准的中转站、OneAPI、Ollama、SiliconFlow 或本地模型。',
     isModel: true,
   },
@@ -234,11 +240,14 @@ import { getUserConnectors, saveUserConnector, setUserActiveModel } from '@/lib/
 /** 允许用户写入的凭证键白名单（防止 POST 任意 envVar 键名注入配置） */
 const ALLOWED_ENV_VARS = new Set<string>(
   CONNECTOR_DEFS.flatMap((d) =>
-    [d.envVar, d.baseUrlEnvVar, d.modelNameEnvVar].filter(
+    [d.envVar, d.baseUrlEnvVar, d.modelNameEnvVar, d.reasoningEffortEnvVar].filter(
       (v): v is string => Boolean(v)
     )
   )
 );
+
+/** 思考深度合法档位(POST 校验 + GET 回显过滤;'' = 清除配置回落全局) */
+const VALID_REASONING_EFFORTS = new Set(['', 'low', 'medium', 'high']);
 
 /** 合法的默认模型 ID */
 const VALID_MODEL_IDS = new Set<string>(
@@ -264,6 +273,12 @@ function getConnectorStatusList(userId?: string): ConnectorInfo[] {
 
     const baseUrl = lookup(def.baseUrlEnvVar) || undefined;
     const customModelName = lookup(def.modelNameEnvVar) || undefined;
+    // 思考深度回显:只认合法档位(env 里被塞了脏值也不透传给前端下拉)
+    const rawEffort = lookup(def.reasoningEffortEnvVar);
+    const reasoningEffort =
+      rawEffort && VALID_REASONING_EFFORTS.has(rawEffort) && rawEffort !== ''
+        ? rawEffort
+        : undefined;
 
     return {
       ...def,
@@ -272,6 +287,7 @@ function getConnectorStatusList(userId?: string): ConnectorInfo[] {
       isDefaultModel: def.isModel ? def.id === activeModel : undefined,
       baseUrl,
       customModelName,
+      reasoningEffort,
     };
   });
 }
@@ -328,16 +344,33 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2. 支持批量更新（针对带有 API Key, Base URL, Model Name 的连接器）
+    // 2. 支持批量更新（针对带有 API Key, Base URL, Model Name, 思考深度 的连接器）
     if (body.action === 'saveConnectorConfig' && typeof body.envVar === 'string') {
-      const { envVar, value, baseUrlEnvVar, baseUrl, modelNameEnvVar, modelName } = body;
+      const {
+        envVar,
+        value,
+        baseUrlEnvVar,
+        baseUrl,
+        modelNameEnvVar,
+        modelName,
+        reasoningEffortEnvVar,
+        reasoningEffort,
+      } = body;
       if (!ALLOWED_ENV_VARS.has(envVar)) {
         return NextResponse.json(
           { success: false, error: `不允许写入的配置键: ${envVar}` },
           { status: 400 }
         );
       }
-      if (typeof value === 'string') {
+      if (reasoningEffort !== undefined && !VALID_REASONING_EFFORTS.has(reasoningEffort)) {
+        return NextResponse.json(
+          { success: false, error: '无效的思考深度档位(仅支持 low/medium/high 或留空)' },
+          { status: 400 }
+        );
+      }
+      // Key 留空 = 本次不动凭证(只改 Base URL/模型标识/思考深度的元数据保存);
+      // 空串写入会删键断开连接,绝不能被"只想调思考深度"的保存误触发
+      if (typeof value === 'string' && value.trim()) {
         saveUserConnector(userId, envVar, value.trim());
       }
       if (baseUrlEnvVar && typeof baseUrl === 'string' && ALLOWED_ENV_VARS.has(baseUrlEnvVar)) {
@@ -345,6 +378,14 @@ export async function POST(req: NextRequest) {
       }
       if (modelNameEnvVar && typeof modelName === 'string' && ALLOWED_ENV_VARS.has(modelNameEnvVar)) {
         saveUserConnector(userId, modelNameEnvVar, modelName.trim());
+      }
+      if (
+        reasoningEffortEnvVar &&
+        typeof reasoningEffort === 'string' &&
+        ALLOWED_ENV_VARS.has(reasoningEffortEnvVar)
+      ) {
+        // '' = 清除连接器级配置(saveUserConnector 删键)→ 回落全局 env / 厂商缺省
+        saveUserConnector(userId, reasoningEffortEnvVar, reasoningEffort.trim());
       }
       const userConfigs = getUserConnectors(userId);
       return NextResponse.json({

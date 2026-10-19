@@ -401,7 +401,7 @@ describe('reasoning 剥离(子循环闸)', () => {
 describe('工坊白名单对齐(session.activeTools 交集)', () => {
   const webTool = mkTool('search_web', { readOnly: true });
   const ragTool = mkTool('rag_search', { readOnly: true });
-  const memTool = mkTool('memory_recall', { readOnly: true, baseline: true });
+  const memTool = mkTool('sandbox_read_file', { readOnly: true, baseline: true });
   const ghTool = mkTool('mcp_github_mcp_search_issues', { readOnly: true });
   const dwTool = mkTool('mcp_deepwiki_ask_question', {}); // 无 readOnly 声明:走逃生口前缀放行
 
@@ -437,11 +437,11 @@ describe('工坊白名单对齐(session.activeTools 交集)', () => {
     expect(mountedNames(calls.loop[0])).toEqual(['mcp_deepwiki_ask_question']);
   });
 
-  it('baseline 自动并入:未声明的 memory_recall 仍挂载(与主循环 resolveExplicitTools 同款)', async () => {
+  it('baseline 自动并入:未声明的 sandbox_read_file 仍挂载(与主循环 resolveExplicitTools 同款)', async () => {
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, [webTool, memTool], {});
     await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web'] });
-    expect(mountedNames(calls.loop[0])).toEqual(['search_web', 'memory_recall']);
+    expect(mountedNames(calls.loop[0])).toEqual(['search_web', 'sandbox_read_file']);
   });
 
   it('交集为空 → 无法派发,错误信息如实说明白名单交集,不触模型', async () => {
@@ -755,5 +755,74 @@ describe('resolveMcpServers(逐用户动态人工钥匙)', () => {
     const res = await engine.run({ query: 'q' }, baseSession);
     expect(res.ok).toBe(true);
     expect(loopToolNames(calls.loop)).toContain('mcp_zhihu_hot_fetch');
+  });
+});
+
+// ---- resolveModelOverride(逐用户模型覆盖,宿主注入)----
+
+describe('resolveModelOverride(逐用户模型覆盖,宿主注入)', () => {
+  const STATIC = { activeModelId: 'deepseek', modelName: 'deepseek-chat' };
+  const USER_OVERRIDE = { activeModelId: 'custom_llm', modelName: 'relay-model', apiKey: 'k' };
+
+  it('返回覆盖 → 压过静态缺省档,runAgentLoop 收到(子代理与主循环同源连接器配置)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, undefined, {
+      configOverride: STATIC,
+      resolveModelOverride: (uid) => (uid === 'u1' ? USER_OVERRIDE : undefined),
+    });
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(calls.loop[0].configOverride).toEqual(USER_OVERRIDE);
+  });
+
+  it('以 session.userId 调用(逐用户解析,不串号)', async () => {
+    const { model } = makeFakeModel();
+    const seen: Array<string | undefined> = [];
+    const { engine } = makeEngine(model, undefined, {
+      resolveModelOverride: (uid) => {
+        seen.push(uid);
+        return undefined;
+      },
+    });
+    await engine.run({ query: 'q' }, { ...baseSession, userId: 'u2' });
+    expect(seen).toEqual(['u2']);
+  });
+
+  it('返回 undefined → 回退静态缺省档', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, undefined, {
+      configOverride: STATIC,
+      resolveModelOverride: () => undefined,
+    });
+    await engine.run({ query: 'q' }, baseSession);
+    expect(calls.loop[0].configOverride).toEqual(STATIC);
+  });
+
+  it('回调抛异常 → 回退静态缺省档,派发不中断(永不 throw 契约)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, undefined, {
+      configOverride: STATIC,
+      resolveModelOverride: () => {
+        throw new Error('user-store 读盘炸了');
+      },
+    });
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(calls.loop[0].configOverride).toEqual(STATIC);
+  });
+
+  it('强制收敛 invokeStep 同用解析后的覆盖(两处模型调用同源)', async () => {
+    const { model, calls } = makeFakeModel(
+      () => resultOf({ text: '', stepsExhausted: true }),
+      () => ({ text: '收敛报告' }),
+    );
+    const { engine } = makeEngine(model, undefined, {
+      configOverride: STATIC,
+      resolveModelOverride: () => USER_OVERRIDE,
+    });
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(calls.loop[0].configOverride).toEqual(USER_OVERRIDE);
+    expect(calls.step[0].configOverride).toEqual(USER_OVERRIDE);
   });
 });

@@ -10,7 +10,7 @@
  */
 import { Context, Service } from '@deepseek-ai/cordis';
 import '@agtpilot/core';
-import type { ToolDefinition, ToolSession } from '@agtpilot/core';
+import type { ModelConfigOverride, ToolDefinition, ToolSession } from '@agtpilot/core';
 import {
   SubagentEngine,
   type SubagentEventPayload,
@@ -45,7 +45,8 @@ const MAX_TOKENS = readInt('AGTPILOT_SUBAGENT_MAX_TOKENS', 60000, 0, Number.MAX_
 const TIMEOUT_MS = readInt('AGTPILOT_SUBAGENT_TIMEOUT_MS', 180000, 30000, 24 * 3600 * 1000);
 const MAX_CONCURRENT = readInt('AGTPILOT_SUBAGENT_MAX_CONCURRENT', 4, 1, 8);
 const REPORT_LIMIT = readInt('AGTPILOT_SUBAGENT_REPORT_LIMIT', 8000, 500, 64000);
-// 档位默认对齐 router fast 档;AGTPILOT_SUBAGENT_PROVIDER/_MODEL 可单独覆盖(spec §4.2)
+// 静态缺省档(原 router fast 档语义,router 已删除);AGTPILOT_SUBAGENT_PROVIDER/_MODEL
+// 可单独覆盖(spec §4.2)。web 宿主注入 resolveModelOverride 后本档只是回退缺省。
 const PROVIDER =
   process.env.AGTPILOT_SUBAGENT_PROVIDER || process.env.AGTPILOT_FAST_PROVIDER || 'deepseek';
 const MODEL = process.env.AGTPILOT_SUBAGENT_MODEL || process.env.AGTPILOT_FAST_MODEL || 'deepseek-chat';
@@ -107,6 +108,12 @@ export interface SubagentPluginConfig {
    * env AGTPILOT_SUBAGENT_MCP_SERVERS 显式设置时宿主不注入,env 语义优先。
    */
   resolveMcpServers?: (userId: string | undefined) => readonly string[] | undefined;
+  /**
+   * 逐用户解析模型覆盖(宿主注入)。web 宿主按用户连接器配置解析(user-store),
+   * 子代理与主循环同源;AGTPILOT_SUBAGENT_PROVIDER/_MODEL 显式设置时宿主不注入,
+   * env 语义优先。缺省不注入 → 静态缺省档(PROVIDER/MODEL)。
+   */
+  resolveModelOverride?: (userId: string | undefined) => ModelConfigOverride | undefined;
   /** MCP 工具名前缀逃生口;缺省 env AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS → 内置名单(deepwiki/newsnow,实测背书) */
   mcpAllowTools?: string[];
   maxSteps?: number;
@@ -140,8 +147,9 @@ class SubagentService extends Service {
         mcpServers: config.mcpServers ?? MCP_SERVERS,
         resolveMcpServers: config.resolveMcpServers,
         mcpAllowTools: config.mcpAllowTools ?? MCP_ALLOW_TOOLS,
-        // per-call 覆盖,不写 router 全局档位(spec §4.2)
+        // 静态缺省档(不写全局状态,spec §4.2);宿主注入 resolveModelOverride 时按用户逐次覆盖
         configOverride: { activeModelId: PROVIDER, modelName: MODEL },
+        resolveModelOverride: config.resolveModelOverride,
         appendTranscript: config.appendTranscript,
       },
     );

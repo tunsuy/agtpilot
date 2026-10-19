@@ -36,6 +36,61 @@ export interface AgentBackendState {
   latestArtifact?: any;
 }
 
+/**
+ * 用户连接器配置 → 模型覆盖(主循环与子代理共用的唯一映射点)。
+ *
+ * 三分支(custom_llm/openai/deepseek)字段语义:user-store 连接器配置 >
+ * 部署级 env > 分支缺省模型名;hasLlm = 任一来源有 Key(主循环用它判定
+ * 任务能否起跑)。reasoningEffort 走连接器级配置 > env > undefined(分支缺省)。
+ *
+ * 返回值含 apiKey —— 只准进模型调用链,严禁落日志/事件/错误消息。
+ */
+export function buildUserModelOverride(uConfigs: {
+  activeModelId?: string;
+  configs: Record<string, string>;
+}): { override: any; hasLlm: boolean } {
+  const activeModelId = uConfigs.activeModelId || 'custom_llm';
+  let override: any;
+  let hasLlm = false;
+
+  if (activeModelId === 'custom_llm') {
+    const apiKey = uConfigs.configs['CUSTOM_LLM_API_KEY'] || process.env.CUSTOM_LLM_API_KEY;
+    if (apiKey) hasLlm = true;
+    override = {
+      activeModelId: 'custom_llm',
+      apiKey,
+      baseURL: uConfigs.configs['CUSTOM_LLM_BASE_URL'] || process.env.CUSTOM_LLM_BASE_URL,
+      modelName: uConfigs.configs['CUSTOM_LLM_MODEL_NAME'] || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o',
+      // 思考深度:连接器级配置(用户卡片下拉)> 部署级 env > 分支缺省(不下发)
+      reasoningEffort:
+        uConfigs.configs['CUSTOM_LLM_REASONING_EFFORT'] || process.env.CUSTOM_LLM_REASONING_EFFORT || undefined,
+    };
+  } else if (activeModelId === 'openai') {
+    const apiKey = uConfigs.configs['OPENAI_API_KEY'] || process.env.OPENAI_API_KEY;
+    if (apiKey) hasLlm = true;
+    override = {
+      activeModelId: 'openai',
+      apiKey,
+      baseURL: uConfigs.configs['OPENAI_BASE_URL'] || process.env.OPENAI_BASE_URL,
+      modelName: uConfigs.configs['OPENAI_MODEL_NAME'] || process.env.OPENAI_MODEL_NAME || 'gpt-4o',
+      reasoningEffort:
+        uConfigs.configs['OPENAI_REASONING_EFFORT'] || process.env.OPENAI_REASONING_EFFORT || undefined,
+    };
+  } else {
+    const apiKey = uConfigs.configs['DEEPSEEK_API_KEY'] || process.env.DEEPSEEK_API_KEY;
+    if (apiKey) hasLlm = true;
+    override = {
+      activeModelId: 'deepseek',
+      apiKey,
+      baseURL: uConfigs.configs['DEEPSEEK_BASE_URL'] || process.env.DEEPSEEK_BASE_URL,
+      modelName: uConfigs.configs['DEEPSEEK_MODEL_NAME'] || process.env.DEEPSEEK_MODEL_NAME || 'deepseek-chat',
+      reasoningEffort:
+        uConfigs.configs['DEEPSEEK_REASONING_EFFORT'] || process.env.DEEPSEEK_REASONING_EFFORT || undefined,
+    };
+  }
+  return { override, hasLlm };
+}
+
 class AgentBackend {
   private static instance: AgentBackend;
   public ctx!: Context;
@@ -165,6 +220,19 @@ class AgentBackend {
                 const { buildUserSubagentMcpServers } = require('@/lib/mcp-connectors');
                 return buildUserSubagentMcpServers(userId ?? 'default');
               },
+          // 子代理模型继承用户连接器配置:不注入时插件静态缺省档钉 deepseek,
+          // web 部署通常没有 DEEPSEEK_API_KEY env → 派发全挂,调研脏活回灌主
+          // 上下文(2026-10 生产 mission 实证,34 万 token 会话的直接放大器)。
+          // AGTPILOT_SUBAGENT_PROVIDER/_MODEL 显式设置时不注入,env 语义优先
+          // (与 resolveMcpServers 同款约定)。
+          resolveModelOverride:
+            process.env.AGTPILOT_SUBAGENT_PROVIDER || process.env.AGTPILOT_SUBAGENT_MODEL
+              ? undefined
+              : (userId: string | undefined) => {
+                  if (!userId) return undefined;
+                  const { getUserConnectors } = require('@/lib/user-store');
+                  return buildUserModelOverride(getUserConnectors(userId)).override;
+                },
         },
       });
       this.ctx = runtime.ctx;
@@ -1575,37 +1643,9 @@ class AgentBackend {
         if (options.userId) {
           try {
             const { getUserConnectors } = await import('@/lib/user-store');
-            const uConfigs = getUserConnectors(options.userId);
-            const activeModelId = uConfigs.activeModelId || 'custom_llm';
-
-            if (activeModelId === 'custom_llm') {
-              const apiKey = uConfigs.configs['CUSTOM_LLM_API_KEY'] || process.env.CUSTOM_LLM_API_KEY;
-              if (apiKey) userHasLlm = true;
-              userConfigOverride = {
-                activeModelId: 'custom_llm',
-                apiKey,
-                baseURL: uConfigs.configs['CUSTOM_LLM_BASE_URL'] || process.env.CUSTOM_LLM_BASE_URL,
-                modelName: uConfigs.configs['CUSTOM_LLM_MODEL_NAME'] || process.env.CUSTOM_LLM_MODEL_NAME || 'gpt-4o',
-              };
-            } else if (activeModelId === 'openai') {
-              const apiKey = uConfigs.configs['OPENAI_API_KEY'] || process.env.OPENAI_API_KEY;
-              if (apiKey) userHasLlm = true;
-              userConfigOverride = {
-                activeModelId: 'openai',
-                apiKey,
-                baseURL: uConfigs.configs['OPENAI_BASE_URL'] || process.env.OPENAI_BASE_URL,
-                modelName: uConfigs.configs['OPENAI_MODEL_NAME'] || process.env.OPENAI_MODEL_NAME || 'gpt-4o',
-              };
-            } else {
-              const apiKey = uConfigs.configs['DEEPSEEK_API_KEY'] || process.env.DEEPSEEK_API_KEY;
-              if (apiKey) userHasLlm = true;
-              userConfigOverride = {
-                activeModelId: 'deepseek',
-                apiKey,
-                baseURL: uConfigs.configs['DEEPSEEK_BASE_URL'] || process.env.DEEPSEEK_BASE_URL,
-                modelName: uConfigs.configs['DEEPSEEK_MODEL_NAME'] || process.env.DEEPSEEK_MODEL_NAME || 'deepseek-chat',
-              };
-            }
+            const r = buildUserModelOverride(getUserConnectors(options.userId));
+            userConfigOverride = r.override;
+            userHasLlm = r.hasLlm;
           } catch (e) {
             // fallback
           }
@@ -1634,9 +1674,10 @@ class AgentBackend {
           const uid = options.userId;
 
           // 2.4 用户级长期记忆工具（独立于 MCP 挂载，不随连接器失败而失效）：
-          // 同名覆盖 plugin-memory 的全局单文件版本 —— memory_store/recall/list
-          // 全部读写该用户专属记忆库（user-store），多用户部署时 A 用户 Agent
-          // 沉淀的记忆不会进入 B 用户的召回结果
+          // memory_store/recall/list 全部读写该用户专属记忆库（user-store），
+          // 多用户部署时 A 用户 Agent 沉淀的记忆不会进入 B 用户的召回结果。
+          // （曾以同名 taskTools 覆盖 plugin-memory 的进程级共享版;该插件已于
+          // 2026-10-19 整包删除,这里是唯一的记忆实现）
           try {
             const { buildUserMemoryTools } = await import('@/lib/memory-service');
             taskTools = [...(taskTools || []), ...buildUserMemoryTools(uid)];

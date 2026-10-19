@@ -17,6 +17,9 @@ export interface ConnectorApp {
   baseUrlEnvVar?: string;
   customModelName?: string;
   modelNameEnvVar?: string;
+  /** 思考深度档位(low|medium|high);空 = 未配置(回落全局 env / 厂商缺省) */
+  reasoningEffort?: string;
+  reasoningEffortEnvVar?: string;
   platformType?: 'web' | 'mobile' | 'both';
   websiteUrl?: string;
   mobileAction?: {

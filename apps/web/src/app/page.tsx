@@ -334,7 +334,15 @@ export default function Workspace() {
   const handleSaveKey = async (
     envVar: string,
     value: string,
-    extra?: { baseUrl?: string; baseUrlEnvVar?: string; modelName?: string; modelNameEnvVar?: string }
+    extra?: {
+      baseUrl?: string;
+      baseUrlEnvVar?: string;
+      modelName?: string;
+      modelNameEnvVar?: string;
+      /** 思考深度(low|medium|high);'' = 清除连接器级配置回落全局。value 留空时凭证不动 */
+      reasoningEffort?: string;
+      reasoningEffortEnvVar?: string;
+    }
   ) => {
     try {
       const payload: any = extra
@@ -346,6 +354,8 @@ export default function Workspace() {
             baseUrlEnvVar: extra.baseUrlEnvVar,
             modelName: extra.modelName,
             modelNameEnvVar: extra.modelNameEnvVar,
+            reasoningEffort: extra.reasoningEffort,
+            reasoningEffortEnvVar: extra.reasoningEffortEnvVar,
           }
         : { envVar, value };
 

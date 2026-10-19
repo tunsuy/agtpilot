@@ -238,7 +238,15 @@ interface ConnectorsViewProps {
   onSaveKey: (
     envVar: string,
     value: string,
-    extra?: { baseUrl?: string; baseUrlEnvVar?: string; modelName?: string; modelNameEnvVar?: string }
+    extra?: {
+      baseUrl?: string;
+      baseUrlEnvVar?: string;
+      modelName?: string;
+      modelNameEnvVar?: string;
+      /** 思考深度(low|medium|high);'' = 清除连接器级配置回落全局。value 留空时凭证不动 */
+      reasoningEffort?: string;
+      reasoningEffortEnvVar?: string;
+    }
   ) => Promise<void>;
   onSetDefaultModel: (modelId: string) => Promise<void>;
   /** 任务中途授权跳转过来时自动打开对应连接器的配置弹窗 */
@@ -267,6 +275,8 @@ export function ConnectorsView({
   const [imapKeyInput, setImapKeyInput] = useState('');
   const [baseUrlInput, setBaseUrlInput] = useState('');
   const [modelNameInput, setModelNameInput] = useState('');
+  // 思考深度('' = 默认:不存连接器级配置,回落全局 env / 厂商缺省)
+  const [reasoningInput, setReasoningInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   // ---- 真机唤起可用性:Capacitor 原生壳或手机浏览器 UA;桌面端隐藏按钮(scheme 打不开是死按钮) ----
@@ -709,7 +719,11 @@ export function ConnectorsView({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!configuringApp || !configuringApp.envVar || !keyInput.trim()) return;
+    if (!configuringApp || !configuringApp.envVar) return;
+    // 已连接的模型连接器允许 Key 留空 = 只改 Base URL/模型标识/思考深度(后端对空 Key 不动凭证)
+    const keylessModelSave =
+      configuringApp.isModel && configuringApp.status === 'connected' && !keyInput.trim();
+    if (!keyInput.trim() && !keylessModelSave) return;
     setIsSaving(true);
     try {
       await onSaveKey(configuringApp.envVar, keyInput.trim(), {
@@ -717,11 +731,14 @@ export function ConnectorsView({
         baseUrlEnvVar: configuringApp.baseUrlEnvVar,
         modelName: modelNameInput.trim() || undefined,
         modelNameEnvVar: configuringApp.modelNameEnvVar,
+        reasoningEffort: configuringApp.isModel ? reasoningInput : undefined,
+        reasoningEffortEnvVar: configuringApp.reasoningEffortEnvVar,
       });
       setConfiguringApp(null);
       setKeyInput('');
       setBaseUrlInput('');
       setModelNameInput('');
+      setReasoningInput('');
     } catch (err) {
       console.error(err);
     } finally {
@@ -1446,6 +1463,7 @@ export function ConnectorsView({
                       setImapKeyInput('');
                       setBaseUrlInput(app.baseUrl || '');
                       setModelNameInput(app.customModelName || '');
+                      setReasoningInput(app.reasoningEffort || '');
                     }}
                     className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
                     title="手动输入或修改 API Key / Token"
@@ -1796,7 +1814,12 @@ export function ConnectorsView({
             <form onSubmit={handleSave} className="space-y-4">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-zinc-700 block">
-                  API Key / Token <span className="text-red-500">*</span>
+                  API Key / Token{' '}
+                  {configuringApp.isModel && configuringApp.status === 'connected' ? (
+                    <span className="text-[10px] font-normal text-emerald-600">已配置,不填则保留(可只改下方设置)</span>
+                  ) : (
+                    <span className="text-red-500">*</span>
+                  )}
                 </label>
                 <input
                   type="password"
@@ -1881,6 +1904,28 @@ export function ConnectorsView({
                       className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500 font-mono"
                     />
                   </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-zinc-700 block">
+                        思考深度 (Reasoning Effort)
+                      </label>
+                      <span className="text-[10px] text-zinc-400">可选</span>
+                    </div>
+                    <select
+                      value={reasoningInput}
+                      onChange={(e) => setReasoningInput(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:border-zinc-500"
+                    >
+                      <option value="">默认(跟随全局配置或厂商缺省)</option>
+                      <option value="low">低 — 反应快、省 token,适合简单任务</option>
+                      <option value="medium">中 — 均衡</option>
+                      <option value="high">高 — 深度推理,更慢更贵</option>
+                    </select>
+                    <p className="text-[10px] text-zinc-400">
+                      仅对推理型模型有意义(如 deepseek-reasoner、o 系列、QwQ);非推理模型会忽略该参数,严格中转站可能拒绝未知参数——拿不准就留默认。
+                    </p>
+                  </div>
                 </>
               )}
 
@@ -1894,7 +1939,11 @@ export function ConnectorsView({
                 </button>
                 <button
                   type="submit"
-                  disabled={!keyInput.trim() || isSaving}
+                  disabled={
+                    (!keyInput.trim() &&
+                      !(configuringApp.isModel && configuringApp.status === 'connected')) ||
+                    isSaving
+                  }
                   className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-medium transition shadow-xs"
                 >
                   {isSaving && <RotateCw className="h-3.5 w-3.5 animate-spin" />}

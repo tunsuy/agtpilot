@@ -193,13 +193,16 @@ describe('novel loader(书状态服务端现读,docs/design/novel-workshop.md §
   });
 
   // 开书三段化:第一步无书状态依赖;第二步必须现读到第一步入库的书
-  it('genesis_bible(第一步设定包)不需要书状态,契约含回显段', () => {
+  it('genesis_bible(第一步设定包)不需要书状态,逐字段交付契约 + delivery 透传', () => {
     const run = renderWorkshopRunServer('u-novel', 'novel', { mode: 'genesis_bible', genre: '玄幻' });
     expect(run).not.toBeNull();
     expect(run!.title).toBe('网文开书:玄幻');
-    for (const anchor of ['【题材】', '【文风锚】', '【每章字数】', '【设定集】', '【人物卡】']) {
-      expect(run!.prompt).toContain(anchor);
+    expect(run!.prompt).toContain('workshop_deliver_field');
+    for (const f of ['书名', '卖点', '设定集', '人物卡']) {
+      expect(run!.prompt).toContain(f);
     }
+    // 交付契约随权威渲染透传(派发链据此挂载工具)
+    expect(run!.delivery?.id).toBe('novel_bible');
   });
 
   it('genesis_outline(第二步大纲包):有效 bookId 现读书状态,书号逐字注入;缺书抛错', () => {
@@ -213,7 +216,8 @@ describe('novel loader(书状态服务端现读,docs/design/novel-workshop.md §
     expect(run!.title).toBe('《铁拳少年》大纲规划');
     expect(run!.prompt).toContain(book.bookId); // 书号回显注入,入库对账
     expect(run!.prompt).toContain('青铜→白银'); // 设定集是大纲的约束源
-    expect(run!.prompt).toContain('【粗纲】');
+    expect(run!.prompt).toContain('workshop_deliver_field');
+    expect(run!.delivery?.id).toBe('novel_outline');
 
     expect(() =>
       renderWorkshopRunServer(userId, 'novel', { mode: 'genesis_outline', bookId: 'nv_nope_000000' })
@@ -221,6 +225,19 @@ describe('novel loader(书状态服务端现读,docs/design/novel-workshop.md §
     expect(() => renderWorkshopRunServer(userId, 'novel', { mode: 'genesis_outline' })).toThrow(
       /小说不存在或无权访问/
     );
+  });
+
+  it('override 全文热修:prompt 替换为覆盖全文,delivery 显式丢弃(工具挂载与 prompt 契约同生共死)', () => {
+    fs.writeFileSync(path.join(dir, 'novel.md'), '【覆盖全文】旧的单轮契约,不含逐字段交付。', 'utf8');
+    const run = renderWorkshopRunServer('u-novel-ovr', 'novel', { mode: 'genesis_bible', genre: '玄幻' }, {
+      overrideDir: dir,
+    });
+    expect(run).not.toBeNull();
+    expect(run!.overridden).toBe(true);
+    expect(run!.prompt).toContain('【覆盖全文】');
+    expect(run!.prompt).not.toContain('workshop_deliver_field');
+    // 关键:覆盖分支不得残留 delivery,否则"工具挂着、prompt 是旧契约"分裂态
+    expect(run!.delivery).toBeUndefined();
   });
 
   it('continue/review 缺书或 bookId 无效:抛错带明确原因(调用方 500,绝不静默降级)', () => {

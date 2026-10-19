@@ -8,7 +8,7 @@
  *    【标题】锚(novel 包不被别的解析器吃掉,别的包也不被 novel 吃掉)。
  */
 import { describe, it, expect } from 'vitest';
-import { parseNovelPackage } from '../novel-package';
+import { parseNovelPackage, validateDeliverField, assembleNovelDelivery, extractDeliverBookId } from '../novel-package';
 import { parseNotePackages } from '../../xhs/note-package';
 import { parseArticlePackages } from '../../shared/article-package';
 
@@ -451,5 +451,128 @@ ${BODY}
   it('对照:文章包样例仍被文章包解析器命中(证明上面的空结果不是解析器全盲)', () => {
     expect(parseArticlePackages(ARTICLE_FIXTURE).packages.length).toBeGreaterThan(0);
     expect(parseNotePackages(NOTE_FIXTURE).packages.length).toBeGreaterThan(0);
+  });
+});
+
+// ---- 逐字段交付:单字段校验 + 已交付字段组包(计划「novel 工坊逐字段交付」) ----
+
+const FOUR_CARDS = ['林凡', '苏晚', '陈默', '赵烈']
+  .map(
+    (n) => `## ${n}
+- 定位:主角
+- 性格:隐忍
+- 动机:还清债
+- 口癖:接了
+- 关系:室友
+- 弧光:成长`
+  )
+  .join('\n\n');
+
+const DETAILED = [1, 2, 3, 4, 5]
+  .map(
+    (n) => `### 第${n}章 标题${n}
+- 钩子:开场钩子
+- 事件:本章主要事件描述,推进主线冲突。
+- 情绪点:爽点
+- 伏笔:无
+- 字数:3000`
+  )
+  .join('\n\n');
+
+describe('validateDeliverField · novel_bible', () => {
+  it('合格内容通过(空错误清单)', () => {
+    expect(validateDeliverField('novel_bible', '书名', '铁拳少年')).toEqual([]);
+    expect(validateDeliverField('novel_bible', '卖点', '外卖骑手捡到预知差评的手机,越躲越强')).toEqual([]);
+    expect(validateDeliverField('novel_bible', '设定集', '世界观:近未来江城。'.repeat(15))).toEqual([]);
+    expect(validateDeliverField('novel_bible', '人物卡', FOUR_CARDS)).toEqual([]);
+    expect(validateDeliverField('novel_bible', '题材', '都市')).toEqual([]);
+    expect(validateDeliverField('novel_bible', '文风锚', '爽文快节奏:短段落强钩子')).toEqual([]);
+    expect(validateDeliverField('novel_bible', '每章字数', '3000')).toEqual([]);
+  });
+
+  it('结构/篇幅不合格给可执行错误(非空)', () => {
+    expect(validateDeliverField('novel_bible', '书名', '').length).toBeGreaterThan(0);
+    expect(validateDeliverField('novel_bible', '书名', '候选一\n候选二\n候选三').length).toBeGreaterThan(0); // 多行=候选清单
+    expect(validateDeliverField('novel_bible', '设定集', '太短').length).toBeGreaterThan(0);
+    expect(validateDeliverField('novel_bible', '人物卡', '## 林凡\n- 定位:主角').length).toBeGreaterThan(0); // 不足 4 张
+    expect(validateDeliverField('novel_bible', '每章字数', '300').length).toBeGreaterThan(0); // 域外
+  });
+
+  it('content 首行误带【字段头】先剥掉再校验', () => {
+    expect(validateDeliverField('novel_bible', '书名', '【书名】\n铁拳少年')).toEqual([]);
+  });
+
+  it('未知字段/契约给错误(不静默通过)', () => {
+    expect(validateDeliverField('novel_bible', '不存在字段', 'x').length).toBeGreaterThan(0);
+    expect(validateDeliverField('未知契约', '书名', 'x').length).toBeGreaterThan(0);
+  });
+});
+
+describe('validateDeliverField · novel_outline', () => {
+  it('合格内容通过', () => {
+    expect(validateDeliverField('novel_outline', '书号', 'nv_test01_a1b2c3')).toEqual([]);
+    expect(validateDeliverField('novel_outline', '粗纲', '起承转合主线规划。'.repeat(40))).toEqual([]);
+    expect(validateDeliverField('novel_outline', '细纲', DETAILED)).toEqual([]);
+    expect(validateDeliverField('novel_outline', '伏笔', '无')).toEqual([]);
+    expect(validateDeliverField('novel_outline', '伏笔', '- [埋设] 手机裂纹来历 @第1章')).toEqual([]);
+    expect(validateDeliverField('novel_outline', '时间线', '- 第1章|雨夜|捡到手机')).toEqual([]);
+  });
+
+  it('书号格式错/粗纲过短/细纲不足给错误', () => {
+    expect(validateDeliverField('novel_outline', '书号', '随便写的').length).toBeGreaterThan(0);
+    expect(validateDeliverField('novel_outline', '粗纲', '太短').length).toBeGreaterThan(0);
+    expect(validateDeliverField('novel_outline', '细纲', '### 第1章\n- 事件:x').length).toBeGreaterThan(0);
+  });
+});
+
+describe('extractDeliverBookId', () => {
+  it('剥字段头取首行归一化 bookId', () => {
+    expect(extractDeliverBookId('nv_test01_a1b2c3')).toBe('nv_test01_a1b2c3');
+    expect(extractDeliverBookId('【书号】\nnv_test01_a1b2c3\n多余行')).toBe('nv_test01_a1b2c3');
+  });
+});
+
+describe('assembleNovelDelivery', () => {
+  it('novel_bible 已交付字段 → genesis_bible 包(与整包解析同结构口径)', () => {
+    const pkg = assembleNovelDelivery('novel_bible', {
+      书名: '铁拳少年',
+      卖点: '外卖骑手捡到预知差评的手机',
+      设定集: '世界观:近未来江城。力量体系:青铜→白银→黄金。'.repeat(3),
+      人物卡: FOUR_CARDS,
+      题材: '都市',
+      文风锚: '爽文快节奏:短段落强钩子',
+      每章字数: '3000',
+    });
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('genesis_bible');
+    if (pkg!.kind === 'genesis_bible') {
+      expect(pkg!.title).toBe('铁拳少年');
+      expect(pkg!.characters.length).toBe(4);
+      expect(pkg!.genre).toBe('都市');
+      expect(pkg!.chapterWords).toBe(3000);
+    }
+  });
+
+  it('novel_outline 已交付字段 → genesis_outline 包;书号格式非法则空', () => {
+    const pkg = assembleNovelDelivery('novel_outline', {
+      书号: 'nv_test01_a1b2c3',
+      粗纲: '起承转合主线规划。'.repeat(40),
+      细纲: DETAILED,
+      伏笔: '- [埋设] 手机裂纹来历 @第1章',
+      时间线: '- 第1章|雨夜|捡到手机',
+    });
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('genesis_outline');
+    if (pkg!.kind === 'genesis_outline') {
+      expect(pkg!.bookId).toBe('nv_test01_a1b2c3');
+      expect(pkg!.detailed.length).toBe(5);
+      expect(pkg!.ledgerSeeds.length).toBe(1);
+    }
+    const bad = assembleNovelDelivery('novel_outline', { 书号: '乱写', 粗纲: 'x'.repeat(400), 细纲: DETAILED });
+    if (bad && bad.kind === 'genesis_outline') expect(bad.bookId).toBe('');
+  });
+
+  it('未知契约返回 null', () => {
+    expect(assembleNovelDelivery('不存在', {})).toBeNull();
   });
 });

@@ -4,7 +4,7 @@
  * 锁:三模式模板变量注入、参数钳制(context.ts 单一事实源)、续写的
  * 恒定上下文块与书号逐字内嵌、细纲低水位条件段、审查的只读边界与红线文案。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   buildNovelGenesisPrompt,
   buildNovelGenesisBiblePrompt,
@@ -20,8 +20,13 @@ import {
   NOVEL_REVIEW_FOCUS,
 } from '../context';
 import { WORKSHOP_SKILL } from '../skill';
+import { NOVEL_BIBLE_CONTRACT_ID, NOVEL_OUTLINE_CONTRACT_ID } from '../delivery';
 import type { NovelBook } from '@/lib/novel-context';
 import type { ScenarioProfile } from '@/lib/scenario-profile';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function makeBook(overrides: Partial<NovelBook> = {}): NovelBook {
   return {
@@ -204,7 +209,7 @@ describe('skill.run() 分发与信任边界', () => {
 });
 
 describe('开书三段化 · 第一步设定包 prompt(genesis_bible)', () => {
-  it('注入题材/卖点/文风锚/字数;契约锚只有回显段+书名/卖点/设定集/人物卡,无大纲与正文', () => {
+  it('注入题材/卖点/文风锚/字数;逐字段交付契约(不再用【字段头】整轮巨文本)', () => {
     const p = buildNovelGenesisBiblePrompt({
       genre: '都市',
       premise: '外卖骑手捡到预知差评的手机',
@@ -214,10 +219,17 @@ describe('开书三段化 · 第一步设定包 prompt(genesis_bible)', () => {
     expect(p).toContain('题材:都市');
     expect(p).toContain('外卖骑手捡到预知差评的手机');
     expect(p).toContain('2500');
-    // 回显段(卡片「继续:生成大纲」按钮靠它串表单值)
-    for (const anchor of ['【题材】', '【文风锚】', '【每章字数】', '【书名】', '【卖点】', '【设定集】', '【人物卡】']) {
-      expect(p).toContain(anchor);
+    // 逐字段交付契约:工具名 + 交付方式段 + 字段名以裸词出现(不再是【字段头】锚)
+    expect(p).toContain('workshop_deliver_field');
+    expect(p).toContain('交付方式(逐字段交付');
+    for (const f of ['书名', '卖点', '设定集', '人物卡', '题材', '文风锚', '每章字数']) {
+      expect(p).toContain(f);
     }
+    // 旧的整轮巨文本【字段头】锚不再出现(逐字段交付 content 不含字段头)
+    expect(p).not.toContain('【设定集】');
+    expect(p).not.toContain('【人物卡】');
+    // 不建看板(planner 步是步数最大泄漏源)
+    expect(p).toContain('不要为本任务创建看板');
     // 三段化:第一步只产地基,不出大纲与正文
     expect(p).not.toContain('【粗纲】');
     expect(p).not.toContain('【细纲】');
@@ -225,16 +237,28 @@ describe('开书三段化 · 第一步设定包 prompt(genesis_bible)', () => {
     expect(p).toContain('必须原创');
   });
 
-  it('skill.run() 分发:genesis_bible 不需要书状态,题材缺省取 NOVEL_GENRES[0]', () => {
+  it('skill.run() 分发:genesis_bible 不需要书状态,题材缺省取 NOVEL_GENRES[0],附逐字段交付契约', () => {
     const run = WORKSHOP_SKILL.run({ mode: 'genesis_bible' });
     expect(run.title).toBe(`网文开书:${NOVEL_GENRES[0]}`);
     expect(run.prompt).toContain(NOVEL_GENRES[0]);
+    expect(run.prompt).toContain('workshop_deliver_field');
+    // 交付契约挂载(与模板选择同一保险丝)
+    expect(run.delivery?.id).toBe(NOVEL_BIBLE_CONTRACT_ID);
+    expect(run.delivery?.fields.map((f) => f.key)).toContain('设定集');
+  });
+
+  it('灰度保险丝 AGTPILOT_NOVEL_FIELD_DELIVERY=0:回退 legacy 单轮【字段头】契约,不附 delivery', () => {
+    vi.stubEnv('AGTPILOT_NOVEL_FIELD_DELIVERY', '0');
+    const run = WORKSHOP_SKILL.run({ mode: 'genesis_bible', genre: '都市' });
     expect(run.prompt).toContain('【设定集】');
+    expect(run.prompt).toContain('【人物卡】');
+    expect(run.prompt).not.toContain('workshop_deliver_field');
+    expect(run.delivery).toBeUndefined();
   });
 });
 
 describe('开书三段化 · 第二步大纲包 prompt(genesis_outline)', () => {
-  it('书状态注入(设定集/人物卡)+ 书号/文风锚/字数注入;契约锚为回显书号+粗纲/细纲/伏笔/时间线', () => {
+  it('书状态注入(设定集/人物卡)+ 书号/文风锚/字数注入;逐字段交付契约', () => {
     const run = WORKSHOP_SKILL.run(
       { mode: 'genesis_outline', bookId: 'nv_test01_a1b2c3', style: '快节奏爽文', chapterWords: 3000 },
       { novelState: makeBook() }
@@ -245,12 +269,30 @@ describe('开书三段化 · 第二步大纲包 prompt(genesis_outline)', () => 
     expect(run.prompt).toContain('nv_test01_a1b2c3'); // 书号原样注入,入库对账
     expect(run.prompt).toContain('快节奏爽文');
     expect(run.prompt).toContain('3000');
-    for (const anchor of ['【书号】', '【粗纲】', '【细纲】', '【伏笔】', '【时间线】']) {
-      expect(run.prompt).toContain(anchor);
+    // 逐字段交付契约:工具名 + 字段名裸词(不再【字段头】锚)
+    expect(run.prompt).toContain('workshop_deliver_field');
+    for (const f of ['书号', '粗纲', '细纲', '伏笔', '时间线']) {
+      expect(run.prompt).toContain(f);
     }
+    expect(run.prompt).not.toContain('【粗纲】');
+    // 交付契约挂载
+    expect(run.delivery?.id).toBe(NOVEL_OUTLINE_CONTRACT_ID);
+    // 一致性硬要求逐字保留
+    expect(run.prompt).toContain('一致性硬要求(违反等于废稿)');
     // 第二步不产设定与正文(那是第一步/续写的事)
-    expect(run.prompt).not.toContain('【设定集】\n');
     expect(run.prompt).not.toContain('【人物卡】');
+  });
+
+  it('灰度保险丝 AGTPILOT_NOVEL_FIELD_DELIVERY=0:回退 legacy 单轮【字段头】契约,不附 delivery', () => {
+    vi.stubEnv('AGTPILOT_NOVEL_FIELD_DELIVERY', '0');
+    const run = WORKSHOP_SKILL.run(
+      { mode: 'genesis_outline', bookId: 'nv_test01_a1b2c3' },
+      { novelState: makeBook() }
+    );
+    expect(run.prompt).toContain('【粗纲】');
+    expect(run.prompt).toContain('【细纲】');
+    expect(run.prompt).not.toContain('workshop_deliver_field');
+    expect(run.delivery).toBeUndefined();
   });
 
   it('缺书状态诚实抛错:第二步必须吃第一步入库的书', () => {

@@ -9,10 +9,14 @@
 import promptGenesis from './prompt.genesis.md';
 import promptGenesisBible from './prompt.genesis-bible.md';
 import promptGenesisOutline from './prompt.genesis-outline.md';
+import promptGenesisBibleLegacy from './prompt.genesis-bible.legacy.md';
+import promptGenesisOutlineLegacy from './prompt.genesis-outline.legacy.md';
 import promptContinue from './prompt.continue.md';
 import promptReview from './prompt.review.md';
 import promptStyle from './prompt.style.md';
 import { renderTemplate } from '../engine';
+// 灰度保险丝:AGTPILOT_NOVEL_FIELD_DELIVERY=0 → 设定包/大纲包回退 legacy 单轮巨文本契约
+import { novelFieldDeliveryEnabled } from './delivery';
 // fs-free 纯模块:novel-store(带 node:fs)绝不能进客户端 bundle(context.ts ←
 // skill.ts ← registry.ts ← 客户端组件);类型与装配函数都住 novel-context
 import { assembleChapterContext, assembleReviewContext, type NovelBook } from '@/lib/novel-context';
@@ -92,7 +96,9 @@ export interface NovelGenesisBibleInput {
 /** 开书第一步:书名/卖点/设定集/人物卡(建书的地基) */
 export function buildNovelGenesisBiblePrompt(input: NovelGenesisBibleInput): string {
   const profileSection = input.profile ? buildProfileSection(input.profile) : null;
-  return renderTemplate(promptGenesisBible, {
+  // 保险丝现读(不在模块加载期定格):vitest vi.stubEnv 与生产灰度都靠它切模板
+  const template = novelFieldDeliveryEnabled() ? promptGenesisBible : promptGenesisBibleLegacy;
+  return renderTemplate(template, {
     genre: String(input.genre || '').trim() || '不限(自行拍板最有张力的方向)',
     premise: String(input.premise || '').trim(),
     style: String(input.style || '').trim() || NOVEL_STYLES[0],
@@ -135,7 +141,8 @@ function assembleBibleBlock(book: NovelBook): string {
 export function buildNovelGenesisOutlinePrompt(input: NovelGenesisOutlineInput): string {
   const { book } = input;
   const profileSection = input.profile ? buildProfileSection(input.profile) : null;
-  return renderTemplate(promptGenesisOutline, {
+  const template = novelFieldDeliveryEnabled() ? promptGenesisOutline : promptGenesisOutlineLegacy;
+  return renderTemplate(template, {
     bookTitle: book.title,
     bookId: book.bookId,
     bibleBlock: assembleBibleBlock(book),

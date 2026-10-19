@@ -127,6 +127,13 @@ export interface Mission {
    * 看板自动替换(planner 同 taskKey 旧计划作废);旧任务落盘无此字段。
    */
   plan?: PlanData;
+  /**
+   * 逐字段交付契约的可序列化投影(novel 工坊设定包/大纲包):validator 是函数
+   * 不可 JSON 化,mission 只存 {id, fields:[{key,label,required}]};续聊/重启后
+   * 凭 id 经 resolveDeliveryContract 从工坊注册表现场重建完整 spec 并重挂工具,
+   * 交付注册表从 steps 预灌。旧任务无此字段(零迁移)。
+   */
+  deliveryContract?: { id: string; fields: Array<{ key: string; label: string; required: boolean }> };
   artifact?: ArtifactState | null;
 }
 

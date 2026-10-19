@@ -64,7 +64,10 @@ import { parseTopicPicks } from '../workshops/xhs/topic-picks';
 import { OssOpportunityList, parseOssDeliverable } from './workshops/OssOpportunityCard';
 import { NovelPackageCard, type NovelChainHandler } from './workshops/NovelPackageCard';
 import type { WorkshopRunPayload } from './workshops/run';
-import { parseNovelPackage } from '../workshops/novel/novel-package';
+import { parseNovelPackage, assembleNovelDelivery } from '../workshops/novel/novel-package';
+import { resolveDeliveryContract } from '../workshops/novel/delivery';
+import { collectWorkshopDeliveries } from '../lib/workshop-delivery-view';
+import { deliveredFieldsFromSteps, DELIVER_FIELD_TOOL } from '../lib/workshop-delivery';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
 import { hasWorkshopDeliverable } from '../workshops/deliverable';
@@ -803,9 +806,34 @@ export function CockpitView({
                 // 原始工具名与入参出参默认在右侧「执行动态」tab 查看
                 const { blocks } = splitStepsIntoBlocks(currentMission.steps);
 
+                // 逐字段交付(novel 设定包/大纲包)· mission 级渐进卡:契约经
+                // mission.deliveryContract.id 现场重建,字段跨轮累积(steps 是持久
+                // 事实源,注册表只是轮内缓存),卡只钉在最后一个含交付步的轮之后
+                // (一张、最新位置)。文本解析路径无 deliveryContract → 全为 null,
+                // 卡片不钉,行为与从前逐字节一致。
+                const deliveryContract = currentMission.deliveryContract
+                  ? resolveDeliveryContract(currentMission.deliveryContract.id)
+                  : undefined;
+                const deliveryProgress = collectWorkshopDeliveries(currentMission.steps, deliveryContract);
+                const deliveryPkg =
+                  deliveryProgress && deliveryContract
+                    ? assembleNovelDelivery(deliveryContract.id, deliveredFieldsFromSteps(currentMission.steps))
+                    : null;
+                const groupedTurns = groupBlocksIntoTurns(blocks);
+                let lastDeliveryTurnKey: string | null = null;
+                if (deliveryProgress) {
+                  for (const t of groupedTurns) {
+                    if (t.type !== 'agent') continue;
+                    const has = t.items.some(
+                      (b) => b.type === 'tools' && b.steps.some((s) => s.tool === DELIVER_FIELD_TOOL)
+                    );
+                    if (has) lastDeliveryTurnKey = t.key;
+                  }
+                }
+
                 return (
                   <>
-                  {groupBlocksIntoTurns(blocks).map((turn) => {
+                  {groupedTurns.map((turn) => {
                   // ================= 1. 用户提问气泡 (轻量现代感带用户专属头像) =================
                   if (turn.type === 'user') {
                     const st = turn.step;
@@ -926,6 +954,17 @@ export function CockpitView({
                             状态经 mission.plan 实时刷新,重建看板自动替换 */}
                         {turnCreatesPlan(turn.items) && currentMission.plan && (
                           <KanbanPlanCard plan={currentMission.plan} />
+                        )}
+                        {/* 逐字段交付渐进卡:钉在最后一个含交付步的轮(KanbanPlanCard 同款
+                            钉挂,不参与整轮过程折叠 —— 交付进度受控播报开始吐正文后不能
+                            跟着收起)。字段取 mission 级累积,pkg 经 assembleNovelDelivery
+                            由已交付字段拼成,progress 驱动骨架行/角标/入库门 */}
+                        {turn.key === lastDeliveryTurnKey && deliveryProgress && deliveryPkg && (
+                          <NovelPackageCard
+                            pkg={deliveryPkg}
+                            onChain={onRunNovelChain}
+                            progress={deliveryProgress}
+                          />
                         )}
                         {/* 整轮过程折叠开关:最终回复开始流式输出时,本轮全部
                             过程(工具行 + 中间思考)自动收成这一行,点开原地
@@ -1051,7 +1090,13 @@ export function CockpitView({
                     // 小说包(novel 工坊):开书包锚【设定集】+【粗纲】,续写包锚【书号】(nv_ 前缀)
                     // +【本章摘要】——【本章摘要】不命中文章包的【摘要】锚(其正则要求「摘要」顶格),
                     // 与选题/笔记/文章/开源四种格式字段头互不相交(解析器测试双向锚定),顺序不敏感
-                    const parsedNovel = st.answer && !isStreaming ? parseNovelPackage(st.answer) : null;
+                    const parsedNovelRaw = st.answer && !isStreaming ? parseNovelPackage(st.answer) : null;
+                    // 去重护栏:逐字段交付已齐全且文本 fallback 又解析出同 kind 包时,
+                    // 跳过文本卡(防 wrap-up 复述已交付内容渲染出双卡)——渐进卡已是权威
+                    const parsedNovel =
+                      parsedNovelRaw && deliveryProgress?.complete && deliveryPkg && deliveryPkg.kind === parsedNovelRaw.kind
+                        ? null
+                        : parsedNovelRaw;
                     // 搜索来源引用(ChatGPT 式):最终答复收尾后,取本轮(上一条
                     // 最终答复之后)检索步骤的结构化结果,渲染可跳转的来源卡
                     const answerIndex = currentMission.steps.findIndex((s) => s.id === st.id);

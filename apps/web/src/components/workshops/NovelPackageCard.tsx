@@ -66,6 +66,7 @@ import {
   deriveContinueSaved,
 } from '../../lib/novel-card-state';
 import type { WorkshopRunPayload } from './run';
+import type { DeliveryProgressView } from '../../lib/workshop-delivery-view';
 
 const countWords = (s: string) => String(s || '').replace(/\s/g, '').length;
 
@@ -114,6 +115,49 @@ function Section({ label, count, children }: { label: string; count?: string; ch
           {typeof children === 'string' ? <Md>{children}</Md> : children}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 逐字段交付进度条(novel 设定包/大纲包):按契约字段序展示每字段三态——
+ * ✓ 已交付 / ⏳ 交付中 / ! 被打回重试 / ○ 待交付(骨架)。头部角标 N/M。
+ * 仅在 progress 存在(交付路径)时渲染;文本解析路径 progress=undefined 不出现,
+ * 卡片行为与从前逐字节一致。
+ */
+function FieldProgressStrip({ progress }: { progress: DeliveryProgressView }) {
+  const icon = (state: string) => {
+    if (state === 'delivered') return <Check className="h-3 w-3 text-emerald-600" />;
+    if (state === 'delivering') return <Loader2 className="h-3 w-3 text-blue-500 animate-spin" />;
+    if (state === 'rejected') return <TriangleAlert className="h-3 w-3 text-amber-500" />;
+    return <span className="h-1.5 w-1.5 rounded-full bg-zinc-300" />;
+  };
+  const tone = (state: string) =>
+    state === 'delivered'
+      ? 'text-zinc-700'
+      : state === 'delivering'
+        ? 'text-blue-600'
+        : state === 'rejected'
+          ? 'text-amber-600'
+          : 'text-zinc-400';
+  return (
+    <div className="px-4 py-2 border-b border-zinc-100 bg-white">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="text-[10px] font-medium text-zinc-500">逐字段交付</span>
+        <span className="text-[10px] font-mono text-zinc-400">
+          {progress.deliveredCount}/{progress.totalCount}
+        </span>
+        {progress.complete && <span className="text-[10px] text-emerald-600 font-medium">· 已全部交付</span>}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {progress.fields.map((f) => (
+          <span key={f.key} className={`flex items-center gap-1 text-[10px] ${tone(f.state)}`}>
+            {icon(f.state)}
+            {f.label}
+            {f.required && f.state !== 'delivered' && <span className="text-zinc-300">*</span>}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -322,7 +366,15 @@ function GenesisCard({ pkg }: { pkg: NovelGenesisPackage }) {
 
 // ---- 设定包卡(开书三段化 · 第一步) ----
 
-function GenesisBibleCard({ pkg, onChain }: { pkg: NovelGenesisBiblePackage; onChain?: NovelChainHandler }) {
+function GenesisBibleCard({
+  pkg,
+  onChain,
+  progress,
+}: {
+  pkg: NovelGenesisBiblePackage;
+  onChain?: NovelChainHandler;
+  progress?: DeliveryProgressView;
+}) {
   const [save, setSave] = useState<SaveState>({ phase: 'idle' });
   // 已在书库派生:同名书已建(含服务端 existed 幂等命中过的)→ 直接呈现已入库,
   // 「继续:生成大纲」用派生书号激活,历史卡片可续操作
@@ -394,6 +446,8 @@ function GenesisBibleCard({ pkg, onChain }: { pkg: NovelGenesisBiblePackage; onC
         </span>
       </div>
 
+      {progress && <FieldProgressStrip progress={progress} />}
+
       <div className="p-4 space-y-2.5">
         {pkg.genre && (
           <p className="text-xs text-zinc-700 leading-relaxed break-words">
@@ -429,6 +483,7 @@ function GenesisBibleCard({ pkg, onChain }: { pkg: NovelGenesisBiblePackage; onC
           <SaveButton
             onSave={handleSave}
             state={save}
+            disabled={progress ? !progress.requiredDone : undefined}
             label="存入书库"
             savedLabel={
               save.phase === 'saved'
@@ -462,7 +517,15 @@ const DAILY_HOURS = [6, 9, 12, 18, 21];
 /** 日更章字数 chip(与表单 CHAPTER_WORDS 同源,钳制区间 1000-6000) */
 const DAILY_WORDS = [1000, 2000, 3000, 5000];
 
-function GenesisOutlineCard({ pkg, onChain }: { pkg: NovelGenesisOutlinePackage; onChain?: NovelChainHandler }) {
+function GenesisOutlineCard({
+  pkg,
+  onChain,
+  progress,
+}: {
+  pkg: NovelGenesisOutlinePackage;
+  onChain?: NovelChainHandler;
+  progress?: DeliveryProgressView;
+}) {
   const [save, setSave] = useState<SaveState>({ phase: 'idle' });
   // 书号校验同续写包:回显书号按用户书库核对,未命中(书被删/串书/漏回显)给下拉指认
   const [books, setBooks] = useState<NovelBookSummary[] | null>(null);
@@ -624,6 +687,8 @@ function GenesisOutlineCard({ pkg, onChain }: { pkg: NovelGenesisOutlinePackage;
         </span>
       </div>
 
+      {progress && <FieldProgressStrip progress={progress} />}
+
       <div className="p-4 space-y-2.5">
         <Section label="粗纲/卷纲" count={`${countWords(pkg.outline)}字`}>{pkg.outline}</Section>
         {pkg.detailed.length > 0 && (
@@ -680,7 +745,7 @@ function GenesisOutlineCard({ pkg, onChain }: { pkg: NovelGenesisOutlinePackage;
           <SaveButton
             onSave={handleSave}
             state={save}
-            disabled={!targetBookId}
+            disabled={!targetBookId || (progress ? !progress.requiredDone : false)}
             label="存入书库"
             savedLabel={
               save.phase === 'saved'
@@ -1281,10 +1346,19 @@ function FanqieSyncRow({ bookId }: { bookId: string }) {
   );
 }
 
-export function NovelPackageCard({ pkg, onChain }: { pkg: NovelPackage; onChain?: NovelChainHandler }) {
+export function NovelPackageCard({
+  pkg,
+  onChain,
+  progress,
+}: {
+  pkg: NovelPackage;
+  onChain?: NovelChainHandler;
+  /** 逐字段交付进度(交付路径传入;文本解析路径不传,卡片行为逐字节不变) */
+  progress?: DeliveryProgressView;
+}) {
   if (pkg.kind === 'genesis') return <GenesisCard pkg={pkg} />;
-  if (pkg.kind === 'genesis_bible') return <GenesisBibleCard pkg={pkg} onChain={onChain} />;
-  if (pkg.kind === 'genesis_outline') return <GenesisOutlineCard pkg={pkg} onChain={onChain} />;
+  if (pkg.kind === 'genesis_bible') return <GenesisBibleCard pkg={pkg} onChain={onChain} progress={progress} />;
+  if (pkg.kind === 'genesis_outline') return <GenesisOutlineCard pkg={pkg} onChain={onChain} progress={progress} />;
   if (pkg.kind === 'style') return <StyleAnchorCard pkg={pkg} />;
   return <ContinueCard pkg={pkg} />;
 }

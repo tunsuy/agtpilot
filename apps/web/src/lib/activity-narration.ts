@@ -111,6 +111,11 @@ function narrateTool(tool: string, args: any = {}): NarratedActivity {
       return { kind: 'connector', label: '保存知乎文章草稿' };
     case 'wechat_mp_create_draft':
       return { kind: 'connector', label: '写入公众号草稿箱' };
+    case 'workshop_deliver_field': {
+      // 逐字段交付(novel 设定包/大纲包):把内部字段名说成人话进度
+      const f = clip(args?.field, 20);
+      return { kind: 'artifact', label: f ? `交付字段「${f}」` : '交付字段' };
+    }
   }
 
   if (tool.startsWith('browser_')) {

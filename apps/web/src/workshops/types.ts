@@ -117,6 +117,37 @@ export const WORKSHOP_CATEGORIES: Array<{ key: string; label: string; accent: Wo
 export interface WorkshopRun {
   prompt: string;
   title: string;
+  /**
+   * 逐字段交付契约(可选):声明后派发链把 workshop_deliver_field 工具挂进任务,
+   * prompt 契约与工具挂载同生共死(模板 override 热修时 server-render 显式丢弃)。
+   * validator 是函数不可 JSON 化——mission 只持久化 {id, fields:[{key,label,required}]}
+   * 投影,续聊/重启后经 id 从工坊注册表现场重建完整 spec。
+   */
+  delivery?: DeliveryContract;
+}
+
+/**
+ * 逐字段交付 · 单字段声明(工坊层通用,docs 见计划「novel 工坊逐字段交付」):
+ * 把"单轮巨型文本契约"拆成"每字段一步小生成 + 工具交付",推理模型的思考
+ * 天然被切段有界,前端按工具步 args 跨步累积、逐字段点亮卡片。
+ */
+export interface DeliverableFieldSpec {
+  /** 字段键(= 契约【字段头】文案,模型交付时 field 参数用它) */
+  key: string;
+  /** 展示名(渐进卡骨架行/进度角标) */
+  label: string;
+  /** 必交付字段:required 齐了才激活入库(存入书库)按钮 */
+  required: boolean;
+  /** 一句话交付要求(进工具 schema 的字段描述,模型交付时看) */
+  hint?: string;
+  /** 纯函数校验器:返回错误清单(空数组=通过)。必须无 fs/网络访问(spec 随 skill.ts 进客户端 bundle) */
+  validate?: (content: string) => string[];
+}
+
+/** 逐字段交付契约:id 是重启/续聊后重建 spec 的钥匙 */
+export interface DeliveryContract {
+  id: string;
+  fields: DeliverableFieldSpec[];
 }
 
 /**

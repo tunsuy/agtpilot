@@ -1291,6 +1291,14 @@ class AgentBackend {
       // ignore
     }
 
+    // 逐字段交付注册表清场(模块级单例按 missionId 分域,防跨任务泄漏)
+    try {
+      const { clearDeliveries } = require('@/lib/workshop-delivery');
+      clearDeliveries(missionId);
+    } catch {
+      // ignore
+    }
+
     const mission = this.state.missions.find((m) => m.id === missionId);
     if (mission && mission.status !== 'DONE') {
       mission.status = 'DONE';
@@ -1342,7 +1350,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1485,6 +1493,16 @@ class AgentBackend {
         ],
         conversationMessages: [],
         workshopId: options.workshopId,
+        // 逐字段交付契约投影(validator 是函数不可 JSON 化,只存可序列化骨架;
+        // 续聊/重启凭 id 经 resolveDeliveryContract 现场重建完整 spec 并重挂工具)
+        ...(options.delivery
+          ? {
+              deliveryContract: {
+                id: options.delivery.id,
+                fields: options.delivery.fields.map((f) => ({ key: f.key, label: f.label, required: f.required })),
+              },
+            }
+          : {}),
       };
 
       this.state.missions.unshift(targetMission);
@@ -1650,6 +1668,41 @@ class AgentBackend {
             } catch (e: any) {
               this.addTerminalLog('stderr', `[AskUser] 提问/计划确认工具挂载异常: ${e?.message || e}`, uid);
             }
+          }
+
+          // 2.42 逐字段交付工具(novel 设定包/大纲包):工坊声明 delivery 契约时挂载
+          // workshop_deliver_field(baseline 穿透白名单,不设 readOnly 以保"重交=替换")。
+          // 契约来源:本轮 options.delivery(新派发)或续聊/重启经 mission.deliveryContract.id
+          // 现场重建(resolveDeliveryContract)。挂载前从 targetMission.steps 预灌注册表,
+          // 续聊时已交付字段不丢、remaining 不误报。cron 无人值守任务只传 continue 模式
+          // 无 delivery,挂载纯由契约存在性驱动,无需 !unattended 门。
+          try {
+            const deliveryContract =
+              options.delivery ||
+              (targetMission.deliveryContract
+                ? (await import('@/workshops/novel/delivery')).resolveDeliveryContract(targetMission.deliveryContract.id)
+                : undefined);
+            if (deliveryContract) {
+              const { buildDeliverFieldTool, seedDeliveries, deliveredFieldsFromSteps } = await import('@/lib/workshop-delivery');
+              // 预灌:从历史步复原已接受字段(续聊/重启)
+              seedDeliveries(targetMission.id, deliveryContract.id, deliveredFieldsFromSteps(targetMission.steps));
+              // novel 大纲包【书号】服务端权威归属校验:格式对但书不存在/越权必须打回
+              const deps: import('@/lib/workshop-delivery').DeliveryToolDeps = {};
+              if (deliveryContract.id === 'novel_outline') {
+                deps.authoritativeCheck = async (field, content) => {
+                  if (field !== '书号') return [];
+                  const { extractDeliverBookId } = await import('@/workshops/novel/novel-package');
+                  const bookId = extractDeliverBookId(content);
+                  if (!bookId) return ['书号为空:原样回显任务给定的目标书号'];
+                  const { getNovelBook } = await import('@/lib/novel-store');
+                  const book = getNovelBook(uid, bookId);
+                  return book ? [] : [`书号「${bookId}」不存在或无权访问:请原样回显任务给定的目标书号(nv_ 开头,别改)`];
+                };
+              }
+              taskTools = [...(taskTools || []), buildDeliverFieldTool(deliveryContract, deps)];
+            }
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[Delivery] 逐字段交付工具挂载异常: ${e?.message || e}`, uid);
           }
 
           // 2.45 用户级定时巡航工具（同名命名空间 cron_*，与插件路由前缀约定一致）：
@@ -2107,6 +2160,15 @@ class AgentBackend {
         }
         if (this.runInflight.get(targetMission.id) === runPromise) {
           this.runInflight.delete(targetMission.id);
+        }
+
+        // 逐字段交付注册表清场:轮末即清,续聊/重启由挂载块从 steps 预灌复原
+        // (steps 才是持久事实源,注册表只是轮内累积缓存)
+        try {
+          const { clearDeliveries } = require('@/lib/workshop-delivery');
+          clearDeliveries(targetMission.id);
+        } catch {
+          // ignore
         }
 
         // 轮末兜底:注入通道没来得及消费的追加消息(典型:最终答复流式

@@ -27,6 +27,12 @@ import {
   clampChapterWords,
 } from './context';
 import { str } from '../shared/params';
+import {
+  NOVEL_DELIVERY_CONTRACTS,
+  NOVEL_BIBLE_CONTRACT_ID,
+  NOVEL_OUTLINE_CONTRACT_ID,
+  novelFieldDeliveryEnabled,
+} from './delivery';
 import type { CronScenarioSpec, WorkshopSkill } from '../types';
 import type { NovelBook } from '@/lib/novel-context';
 
@@ -130,6 +136,9 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
           profile: ctx?.scenarioProfile ?? null,
         }),
         title: `《${book.title}》大纲规划`,
+        // 逐字段交付契约:与 buildNovelGenesisOutlinePrompt 的模板选择同一个保险丝
+        // 现读判定,模板 override 热修(server-render)时由覆盖分支显式丢弃
+        delivery: novelFieldDeliveryEnabled() ? NOVEL_DELIVERY_CONTRACTS[NOVEL_OUTLINE_CONTRACT_ID] : undefined,
       };
     }
     // 开书第一步:设定包(书名/卖点/设定集/人物卡)。这是唯一无书状态依赖的
@@ -146,6 +155,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
           profile: ctx?.scenarioProfile ?? null,
         }),
         title: `网文开书:${genre}`,
+        delivery: novelFieldDeliveryEnabled() ? NOVEL_DELIVERY_CONTRACTS[NOVEL_BIBLE_CONTRACT_ID] : undefined,
       };
     }
     // genesis(旧单次全量,兼容历史重跑)

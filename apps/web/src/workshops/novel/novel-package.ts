@@ -499,3 +499,171 @@ export function parseNovelPackage(text: string): NovelPackage | null {
 
   return null;
 }
+
+// ---- 逐字段交付(设定包/大纲包多步小交付,见计划「novel 工坊逐字段交付」) ----
+//
+// 与整包解析的关系:整包 parseNovelPackage(一次吃完整文本)保持原样服务
+// fallback 与历史任务;这里新增两个纯函数——
+// - validateDeliverField:交付工具端的单字段校验(结构从严、篇幅从宽,防重试死循环);
+// - assembleNovelDelivery:把已交付字段直接组装成 NovelPackage(不经过 segmentize——
+//   半包的互斥锚判定不成立,且字段 content 里杂散的【…】行会被误切段)。
+// 两者共用子解析器(parseCharacters/parseDetailed/parseLedgerLines/parseTimelineLines),
+// 与整包解析同一套结构口径,单一事实源。
+
+/** content 首行误带字段头(【书名】等整行)时剥掉:交付契约要求 content 不含字段头 */
+function stripLeadingHeader(content: string): string {
+  const lines = String(content || '').split('\n');
+  if (lines.length > 0) {
+    const first = lines[0];
+    if (matchHeader(first) || CHAPTER_HEADER.test(first) || /^\s*【[^】]*】\s*$/.test(first)) {
+      lines.shift();
+    }
+  }
+  return lines.join('\n').trim();
+}
+
+/** 文本首个非空行(书名/书号/每章字数取首行) */
+function firstLineOf(text: string): string {
+  return firstLine(String(text || '').split('\n'));
+}
+
+const dense = (s: string): number => String(s || '').replace(/\s/g, '').length;
+const nonEmptyLines = (s: string): string[] =>
+  String(s || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+/** 人物卡张数区间(与设定包契约"主要人物 4-8 人"对齐,上限放宽到 10 防误杀) */
+const CHAR_CARDS_MIN = 4;
+const CHAR_CARDS_MAX = 10;
+
+/**
+ * 单字段交付校验:返回错误清单(空数组=通过)。错误文案直接回给模型重试,
+ * 必须可执行(说清差在哪、怎么改)。校验底线:结构从严(锚/格式/张数),
+ * 篇幅从宽(远低于模板标称值才打回),防"重试死循环"烧步数。
+ */
+export function validateDeliverField(contractId: string, field: string, rawContent: string): string[] {
+  const content = stripLeadingHeader(rawContent);
+  if (contractId === 'novel_bible') {
+    switch (field) {
+      case '题材':
+        return content ? [] : ['题材不能为空:回显任务给定的题材(仅一行)'];
+      case '文风锚':
+        return dense(content) >= 8
+          ? []
+          : ['文风锚过短:原样回显任务给定的文风锚全文(≥8字,不增删改)'];
+      case '每章字数': {
+        const digits = firstLineOf(content).replace(/[^0-9]/g, '');
+        const n = Number(digits);
+        return digits && Number.isFinite(n) && n >= 1000 && n <= 6000
+          ? []
+          : ['每章字数须是 1000-6000 的数字(回显任务给定的每章字数)'];
+      }
+      case '书名': {
+        if (!content) return ['书名不能为空'];
+        if (nonEmptyLines(content).length > 1) return ['书名仅一行,不要附加说明或候选清单'];
+        const t = normalizeTitle(firstLineOf(content));
+        if (!t) return ['书名不能为空(不带书名号)'];
+        return t.length <= 30 ? [] : ['书名过长(≤30字),12 字以内优先'];
+      }
+      case '卖点':
+        if (!content) return ['卖点不能为空'];
+        return dense(content) >= 10 ? [] : ['卖点过短:一句话说清卖什么、给谁看、爽在哪'];
+      case '设定集':
+        return dense(content) >= 100
+          ? []
+          : ['设定集过短(≥100字):世界规则/力量体系(层级与上限)/势力与地理/关键道具术语'];
+      case '人物卡': {
+        const cards = parseCharacters(content);
+        if (cards.length < CHAR_CARDS_MIN) {
+          return [`人物卡不足 ${CHAR_CARDS_MIN} 张(现 ${cards.length}):以「## 姓名」起卡、"- 键:值"逐行填字段`];
+        }
+        return cards.length <= CHAR_CARDS_MAX ? [] : [`人物卡至多 ${CHAR_CARDS_MAX} 张(现 ${cards.length}),只留主要人物`];
+      }
+      default:
+        return [`novel_bible 契约无字段「${field}」`];
+    }
+  }
+  if (contractId === 'novel_outline') {
+    switch (field) {
+      case '书号': {
+        const id = normalizeTitle(firstLineOf(content));
+        return BOOK_ID_RE.test(id) ? [] : ['书号格式不对:原样回显任务给定的目标书号(nv_ 开头,别改)'];
+      }
+      case '粗纲':
+        return dense(content) >= 300
+          ? []
+          : ['粗纲过短(≥300字):起承转合主线 + 分卷规划(每卷目标/主要冲突/卷末钩子)'];
+      case '细纲': {
+        const items = parseDetailed(content);
+        return items.length >= 5
+          ? []
+          : [`细纲不足 5 章(现 ${items.length}):每章「### 第N章 标题」起条,含 - 钩子:/- 事件: 行`];
+      }
+      case '伏笔': {
+        if (content === '无') return [];
+        const { seeds } = parseLedgerLines(content, 'genesis');
+        return seeds.length >= 1
+          ? []
+          : ['伏笔台账格式:每行「- [埋设] 伏笔内容 @第N章」;确实没有伏笔则只输出一个字「无」'];
+      }
+      case '时间线':
+        return parseTimelineLines(content).length >= 1
+          ? []
+          : ['时间线至少一行:「- 第N章|故事内时间|关键事件」'];
+      default:
+        return [`novel_outline 契约无字段「${field}」`];
+    }
+  }
+  return [`未知交付契约「${contractId}」`];
+}
+
+/**
+ * 交付的【书号】字段 content → 归一化 bookId(服务端权威校验/入库对账共用口径):
+ * 剥字段头 → 取首行 → normalizeTitle。格式合法性由调用方用 BOOK_ID_RE 复核。
+ */
+export function extractDeliverBookId(rawContent: string): string {
+  return normalizeTitle(firstLineOf(stripLeadingHeader(rawContent)));
+}
+
+/**
+ * 已交付字段 → NovelPackage(渐进卡数据源)。kind 由契约 id 映射(不靠解析锚
+ * 判定,半包不会误路由);缺的字段给空占位,卡片按 progress 渲染骨架行,
+ * required 齐了才激活「存入书库」。未知契约返回 null。
+ */
+export function assembleNovelDelivery(
+  contractId: string,
+  fields: Record<string, string>
+): NovelGenesisBiblePackage | NovelGenesisOutlinePackage | null {
+  const get = (k: string): string => stripLeadingHeader(fields?.[k] ?? '');
+  if (contractId === 'novel_bible') {
+    const words = firstLineOf(get('每章字数')).replace(/[^0-9]/g, '');
+    const genre = get('题材');
+    const style = get('文风锚');
+    return {
+      kind: 'genesis_bible',
+      title: normalizeTitle(firstLineOf(get('书名'))) || '无题',
+      premise: get('卖点'),
+      bible: get('设定集'),
+      characters: parseCharacters(get('人物卡')),
+      ...(genre ? { genre } : {}),
+      ...(style ? { style } : {}),
+      ...(words ? { chapterWords: clampChapterWords(words) } : {}),
+    };
+  }
+  if (contractId === 'novel_outline') {
+    const bookIdRaw = normalizeTitle(firstLineOf(get('书号')));
+    const ledgerRaw = get('伏笔');
+    const { seeds } = parseLedgerLines(ledgerRaw === '无' ? '' : ledgerRaw, 'genesis');
+    return {
+      kind: 'genesis_outline',
+      bookId: BOOK_ID_RE.test(bookIdRaw) ? bookIdRaw : '',
+      outline: get('粗纲'),
+      detailed: parseDetailed(get('细纲')),
+      ledgerSeeds: seeds,
+      timelineSeeds: parseTimelineLines(get('时间线')),
+    };
+  }
+  return null;
+}

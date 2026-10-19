@@ -73,7 +73,9 @@ export function renderWorkshopRunServer(
   });
   const override = getWorkshopOverrides(opts.overrideDir).byId[workshopId];
   if (override !== undefined) {
-    return { ...run, prompt: override, overridden: true };
+    // 覆盖全文热修:prompt 契约与工具挂载同生共死——覆盖文本大概率是旧单轮契约,
+    // 若仍附 delivery 会出现"工具挂着、prompt 没让调"的分裂态,这里显式丢弃
+    return { ...run, prompt: override, overridden: true, delivery: undefined };
   }
   return { ...run, overridden: false };
 }

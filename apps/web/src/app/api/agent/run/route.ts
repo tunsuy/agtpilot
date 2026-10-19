@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     // 覆盖目录热修),该请求忽略客户端拼好的 prompt;普通手输 prompt 不受影响。
     let finalPrompt = typeof prompt === 'string' ? prompt.trim() : '';
     let finalTitle = title;
+    let finalDelivery: import('@/workshops/types').DeliveryContract | undefined;
     if (workshop && typeof workshop.id === 'string') {
       const run = renderWorkshopRunServer(session.user.id, workshop.id, workshop.params);
       if (!run) {
@@ -29,6 +30,8 @@ export async function POST(req: NextRequest) {
       }
       finalPrompt = run.prompt;
       finalTitle = run.title;
+      // 逐字段交付契约:随权威渲染透传(override 分支已在 server-render 显式丢弃)
+      finalDelivery = run.delivery;
     }
 
     if (!finalPrompt) {
@@ -43,6 +46,8 @@ export async function POST(req: NextRequest) {
       // 工坊标识贯穿到任务记录:记忆蒸馏层据此把首条消息识别为表单参数,
       // 不把单次选择(文章类型/风格等)沉淀为用户的长期定位
       workshopId: typeof workshop?.id === 'string' ? workshop.id : undefined,
+      // 逐字段交付契约:声明后挂载 workshop_deliver_field 工具并写投影
+      delivery: finalDelivery,
     });
 
     return NextResponse.json({

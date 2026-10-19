@@ -50,6 +50,10 @@ export async function GET() {
     connectorSuggestions: userId
       ? backend.state.connectorSuggestions.filter((s) => s.id.startsWith(`${userId}::`))
       : [],
+    // ask_user 问题卡按归属过滤(刷新页面卡片不丢,与审批卡同级保证)
+    pendingQuestions: userId
+      ? backend.state.pendingQuestions.filter((q) => !q.userId || q.userId === userId)
+      : [],
   };
 
   return NextResponse.json({

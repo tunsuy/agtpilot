@@ -247,6 +247,9 @@ class ChannelManager {
         userId,
         ...(missionId ? { missionId } : {}),
         title: `${msg.channel} 对话`,
+        // IM 通道看不到网页问题卡(首版),按无人值守处理:不挂 ask_user,
+        // 模糊需求走模型自行拍板,不让用户隔着 IM 干等 5 分钟超时
+        unattended: true,
       });
       store.saveConversation({
         channel: msg.channel,

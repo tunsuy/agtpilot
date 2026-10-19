@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis';
 import { OrchestratorService, AgentService } from '@agtpilot/core';
 import { createAgentRuntime } from '@agtpilot/app-kit';
-import { ApprovalRequest, ConnectorSuggestion, PlanData, PlanTask } from '@agtpilot/protocol';
+import { ApprovalRequest, ConnectorSuggestion, PlanData, PlanTask, UserQuestion, QuestionAnswerItem } from '@agtpilot/protocol';
 import type { MCPService } from '@agtpilot/plugin-mcp';
 
 import { Mission, MissionStep, ViewportState, TerminalLog } from '../types/agent';
@@ -31,6 +31,8 @@ export interface AgentBackendState {
   approvalRequests: ApprovalRequest[];
   /** 任务中途连接器授权建议（等待用户一键授权/跳过） */
   connectorSuggestions: ConnectorSuggestion[];
+  /** ask_user 问题卡（等待用户点选项/输入回答；内存态,刷新经 /api/agent/state 重放） */
+  pendingQuestions: UserQuestion[];
   latestArtifact?: any;
 }
 
@@ -104,6 +106,7 @@ class AgentBackend {
       ],
       approvalRequests: [],
       connectorSuggestions: [],
+      pendingQuestions: [],
       latestArtifact: undefined,
     };
     // 治理总线订阅(回退弧传导到 in-flight 任务);失败只降级不拖垮后端
@@ -661,6 +664,55 @@ class AgentBackend {
         break;
       }
 
+      case 'question_request': {
+        // ask_user 问题卡(先问后猜):入 state + 广播,前端渲染选项卡并等待回答。
+        // 卡片先于 mission_updated 广播(同 approval_request 纪律:不让磁盘 I/O 挡卡)
+        const q: UserQuestion = event.payload;
+        const mission = this.resolveMissionFromEvent(event);
+        if (mission) {
+          q.userId = q.userId || mission.userId;
+          q.missionId = q.missionId || mission.id;
+          mission.status = 'WAITING_APPROVAL';
+        }
+        if (!this.state.pendingQuestions.some((x) => x.id === q.id)) {
+          this.state.pendingQuestions.push(q);
+        }
+        this.broadcast({ type: 'question_asked', data: q });
+        if (mission) {
+          this.broadcast({ type: 'mission_updated', data: mission });
+        }
+        break;
+      }
+
+      case 'question_resolved': {
+        // 问题已回答/超时/中止:撤卡 + 状态恢复(工具侧解冻后统一发到这里收口)
+        const { id, outcome, answer } = event.payload || {};
+        this.state.pendingQuestions = this.state.pendingQuestions.filter((x) => x.id !== id);
+        const qMission = this.resolveMissionFromEvent(event);
+        // 广播盖 userId:SSE 按归属过滤,答案文本不推给其他用户
+        this.broadcast({
+          type: 'question_resolved',
+          data: { id, outcome, answer, userId: event.payload?.userId || qMission?.userId },
+        });
+        // 同任务还压着审批卡时不回 ACTIVE(两种等待共享 WAITING_APPROVAL 状态)
+        if (
+          qMission &&
+          qMission.status === 'WAITING_APPROVAL' &&
+          !this.state.approvalRequests.some((r) => r.taskId === qMission.id)
+        ) {
+          qMission.status = 'ACTIVE';
+          this.broadcast({ type: 'mission_updated', data: qMission });
+        }
+        if (outcome === 'timeout') {
+          this.addTerminalLog(
+            'stderr',
+            '[AskUser] 提问等待超时,已按推荐项自动继续(任务不中断)。',
+            qMission?.userId
+          );
+        }
+        break;
+      }
+
       case 'connector_suggestion': {
         // 任务中途请求连接器授权：入 state 并广播，前端驾驶舱弹授权卡片
         const suggestion: ConnectorSuggestion = event.payload;
@@ -1060,6 +1112,29 @@ class AgentBackend {
   }
 
   /**
+   * ask_user 问题卡答题入口(POST /api/agent/answer):按问题 id 解冻等待中的
+   * 工具,回答作为 tool result 回填主循环原地续跑。撤卡/状态恢复不在这里做 ——
+   * 工具解冻后发 question_resolved 事件统一收口(单一事实源,超时/中止同路径)。
+   * answers 为逐问回答(index 对应卡内 questions 序),覆盖校验在桥内做;
+   * userId 传了则校验归属,防跨用户答题。
+   */
+  public submitAnswer(questionId: string, answers: QuestionAnswerItem[], opts?: { userId?: string }): boolean {
+    const q = this.state.pendingQuestions.find((x) => x.id === questionId);
+    if (!q) return false;
+    if (opts?.userId && q.userId && q.userId !== opts.userId) return false;
+    const { resolveUserQuestion } = require('@/lib/ask-user-bridge');
+    const ok = resolveUserQuestion(questionId, answers);
+    if (ok) {
+      const summary = (answers || [])
+        .map((a) => a.answer)
+        .join(' | ')
+        .slice(0, 120);
+      this.addTerminalLog('system', `[AskUser] 用户已回答:${summary}`, q.userId);
+    }
+    return ok;
+  }
+
+  /**
    * runner_publish 审批裁决:调 runner-bridge 持久化落盘(批准 → 固化命令集 +
    * finishing;拒绝 → rejected + cancel 指令下行),然后撤卡广播。
    * 卡片是内存态、审批单是持久态:裁决失败(任务已过期/已裁决)也要撤卡,
@@ -1200,6 +1275,22 @@ class AgentBackend {
       this.state.approvalRequests = [];
     }
 
+    // 同语义清理挂起中的 ask_user 问题卡(abort 监听通常已解冻,这里幂等兜底
+    // —— 防终止时序里工具来不及发 question_resolved 留下点不动的死卡)
+    try {
+      const { abortQuestionsForMission } = require('@/lib/ask-user-bridge');
+      abortQuestionsForMission(missionId);
+      const stale = this.state.pendingQuestions.filter((q) => q.missionId === missionId);
+      if (stale.length > 0) {
+        this.state.pendingQuestions = this.state.pendingQuestions.filter((q) => q.missionId !== missionId);
+        for (const q of stale) {
+          this.broadcast({ type: 'question_resolved', data: { id: q.id, outcome: 'aborted', userId: q.userId } });
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     const mission = this.state.missions.find((m) => m.id === missionId);
     if (mission && mission.status !== 'DONE') {
       mission.status = 'DONE';
@@ -1251,7 +1342,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1273,6 +1364,41 @@ class AgentBackend {
         }
       } catch {
         // 回水失败按新任务处理
+      }
+    }
+
+    // 问题卡在等答案 + 用户直接打字 → 视为自由文本回答,不走排队:
+    // ask_user 工具挂起在 execute 内,steering 注入点(prepareStep 边界)
+    // 根本到不了,回答必须经桥接 resolver 解冻工具原地续跑
+    if (targetMission && this.runInflight.has(targetMission.id)) {
+      const { hasPendingQuestionForMission, resolveQuestionForMission } = await import('@/lib/ask-user-bridge');
+      if (hasPendingQuestionForMission(targetMission.id)) {
+        const resolved = resolveQuestionForMission(targetMission.id, goal);
+        if (resolved > 0) {
+          targetMission.steps.push({
+            id: `step_${Date.now()}`,
+            role: 'user',
+            title: goal,
+            userPrompt: goal,
+            status: 'DONE',
+          });
+          this.state.activeMissionId = targetMission.id;
+          this.broadcast({ type: 'mission_updated', data: targetMission });
+          this.addTerminalLog(
+            'system',
+            `[AskUser] 任务等待回答中收到用户输入,已作为答案解冻问题卡(不打断当前轮)`,
+            targetMission.userId
+          );
+          if (targetMission.userId) {
+            try {
+              const { saveUserMission } = await import('@/lib/user-store');
+              saveUserMission(targetMission.userId, targetMission);
+            } catch {
+              // 落盘失败不影响答题,轮末检查点会再存
+            }
+          }
+          return targetMission;
+        }
       }
     }
 
@@ -1508,6 +1634,22 @@ class AgentBackend {
             spillToolOutput = (info) => spillImpl(uid, info);
           } catch (e: any) {
             this.addTerminalLog('stderr', `[ToolOutput] 超长输出落盘/续读工具挂载异常: ${e?.message || e}`, uid);
+          }
+
+          // 2.44 ask_user / confirm_plan 卡工具(先问后猜 + 计划确认门):baseline
+          // 常驻穿透工坊白名单;无人值守任务(cron 自动巡航)不挂载 —— 提问没人答,
+          // 超时兜底也会白等 5 分钟
+          if (!options.unattended) {
+            try {
+              const { buildAskUserTool, buildConfirmPlanTool } = await import('@/lib/ask-user-bridge');
+              const cardDeps = {
+                emit: (e: any) => this.ctx.agent.emitEvent(e as any),
+                getAbortSignal: (mid: string) => this.activeAbortControllers.get(mid)?.signal,
+              };
+              taskTools = [...(taskTools || []), buildAskUserTool(cardDeps), buildConfirmPlanTool(cardDeps)];
+            } catch (e: any) {
+              this.addTerminalLog('stderr', `[AskUser] 提问/计划确认工具挂载异常: ${e?.message || e}`, uid);
+            }
           }
 
           // 2.45 用户级定时巡航工具（同名命名空间 cron_*，与插件路由前缀约定一致）：
@@ -2093,6 +2235,7 @@ class AgentBackend {
           title: `【自动巡航】${jobInfo.name}`,
           userId,
           workshopId: cronWorkshopId(jobInfo),
+          unattended: true, // 无人值守:不挂 ask_user(提问没人答)
         });
       } catch (err: any) {
         this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);
@@ -2145,6 +2288,7 @@ class AgentBackend {
         title: `【自动巡航】${jobInfo.name}`,
         userId,
         workshopId: cronWorkshopId(jobInfo),
+        unattended: true, // 与定时触发同语义:巡航 prompt 已定型,不留提问悬挂点
       });
     } catch (err: any) {
       this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);

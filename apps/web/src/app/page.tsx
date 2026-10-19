@@ -32,6 +32,7 @@ import {
   TerminalLog,
   ApprovalRequest,
   ConnectorSuggestion,
+  PendingQuestion,
   ArtifactState,
   ConnectorApp,
   MemoryItem,
@@ -70,6 +71,8 @@ export default function Workspace() {
   const [terminalLogs, setTerminalLogs] = useState<TerminalLog[]>([]);
   const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([]);
   const [connectorSuggestions, setConnectorSuggestions] = useState<ConnectorSuggestion[]>([]);
+  // ask_user 问题卡(模糊需求先问后猜):点选项/输入回答后任务原地续跑
+  const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   // 中途授权（粘贴凭证类）：跳到连接器中心并自动打开对应配置弹窗
   const [mcpAutoConfigure, setMcpAutoConfigure] = useState<string | null>(null);
   // 工坊依赖点跳转:要定位的连接器标识(进连接器页后填入搜索框,随即清空)
@@ -389,6 +392,25 @@ export default function Workspace() {
     }
   };
 
+  // ask_user 问题卡答题:乐观移除(卡片先消失再等 POST,与 handleApproval 同款
+  // 防双击纪律),真实撤卡由 question_resolved SSE 收口。
+  // answers 为逐问回答(index 对应卡内 questions 序),覆盖校验由后端桥做
+  const handleAnswerQuestion = async (
+    questionId: string,
+    answers: Array<{ index: number; answer: string; via: 'option' | 'free_text' }>
+  ) => {
+    setPendingQuestions((prev) => prev.filter((q) => q.id !== questionId));
+    try {
+      await fetch('/api/agent/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionId, answers }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // 任务中途授权卡片：oauth → 直接跳一键授权；token → 连接器中心自动打开配置弹窗
   const handleConnectorAuthorize = (s: ConnectorSuggestion) => {
     if (s.authType === 'oauth' && s.authorizeUrl) {
@@ -696,6 +718,7 @@ export default function Workspace() {
         if (data.state.terminalLogs) setTerminalLogs(data.state.terminalLogs);
         if (data.state.approvalRequests) setApprovalRequests(data.state.approvalRequests);
         if (data.state.connectorSuggestions) setConnectorSuggestions(data.state.connectorSuggestions);
+        if (data.state.pendingQuestions) setPendingQuestions(data.state.pendingQuestions);
         if (data.state.latestArtifact) setArtifact(data.state.latestArtifact);
       }
     } catch (e) {
@@ -733,6 +756,7 @@ export default function Workspace() {
           if (state.terminalLogs) setTerminalLogs(state.terminalLogs);
           if (state.approvalRequests) setApprovalRequests(state.approvalRequests);
           if (state.connectorSuggestions) setConnectorSuggestions(state.connectorSuggestions);
+          if (state.pendingQuestions) setPendingQuestions(state.pendingQuestions);
           if (state.latestArtifact) setArtifact(state.latestArtifact);
         } catch (err) {
           console.error(err);
@@ -894,6 +918,27 @@ export default function Workspace() {
         try {
           const { id } = JSON.parse(e.data);
           setConnectorSuggestions((prev) => prev.filter((x) => x.id !== id));
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      // ask_user 问题卡:弹卡等回答(切到驾驶舱/移动端「动态」让用户看见)
+      eventSource.addEventListener('question_asked', (e: MessageEvent) => {
+        try {
+          const q: PendingQuestion = JSON.parse(e.data);
+          setPendingQuestions((prev) => [...prev.filter((x) => x.id !== q.id), q]);
+          setActiveView('cockpit');
+          setMobileTab('activity');
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      eventSource.addEventListener('question_resolved', (e: MessageEvent) => {
+        try {
+          const { id } = JSON.parse(e.data);
+          setPendingQuestions((prev) => prev.filter((x) => x.id !== id));
         } catch (err) {
           console.error(err);
         }
@@ -1101,7 +1146,7 @@ export default function Workspace() {
                   isSubmitting={isSubmitting}
                   userName={userName}
                   isLoggedIn={isLoggedIn}
-                  approvalCount={approvalRequests.length}
+                  approvalCount={approvalRequests.length + pendingQuestions.length}
                   onRunMission={handleRun}
                   onStopMission={handleStopMission}
                   onOpenMission={(id) => {
@@ -1133,6 +1178,8 @@ export default function Workspace() {
                   connectorSuggestions={connectorSuggestions}
                   onConnectorAuthorize={handleConnectorAuthorize}
                   onSkipConnectorSuggestion={handleSkipConnectorSuggestion}
+                  pendingQuestions={pendingQuestions}
+                  onAnswerQuestion={handleAnswerQuestion}
                   terminalLogs={terminalLogs}
                   onOpenDeliverable={() => setMobileTab('deliverables')}
                   onRunMission={handleRun}
@@ -1166,7 +1213,7 @@ export default function Workspace() {
               <MobileTabBar
                 activeTab={mobileTab}
                 onChange={setMobileTab}
-                approvalCount={approvalRequests.length}
+                approvalCount={approvalRequests.length + pendingQuestions.length}
                 hasActiveMission={hasActiveMission}
               />
             </>
@@ -1191,6 +1238,7 @@ export default function Workspace() {
           patrolCount={cronJobs.filter((j) => j.status === 'active').length}
           goalCount={goals.length}
           approvalRequests={approvalRequests}
+          pendingQuestionCount={pendingQuestions.length}
           hasArtifact={Boolean(artifact)}
           onNewMission={() => {
             if (sessionStatus !== 'loading' && !session?.user) {
@@ -1262,6 +1310,8 @@ export default function Workspace() {
               connectorSuggestions={connectorSuggestions}
               onConnectorAuthorize={handleConnectorAuthorize}
               onSkipConnectorSuggestion={handleSkipConnectorSuggestion}
+              pendingQuestions={pendingQuestions}
+              onAnswerQuestion={handleAnswerQuestion}
               artifact={artifact}
               rightTab={rightTab}
               onRightTabChange={setRightTab}

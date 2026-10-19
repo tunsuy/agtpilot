@@ -41,6 +41,7 @@ import {
   Search,
   Code,
   AlertCircle,
+  HelpCircle,
   Download,
   Code2,
   Eye,
@@ -79,9 +80,11 @@ import {
   TerminalLog,
   ApprovalRequest,
   ConnectorSuggestion,
+  PendingQuestion,
   ArtifactState,
   ConnectorApp,
 } from '../types/agent';
+import { QuestionCard } from './QuestionCard';
 
 /**
  * 跳动的已耗时徽标（叶子组件自持 1s 定时器，只重渲染自身）：
@@ -121,6 +124,12 @@ interface CockpitViewProps {
   connectorSuggestions?: ConnectorSuggestion[];
   onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
   onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
+  /** ask_user 问题卡(模糊需求先问后猜):按来源会话归属展示 */
+  pendingQuestions?: PendingQuestion[];
+  onAnswerQuestion?: (
+    questionId: string,
+    answers: Array<{ index: number; answer: string; via: 'option' | 'free_text' }>
+  ) => void;
   artifact: ArtifactState | null;
   rightTab: 'browser' | 'terminal' | 'artifact' | 'activity';
   onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact' | 'activity') => void;
@@ -150,6 +159,8 @@ export function CockpitView({
   connectorSuggestions = [],
   onConnectorAuthorize,
   onSkipConnectorSuggestion,
+  pendingQuestions = [],
+  onAnswerQuestion,
   artifact,
   rightTab,
   onRightTabChange,
@@ -268,6 +279,12 @@ export function CockpitView({
   // 不带 missionId 的会话内安全审批恒可见,行为不变。
   const { visible: visibleApprovals, hidden: hiddenApprovals } = partitionApprovalsByMission(
     approvalRequests,
+    activeMissionId
+  );
+
+  // ask_user 问题卡同款归属切分:只在来源会话展示,其他会话走细条提示
+  const { visible: visibleQuestions, hidden: hiddenQuestions } = partitionApprovalsByMission(
+    pendingQuestions,
     activeMissionId
   );
 
@@ -663,6 +680,37 @@ export function CockpitView({
               >
                 {connectorSuggestions[0].authType === 'oauth' ? '一键授权' : '去配置'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* ask_user 问题卡(先问后猜):agent 遇到模糊需求弹卡等回答,
+            只在来源会话展示;回答后任务原地续跑 */}
+        {visibleQuestions.length > 0 && onAnswerQuestion && (
+          <div className="m-3 space-y-2">
+            {visibleQuestions.map((q) => (
+              <QuestionCard key={q.id} q={q} onAnswer={onAnswerQuestion} />
+            ))}
+          </div>
+        )}
+
+        {/* 其他会话的问题卡:细条提示 + 跳回来源会话(与发布审批同规则) */}
+        {hiddenQuestions.length > 0 && (
+          <div className="m-3 px-3.5 py-2 rounded-xl border border-sky-200/70 bg-sky-50/60 flex items-center justify-between gap-2 animate-fadeIn">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-sky-800 min-w-0 truncate">
+              <HelpCircle className="h-3 w-3 flex-shrink-0" />
+              另有 {hiddenQuestions.length} 个问题等你回答(来自其他会话)
+            </span>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {hiddenQuestions.map((q) => (
+                <button
+                  key={q.id}
+                  onClick={() => q.missionId && onSelectMission(q.missionId)}
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white hover:bg-sky-50 border border-zinc-200 text-zinc-700 transition max-w-[10rem] truncate"
+                >
+                  {missions.find((m) => m.id === q.missionId)?.title || '未知会话'}
+                </button>
+              ))}
             </div>
           </div>
         )}

@@ -29,7 +29,7 @@
 
 | 注入项 | 来源 | 预算 |
 |---|---|---|
-| 设定集(浓缩) | book.bible | ~1k |
+| 设定集(浓缩) | book.bible | ~1k(硬上限 12k 字符,见下) |
 | 出场人物卡(含当前状态) | book.characters 筛选:主角/主要恒入 + 本章细纲文本点名者 | ~1k |
 | 本章细纲 | book.detailed[下一章] | ~300 |
 | 近 3 章摘要 | book.summaries 尾部 | ~600 |
@@ -38,6 +38,14 @@
 | 时间线尾部 | book.timeline 尾 5 条 | ~200 |
 
 分层压缩抗漂移:章正文 → 章摘要(150-250 字)→ 全书总纲(反思时滚动更新)。
+
+> **设定集封顶(2026-10-19,token 盘点放大器④)**:bible 原是上表中唯一无界项
+> (随创作只增不减、任务内每步全量重发)。现加硬上限 `NOVEL_BIBLE_MAX_CHARS = 12000`
+> 字符(`novel-context.ts` `capNovelBible`,纯函数):超限保头 70% + 尾 30%,中段
+> 显式标记截断(不静默,与 MCP output-cap 同原则)。三个注入点(续写
+> `assembleChapterContext` / 体检 `assembleReviewContext` / 开书大纲
+> `assembleBibleBlock`)全部走同一封顶;正常体量(≤12k)零变化,「恒定上下文」
+> 不变量从"靠自觉"变成"有硬界"。测试 `__tests__/novel-context.test.ts` 8 例。
 
 **反思写回五连**(每章生成完,同一输出契约里强制带出,`saveChapter` 一次落库):
 1. 章摘要 → `summaries[]`

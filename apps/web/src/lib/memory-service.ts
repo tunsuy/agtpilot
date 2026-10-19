@@ -39,8 +39,8 @@ import { getGovernanceBus } from './governance-bus';
  *
  * 通用能力:
  * 1. TF-IDF 加权余弦召回(词袋向量,按用户语料算 IDF;可平滑替换为 embedding);
- * 2. 按任务相关性排序 + 体积上限的 prompt 注入(用户 rule 永远全量注入;
- *    Agent 经验独立分块注入);
+ * 2. 按任务相关性排序 + 体积上限的 prompt 注入(用户 rule 全文注入特权保留,
+ *    但受总字符预算封顶,超限降级 L0 摘要并显式标记;Agent 经验独立分块注入);
  * 3. 用户级 memory_store/recall/list 工具(经 runTask 的 taskTools 挂载,
  *    多用户互不可见;原被同名覆盖的 plugin-memory 全局版已整包删除);
  * 4. 命中反馈与衰减:recall/注入时累计 hitCount,长期零命中的自动记忆降权,
@@ -166,6 +166,10 @@ const PROMPT_MAX_ITEMS = 6;
 const PROMPT_MAX_CHARS = 2400;
 /** 执行红线(rule)类记忆始终全量注入的条数上限 */
 const PROMPT_MAX_RULES = 10;
+/** rule 红线全文注入的总字符预算(2026-10-19 token 盘点④:特权通道也要有界。
+ *  system prompt 每步全量重发,单条超长红线会被步数放大;超限条目降级 L0
+ *  摘要层并带「红线」显式标记 —— 不静默丢,read_memory 可取全文) */
+const PROMPT_MAX_RULE_CHARS = 4000;
 /** system prompt 全文注入的 Agent 经验条数上限(独立分块、独立预算) */
 const AGENT_PROMPT_MAX_ITEMS = 4;
 /** system prompt 全文注入的 Agent 经验总字符预算 */
@@ -759,8 +763,34 @@ function round3(n: number): number {
 // ---- prompt 注入 ----
 
 /**
+ * rule 红线注入挑选(纯函数,2026-10-19 token 盘点④):条数上限 + 总字符预算
+ * 双闸。入参需已按更新时间降序(新的红线优先保全文);超预算的条目由调用方
+ * 降级 L0 摘要层。贪心装填:中间某条超长不挡后面短条保全文。
+ */
+export function selectRuleInjection<T extends { title: string; content: string }>(
+  rules: T[],
+  maxItems: number = PROMPT_MAX_RULES,
+  maxChars: number = PROMPT_MAX_RULE_CHARS
+): { full: T[]; demoted: T[] } {
+  const full: T[] = [];
+  const demoted: T[] = [];
+  let used = 0;
+  for (const r of rules.slice(0, Math.max(0, maxItems))) {
+    const cost = String(r.title ?? '').length + String(r.content ?? '').length;
+    if (used + cost <= maxChars) {
+      full.push(r);
+      used += cost;
+    } else {
+      demoted.push(r);
+    }
+  }
+  return { full, demoted };
+}
+
+/**
  * 构建 system prompt 记忆注入块(P2 两级注入,双通道分块):
- * - L2 全文层:用户 rule(执行红线)始终全量注入;其余按与任务目标的 TF-IDF
+ * - L2 全文层:用户 rule(执行红线)全文注入(条数+总字符双预算,超限降级
+ *   L0 带红线标记);其余按与任务目标的 TF-IDF
  *   相关性排序,头部高分项全文注入(条数/字符双预算);
  * - L0 摘要层:未全文注入的活跃记忆按相关性排成一行式摘要清单(id + 摘要),
  *   模型可用 read_memory(id) 按需取全文 —— 摘要清单成本远低于全文注入;
@@ -793,13 +823,24 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
     const l0: UserMemory[] = [];
     const trace: Array<{ id: string; title: string; score: number; sel: 'full' | 'l0' | 'dropped'; reason: string }> = [];
     let usedChars = 0;
-    // rule 等「必须全文」项先行(不占相关性名额,但占字符预算)
-    const forced = mems.filter(alwaysFull).slice(0, PROMPT_MAX_RULES);
-    const forcedIds = new Set(forced.map((m) => m.id));
-    for (const m of forced) {
+    // rule 等「必须全文」项先行(不占相关性名额,但占字符预算;总字符预算
+    // 封顶,超限降级 L0 摘要并显式标记 —— 红线不静默丢)
+    const forcedCandidates = mems.filter(alwaysFull).slice(0, PROMPT_MAX_RULES);
+    const forcedIds = new Set(forcedCandidates.map((m) => m.id));
+    const ruleSel = selectRuleInjection(forcedCandidates);
+    for (const m of ruleSel.full) {
       full.push(m);
       usedChars += m.title.length + m.content.length;
       trace.push({ id: m.id, title: capText(m.title, 40), score: round3(scores.get(m.id) || 0), sel: 'full', reason: 'rule-always' });
+    }
+    // 降级红线排在 L0 清单最前(优先级高于普通摘要),超出 L0 容量才丢弃(轨迹如实)
+    for (const m of ruleSel.demoted) {
+      if (l0.length < l0Max) {
+        l0.push(m);
+        trace.push({ id: m.id, title: capText(m.title, 40), score: round3(scores.get(m.id) || 0), sel: 'l0', reason: 'rule-chars-cap' });
+      } else {
+        trace.push({ id: m.id, title: capText(m.title, 40), score: round3(scores.get(m.id) || 0), sel: 'dropped', reason: 'l0-full' });
+      }
     }
     const ranked = mems
       .filter((m) => !forcedIds.has(m.id))
@@ -885,7 +926,10 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
     notes: notePaths,
   });
 
-  const l0Lines = (list: UserMemory[]) => list.map((m) => `- ${m.id} ${memorySummary(m)}`);
+  const l0Lines = (list: UserMemory[]) =>
+    list.map((m) =>
+      `- ${m.id} ${m.category === 'rule' ? '[红线·全文未注入,执行相关操作前先 read_memory 取全文] ' : ''}${memorySummary(m)}`
+    );
   const sections: string[] = [];
   if (userSel.full.length > 0 || userSel.l0.length > 0) {
     sections.push(

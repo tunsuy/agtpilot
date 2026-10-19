@@ -188,3 +188,59 @@ describe('summary 懒生成回退(零模型成本)', () => {
     expect(ms.missionSummary({})).toBe('');
   });
 });
+
+describe('rule 红线全文注入封顶(2026-10-19 盘点④:特权通道也要有界)', () => {
+  it('selectRuleInjection(纯函数):预算内全保全文;超限按序降级,贪心装填', () => {
+    const r = (title: string, len: number) => ({ title, content: 'x'.repeat(len) });
+    // 预算内:全保
+    const ok = ms.selectRuleInjection([r('a', 100), r('b', 200)], 10, 4000);
+    expect(ok.full.length).toBe(2);
+    expect(ok.demoted.length).toBe(0);
+    // 超限:新的(排前)保全文,老的降级
+    const over = ms.selectRuleInjection([r('new', 2500), r('old', 2500)], 10, 4000);
+    expect(over.full.map((m) => m.title)).toEqual(['new']);
+    expect(over.demoted.map((m) => m.title)).toEqual(['old']);
+    // 贪心:中间超长条不挡后面短条
+    const greedy = ms.selectRuleInjection([r('big', 3900), r('huge', 5000), r('small', 90)], 10, 4000);
+    expect(greedy.full.map((m) => m.title)).toEqual(['big', 'small']);
+    expect(greedy.demoted.map((m) => m.title)).toEqual(['huge']);
+    // 条数闸先于字符闸
+    const items = ms.selectRuleInjection([r('a', 10), r('b', 10), r('c', 10)], 2, 4000);
+    expect(items.full.length).toBe(2);
+    expect(items.demoted.length).toBe(0); // 第 3 条不进红线通道(回到相关性队列由调用方处理)
+  });
+
+  it('超长红线:最新一条保全文,超限条降级 L0 并带红线标记,轨迹 reason=rule-chars-cap', () => {
+    const uid = 'rule_cap';
+    const marker = 'OLD_RULE_FULLTEXT_MARKER';
+    us.saveUserMemory(
+      uid,
+      mem({ id: 'rule_new', title: '新红线', content: 'N'.repeat(2500), category: 'rule', updatedAt: Date.now() })
+    );
+    us.saveUserMemory(
+      uid,
+      mem({ id: 'rule_old', title: '老红线', content: `${marker}${'O'.repeat(2500)}`, category: 'rule', updatedAt: Date.now() - 60000 })
+    );
+
+    const block = ms.buildMemoryPromptBlock(uid, '随便聊聊天');
+    // 最新红线全文注入(特权保留)
+    expect(block).toContain('N'.repeat(2500));
+    // 超限红线全文不再进 system prompt
+    expect(block).not.toContain(marker);
+    // 降级不是静默丢:L0 摘要行带红线显式标记 + read_memory 指引
+    expect(block).toContain('[红线·全文未注入,执行相关操作前先 read_memory 取全文]');
+    expect(block).toContain('- rule_old');
+    // 检索轨迹如实:rule-chars-cap
+    const t = us.readRetrievalTrace(uid).find((x) => x.kind === 'memory-inject')!;
+    expect((t.selected as any[]).some((s) => s.id === 'rule_new' && s.reason === 'rule-always')).toBe(true);
+    expect((t.omitted as any[]).some((o) => o.id === 'rule_old' && o.reason === 'rule-chars-cap')).toBe(true);
+  });
+
+  it('预算内红线行为不变(既有特权语义回归锁)', () => {
+    const uid = 'rule_small';
+    us.saveUserMemory(uid, mem({ id: 'rule_ok', title: '小红线', content: '对外发布先过围栏', category: 'rule' }));
+    const block = ms.buildMemoryPromptBlock(uid, '随便聊聊天');
+    expect(block).toContain('对外发布先过围栏');
+    expect(block).not.toContain('[红线·全文未注入');
+  });
+});

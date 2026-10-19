@@ -16,6 +16,7 @@ import type {
 import '@agtpilot/core';
 import { thinkingProviderOptions, resolveThinkingEffort } from './thinking';
 import { effortFallbackFetch } from './effort-fallback';
+import { shouldStopAgentLoop, isPerCallBudgetHit } from './loop-stop';
 
 export const name = 'agtpilot-plugin-model';
 export const inject = ['agent'];
@@ -209,6 +210,9 @@ export class ModelService extends Service implements ModelGateway {
       : undefined;
 
     let stepCounter = 0;
+    // 本次调用的 token 记账(与进程级 usedTokens 分离 —— 并发任务各算各账,
+    // tokenBudget 闸门只看本调用累计;策略额度由应用层经 options 下发)
+    let loopTokens = 0;
     // 用户中止信号中继：与看门狗共用一条传给 SDK 的信号，任一触发即断流；
     // 中止后语义分流 —— 用户中止走既有 Cancelled 路径，看门狗走模型连接中断
     const userSignal = options.abortSignal;
@@ -251,9 +255,17 @@ export class ModelService extends Service implements ModelGateway {
         branch,
         resolveThinkingEffort(options.configOverride?.reasoningEffort)
       ),
-      // 步数上限 + Token 预算双闸门：任一触达即停止循环（预算由 setBudget 设置）
+      // 步数上限 + 本次调用 Token 预算 + 进程级遗留预算,三道闸门任一触达即停
+      // (判定抽为纯函数 loop-stop.ts,vitest 直测;预算触顶在返回值里改写为
+      //  finishReason 'budget-exceeded',上层照常走强制总结收尾)
       stopWhen: ({ steps }: { steps: any[] }) =>
-        steps.length >= maxSteps || this.isBudgetExceeded(),
+        shouldStopAgentLoop({
+          stepsCount: steps.length,
+          maxSteps,
+          loopTokens,
+          ...(options.tokenBudget !== undefined ? { tokenBudget: options.tokenBudget } : {}),
+          legacyExceeded: this.isBudgetExceeded(),
+        }),
       abortSignal: streamController.signal,
       // 每步动态路由 + 任务内压缩：上层可重算本步可见工具（初始 activeTools 仍作默认），
       // 也可重写本步消息（超阈值时压缩历史）；两者都缺省时返回 undefined 不干预
@@ -285,6 +297,7 @@ export class ModelService extends Service implements ModelGateway {
         let usage: { promptTokens: number; completionTokens: number } | undefined;
         if (stepUsage) {
           this.recordUsage(stepUsage.inputTokens ?? 0, stepUsage.outputTokens ?? 0);
+          loopTokens += (stepUsage.inputTokens ?? 0) + (stepUsage.outputTokens ?? 0);
           // 透传上层（orchestrator 逐步入账 mission.usage → 前端实时成本展示）
           usage = { promptTokens: stepUsage.inputTokens ?? 0, completionTokens: stepUsage.outputTokens ?? 0 };
         }
@@ -375,7 +388,12 @@ export class ModelService extends Service implements ModelGateway {
     ]);
 
     const budgetStopped =
-      finishReason === 'tool-calls' && this.budgetMaxTokens > 0 && this.isBudgetExceeded();
+      finishReason === 'tool-calls' &&
+      (isPerCallBudgetHit({
+        loopTokens,
+        ...(options.tokenBudget !== undefined ? { tokenBudget: options.tokenBudget } : {}),
+      }) ||
+        (this.budgetMaxTokens > 0 && this.isBudgetExceeded()));
 
     return {
       text,

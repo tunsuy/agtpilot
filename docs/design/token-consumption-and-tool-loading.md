@@ -36,6 +36,8 @@
    入口 `router_set_budget_limit` 已随 plugin-router 整包删除(2026-10-19 基线清理),
    `setBudget` 契约保留但无生产调用方;且 `usedTokens` 是**进程级跨任务串账**,
    即便重新接线也兜不住单任务。
+   (**2026-10-19 已治理**:改走 per-call `tokenBudget` 任务级预算闸 + 子代理/蒸馏
+   usage 入账总账,见 §9.6;进程级 `setBudget`/`usedTokens` 旧口径原样保留未动。)
 2. **工具挂载面失控(雷达任务特有,详见第二部分)。**
    雷达 prompt 是「关键词磁铁」:仓库/PR/执行/网页/检索/调研/github/deepwiki 命中
    全部 route,把 GitHub 官方 MCP 全服务器(~30-40 个大 schema)+ browser(11)+
@@ -349,11 +351,12 @@ plugin-subagent 挂载面与工坊白名单对齐 —— `TaskOptions.activeTool
 
 **配套的 token 治理(与挂载专题独立,见第一部分放大器 3~8)**
 - P0:browser_navigate 剥离 screenshotBase64(**已实施**,§9.3 ①);DeepWiki/GitHub MCP
-  源头字段裁剪(**已实施**,§9.3 ②③);任务级 token 预算闸(usedTokens 先改任务级,待拍板);
+  源头字段裁剪(**已实施**,§9.3 ②③);任务级 token 预算闸(**已实施**,§9.6:
+  不改进程级 usedTokens,直接 per-call tokenBudget 接线);
 - P1:重发前剥离历史 reasoning(**已实施**,见 §9.2);近期 10 条窗口内超大 tool_result 二次截断(~4KB)
   (**已实施**,由 spill-to-file 方案覆盖并超出:超限输出全量落盘 + 进历史的换成
   ~4.5KB「预览+指针」,保护窗最坏 160KB→45KB,截断部分从永久丢失变可恢复续读,
-  见 `tool-output-spill.md`);子 agent/蒸馏 usage 计入 mission.usage;
+  见 `tool-output-spill.md`);子 agent/蒸馏 usage 计入 mission.usage(**已实施**,§9.6);
 - P2:UI 分列缓存命中/全价;环节级 token 看板(schema/历史/system/工具结果四栏)。
 
 ### 9.2 reasoning 剥离(2026-10-17 负责人点题「思考剥离吧」,方案确认后实施)
@@ -466,8 +469,8 @@ invokeStep 消息同剥(闸3 同款);transcript 落盘保持无损原文(观测�
   structuredContent/Markdown 不字段压缩/isError 不豁免)。
 
 **层1 完成度自查(对照 §9 第一步~第四步)**:读路径截图 ✅、工具级限额机制 ✅、
-MCP 统一 cap + deepwiki/GitHub 裁剪 ✅。余(不在本次范围):任务级预算闸
-(放大器 1)、search 类结果字段瘦身、层1 规则表随新连接器扩充。
+MCP 统一 cap + deepwiki/GitHub 裁剪 ✅。任务级预算闸(放大器 1)已于
+2026-10-19 落地(§9.6)。余(不在本次范围):search 类结果字段瘦身、层1 规则表随新连接器扩充。
 
 ### 9.4 层0 工具卡片化(schema 渐进披露)——测量先行(2026-10-18 负责人点题「能否将工具做成跟 skill 一样,只把卡片加到上下文,需要时再加 schema」,拍板「搞」)
 
@@ -621,6 +624,40 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
 **测试**:routing.test.ts 新增「零命中收敛兜底」5 例(baseline+fallback 声明序 /
 点名并入 / widen 兼容 / 空目录保守回全量 / 命中分支不受 fallback 影响)+ 既有
 全量兜底断言 3 处改收敛口径 + full 保险丝 1 例;core 165 全绿。
+
+### 9.6 任务级 token 预算闸 + 全口径记账(2026-10-19 负责人听放大器盘点后拍板「做吧」= 方案A重新接线 + ①记账,已实施)
+
+**背景**:放大器 1(token 层面零熔断)与放大器 8/10(子代理 ~240k/轮、压缩蒸馏
+3-4 次/任务均不入账)合并治理 —— 先能看见每个任务烧了多少(记账),再用预算封顶(闸门)。
+
+**① 全口径记账(mission.usage 从「主循环可见部分」变成「任务真实总账」)**
+- 子代理:plugin-subagent 结束/失败时本就 `ctx.emit('agtpilot/subagent', {phase, parentTaskId, usage, ...})`
+  (子循环直连 `model.runAgentLoop`,不经 orchestrator,天然无 `agtpilot/usage` 事件、
+  不会双计)——agent-backend 新增订阅,finished/failed 的 usage 经 `accumulateMissionUsage`
+  并入父任务总账并广播 `mission_usage`。
+- 压缩蒸馏:`compactConversation` 的 summarize 回调拿到 `invokeStep` 返回的 usage 后,
+  经既有 `agtpilot/usage` 通道按 `options.taskId` 上报(TaskOptions 新增可选 taskId 透传)。
+- 有意留白:记忆/技能卡蒸馏(无任务上下文,不属于 mission 账)、runner 派发(另项目)。
+
+**② per-call 预算闸(不改进程级旧账,并发安全)**
+- 契约:`AgentLoopOptions.tokenBudget`(单次调用 prompt+completion 累计上限,循环内
+  逐步实时记账;0/缺省 = 不设限)+ `TaskOptions.tokenBudget` 透传。策略(额度多大)归
+  应用层,网关只执行(反模式 #10)。
+- 网关(plugin-model):`loopTokens` per-call 计数器(onStepFinish 累加),停循环判定抽为
+  纯函数 `shouldStopAgentLoop`(步数闸 / per-call 预算闸 / legacy 进程级闸三合一,
+  loop-stop.ts);触顶 → `finishReason 'budget-exceeded'` + `stepsExhausted` → 上层强制
+  总结轮诚实收尾(orchestrator needsWrapUp 既有链路,零改动)。旧 `setBudget/usedTokens`
+  原样保留(诚实失败:不假装删除无调用方的契约)。
+- 应用层(agent-backend):每轮 runTask 前 `computeMissionTokenBudget(mission.usage, cap)`
+  = 总账上限 − 已花;cap 来自 `AGTPILOT_MISSION_TOKEN_BUDGET`(默认 300k,显式 0 = 关闸)。
+  **余额耗尽钉 1 而非 0**(0 在网关语义 = 不设限,会静默放开烧)——最多再走 1 步即触顶收尾。
+- 记账与闸门闭环:子代理/蒸馏入账 → 下一轮预算自动扣除 → 总账口径封顶。
+
+**测试**:plugin-model loop-stop.test.ts 7 例(三道闸独立/预算 0-缺省-负数=不限/per-call
+隔离),plugin-model 31 全绿;core 191 全绿(orchestrator 透传+蒸馏上报不破坏既有用例);
+web mission-efficiency.test.ts 新增 11 例(缺省 300k/余额扣减/关闸/钉 1/负余额防御/
+NaN 兜底/向下取整/env 解析合法-非法-显式 0)21 全绿;apps/web `tsc --noEmit` 通过。
+本地 `next build` 受宿主 1.6GB 内存限制无法验证(OOM,既有环境问题),以 GH Actions 为准。
 
 ---
 

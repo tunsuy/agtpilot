@@ -75,6 +75,12 @@ export interface AgentLoopOptions {
   temperature?: number;
   /** 多步循环的最大步数 */
   maxSteps?: number;
+  /**
+   * 本次调用的 token 总预算(prompt+completion 累计,循环内逐步实时记账)。
+   * 触顶即停循环并标识 finishReason 'budget-exceeded'(上层照常强制总结收尾)。
+   * 0/缺省 = 不设限。策略(额度多大、按任务还是按轮)归应用层,网关只执行。
+   */
+  tokenBudget?: number;
   tools?: AgentLoopTool[];
   /** 本次调用只向模型声明的工具子集（其余仍可执行但不进上下文），缺省为全量 */
   activeTools?: string[];

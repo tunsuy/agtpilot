@@ -14,7 +14,12 @@ import {
 } from './live-steps';
 import { cronWorkshopId } from './cron-scenario';
 import { settleToolStep, upsertToolStep } from './tool-steps';
-import { accumulateMissionUsage, buildEfficiencyStepTitle } from './mission-efficiency';
+import {
+  accumulateMissionUsage,
+  buildEfficiencyStepTitle,
+  computeMissionTokenBudget,
+  missionTokenBudgetCapFromEnv,
+} from './mission-efficiency';
 import { buildTaskSystemPrompt } from './task-system-prompt';
 import { logRuntime } from './runtime-log';
 
@@ -374,6 +379,26 @@ class AgentBackend {
       const mission = this.state.missions.find((m) => m.id === taskId);
       if (!mission) return;
       mission.usage = accumulateMissionUsage(mission.usage, { promptTokens, completionTokens });
+      this.broadcast({
+        type: 'mission_usage',
+        data: { taskId: mission.id, usage: mission.usage, userId: mission.userId },
+      });
+    });
+    // 子代理入账(token 治理 ①):子循环直连模型网关,usage 过去只发
+    // agtpilot/subagent 事件、无人消费 —— 实测最高 ~240k/轮完全在账外。
+    // 现在 finished/failed 都并进父任务总账(mission.usage),预算闸门
+    // 下一轮据此扣减,成本可观测且子代理烧钱不再逃逸于总账之外。
+    // 不与 agtpilot/usage 双计:子循环不经 orchestrator,不发那条事件。
+    this.ctx.on('agtpilot/subagent', (payload: any) => {
+      if (!payload || (payload.phase !== 'finished' && payload.phase !== 'failed')) return;
+      const { parentTaskId, usage } = payload;
+      if (!parentTaskId || !usage) return;
+      const mission = this.state.missions.find((m) => m.id === parentTaskId);
+      if (!mission) return;
+      mission.usage = accumulateMissionUsage(mission.usage, {
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+      });
       this.broadcast({
         type: 'mission_usage',
         data: { taskId: mission.id, usage: mission.usage, userId: mission.userId },
@@ -2012,6 +2037,13 @@ class AgentBackend {
             taskSandbox,
             spillToolOutput,
             activeTools: workshopActiveTools,
+            // 任务 token 总预算(多轮共享总账):触顶后网关停循环,orchestrator
+            // 强制总结轮诚实收尾 —— 单任务失控烧钱的最后刹车(策略在应用层,
+            // 内核只执行;AGTPILOT_MISSION_TOKEN_BUDGET=0 显式关闭)
+            tokenBudget: computeMissionTokenBudget(
+              targetMission.usage,
+              missionTokenBudgetCapFromEnv()
+            ),
             // 回退弧感知通道:每步 prepareStep 前取一条排队的治理提示注入
             getStepNotice: () => this.taskRuntimes.get(targetMission.id)?.notices.shift() ?? null,
             // 用户追加消息通道(同款拉取式):任务进行中排队的追问在此

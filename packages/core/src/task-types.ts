@@ -10,6 +10,11 @@ export interface TaskOptions {
   system?: string;
   model?: string;
   maxSteps?: number;
+  /**
+   * 本次 runTask 的 token 总预算(透传模型网关 runAgentLoop,触顶主动收尾)。
+   * 预算策略归应用层(如 web 按 mission 总账余额下发),内核只透传执行。
+   */
+  tokenBudget?: number;
   /** 显式指定本次任务向模型声明的工具子集；缺省时仅当工具声明 tokens 超阈值才按关键词路由，否则全量挂载 */
   activeTools?: string[];
   /**

@@ -2,7 +2,9 @@
  * 工具 schema 上线成本测量 · 第 1 段:注册表(层0「工具卡片化」第一步,
  * docs/design/token-consumption-and-tool-loading.md §9.4)
  *
- * 用法: npx tsx scripts/tool-schema-measure.mts [--json]
+ * 用法: pnpm measure:tools(= npx tsx scripts/tool-schema-measure.mts [--json])
+ *       生产口径(MCP 连接器已连接)在服务器端跑 pnpm measure:all,
+ *       一并重算第 2 段工坊+用户级合并表格。
  * 产出: stdout 报告 + scripts/out/tool-registry-measure.json(供第 2 段工坊视图
  *       消费:apps/web vitest 的 tool-schema-cost.measure.test.ts——工坊 registry
  *       依赖 .md 提示词导入,只能在 web 的 vitest 环境里解析,故分两段)。
@@ -24,6 +26,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { estTokens, wirePayload, cardLine } from './tool-schema-est';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -36,34 +39,9 @@ process.env.USER_DATA_DIR ||= mkdtempSync(join(tmpdir(), 'agtpilot-measure-'));
 
 const { createAgentRuntime } = await import('../packages/app-kit/src/index');
 
-/** CJK(含全角标点)×1 + 其余 ÷4,向上取整 */
-export function estTokens(s: string): number {
-  let cjk = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0)!;
-    if (
-      (c >= 0x4e00 && c <= 0x9fff) ||
-      (c >= 0x3000 && c <= 0x303f) ||
-      (c >= 0xff00 && c <= 0xffef)
-    ) cjk++;
-  }
-  return Math.ceil(cjk + (s.length - cjk) / 4);
-}
-
-/** 工具上线时 tools 块的载荷(与 AI SDK 发给模型的字段一致) */
-function wirePayload(t: { name: string; description?: string; parameters?: unknown }): string {
-  return JSON.stringify({
-    name: t.name,
-    description: t.description ?? '',
-    parameters: t.parameters ?? { type: 'object', properties: {} },
-  });
-}
-
-/** 目录卡片一行:`- name: 一行用途`(描述首句,钳 50 字符) */
-function cardLine(t: { name: string; description?: string }): string {
-  const first = (t.description ?? '').split(/[。\n;]/)[0].slice(0, 50);
-  return `- ${t.name}: ${first}`;
-}
+// 估算口径(estTokens/wirePayload/cardLine)已抽到 scripts/tool-schema-est.ts:
+// 第 2 段(apps/web vitest)现场构建用户级 taskTools 时必须用同一口径,单一事实源。
+export { estTokens };
 
 const runtime = await createAgentRuntime({ browser: { headless: true } });
 const failed = runtime.loaded.filter((l) => !l.ok);

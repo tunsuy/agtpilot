@@ -492,15 +492,22 @@ MCP 统一 cap + deepwiki/GitHub 裁剪 ✅。余(不在本次范围):任务级�
   schema 以 tool_result 文本喂回,可借鉴;deepseek 隐式缓存净损益需实测);
   ③ 目录纪律(一行描述不够短,省的被吃回去)。
 
-**测量工具(已实施,2026-10-18)**:两段式,可重复跑——
-- 第 1 段 `npx tsx scripts/tool-schema-measure.mts`:启动 app-kit 真实注册表
-  (EXA/TAVILY/FIRECRAWL 假 key 对齐生产注册面;只读注册表,不执行工具),按
-  「name+description+parameters 序列化」计每把工具上线成本;估算口径
-  CJK 字符 ×1.0 + 其余 ÷4;产物 `scripts/out/tool-registry-measure.json`(不入库);
-- 第 2 段 apps/web vitest `src/workshops/__tests__/tool-schema-cost.measure.test.ts`:
-  消费 JSON,用与生产同一代码路径(`resolveWorkshopActiveTools` 四层并集 + 内核
-  `resolveExplicitTools`)算每坊每步 tools 块成本与卡片化理论上限;`MEASURE=1`
-  打印表格,JSON 缺席自动 skip(不影响常规测试)。
+**测量工具(已实施 2026-10-18;口径修复 2026-10-19,见本节末)**:两段式,可重复跑——
+- 第 1 段 `pnpm measure:tools`(= `npx tsx scripts/tool-schema-measure.mts`):启动
+  app-kit 真实注册表(EXA/TAVILY/FIRECRAWL 假 key 对齐生产注册面;只读注册表,
+  不执行工具),按「name+description+parameters 序列化」计每把工具上线成本;
+  估算口径 CJK 字符 ×1.0 + 其余 ÷4(单一事实源 `scripts/tool-schema-est.ts`,
+  两段共享);产物 `scripts/out/tool-registry-measure.json`(不入库);
+- 第 2 段 apps/web vitest `src/workshops/__tests__/tool-schema-cost.measure.test.ts`
+  (`pnpm measure:workshops`):消费 JSON,用与生产同一代码路径
+  (`resolveWorkshopActiveTools` 四层并集 + 内核 `resolveExplicitTools`)算每坊
+  每步 tools 块成本与卡片化理论上限;**2026-10-19 起并入用户级 taskTools 表面**
+  (记忆五件套 / read_tool_output / ask 桥 / cron 三件 / connector 桥 / 交付字段 /
+  TOOL_PROVIDER 固定工具——现场用生产同款 builder + stub 依赖构建,这些从不进
+  全局注册表,第 1 段对其不可见);`MEASURE=1` 打印表格,JSON 缺席时工坊合并
+  表格 skip、用户级表面测量恒跑;
+- 一键生产口径 `pnpm measure:all`:服务器端(MCP 连接器已连接)跑第 1 段 +
+  第 2 段,mcpToolCount 与 mcp_* schema 成本才入表(本地/CI 恒为 0,表格是下限)。
 
 **静态测量结果(2026-10-18,内置口径——本地无 MCP 连接器,mcp_* 缺席)**:
 
@@ -563,6 +570,22 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
   (注入面五档 × 点菜流程 × 广播管道 × 效率统计口径);core 191 全绿。
 - v1 明确不做(留给数据说话后的 v2):内置工具卡片化、目录按命中分布自动
   排序/裁剪、load 的跨任务预取(高频点名工具晋升常驻)。
+
+**口径修复与复测(2026-10-19,⑤ 测量脚本修口径)**:此前两段测量有三处系统性
+低估,已修复并复测(基线 add6045 工具清理后):
+1. **本地 JSON 过期**:旧表基于清理前注册表(48 把 / 内置 baseline 2131);
+   复测后 39 把 / 全量挂载 6547 / 内置 baseline **1070** tokens/步。
+2. **用户级 taskTools 从不入账**(最大缺口):agent-backend 每任务现场装配的
+   26 把用户级工具(合计 ≈6462 tokens)第 1 段全部不可见,其中 baseline 六件
+   (ask_user 649 / confirm_plan 326 / workshop_deliver_field 327 /
+   connector_authorize 299 / read_tool_output 234 / mcp_call 173)穿透一切
+   工坊白名单,**每任务每步固定 ≈2008 tokens**——旧每坊表格全部少算这一块;
+   记忆/cron 工具非 baseline,只在自由路由任务出现(自由路由最坏情形
+   ≈6547+6462=**13009** tokens/步)。修复后每坊合并挂载面:novel 3581 ~
+   wechat_mp 5040 tokens/步(xhs/zhihu 托管 provider 本地缺凭证构建 0 把,
+   表格显式标注低估项;服务器端 `pnpm measure:all` 取生产口径)。
+3. **MCP 生产口径没有入口**:一直是「服务器端补测」的口头约定;现已固化为
+   根 package.json 一键脚本(measure:tools / measure:workshops / measure:all)。
 
 ### 9.5 路由零命中收敛兜底(快速止血 A,2026-10-18 负责人盘点路由后拍板「搞」= C 方案:A 先落、B 等 §9.4 数据立项)
 

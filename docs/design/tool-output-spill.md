@@ -23,6 +23,9 @@
 2. **保护窗骑线**:压缩阈值 30k tokens(`COMPACT_THRESHOLD_TOKENS`)+ 近 10 条原样保留
    (`COMPACT_RECENT_MESSAGES`)。16KB 截断版 × 10 条保护窗 ≈ 最坏 160KB 字符骑在阈值上,
    历史反复触发蒸馏、每步重复付费(token 文档「放大器 3」病根之一)。
+   (2026-10-19 更新:token 文档 §9.8 已把阈值改为 min(静态 30k, 模型窗口动态预算)、
+   近期窗口改为 token 预算制(默认 ≤8k、条数 4~10 钳制),「160KB 骑线」的最坏形态
+   由窗口预算直接封死;落盘指针机制的价值不变。)
 3. **浏览器窗口分页不保底**:`browser_navigate`/`browser_firecrawl_scrape` 用
    `PAGE_WINDOW=4000` 窗口 + offset 续读,但全文只存在于源站 —— 页面一变(动态渲染/反爬)
    offset 续读就拉不到同一份内容,不可恢复。

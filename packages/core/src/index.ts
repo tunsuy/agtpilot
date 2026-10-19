@@ -56,11 +56,25 @@ export {
 } from './text';
 export {
   compactConversationMessages,
+  assistantTextDigestEnabled,
   COMPACT_THRESHOLD_TOKENS,
   COMPACT_RECENT_MESSAGES,
+  COMPACT_RECENT_TOKEN_BUDGET,
+  COMPACT_RECENT_MIN_MESSAGES,
   COMPACT_DIGEST_ENTRY_LIMIT,
+  ASSISTANT_TEXT_KEEP_CHARS,
 } from './compaction';
 export type { CompactOptions, DigestSummarizer } from './compaction';
+export {
+  contextWindowTokens,
+  outputReserveTokens,
+  budgetSafetyRatio,
+  estimateToolsBlockTokens,
+  historyTokenBudget,
+  effectiveCompactThreshold,
+  MIN_HISTORY_BUDGET,
+} from './context-budget';
+export type { ContextBudgetInputs } from './context-budget';
 export { appendStepNotice, STEP_NOTICE_PREFIX } from './notice';
 export { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 export type { ReasoningMessageLike, StripReasoningResult } from './reasoning';

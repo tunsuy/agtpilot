@@ -175,6 +175,16 @@ export class ChannelService extends Service {
   }
 }
 
+/**
+ * cordis 插件入口:ctx.plugin(ChannelPlugin) 的唯一合法挂载点。
+ * 实例化即注册 ctx.channel(Service 构造器 super(ctx, 'channel')),
+ * 对齐 plugin-cron/plugin-git/plugin-notify 的 apply 范式;
+ * Phase 1 按设计文档不注册任何工具路由(通道能力走服务接口,不进模型菜单)。
+ */
+export function apply(ctx: Context) {
+  new ChannelService(ctx);
+}
+
 // 契约类型与适配器实现统一从插件面再导出,应用层只依赖本包（单一入口）。
 export type {
   ChannelAdapter,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Context } from '@deepseek-ai/cordis';
-import { ChannelService, supportsWebhookIngest } from './index';
+import { apply, ChannelService, supportsWebhookIngest } from './index';
+import * as ChannelPlugin from './index';
 import type {
   ChannelAdapter,
   ChannelAdapterEvents,
@@ -216,5 +217,14 @@ describe('ChannelService 状态与错误', () => {
     const errs = svc.recentErrors();
     expect(errs).toHaveLength(1);
     expect(errs[0]).toMatchObject({ channel: 'ch_a', code: 'connection_lost', message: expect.stringContaining('ws dropped') });
+  });
+});
+
+describe('cordis 插件入口', () => {
+  it('导出 apply;ctx.plugin 挂模块对象即注册 ctx.channel(app-kit mount 同路径,生产 invalid plugin 加载失败回归)', async () => {
+    expect(typeof apply).toBe('function');
+    const ctx = new Context();
+    await ctx.plugin(ChannelPlugin);
+    expect(ctx.channel).toBeInstanceOf(ChannelService);
   });
 });

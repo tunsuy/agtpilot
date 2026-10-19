@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { formatTokenCount, buildEfficiencyStepTitle, accumulateMissionUsage } from '@/lib/mission-efficiency';
+import { formatTokenCount, buildEfficiencyStepTitle, accumulateMissionUsage,
+  computeMissionTokenBudget, missionTokenBudgetCapFromEnv, DEFAULT_MISSION_TOKEN_BUDGET } from '@/lib/mission-efficiency';
 import type { TaskEfficiency } from '@agtpilot/core';
 
 /**
@@ -98,5 +99,62 @@ describe('accumulateMissionUsage（agtpilot/usage 事件逐次并入任务总账
       { promptTokens: undefined, completionTokens: Number.NaN }
     );
     expect(usage).toEqual({ promptTokens: 100, completionTokens: 20 });
+  });
+});
+
+describe('computeMissionTokenBudget（任务总账预算闸门:本轮可花 = cap − 已花）', () => {
+  it('未配置 cap 时用缺省总账 300k', () => {
+    expect(computeMissionTokenBudget(undefined)).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
+    expect(computeMissionTokenBudget({ promptTokens: 0, completionTokens: 0 })).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
+  });
+
+  it('余额 = cap − 已花(prompt+completion 都算)', () => {
+    expect(computeMissionTokenBudget({ promptTokens: 80_000, completionTokens: 20_000 }, 300_000)).toBe(200_000);
+    expect(computeMissionTokenBudget({ promptTokens: 50, completionTokens: 25 }, 1_000)).toBe(925);
+  });
+
+  it('显式 cap = 0 → undefined(总闸关闭,不设限)', () => {
+    expect(computeMissionTokenBudget({ promptTokens: 9_999_999 }, 0)).toBeUndefined();
+  });
+
+  it('余额耗尽钉 1 而非 0(0 在网关语义 = 不设限,会导致静默放开烧)', () => {
+    expect(computeMissionTokenBudget({ promptTokens: 300_000, completionTokens: 0 }, 300_000)).toBe(1);
+    expect(computeMissionTokenBudget({ promptTokens: 299_000, completionTokens: 2_000 }, 300_000)).toBe(1);
+  });
+
+  it('负余额(脏数据防御)同样钉 1', () => {
+    expect(computeMissionTokenBudget({ promptTokens: 400_000, completionTokens: 50_000 }, 300_000)).toBe(1);
+  });
+
+  it('usage 字段缺失/NaN 按 0 计,不产生 NaN 预算', () => {
+    expect(computeMissionTokenBudget({ promptTokens: Number.NaN }, 1_000)).toBe(1_000);
+    expect(computeMissionTokenBudget(undefined, 1_000)).toBe(1_000);
+  });
+
+  it('小数余额向下取整', () => {
+    expect(computeMissionTokenBudget({ promptTokens: 0.5, completionTokens: 0.4 }, 10)).toBe(9);
+  });
+});
+
+describe('missionTokenBudgetCapFromEnv（AGTPILOT_MISSION_TOKEN_BUDGET 解析）', () => {
+  it('未配置/空串/空白 → undefined(走缺省)', () => {
+    expect(missionTokenBudgetCapFromEnv({})).toBeUndefined();
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: '' })).toBeUndefined();
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: '   ' })).toBeUndefined();
+  });
+
+  it('合法数值 → 取整返回', () => {
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: '300000' })).toBe(300000);
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: ' 50000.9 ' })).toBe(50000);
+  });
+
+  it('显式 0 → 0(交给 computeMissionTokenBudget 解释为关闸)', () => {
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: '0' })).toBe(0);
+  });
+
+  it('非法值(非数字/负数)→ undefined(回缺省,不静默关闸)', () => {
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: 'abc' })).toBeUndefined();
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: '-1' })).toBeUndefined();
+    expect(missionTokenBudgetCapFromEnv({ AGTPILOT_MISSION_TOKEN_BUDGET: 'Infinity' })).toBeUndefined();
   });
 });

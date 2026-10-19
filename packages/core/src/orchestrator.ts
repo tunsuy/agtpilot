@@ -561,6 +561,7 @@ export class OrchestratorService extends Service {
         messages: baseMessages as any,
         configOverride: options.configOverride,
         maxSteps,
+        ...(options.tokenBudget !== undefined ? { tokenBudget: options.tokenBudget } : {}),
         tools: loopTools,
         activeTools: initialActiveTools,
         // 每步准备回调（AI SDK v5 prepareStep，每一步模型调用前触发）：
@@ -938,6 +939,15 @@ export class OrchestratorService extends Service {
           disableTools: true,
           configOverride: options.configOverride,
         });
+        // 蒸馏调用同样烧钱 —— 入账 mission.usage(走既有 agtpilot/usage 通道,
+        // agent-backend 累计),消灭「压缩越频繁、账外消耗越大」的观测盲区
+        if (options.taskId && result?.usage) {
+          this.ctx.emit('agtpilot/usage', {
+            taskId: options.taskId,
+            promptTokens: result.usage.promptTokens ?? 0,
+            completionTokens: result.usage.completionTokens ?? 0,
+          });
+        }
         return result?.text || '';
       },
       onProgress: ({ totalTokens, entries }) => {

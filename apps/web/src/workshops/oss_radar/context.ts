@@ -111,13 +111,19 @@ function extractRepo(token: string): string | null {
 /**
  * 指定项目 → Prompt 注入段(无指定 → null,模板 {{#if}} 整段不渲染)。
  * 明确改写发现模式:只查这些 repo 的 open Issue,不话题广扫、不擅自换成别的项目。
+ * 指定 = 用户已选定项目 → 项目级尽调(star/活跃度/口碑/架构)整段跳过,
+ * 只留 Issue 级核验(生产实测 mission ar27n:「照常核验」措辞驱动模型对已指定
+ * 仓库跑了 list_commits+deepwiki+search_web 三发项目级尽调,42k 字符原始 JSON
+ * 进主上下文后被逐轮重放 ≈12 万 tokens)。
  */
 export function buildTargetReposSection(repos: string[]): string | null {
   if (repos.length === 0) return null;
   const lines = repos.map((r) => `- ${r}`);
   return `【本次指定项目】只深挖以下仓库,不做话题广扫(上面的关注方向仅作背景参考):
 ${lines.join('\n')}
-调研路径第 1 步相应改为:直接用 github_scan / GitHub MCP 查这些 repo 的 open Issue(优先 good first issue、help wanted 标签与近期活跃 Issue),star 数 / 最近推送 / Issue 链接照常核验;指定项目产不出足够机会就少给、不凑数,也不要擅自替换成别的项目。`;
+项目已选定,不做项目级尽调:不要检索 star 数、提交活跃度与社区口碑,也不要向 DeepWiki 提问架构与贡献流程;筛选标准里「近 90 天有实质提交」一条对指定项目不适用,【项目简介】的活跃度信号可省略,一句话项目定位即可。
+调研路径相应改为:直接用 GitHub MCP 或子 agent 检索这些 repo 的 open Issue(优先 good first issue、help wanted 标签与近期活跃 Issue),把力气花在候选 Issue 的可认领性核验上(认领留言、在途 PR、交叉引用);检索中顺带发现仓库红旗(已归档、长期无更新)时,不要专门检索确认,只在该项目的机会里加一行风险提示;若确认仓库已归档,如实说明并不产出机会,不硬凑。
+指定项目产不出足够机会就少给、不凑数,也不要擅自替换成别的项目。`;
 }
 
 /** 派发历史单条:Issue 链接 + 处置结果话术(runner-dispatch radarDispatchHistory 产出) */

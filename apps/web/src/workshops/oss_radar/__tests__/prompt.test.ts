@@ -68,14 +68,24 @@ describe('buildOssRadarPrompt · 格式契约(与 oss-opportunities.ts 解析器
     expect(prompt).toContain('good first issue');
   });
 
-  it('广域网页调研引导派只读检索子 agent(并行派发 + 连接器按白名单条件开放)', () => {
+  it('肥调研引导派只读检索子 agent(连接器只读工具默认开放,不再让模型猜白名单)', () => {
     expect(prompt).toContain('research_subagent');
     expect(prompt).toContain('只读检索子 agent');
     expect(prompt).toContain('并行派发');
-    // MCP 双钥匙落地后:连接器是否可交给子 agent 取决于白名单,关键信息仍需主循环复核
-    expect(prompt).toContain('加入子 agent 白名单');
+    // 生产实测 mission ar27n:含糊的「取决于负责人是否已加入白名单」让模型放弃子 agent、
+    // 在主上下文直调 MCP,42k 字符原始 JSON 逐轮重放 ≈12 万 tokens。现在明确默认开放。
+    expect(prompt).toContain('默认已对子 agent 开放');
+    expect(prompt).not.toContain('取决于负责人是否已将其加入子 agent 白名单');
     expect(prompt).toContain('由你直接复核');
     expect(prompt).not.toContain('连接器检索不对子 agent 开放');
+  });
+
+  it('检索纪律:筛选期只要元数据不取 body、perPage ≤ 10,核验期才逐条补详情', () => {
+    expect(prompt).toContain('检索纪律');
+    expect(prompt).toContain('不要取 body');
+    expect(prompt).toContain('perPage ≤ 10');
+    expect(prompt).toContain('不超过产出数量的 2 倍');
+    expect(prompt).toContain('重复付费');
   });
 
   it('收尾提醒:链接直达 Issue、起草文本发送前逐条审批、写代码由用户本地完成', () => {
@@ -276,6 +286,21 @@ describe('buildTargetReposSection / buildOssRadarPrompt · 指定项目注入', 
     expect(section).toContain('- vllm-project/vllm');
     expect(section).toContain('不做话题广扫');
     expect(section).toContain('不要擅自替换成别的项目');
+  });
+
+  it('指定项目 = 用户已选定:跳过项目级尽调(star/活跃度/口碑/DeepWiki),只留 Issue 级核验', () => {
+    const section = buildTargetReposSection(['milvus-io/milvus'])!;
+    // 生产实测 mission ar27n:旧措辞「star 数 / 最近推送照常核验」驱动模型对已指定仓库
+    // 跑 list_commits + deepwiki + search_web 三发项目级尽调 → 全部砍掉
+    expect(section).toContain('不做项目级尽调');
+    expect(section).toContain('不要检索 star 数、提交活跃度与社区口碑');
+    expect(section).toContain('「近 90 天有实质提交」一条对指定项目不适用');
+    expect(section).toContain('可认领性核验');
+    expect(section).not.toContain('照常核验');
+    // 红旗零成本兜底:顺带发现只注记,不专门检索;归档如实说明不硬凑
+    expect(section).toContain('风险提示');
+    expect(section).toContain('不要专门检索确认');
+    expect(section).toContain('已归档');
   });
 
   it('空列表 → null(模板 {{#if}} 整段不渲染)', () => {

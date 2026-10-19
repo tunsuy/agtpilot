@@ -32,9 +32,10 @@
 ### 2. 放大器排名(按贡献排序)
 
 1. **结构性主因:每步全量重发 × 20 步,token 层面零熔断。**
-   预算闸存在但默认关(`plugin-model/src/index.ts:82` `budgetMaxTokens = 0`),唯一
-   入口是模型自己调 `router_set_budget_limit`(`plugin-router/src/index.ts:156-175`);
-   且 `usedTokens` 是**进程级跨任务串账**(`plugin-model:83-84`),开了也兜不住单任务。
+   预算闸存在但默认关(`plugin-model/src/index.ts` `budgetMaxTokens = 0`),原唯一
+   入口 `router_set_budget_limit` 已随 plugin-router 整包删除(2026-10-19 基线清理),
+   `setBudget` 契约保留但无生产调用方;且 `usedTokens` 是**进程级跨任务串账**,
+   即便重新接线也兜不住单任务。
 2. **工具挂载面失控(雷达任务特有,详见第二部分)。**
    雷达 prompt 是「关键词磁铁」:仓库/PR/执行/网页/检索/调研/github/deepwiki 命中
    全部 route,把 GitHub 官方 MCP 全服务器(~30-40 个大 schema)+ browser(11)+
@@ -267,10 +268,19 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
 
 白名单不逐坊手写全量,按「四层并集」自动派生:
 
-- **A. baseline 常驻**(~13 个,内核自动并入,工坊不声明):planner_create_plan /
-  planner_update_task、memory_store / memory_recall、router_select_tier /
-  router_get_budget_status / router_set_budget_limit、observability_get_trace /
-  observability_get_metrics、artifact_render、connector_authorize、mcp_call、notify_*。
+- **A. baseline 常驻**(内核自动并入,工坊不声明):planner_create_plan /
+  planner_update_task、artifact_render、connector_authorize、mcp_call、
+  ask_user / confirm_plan、read_tool_output、workshop_deliver_field。
+  > 2026-10-19 基线清理:router_select_tier / router_get_budget_status /
+  > router_set_budget_limit(plugin-router 整包删除——用户连接器部署下
+  > configOverride 永远压过 preferred,能级切换三重无效)、observability_get_trace /
+  > observability_get_metrics(plugin-observability 整包删除——进程内 ring buffer
+  > 唯二读者就是这两个工具)、codebase_search_symbols(从 plugin-git 删除——
+  > grep 的是服务进程 cwd,Web 部署下即容器目录,检索不到用户代码);
+  > memory_store / memory_recall 所属的 plugin-memory 整包删除——Web 侧三把
+  > (store/recall/list)本就被用户空间同名 taskTools 覆盖,插件版唯一存活场景
+  > 是 CLI 单用户;整包移除后用户空间版成为唯一记忆实现,跨用户泄漏路径
+  > 物理消除。基线净省 ≈1060 tokens/步(插件注册表口径 2131→1070)。
 - **B. 通用检索组**(内容工坊共享,与 `workshops/shared/sources.ts` 检索梯度同源):
   search_web / search_exa / search_tavily、mcp_newsnow_*、mcp_zhihu_*、
   mcp_twitterapi_io_*、research_subagent、browser_firecrawl_scrape、

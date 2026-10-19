@@ -97,7 +97,7 @@ declare module '@deepseek-ai/cordis' {
     dispose(): void;
     'agtpilot/tool-registered'(tool: ToolDefinition): void;
     'agtpilot/event'(event: AgentEvent): void;
-    /** 模型用量上报（runAgentLoop 结束后由内核发出；plugin-router 预算统计消费） */
+    /** 模型用量上报（runAgentLoop 逐步发增量；apps/web mission 用量累计消费） */
     'agtpilot/usage'(usage: { promptTokens: number; completionTokens: number; taskId?: string }): void;
     /**
      * 运行中消息检查点（每步 prepareStep 时由内核发出，payload 为本步实际

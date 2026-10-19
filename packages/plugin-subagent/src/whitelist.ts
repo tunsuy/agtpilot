@@ -32,10 +32,6 @@ export const DEFAULT_READONLY_WHITELIST: readonly string[] = [
   // plugin-git
   'git_status',
   'git_diff',
-  'codebase_search_symbols',
-  // plugin-memory
-  'memory_recall',
-  'memory_list',
 ];
 
 /** MCP 工具名前缀(plugin-mcp:工具名 = sanitize(`mcp_${server}_${tool}`)) */

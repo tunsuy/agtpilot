@@ -818,7 +818,7 @@ export class OrchestratorService extends Service {
       }
 
       // 用量上报收口：主循环逐步 + 残差 + 强总结轮都已发过增量 —— 此处无动作。
-      // （plugin-router 预算统计消费 ctx 事件,apps/web mission 落库同源）
+      // （apps/web agent-backend 消费 agtpilot/usage 累计进 mission 落库）
 
       if (!finalAnswer) {
         finalAnswer = loopResult.stepsExhausted

@@ -20,7 +20,7 @@ function mkTool(name: string, extra: Partial<ToolDefinition> = {}): ToolDefiniti
 describe('resolveReadonlyTools 双层过滤(spec §4.3 / §9.5)', () => {
   const registry = [
     mkTool('search_web', { readOnly: true }),
-    mkTool('memory_recall', { readOnly: true }),
+    mkTool('rag_search', { readOnly: true }),
     mkTool('sandbox_exec'), // 未声明 readOnly → 保守视为写
     mkTool('sandbox_write_file', { readOnly: false }),
     mkTool('browser_navigate', { readOnly: true }), // readOnly 但不在默认名单
@@ -29,7 +29,7 @@ describe('resolveReadonlyTools 双层过滤(spec §4.3 / §9.5)', () => {
 
   it('默认名单 ∩ 注册表 readOnly 硬校验,保持注册表顺序', () => {
     const out = resolveReadonlyTools(registry);
-    expect(out.map((t) => t.name)).toEqual(['search_web', 'memory_recall']);
+    expect(out.map((t) => t.name)).toEqual(['search_web', 'rag_search']);
   });
 
   it('未声明 readOnly 的工具即使在配置名单里也剔除', () => {

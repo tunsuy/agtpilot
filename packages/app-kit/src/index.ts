@@ -10,15 +10,12 @@ import * as MCPPlugin from '@agtpilot/plugin-mcp';
 import * as ModelPlugin from '@agtpilot/plugin-model';
 import * as ArtifactPlugin from '@agtpilot/plugin-artifact';
 import * as PlannerPlugin from '@agtpilot/plugin-planner';
-import * as MemoryPlugin from '@agtpilot/plugin-memory';
 import * as CronPlugin from '@agtpilot/plugin-cron';
 import * as ChannelPlugin from '@agtpilot/plugin-channel';
-import * as ObservabilityPlugin from '@agtpilot/plugin-observability';
 import * as GitPlugin from '@agtpilot/plugin-git';
 import * as NotifyPlugin from '@agtpilot/plugin-notify';
 import * as RagPlugin from '@agtpilot/plugin-rag';
 import * as DesktopPlugin from '@agtpilot/plugin-desktop';
-import * as RouterPlugin from '@agtpilot/plugin-router';
 import * as SubagentPlugin from '@agtpilot/plugin-subagent';
 import type { SubagentPluginConfig } from '@agtpilot/plugin-subagent';
 
@@ -81,13 +78,11 @@ export async function createAgentRuntime(options: CreateAgentOptions = {}): Prom
   // 2. 原子能力插件。顺序不敏感：插件间的依赖由 cordis inject 声明解析
   //    （如 plugin-model inject ['agent']），此处只做并列加载。
   await mount('plugin-model', ModelPlugin);
-  // router / subagent 硬依赖 model 服务（inject 含 'model'）：model 加载失败时跳过，避免挂起
+  // subagent 硬依赖 model 服务（inject 含 'model'）：model 加载失败时跳过，避免挂起
   if (loaded.some((l) => l.plugin === 'plugin-model' && l.ok)) {
-    await mount('plugin-router', RouterPlugin);
     await mount('plugin-subagent', SubagentPlugin, options.subagent);
   }
   await mount('plugin-planner', PlannerPlugin);
-  await mount('plugin-memory', MemoryPlugin);
   await mount('plugin-artifact', ArtifactPlugin);
   await mount('plugin-browser', BrowserPlugin, { headless: options.browser?.headless ?? true });
   await mount('plugin-skill', SkillPlugin, options.skill);
@@ -100,7 +95,6 @@ export async function createAgentRuntime(options: CreateAgentOptions = {}): Prom
   await mount('plugin-notify', NotifyPlugin);
   await mount('plugin-rag', RagPlugin);
   await mount('plugin-mcp', MCPPlugin);
-  await mount('plugin-observability', ObservabilityPlugin);
 
   return {
     ctx,

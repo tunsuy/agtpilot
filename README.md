@@ -73,20 +73,17 @@ agtpilot/
 │   ├── app-kit/           # Composition root: createAgentRuntime() single assembly entry
 │   ├── protocol/          # AG-UI and Generative UI event schema
 │   ├── plugin-model/      # ModelGateway implementation (Vercel AI SDK v5)
-│   ├── plugin-router/     # Capability-tier routing + token budget control
 │   ├── plugin-planner/    # Task planning & progress events
 │   ├── plugin-browser/    # Persistent Playwright browser control
 │   ├── plugin-sandbox/    # Sandboxed code execution (local fence / bwrap / E2B)
 │   ├── plugin-search/     # Web search (Exa / Tavily)
 │   ├── plugin-rag/        # User-scoped document indexing & retrieval
-│   ├── plugin-memory/     # Long-term memory (store / recall / list)
 │   ├── plugin-mcp/        # MCP connector registry + OAuth connector center
-│   ├── plugin-git/        # Git checkpoints, patches, codebase symbol search
+│   ├── plugin-git/        # Git checkpoints & patches
 │   ├── plugin-cron/       # Headless scheduling engine (croner)
 │   ├── plugin-channel/    # Headless IM channel engine (WeChat MP / WeChat personal iLink / QQ OneBot)
 │   ├── plugin-notify/     # Desktop & webhook notifications
 │   ├── plugin-desktop/    # Desktop automation (clipboard, apps, screenshots)
-│   ├── plugin-observability/ # Traces, metrics, event forwarding
 │   └── plugin-artifact/   # Deliverable rendering (Generative UI artifacts)
 ├── apps/
 │   ├── cli/               # Terminal entry: boots the runtime & verifies orchestrator capabilities
@@ -106,20 +103,17 @@ agtpilot/
 | `@agtpilot/app-kit` | Composition root, loads kernel + all official plugins | — |
 | `@agtpilot/protocol` | AG-UI / Generative UI event schema | — |
 | `plugin-model` | `ModelGateway` implementation, provider resolution, budgets | — |
-| `plugin-router` | Model capability tiers & budget | `router_select_tier`, `router_get_budget_status` |
 | `plugin-planner` | Task planning | `planner_create_plan`, `planner_update_task` |
 | `plugin-browser` | Persistent browsing & scraping | `browser_navigate/click/screenshot`, Stagehand `act/observe`, Firecrawl scrape |
 | `plugin-sandbox` | Fenced execution | `sandbox_run_code/run_command/read_file/write_file/list_dir/http_request` |
 | `plugin-search` | Web search | `search_web`, `search_exa`, `search_tavily` |
 | `plugin-rag` | Retrieval | `rag_index_document`, `rag_search`, `rag_list_indexed` |
-| `plugin-memory` | Long-term memory | `memory_store`, `memory_recall`, `memory_list` |
 | `plugin-mcp` | MCP tool registry & connectors | — (tool exposure is app-level) |
-| `plugin-git` | Code & version control | `git_status/diff`, checkpoints, patches, `codebase_search_symbols` |
+| `plugin-git` | Code & version control | `git_status/diff`, checkpoints, patches |
 | `plugin-cron` | Scheduling engine | — (exposed as `cron_schedule_task` by the apps) |
 | `plugin-channel` | IM channel engine (WeChat MP / personal / QQ OneBot) | — (binding & dispatch are app-level, see `apps/web/src/lib/channel-service.ts`) |
 | `plugin-notify` | Notifications | `notify_send_desktop`, `notify_send_webhook` |
 | `plugin-desktop` | Desktop automation | clipboard read/write, open app, screenshot, system info |
-| `plugin-observability` | Observability | `observability_get_trace`, `observability_get_metrics` |
 | `plugin-artifact` | Deliverables | `artifact_render` |
 
 ---

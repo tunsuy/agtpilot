@@ -24,7 +24,8 @@ import { getGovernanceBus } from './governance-bus';
  *
  * 之前记忆体系有两套互不相通的实现:
  * - plugin-memory 全局单文件 .cache/long_term_memory.json(多用户部署时 A 用户的
- *   Agent 沉淀会被 B 用户召回,跨用户泄漏);
+ *   Agent 沉淀会被 B 用户召回,跨用户泄漏;该插件已于 2026-10-19 整包删除,
+ *   本模块是 Web 唯一的记忆实现);
  * - user-store 按 userId 隔离,但只能手动增删,注入 system prompt 时全量无上限。
  *
  * 本模块把 Web 端记忆统一收敛到 user-store(按用户隔离)。记忆按【主体】分双通道
@@ -40,8 +41,8 @@ import { getGovernanceBus } from './governance-bus';
  * 1. TF-IDF 加权余弦召回(词袋向量,按用户语料算 IDF;可平滑替换为 embedding);
  * 2. 按任务相关性排序 + 体积上限的 prompt 注入(用户 rule 永远全量注入;
  *    Agent 经验独立分块注入);
- * 3. 用户级 memory_store/recall/list 工具(经 runTask 的 taskTools 同名覆盖
- *    plugin-memory 的全局版本,多用户互不可见);
+ * 3. 用户级 memory_store/recall/list 工具(经 runTask 的 taskTools 挂载,
+ *    多用户互不可见;原被同名覆盖的 plugin-memory 全局版已整包删除);
  * 4. 命中反馈与衰减:recall/注入时累计 hitCount,长期零命中的自动记忆降权,
  *    前端标记「疑似过时」;
  * 5. 会话结束自动维护(Mem0 式 CRUD 决策环,双通道各自跑):对照现有记忆做
@@ -940,7 +941,7 @@ function formatMemoryLine(m: UserMemory): string {
   return `- [${m.category.toUpperCase()}]${tag} ${m.title}: ${m.content}`;
 }
 
-// ---- 用户级记忆工具(taskTools 同名覆盖 plugin-memory 全局版) ----
+// ---- 用户级记忆工具(taskTools 挂载;原同名覆盖的 plugin-memory 已整包删除) ----
 
 /**
  * 构建绑定到指定用户的 memory_store/recall/list + read_memory/read_mission +

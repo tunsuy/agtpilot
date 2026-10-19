@@ -16,6 +16,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: 'Agent 选题成稿存进知乎草稿箱,你逐次审批放行,发布由你在知乎人工完成',
     icon: PenLine,
     accent: 'violet',
+    searchGroup: 'research',
     deps: [
       { id: 'newsnow', name: '全网热榜' },
       { id: 'zhihu', name: '知乎官方 MCP' },

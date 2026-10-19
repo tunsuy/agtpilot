@@ -89,7 +89,7 @@ export function buildWorkshopRun(
 /**
  * 工坊工具白名单解析(四层并集,docs/design/token-consumption-and-tool-loading.md §9.1):
  * A. baseline 常驻 —— 内核 routing.resolveExplicitTools 自动并入,这里不管;
- * B. 通用检索组 —— 按 meta.searchGroup 口径(full/research/web/none);
+ * B. 通用检索组 —— 按 meta.searchGroup 口径(research/web/none,必填无缺省);
  * C. deps 映射 —— meta.deps 连接器 id → `mcp_<id>_*` 前缀通配(deps 是单一事实源,
  *    新工坊声明 deps 即自动获得对应 MCP 组;非 MCP / 整台禁入的走 DEPS_TOOL_OVERRIDES);
  * D. 工坊追加 —— meta.activeTools 原样并入(固定工具精确名 / MCP 精确工具名 / 前缀通配)。
@@ -99,13 +99,13 @@ export function buildWorkshopRun(
  * 未声明白名单的工坊(理论上不存在,防御)返回 undefined → 走原路由。
  */
 const SEARCH_WEB_TOOLS = ['search_web', 'search_exa', 'search_tavily'];
-/** 调研增强件:并行子 agent + 网页正文抓取 + 参考资料库(full/research 两档共用) */
+/** 调研增强件:并行子 agent + 网页正文抓取 + 参考资料库(research 档) */
 const RESEARCH_TOOLS = ['research_subagent', 'browser_firecrawl_scrape', 'read_reference_material'];
-/** 社媒热榜 MCP(仅 full 档;与 shared/sources.ts 的 TOPIC_RESEARCH_SOURCES 梯度同源) */
-const SOCIAL_MCP_GROUPS = ['mcp_newsnow_*', 'mcp_zhihu_*', 'mcp_twitterapi_io_*'];
+// 2026-10-19 降载:原 full 档(直挂 mcp_newsnow_*/mcp_zhihu_*/mcp_twitterapi_io_*
+// 社媒热榜通配)移除 —— 社媒 MCP 一律走 C 层 deps 映射(单一事实源),
+// invest/edu 等无社媒 deps 的工坊不再每步白背 2~8k token schema。
 
-const SEARCH_GROUPS: Record<NonNullable<WorkshopDef['searchGroup']>, string[]> = {
-  full: [...SEARCH_WEB_TOOLS, ...SOCIAL_MCP_GROUPS, ...RESEARCH_TOOLS],
+const SEARCH_GROUPS: Record<WorkshopDef['searchGroup'], string[]> = {
   research: [...SEARCH_WEB_TOOLS, ...RESEARCH_TOOLS],
   web: [...SEARCH_WEB_TOOLS],
   none: [],
@@ -128,7 +128,7 @@ const DEPS_TOOL_OVERRIDES: Record<string, string[]> = {
 export function resolveWorkshopActiveTools(id: WorkshopId): string[] | undefined {
   const meta = WORKSHOP_SKILLS[id]?.meta;
   if (!meta) return undefined;
-  const tools = new Set<string>(SEARCH_GROUPS[meta.searchGroup ?? 'full']);
+  const tools = new Set<string>(SEARCH_GROUPS[meta.searchGroup]);
   for (const dep of meta.deps || []) {
     const mapped = dep.id in DEPS_TOOL_OVERRIDES ? DEPS_TOOL_OVERRIDES[dep.id] : [`mcp_${dep.id}_*`];
     for (const name of mapped) tools.add(name);

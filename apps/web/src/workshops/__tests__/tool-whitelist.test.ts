@@ -13,7 +13,8 @@ import type { WorkshopId } from '../types';
  *
  * 本测试钉死每坊的关键包含/排除项与派生规则,防止:
  * 1. GitHub MCP 整台(前缀通配)回流任何工坊白名单;
- * 2. 检索组裁剪口径漂移(novel/ppt=web、email_triage/weekly=none、oss_radar=research);
+ * 2. 检索组裁剪口径漂移(novel/ppt=web、email_triage/weekly=none、其余=research;
+ *    2026-10-19 降载后 full 档已删除,社媒热榜 MCP 只准经 deps C 层进入);
  * 3. deps 特例映射腐烂(email→固定三件、tomato_writer→空)。
  */
 
@@ -62,7 +63,7 @@ describe('resolveWorkshopActiveTools · 派生规则', () => {
 });
 
 describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
-  it('full 档(内容工坊):search 三件套 + 社媒热榜 MCP + 调研增强件', () => {
+  it('research 档(内容/调研工坊):search 三件套 + 调研增强件,社媒热榜不再 B 层直挂', () => {
     for (const id of ['xhs', 'wechat_mp', 'zhihu', 'weibo', 'video_douyin', 'video_bilibili', 'follow_builders', 'invest', 'edu'] as WorkshopId[]) {
       const tools = resolveWorkshopActiveTools(id)!;
       expect(tools, id).toContain('search_web');
@@ -72,11 +73,34 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
       expect(tools, id).toContain('browser_firecrawl_scrape');
       expect(tools, id).toContain('read_reference_material');
     }
-    // 社媒热榜 MCP 组:full 档直挂(B 层),内容工坊 deps 也含(C 层,Set 去重)
-    const xhs = resolveWorkshopActiveTools('xhs')!;
-    expect(xhs).toContain('mcp_newsnow_*');
-    expect(xhs).toContain('mcp_zhihu_*');
-    expect(xhs).toContain('mcp_twitterapi_io_*');
+  });
+
+  it('社媒热榜 MCP 只经 deps(C 层)进入:声明社媒 deps 的工坊照旧拿到,功能零损失', () => {
+    // 六坊 deps 均声明 newsnow/zhihu/twitterapi_io(降载前后挂载集合不变)
+    for (const id of ['xhs', 'wechat_mp', 'zhihu', 'weibo', 'video_douyin', 'video_bilibili'] as WorkshopId[]) {
+      const tools = resolveWorkshopActiveTools(id)!;
+      expect(tools, id).toContain('mcp_newsnow_*');
+      expect(tools, id).toContain('mcp_zhihu_*');
+      expect(tools, id).toContain('mcp_twitterapi_io_*');
+    }
+    // follow_builders deps 只有 twitterapi_io:推特保留,热榜/知乎不再白背
+    const fb = resolveWorkshopActiveTools('follow_builders')!;
+    expect(fb).toContain('mcp_twitterapi_io_*');
+    expect(fb).not.toContain('mcp_newsnow_*');
+    expect(fb).not.toContain('mcp_zhihu_*');
+  });
+
+  it('invest/edu:社媒热榜不再整组白背(降载主收益,每步省 2~8k schema)', () => {
+    // invest deps 自己声明了 newsnow(财经热榜)→ C 层照给;知乎/推特不再挂
+    const invest = resolveWorkshopActiveTools('invest')!;
+    expect(invest).toContain('mcp_newsnow_*');
+    expect(invest.some((t) => t.startsWith('mcp_zhihu'))).toBe(false);
+    expect(invest.some((t) => t.startsWith('mcp_twitterapi'))).toBe(false);
+    // edu deps 全是学术源:社媒热榜通配一个不挂
+    const edu = resolveWorkshopActiveTools('edu')!;
+    expect(edu.some((t) => t.startsWith('mcp_newsnow'))).toBe(false);
+    expect(edu.some((t) => t.startsWith('mcp_zhihu'))).toBe(false);
+    expect(edu.some((t) => t.startsWith('mcp_twitterapi'))).toBe(false);
   });
 
   it('research 档(oss_radar):search 三件套 + 调研件,不挂社媒热榜', () => {

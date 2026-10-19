@@ -14,6 +14,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: '文献综述 · 论文精读 · 智能备课 · 学习卡片,引用附 DOI 严禁编造',
     icon: GraduationCap,
     accent: 'indigo',
+    searchGroup: 'research',
     deps: [
       { id: 'openalex', name: 'OpenAlex' },
       { id: 'alphaxiv', name: 'alphaXiv' },
@@ -21,7 +22,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'deepl_mcp', name: 'DeepL' },
     ],
     // 工具白名单 D 层(docs §9.1):成果经确认后邮件投递;学术检索 MCP 由 deps
-    // 自动映射,调研走缺省 full 档(含 research_subagent)
+    // 自动映射,调研走 research 档(含 research_subagent)
     activeTools: ['email_send'],
     note: '生成后跳转任务页,Agent 通过你已连接的 OpenAlex / alphaXiv / Hugging Face / DeepL 连接器检索真实文献(缺失时降级为网络搜索并明示),按模式产出文献综述 / 论文精读卡 / 教案 / 学习卡片。每条引用附 DOI 或 arXiv ID、严禁编造参考文献;全程只读、不改你的文献库;成果经邮件/群机器人投递前需你确认。',
   },

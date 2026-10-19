@@ -21,23 +21,49 @@ function toolResultParts(content: any): Array<{ toolCallId?: string; outputText:
  * 实现，失败时自动退化为原文截断），便于单测。
  *
  * 规则：
- * - 原始意图（首条用户消息）、纯文本对话、最近 N 条消息永远保留；
+ * - 原始意图（首条用户消息）、user 消息、近期保护窗口永远保留；
+ * - 窗口外的 assistant 长文本（> ASSISTANT_TEXT_KEEP_CHARS，交付物/播报/长结论）
+ *   不再终身豁免，截断进纪要流水（§9.8：跨轮续聊重放下，很早以前的对话文本
+ *   没有理由每步全额重付；交付物本体已经工坊字段/文件落盘）；
  * - 较早的 assistant tool-call / tool 结果消息整体移除，先收集成工具执行流水，
  *   再蒸馏成结构化纪要（【已确立事实】【关键结论】【重要链接】【未决事项】），
  *   以一条 user 消息插回首条用户消息之后；
  * - 旧纪要消息（历史轮次压缩的产物）不保留原文，并入流水重新蒸馏，防多轮累积；
- * - 近期窗口边界不落在 tool 消息上（tool 结果必须与其 assistant tool-call 配对）。
+ * - 近期保护窗口按 token 预算从尾部倒着数（条数上限/下限双重钳制），
+ *   边界不落在 tool 消息上（tool 结果必须与其 assistant tool-call 配对）。
  */
 
-/** 压缩触发阈值（估算 tokens，CJK 1 字 ≈ 1 token，其余 4 字符 ≈ 1 token） */
+/** 压缩触发阈值（估算 tokens，CJK 1 字 ≈ 1 token，其余 4 字符 ≈ 1 token）。
+ *  编排器实际传入的是动态阈值（context-budget.ts，按模型窗口扣除
+ *  system/tools/输出预留后计算，与本静态值取较小者）；本值是无实测时的兜底。 */
 export const COMPACT_THRESHOLD_TOKENS = Math.max(
   2000,
   Number(process.env.AGTPILOT_COMPACT_THRESHOLD) || 30_000
 );
-/** 近期保护窗口：最近 N 条消息原样保留（不越过 tool 消息边界切断配对） */
+/** 近期保护窗口 · 条数上限：窗口再富裕也最多保留 N 条（不越过 tool 消息边界切断配对） */
 export const COMPACT_RECENT_MESSAGES = Math.max(4, Number(process.env.AGTPILOT_COMPACT_RECENT) || 10);
+/** 近期保护窗口 · token 预算（§9.8）：从尾部倒着数最多保留这么多估算 tokens。
+ *  条数制对「几条巨型工具结果」不设防——10 条 ×10k 的窗口本身就顶爆阈值；
+ *  预算制下大消息自然少留几条，小消息（纯聊天）留满条数上限，两头都有界。 */
+export const COMPACT_RECENT_TOKEN_BUDGET = Math.max(
+  1000,
+  Number(process.env.AGTPILOT_COMPACT_RECENT_TOKENS) || 8000
+);
+/** 近期保护窗口 · 最少条数：即使超预算也保底保留（最小可用上下文 + 工具配对），
+ *  受条数上限钳制 */
+export const COMPACT_RECENT_MIN_MESSAGES = Math.max(2, Number(process.env.AGTPILOT_COMPACT_RECENT_MIN) || 4);
 /** 单条工具结果进入纪要摘要时的截断长度（字符） */
 export const COMPACT_DIGEST_ENTRY_LIMIT = 600;
+/** 窗口外 assistant 纯文本的原样豁免上限（字符）：超过进纪要流水（§9.8 角色分治，
+ *  user 消息不受此限——意图与约束永远原样保留） */
+export const ASSISTANT_TEXT_KEEP_CHARS = Math.max(
+  0,
+  Number(process.env.AGTPILOT_COMPACT_ASSISTANT_TEXT_CHARS) || 500
+);
+/** AGTPILOT_COMPACT_ASSISTANT_TEXT=0 时恢复旧行为（assistant 长文本全部原样保留） */
+export function assistantTextDigestEnabled(): boolean {
+  return process.env.AGTPILOT_COMPACT_ASSISTANT_TEXT !== '0';
+}
 
 /** 蒸馏回调：把工具流水蒸馏成纪要文本；返回空串/抛错时走原文截断兜底 */
 export type DigestSummarizer = (digest: string) => Promise<string>;
@@ -47,7 +73,14 @@ export interface CompactOptions {
   /** 蒸馏前的进度通知（可选，用于 thought 事件） */
   onProgress?: (info: { totalTokens: number; entries: number }) => void;
   thresholdTokens?: number;
+  /** 近期窗口条数上限（默认 COMPACT_RECENT_MESSAGES） */
   recentMessages?: number;
+  /** 近期窗口 token 预算（默认 COMPACT_RECENT_TOKEN_BUDGET） */
+  recentTokenBudget?: number;
+  /** 近期窗口最少条数（默认 COMPACT_RECENT_MIN_MESSAGES，受条数上限钳制） */
+  recentMinMessages?: number;
+  /** 窗口外 assistant 长文本是否进纪要流水（默认跟随 env 开关，现行为启用） */
+  digestLongAssistantText?: boolean;
   /**
    * 高价值 toolCallId 白名单（plugin-compaction 裁决为 keep 的调用）：
    * 命中时该调用与结果原样保留在 keptTexts，不进入纪要流水。
@@ -63,13 +96,26 @@ export async function compactConversationMessages(
   options: CompactOptions
 ): Promise<Array<{ role: string; content: any }> | null> {
   const threshold = options.thresholdTokens ?? COMPACT_THRESHOLD_TOKENS;
-  const recentWindow = options.recentMessages ?? COMPACT_RECENT_MESSAGES;
+  const recentCap = options.recentMessages ?? COMPACT_RECENT_MESSAGES;
+  const recentBudget = options.recentTokenBudget ?? COMPACT_RECENT_TOKEN_BUDGET;
+  const recentMin = Math.min(options.recentMinMessages ?? COMPACT_RECENT_MIN_MESSAGES, recentCap);
+  const digestLongText = options.digestLongAssistantText ?? assistantTextDigestEnabled();
 
   const totalTokens = messages.reduce((acc, m) => acc + estimateTextTokens(messageText(m.content)), 0);
-  if (totalTokens < threshold || messages.length < recentWindow + 2) return null;
+  if (totalTokens < threshold || messages.length < recentMin + 2) return null;
 
-  // 近期保护窗口（起点右移直到不落在 tool 消息上）
-  let recentStart = Math.max(0, messages.length - recentWindow);
+  // 近期保护窗口（§9.8 token 预算制）：从尾部倒着数，最多 recentBudget tokens
+  // 且最多 recentCap 条；不足 recentMin 条时超预算也保底收进来。
+  let keptCount = 0;
+  let keptTokens = 0;
+  for (let i = messages.length - 1; i >= 0 && keptCount < recentCap; i--) {
+    const t = estimateTextTokens(messageText(messages[i].content));
+    if (keptCount >= recentMin && keptTokens + t > recentBudget) break;
+    keptTokens += t;
+    keptCount++;
+  }
+  // 边界右移直到不落在 tool 消息上（tool 结果必须与 assistant tool-call 配对）
+  let recentStart = messages.length - keptCount;
   while (recentStart < messages.length && messages[recentStart].role === 'tool') recentStart++;
   const headKeep = messages[0]?.role === 'user' ? 1 : 0;
   if (recentStart <= headKeep + 1) return null; // 中间区太小，没有压缩价值
@@ -131,8 +177,15 @@ export async function compactConversationMessages(
       // 旧纪要并入本次流水重新蒸馏，避免多轮任务后纪要消息自身不断累积
       digestEntries.push(`[旧纪要] ${truncateText(text, 2000)}`);
       hasDroppable = true;
+    } else if (m.role === 'assistant' && digestLongText && text.length > ASSISTANT_TEXT_KEEP_CHARS) {
+      // 窗口外的 assistant 长文本（交付物/播报/长结论）不再终身豁免（§9.8 角色分治）：
+      // 跨轮续聊把 conversationMessages 全额重放,纯文本免疫让很早以前的交付正文
+      // 在之后每一步都全额重付。交付物本体已由工坊字段/文件落盘,上下文里留
+      // 截断要点即可。user 消息（无论多长）仍原样保留——意图与约束是任务输入。
+      digestEntries.push(`[历史回复] ${truncateText(text, COMPACT_DIGEST_ENTRY_LIMIT)}`);
+      hasDroppable = true;
     } else {
-      // 纯文本的 user/assistant 消息体积小、信息密度高，原样保留
+      // user 消息与短 assistant 文本体积小、信息密度高，原样保留
       keptTexts.push(m);
     }
   }

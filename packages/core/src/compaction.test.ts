@@ -157,4 +157,152 @@ describe('compactConversationMessages', () => {
       expect(digestMsg.content).not.toContain('【工具调用台账】');
     });
   });
+
+  describe('近期窗口 token 预算制(§9.8)', () => {
+    /** n 对 tool 调用,每条结果 ≈ resultChars 个 CJK 字符(≈同数 tokens) */
+    function sizedToolHistory(n: number, resultChars: number) {
+      const messages: Array<{ role: string; content: any }> = [mk('user', '最初的任务意图')];
+      for (let i = 0; i < n; i++) {
+        messages.push(
+          mk('assistant', [{ type: 'tool-call', toolCallId: `c${i}`, toolName: 'tool_a', input: { q: i } }])
+        );
+        messages.push(mk('tool', [{ type: 'tool-result', toolCallId: `c${i}`, output: '长'.repeat(resultChars) }]));
+      }
+      return messages;
+    }
+
+    it('巨型工具结果按预算少留:窗口不再被条数制撑爆', async () => {
+      // 15 对调用,每条结果 ≈1500 tokens;预算 3000 → 从尾部倒着数,
+      // 保底 4 条后下一条即超预算 → 窗口只护住最后 2 对(4 条)
+      const messages = sizedToolHistory(15, 1500);
+      const result = await compactConversationMessages(messages, {
+        summarize: async () => '纪要',
+        thresholdTokens: 5000,
+        recentTokenBudget: 3000,
+      });
+      expect(result).not.toBeNull();
+      // 原样保留的 tool 结果只剩最近 2 条(c13/c14),更早的全部进了纪要
+      const keptTools = result!.filter((m) => m.role === 'tool').map((m) => JSON.stringify(m.content));
+      expect(keptTools.length).toBe(2);
+      expect(keptTools.every((t) => t.includes('"c13"') || t.includes('"c14"'))).toBe(true);
+    });
+
+    it('小消息纯聊天:预算富裕时仍受条数上限钳制(不无限放行)', async () => {
+      // 60 条微小消息,预算巨大 → 窗口 = 条数上限(默认 10)
+      const messages = [
+        mk('user', '最初意图'),
+        mk('assistant', [{ type: 'tool-call', toolCallId: 'x0', toolName: 'tool_a', input: {} }]),
+        mk('tool', [{ type: 'tool-result', toolCallId: 'x0', output: '早' + '结果'.repeat(400) }]),
+        ...Array.from({ length: 30 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `短消息${i}`)),
+      ];
+      const result = await compactConversationMessages(messages, {
+        summarize: async () => '纪要',
+        thresholdTokens: 10,
+        recentTokenBudget: 1_000_000,
+        recentMessages: 10,
+      });
+      expect(result).not.toBeNull();
+      // 窗口护住最后 10 条短消息,更早的短消息不在结果里(纯文本 user 也受窗口管辖,
+      // 但窗口外 user 消息仍原样保留在 keptTexts —— 断言「短消息0」仍在)
+      expect(result!.some((m) => m.content === '短消息0')).toBe(true);
+      expect(result!.some((m) => m.content === '短消息29')).toBe(true);
+    });
+
+    it('保底条数:预算再小窗口也至少 recentMin 条(且边界不落在 tool 上)', async () => {
+      const messages = sizedToolHistory(15, 3000); // 每条结果 ≈3000 tokens
+      const result = await compactConversationMessages(messages, {
+        summarize: async () => '纪要',
+        thresholdTokens: 5000,
+        recentTokenBudget: 1000, // 远小于单条结果 → 全靠保底
+        recentMinMessages: 4,
+      });
+      expect(result).not.toBeNull();
+      // 保底 4 条 = 最后两对;边界(倒数第 4 条)是 assistant tool-call,配对完整
+      const keptTools = result!.filter((m) => m.role === 'tool');
+      expect(keptTools.length).toBe(2);
+    });
+  });
+
+  describe('窗口外 assistant 长文本角色分治(§9.8)', () => {
+    it('长 assistant 文本进纪要流水([历史回复] 截断),不再终身豁免', async () => {
+      const deliverable = '交付物正文段落。'.repeat(200); // 1800 字符 > 500 上限
+      const messages = [
+        mk('user', '最初的任务意图'),
+        mk('assistant', deliverable),
+        ...longToolHistory(20).slice(1, -1),
+        mk('assistant', '最终答复'),
+      ];
+      const result = await compactConversationMessages(messages, {
+        summarize: async (digest) => `纪要(源 ${digest.includes('[历史回复]') ? '含历史回复' : '缺'})`,
+        thresholdTokens: 5000,
+      });
+      const digestMsg = result!.find(
+        (m) => typeof m.content === 'string' && m.content.startsWith('【历史会话纪要】')
+      ) as { content: string };
+      expect(digestMsg.content).toContain('含历史回复');
+      // 原文不再整段保留(交付物本体已落盘,上下文只留截断要点)
+      expect(result!.some((m) => m.content === deliverable)).toBe(false);
+    });
+
+    it('user 长消息永远原样保留(意图与约束是任务输入,不受角色分治影响)', async () => {
+      const longUserText = '用户的详细约束说明。'.repeat(200);
+      const messages = [
+        mk('user', '最初的任务意图'),
+        mk('user', longUserText),
+        ...longToolHistory(20).slice(1, -1),
+        mk('assistant', '最终答复'),
+      ];
+      const result = await compactConversationMessages(messages, { summarize: async () => '纪要', thresholdTokens: 5000 });
+      expect(result!.some((m) => m.role === 'user' && m.content === longUserText)).toBe(true);
+    });
+
+    it('短 assistant 文本(≤500 字符)仍原样保留(对话粘合剂不进流水)', async () => {
+      const messages = [
+        mk('user', '最初的任务意图'),
+        mk('assistant', '好的,我先查一下资料。'),
+        ...longToolHistory(20).slice(1, -1),
+        mk('assistant', '最终答复'),
+      ];
+      const result = await compactConversationMessages(messages, { summarize: async () => '纪要', thresholdTokens: 5000 });
+      expect(result!.some((m) => m.content === '好的,我先查一下资料。')).toBe(true);
+    });
+
+    it('digestLongAssistantText:false 恢复旧行为(长文本全部豁免)', async () => {
+      const deliverable = '交付物正文段落。'.repeat(200);
+      const messages = [
+        mk('user', '最初的任务意图'),
+        mk('assistant', deliverable),
+        ...longToolHistory(20).slice(1, -1),
+        mk('assistant', '最终答复'),
+      ];
+      const result = await compactConversationMessages(messages, {
+        summarize: async () => '纪要',
+        thresholdTokens: 5000,
+        digestLongAssistantText: false,
+      });
+      expect(result!.some((m) => m.content === deliverable)).toBe(true);
+    });
+
+    it('纯文本多轮续聊(零工具消息)也能压缩——跨轮重放不再全额重付', async () => {
+      // 模拟多轮会话重放:每轮 = user 追问 + assistant 长交付,没有任何工具消息
+      const messages: Array<{ role: string; content: any }> = [mk('user', '最初的任务意图')];
+      for (let i = 0; i < 8; i++) {
+        messages.push(mk('user', `第${i}轮追问`));
+        messages.push(mk('assistant', `第${i}轮的完整交付内容。${'正文'.repeat(400)}`));
+      }
+      const result = await compactConversationMessages(messages, {
+        summarize: async () => '纪要',
+        thresholdTokens: 5000,
+      });
+      expect(result).not.toBeNull();
+      // 早期轮次的长交付被蒸馏;user 追问全部原样保留
+      expect(result!.some((m) => typeof m.content === 'string' && m.content.startsWith('【历史会话纪要】'))).toBe(true);
+      expect(result!.some((m) => m.content === '第0轮追问')).toBe(true);
+      const keptLong = result!.filter(
+        (m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.length > 500
+      );
+      // 只有近期窗口内的长交付幸免(窗口 ≤10 条 → 至多最后几轮)
+      expect(keptLong.length).toBeLessThan(8);
+    });
+  });
 });

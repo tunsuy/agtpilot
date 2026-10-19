@@ -24,6 +24,11 @@ import {
 import { messageText, truncateToolOutput, buildSpillPointer, toolSpillEnabled, effectiveOutputLimit } from './text';
 import { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 import { compactConversationMessages } from './compaction';
+import {
+  effectiveCompactThreshold,
+  estimateToolsBlockTokens,
+  historyTokenBudget,
+} from './context-budget';
 import { appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
 import { ToolGate } from './tool-gate';
 import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
@@ -284,6 +289,22 @@ export class OrchestratorService extends Service {
       }
     }
     const systemPrompt = (options.system || DEFAULT_SYSTEM_PROMPT) + missingKeyNote + catalogNote;
+    // ---- 动态压缩阈值状态（§9.8，docs/design/token-consumption-and-tool-loading.md）----
+    // 压缩的真正约束是模型上下文窗口：每步请求 = system + tools + 历史 + 输出预留。
+    // 阈值不再是写死的 30k，而是 min(静态阈值, 窗口×安全系数 − 固定开销 − 输出预留)；
+    // 固定开销优先用上一步实测校准（真实 promptTokens − 消息估算），没有实测时用估算。
+    const systemPromptTokens = estimateTextTokens(systemPrompt);
+    /** 最近一次 prepareStep 实际发送消息的估算 tokens（onStepFinish 用它做实测校准） */
+    let lastSentMessagesEst = 0;
+    /** 实测校准值：上一步 promptTokens − 消息估算 = system+tools+协议衬垫的真实开销 */
+    let calibratedFixedCost: number | undefined;
+    /** 收尾相位（强制总结/task-end 压缩）阈值：不带工具上线，tools 块按 0 计 */
+    const endPhaseThreshold = (): number =>
+      effectiveCompactThreshold({
+        systemTokens: systemPromptTokens,
+        toolsTokens: 0,
+        calibratedFixedCost,
+      });
     const loopTools: AgentLoopTool[] = allTools.map((toolDef) => ({
       name: toolDef.name,
       description: toolDef.description,
@@ -625,8 +646,19 @@ export class OrchestratorService extends Service {
               reasoningPartsStripped += r.stripped;
             }
           }
+          // 动态压缩阈值（§9.8）：按本步实际挂载面估 tools 块,与 system 估算
+          // (或上一步实测校准值)一起算历史预算,与静态阈值取小 —— 默认 64k 窗口
+          // 下不改变现状,小窗模型/重挂载面下自动收紧,兜住 context_length_exceeded。
+          const stepToolsTokens = estimateToolsBlockTokens(
+            routedTools ? allTools.filter((t) => mountedNames.has(t.name)) : allTools
+          );
+          const compactThreshold = effectiveCompactThreshold({
+            systemTokens: systemPromptTokens,
+            toolsTokens: stepToolsTokens,
+            calibratedFixedCost,
+          });
           try {
-            const compacted = await this.compactConversation(adjust.messages ?? messages, options, 'in-loop');
+            const compacted = await this.compactConversation(adjust.messages ?? messages, options, 'in-loop', compactThreshold);
             if (compacted) adjust.messages = compacted;
           } catch {
             // 压缩失败继续用原消息
@@ -673,8 +705,34 @@ export class OrchestratorService extends Service {
               // 追加消息获取失败不影响主流程(消息仍在队列里,下步重试)
             }
           }
+          // 发送前预算护栏（§9.8 双保险①）：治理提示/看板催促/用户追加消息都在
+          // 常规压缩之后注入,理论上能把本步重新顶爆窗口。发送前实测一次总账
+          // (消息估算 vs 历史预算),超了就地再压一轮(紧急相位,阈值=预算本身);
+          // 仍压不下去(全是不可压的近期文本)则如实放行 —— 溢出走诚实失败,不伪造。
+          const sendEstimate = (list: Array<any>) =>
+            list.reduce((acc: number, m: any) => acc + estimateTextTokens(messageText(m.content)), 0);
+          let outbound = adjust.messages ?? messages;
+          let outboundEst = sendEstimate(outbound);
+          const budget = historyTokenBudget({
+            systemTokens: systemPromptTokens,
+            toolsTokens: stepToolsTokens,
+            calibratedFixedCost,
+          });
+          if (outboundEst > budget) {
+            try {
+              const forced = await this.compactConversation(outbound, options, 'in-loop', Math.max(2000, budget));
+              if (forced) {
+                adjust.messages = forced;
+                outbound = forced;
+                outboundEst = sendEstimate(forced);
+              }
+            } catch {
+              // 紧急压缩失败:按原消息发送,溢出由 provider 报错如实上浮
+            }
+          }
+          lastSentMessagesEst = outboundEst;
           // 检查点采用本步实际使用的消息（含压缩重写与治理提示注入）
-          const finalMessages = adjust.messages ?? messages;
+          const finalMessages = outbound;
           try {
             this.ctx.emit('agtpilot/checkpoint', { taskId, stepNumber, messages: finalMessages });
           } catch {
@@ -718,6 +776,13 @@ export class OrchestratorService extends Service {
           currentStep = (info.stepNumber || 1) + 1;
           // 实时成本：本步账单即刻上行（前端任务执行中就能看到 tokens 在涨）
           if (info.usage) emitUsageDelta(info.usage);
+          // 实测校准（§9.8）：真实 promptTokens − 本步发送前的消息估算
+          // = system+tools+provider 协议衬垫的真实开销。下一步的动态压缩阈值
+          // 优先用它替代估算值 —— 估算口径漂移(分词器差异/缓存计法)不再靠
+          // 安全系数硬扛。负值(估算反超真实)钳 0。
+          if (info.usage?.promptTokens && lastSentMessagesEst > 0) {
+            calibratedFixedCost = Math.max(0, info.usage.promptTokens - lastSentMessagesEst);
+          }
           if (info.text) {
             broadcast({
               type: 'thought',
@@ -787,6 +852,19 @@ export class OrchestratorService extends Service {
           payload: { reason: 'wrap-up' },
           timestamp: Date.now(),
         });
+        // 先压缩再收尾（§9.8 双保险②）：强制总结轮此前原样发送全量历史——
+        // 历史顶着窗口上限时,最需要成功收口的这次调用反而先 400。收尾轮不带
+        // 工具上线(tools 块按 0 计,预算更宽),按同一动态阈值先蒸馏一轮;
+        // 未超预算时返回 null,行为与旧版完全一致。压缩结果就地替换 conversation,
+        // 后续强制总结调用与落盘续聊历史共用同一份,task-end 相位不会二次蒸馏。
+        try {
+          const wrapCompacted = await this.compactConversation(conversation, options, 'wrap-up', endPhaseThreshold());
+          if (wrapCompacted) {
+            conversation.splice(0, conversation.length, ...(wrapCompacted as typeof conversation));
+          }
+        } catch {
+          // 压缩失败按原历史收尾（诚实失败路径不变）
+        }
         try {
           // 截断收尾与步数耗尽的交代口径不同:截断意味着工具调用根本没执行,
           // 总结必须如实说明未交付,不得把残段当成果
@@ -841,10 +919,12 @@ export class OrchestratorService extends Service {
 
       // 会话压缩：多轮任务历史无限累积会让模型逐轮退化（越跑越笨、步数越跑越多）。
       // 超过阈值时把较早的工具调用/结果压成一条结构化纪要，近期窗口原样保留。
+      // 阈值走收尾相位动态值（§9.8）：强制总结轮已就地压过时这里天然低于阈值,
+      // 不会二次蒸馏;正常文本收尾的任务在这里按窗口预算收口,续聊重放不再全额。
       let finalMessages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = conversation;
       try {
         finalMessages =
-          ((await this.compactConversation(conversation, options)) as typeof conversation) ?? conversation;
+          ((await this.compactConversation(conversation, options, 'task-end', endPhaseThreshold())) as typeof conversation) ?? conversation;
       } catch {
         // 压缩失败不影响任务结果，保留原始历史
       }
@@ -895,14 +975,18 @@ export class OrchestratorService extends Service {
 
   /**
    * 会话压缩（compaction.ts 纯函数的网关注入包装）：
-   * 两个触发相位：'in-loop'（prepareStep 每步检查，长任务不等收尾就地压缩）、
+   * 三个触发相位：'in-loop'（prepareStep 每步检查，长任务不等收尾就地压缩）、
+   * 'wrap-up'（强制总结轮发送前压缩，防最需要收口的调用先溢出）、
    * 'task-end'（任务收尾时压缩会话历史，供下一轮继承）。
+   * thresholdTokens 由调用方按上下文预算动态计算（context-budget.ts），
+   * 不传时走纯函数内的静态默认值。
    * 返回 null 表示无需压缩（保持调用方原消息不变）。
    */
   private async compactConversation(
     messages: Array<{ role: string; content: any }>,
     options: TaskOptions,
-    phase: 'task-end' | 'in-loop' = 'task-end'
+    phase: 'task-end' | 'in-loop' | 'wrap-up' = 'task-end',
+    thresholdTokens?: number
   ): Promise<Array<{ role: string; content: any }> | null> {
     const enabled = process.env.AGTPILOT_COMPACTION_CLASSIFY !== '0';
     let keepToolCallIds: Set<string> | undefined;
@@ -930,6 +1014,7 @@ export class OrchestratorService extends Service {
     const model = this.ctx.reflect.get('model');
     return compactConversationMessages(messages, {
       keepToolCallIds,
+      ...(thresholdTokens ? { thresholdTokens } : {}),
       summarize: async (digest) => {
         if (!model) return '';
         const result: ModelStepResult = await model.invokeStep({
@@ -955,7 +1040,7 @@ export class OrchestratorService extends Service {
           type: 'thought',
           payload: {
             text: `${
-              phase === 'in-loop' ? '任务执行中' : '任务收尾'
+              phase === 'in-loop' ? '任务执行中' : phase === 'wrap-up' ? '强制总结前' : '任务收尾'
             }检测到会话上下文约 ${totalTokens} tokens，超过压缩阈值，正在把 ${entries} 条历史工具记录蒸馏为纪要…`,
           },
           timestamp: Date.now(),

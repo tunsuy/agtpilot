@@ -25,7 +25,7 @@
 | 组成 | 估算 tokens/步 | 依据 |
 |---|---|---|
 | 工具 schema(挂载 80~100 个) | **10~27k** | `routing.ts:64-67` 生产实测:三字符闲聊付 45.8k 输入、135 个 MCP 工具 schema 占六成 ≈27k |
-| 消息历史(压缩阈值 30k + 近 10 条原样保留) | 20~40k | `compaction.ts:33-40`;近期窗口常驻多个 16KB 级工具结果 |
+| 消息历史(压缩阈值 30k + 近 10 条原样保留) | 20~40k | `compaction.ts:33-40`;近期窗口常驻多个 16KB 级工具结果(2026-10-19 §9.8 已重构:阈值 = min(静态 30k, 窗口动态预算),近期窗口改 token 预算制 ≤8k,窗口外 assistant 长文本进蒸馏) |
 | system 段(提示词 ~1.9k + 记忆块 + 技能卡 ≤1200 字符 + 派发历史 ≤50 条) | 4~6k | `task-system-prompt.ts:37-53`、`memory-service.ts:163-179`、`plugin-skill/cards.ts:113`、`runner-dispatch.ts:210` |
 | 合计 | **35~55k(骑线时更高)** | |
 
@@ -698,6 +698,87 @@ NaN 兜底/向下取整/env 解析合法-非法-显式 0)21 全绿;apps/web `tsc
 **测试**:memory-retrieval.test.ts 新增 3 例(纯函数双闸/贪心/条数闸 + 超长红线
 降级集成 + 预算内回归锁)、novel-context.test.ts 新文件 8 例(纯函数 + 三嵌入点
 + 空态);web 全量 1321 例绿,tsc 通过。
+
+---
+
+### 9.8 上下文预算与压缩重构(2026-10-19 负责人点题「把刚刚讨论的上下文问题设计重构下吧」,已实施)
+
+> 编号说明:§9.6(预算闸+记账,PR #10)、§9.7(规则记忆字符预算,PR #12)已被
+> 未合并分支占用,本节用 §9.8 避免合并冲突。与 #10 同触 orchestrator,后合并方 rebase。
+
+**背景(与负责人问答中确认的四个结构性问题)**:
+
+1. 压缩阈值是写死的 30k 估算 tokens,与模型真实上下文窗口无关 —— 64k 窗口下
+   偏保守,32k 小窗模型下根本兜不住(30k 历史 + system/tools 3-8k + 输出 →
+   provider 400 `context_length_exceeded`,AI SDK 只重试 429/5xx,任务诚实失败);
+2. 近期保护窗口是条数制(最近 10 条),对「几条巨型工具结果」不设防 ——
+   10 条 ×10k 的窗口自己就能顶爆阈值;
+3. 纯文本消息(user/assistant)终身豁免压缩 —— 跨轮续聊把 conversationMessages
+   全额重放(agent-backend 1970-2008),很早以前的 assistant 交付物/播报正文在
+   之后每一轮每一步都全额重付;
+4. 溢出无兜底:强制总结轮(wrap-up)原样发送全量历史 —— 历史顶着窗口时,
+   最需要成功收口的调用反而先 400;治理提示/用户追加消息在常规压缩之后注入,
+   也能把本步重新顶爆。
+
+**方案(四件套,纯函数扩展 + orchestrator 包装层,不动插件面)**:
+
+**① 动态压缩阈值(新纯函数 `core/src/context-budget.ts`)**
+```
+历史预算 = 窗口(AGTPILOT_CONTEXT_WINDOW, 与层0目录共用, 默认 64k) × 安全系数(0.8)
+           − 固定开销(system 估算 + tools 块估算,或实测校准值) − 输出预留(默认 8k)
+压缩阈值 = min(静态 30k, max(下限 4k, 历史预算))
+```
+- 取小保证**默认口径零行为变化**(64k 窗口下动态值 ≈3.5-4.3万 > 30k,生效的仍是
+  静态值);小窗模型/重挂载面下动态值收紧接管。下限 4k 防退化成每步反复蒸馏。
+- tools 块估算与 §9.4 测量同口径(name/description/parameters JSON 化,
+  CJK×1 + 其余÷4);prepareStep 每步按实际挂载面(routedTools/mountedNames)算。
+- **实测校准(精版)**:onStepFinish 已有真实 `usage.promptTokens` ——
+  校准值 = 本步真实 promptTokens − 发送前消息估算 = system+tools+provider 协议
+  衬垫的真实开销,下一步阈值用它替代估算(负值钳 0)。估算口径漂移(分词器差异/
+  缓存计法)不再靠安全系数硬扛;首步无校准时才用估算值。
+
+**② 近期窗口条数制 → token 预算制(compaction.ts 纯函数扩展)**
+- 从尾部倒着数:最多 `AGTPILOT_COMPACT_RECENT_TOKENS`(默认 8000)估算 tokens、
+  最多 10 条(原条数上限保留,防小消息无限放行)、超预算也保底 4 条
+  (`AGTPILOT_COMPACT_RECENT_MIN`,保最小上下文与工具配对);
+- 边界照旧右移离开 tool 消息(配对不切断),既有 compaction.test.ts 十例零改动全绿。
+
+**③ 纯文本角色分治(compaction.ts)**
+- user 消息**永远原样保留**(意图与约束是任务输入,多长都留);
+- 窗口外 assistant 长文本(>500 字符:交付物/播报/长结论)不再终身豁免,
+  以 `[历史回复]` 截断(600 字符)进纪要流水蒸馏 —— 交付物本体已由工坊字段/
+  文件落盘,上下文只留要点;短 assistant 文本(对话粘合剂)照旧保留;
+- `AGTPILOT_COMPACT_ASSISTANT_TEXT=0` 一键恢复旧行为。
+- 连带效应:**纯文本多轮续聊(零工具消息)现在也能压缩** —— 此前 hasDroppable
+  恒 false,长会话的旧对话文本每步全额重付(问题 3 的主场景)。
+
+**④ 溢出双保险(orchestrator)**
+- **发送前预算护栏**:治理提示/看板催促/用户追加消息注入完成后,实测本步消息
+  总账 vs 历史预算,超了就就地紧急再压一轮(阈值=预算本身);仍压不下去
+  (全是不可压的近期文本)则如实放行 —— 溢出走诚实失败,不伪造;
+- **收尾轮先压缩再总结**:wrap-up invokeStep 前按收尾相位阈值(tools 块按 0 计,
+  预算更宽)压缩,压缩结果就地替换 conversation —— 总结调用与 task-end 落盘
+  共用同一份,不二次蒸馏;task-end 相位同走动态阈值(正常文本收尾的任务在
+  落盘前按窗口预算收口,续聊重放不再全额)。
+
+**旋钮汇总(.env.example 第 9 节)**:AGTPILOT_CONTEXT_WINDOW(复用)、
+AGTPILOT_COMPACT_OUTPUT_RESERVE=8000、AGTPILOT_COMPACT_SAFETY_PCT=80、
+AGTPILOT_COMPACT_THRESHOLD=30000(取小兜底)、AGTPILOT_COMPACT_RECENT_TOKENS=8000、
+AGTPILOT_COMPACT_RECENT=10(条数上限)、AGTPILOT_COMPACT_RECENT_MIN=4、
+AGTPILOT_COMPACT_ASSISTANT_TEXT=1、AGTPILOT_COMPACT_ASSISTANT_TEXT_CHARS=500。
+
+**诚实边界**:
+- 窗口值是全局 env,无按模型元数据表(负责人已拍「先不动」;换模型时手工对齐);
+- 实测校准滞后一步(首步用估算);promptTokens 含缓存计法差异时校准值有噪声,
+  由安全系数与下限共同兜底;
+- 结构性地板仍在:近期窗口(保底 4 条)+ 首条意图 + 纪要本身压无可压时,
+  溢出仍如实 400 —— 本刀把「能救的都救了」,不承诺永不溢出。
+
+**测试**:context-budget.test.ts 9 例(预算公式/校准优先/env 口径/取小/下限钳制/
+tools 估算单调性)+ compaction.test.ts 新增 8 例(预算窗口/条数上限/保底与配对/
+长文本进纪要/user 豁免/短文本保留/开关回退/纯文本多轮可压)+
+orchestrator-context-budget.test.ts 3 例(wrap-up 压缩接线与不二次蒸馏/低于阈值
+零行为变化/实测校准收紧 in-loop 阈值)—— core 211 全绿。
 
 ---
 

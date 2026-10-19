@@ -28,6 +28,8 @@ describe('buildTaskSystemPrompt', () => {
       '受控进展播报',
       '小红书托管边界',
       '公众号草稿箱边界',
+      '先问后猜', // 模糊需求提问卡(ask_user)
+      '计划确认', // 大任务方案批准门(confirm_plan)
       '发布永远由用户本人', // 小红书发布合规红线
       'freepublish', // 公众号群发红线
     ]) {
@@ -111,5 +113,48 @@ describe('buildTaskSystemPrompt', () => {
     expect(s).toContain('够决定下一步动作');
     // 规则编号连续:排在时效基准(11)之后
     expect(s.indexOf('【思考经济】')).toBeGreaterThan(s.indexOf('【时效基准】'));
+  });
+
+  /**
+   * 先问后猜(ask_user 问题卡):模糊 query 逐个方向试探是 token 黑洞 ——
+   * 正面触发判据(多种合理解读 + 影响交付方向)与反面防滥问清单
+   * (查证优先/琐事拍板/次数上限/禁假选项)缺一不可。
+   * 多问打包(至多 3 问一张卡)防拆多轮:对齐 Claude Code AskUserQuestion 的
+   * questions[] 设计,一次问清方向/范围/形式,省模型往返。
+   */
+  it('规则 13 给出提问触发判据、多问打包上限与防滥问反面约束', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('【先问后猜】');
+    expect(s).toContain('ask_user');
+    expect(s).toContain('2-4 个互斥的具体选项'); // 选项契约
+    expect(s).toContain('recommended'); // 推荐项标注
+    expect(s).toContain('multi_select'); // 多选问
+    expect(s).toContain('preview'); // 选项对照物
+    expect(s).toContain('至多 3 个'); // 多问打包上限
+    expect(s).toContain('一次打包问清就不要拆成多轮'); // 打包优先
+    expect(s).toContain('同一任务提问不超过 2 次'); // 次数上限
+    expect(s).toContain('能自行检索/查证的事项先查证'); // 查证优先
+    expect(s).toContain('严禁再问'); // 已明确内容不重复问
+    expect(s).toContain('假选项'); // 反面:没有真分歧不弹卡
+    // 规则编号连续:排在思考经济(12)之后
+    expect(s.indexOf('【先问后猜】')).toBeGreaterThan(s.indexOf('【思考经济】'));
+  });
+
+  /**
+   * 计划确认门(confirm_plan,对齐 Claude Code ExitPlanMode 的方案批准):
+   * 与提问分轨 —— 提问是参数级澄清可多次,确认是方案级批准每任务一次;
+   * 反面约束(小任务禁调/用户说直接做禁调/修改后不二次确认)防确认疲劳。
+   */
+  it('规则 14 给出计划确认触发面、单次上限与防确认疲劳反面约束', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('【计划确认】');
+    expect(s).toContain('confirm_plan');
+    expect(s).toContain('开始执行前'); // 建板后动手前的时序
+    expect(s).toContain('同一任务至多确认一次'); // 单次上限
+    expect(s).toContain('不要再弹卡二次确认'); // 修改意见直接改完执行
+    expect(s).toContain('严禁调用'); // 小任务/闲聊/「直接做」禁调
+    expect(s).toContain('先走【先问后猜】问清'); // 与提问分轨:方向不清先问再出计划
+    // 规则编号连续:排在先问后猜(13)之后
+    expect(s.indexOf('【计划确认】')).toBeGreaterThan(s.indexOf('【先问后猜】'));
   });
 });

@@ -69,6 +69,10 @@ export async function GET() {
         connectorSuggestions: userId
           ? backend.state.connectorSuggestions.filter((s) => s.id.startsWith(`${userId}::`))
           : [],
+        // ask_user 问题卡按归属过滤(init 重放,刷新页面卡片不丢)
+        pendingQuestions: userId
+          ? backend.state.pendingQuestions.filter((q) => !q.userId || q.userId === userId)
+          : [],
       };
 
       const initialPayload = `event: init\ndata: ${JSON.stringify(userScopedState)}\n\n`;
@@ -103,6 +107,13 @@ export async function GET() {
           // 终端日志 / 视口画面 / 挂起审批：按归属用户过滤（未标记 userId 的全局日志放行）
           if (event.type === 'terminal_log' || event.type === 'viewport_update' || event.type === 'approval_requested') {
             const owner = (event.data?.userId ?? event.data?.entry?.userId) as string | undefined;
+            if (!userId || (owner && owner !== userId)) {
+              return;
+            }
+          }
+          // ask_user 问题卡(提问/裁决)按归属用户过滤,防串台/泄露
+          if (event.type === 'question_asked' || event.type === 'question_resolved') {
+            const owner = event.data?.userId as string | undefined;
             if (!userId || (owner && owner !== userId)) {
               return;
             }

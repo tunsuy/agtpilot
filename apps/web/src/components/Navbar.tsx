@@ -29,6 +29,8 @@ interface NavbarProps {
   patrolCount?: number;
   goalCount?: number;
   approvalRequests: ApprovalRequest[];
+  /** ask_user 挂起问题卡数(角标与审批同通道提醒) */
+  pendingQuestionCount?: number;
   hasArtifact: boolean;
   onNewMission: () => void;
   onOpenAuth: (tab: 'login' | 'register') => void;
@@ -44,6 +46,7 @@ export function Navbar({
   patrolCount = 0,
   goalCount = 0,
   approvalRequests,
+  pendingQuestionCount = 0,
   hasArtifact,
   onNewMission,
   onOpenAuth,
@@ -51,6 +54,9 @@ export function Navbar({
 }: NavbarProps) {
   const isMissionActive = currentMission && currentMission.status === 'ACTIVE';
   const hasPendingApproval = approvalRequests.length > 0;
+  // 需要用户出手的 attention 集合:审批卡 + ask_user 问题卡(等待回答)
+  const hasPendingQuestion = pendingQuestionCount > 0;
+  const needsAttention = hasPendingApproval || hasPendingQuestion;
 
   return (
     <header className="fixed top-0 inset-x-0 h-14 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md z-50">
@@ -76,11 +82,11 @@ export function Navbar({
 
         {/* Global Agent State Pill */}
         {/* Status indicator when active or pending */}
-        {(hasPendingApproval || isMissionActive) && (
+        {(needsAttention || isMissionActive) && (
           <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-zinc-50 border border-zinc-200/80 animate-fadeIn">
             <span
               className={`h-2 w-2 rounded-full ${
-                hasPendingApproval
+                needsAttention
                   ? 'bg-amber-500 animate-ping'
                   : 'bg-blue-600 animate-pulse'
               }`}
@@ -88,6 +94,8 @@ export function Navbar({
             <span className="text-[11px] font-medium text-zinc-600">
               {hasPendingApproval
                 ? '等待审批授权'
+                : hasPendingQuestion
+                ? '有问题等你回答'
                 : `执行中: ${currentMission?.title.slice(0, 18)}...`}
             </span>
           </div>
@@ -245,13 +253,13 @@ export function Navbar({
           </button>
         )}
 
-        {hasPendingApproval && (
+        {needsAttention && (
           <button
             onClick={() => onViewChange('cockpit')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-amber-500/10 text-amber-700 border border-amber-300/80 animate-pulse hover:bg-amber-500/20 transition"
           >
             <ShieldAlert className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">授权确认</span>
+            <span className="hidden sm:inline">{hasPendingApproval ? '授权确认' : '回答问题'}</span>
           </button>
         )}
 

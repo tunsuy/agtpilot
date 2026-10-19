@@ -16,9 +16,11 @@ import {
   Inbox,
   Plug,
   FileText,
+  HelpCircle,
 } from 'lucide-react';
-import { ApprovalRequest, ConnectorSuggestion, Mission, TerminalLog } from '../../types/agent';
+import { ApprovalRequest, ConnectorSuggestion, Mission, PendingQuestion, TerminalLog } from '../../types/agent';
 import { KanbanPlanCard } from '../KanbanPlanCard';
+import { QuestionCard } from '../QuestionCard';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
@@ -35,6 +37,12 @@ interface MobileActivityViewProps {
   connectorSuggestions?: ConnectorSuggestion[];
   onConnectorAuthorize?: (s: ConnectorSuggestion) => void;
   onSkipConnectorSuggestion?: (s: ConnectorSuggestion) => void;
+  /** ask_user 问题卡(模糊需求先问后猜):按来源会话归属展示 */
+  pendingQuestions?: PendingQuestion[];
+  onAnswerQuestion?: (
+    questionId: string,
+    answers: Array<{ index: number; answer: string; via: 'option' | 'free_text' }>
+  ) => void;
   terminalLogs: TerminalLog[];
   /** 跳到交付物 Tab（看最终产物），不传则不显示入口 */
   onOpenDeliverable?: () => void;
@@ -81,6 +89,8 @@ export function MobileActivityView({
   approvalRequests,
   onApproval,
   connectorSuggestions = [],
+  pendingQuestions = [],
+  onAnswerQuestion,
   onConnectorAuthorize,
   onSkipConnectorSuggestion,
   terminalLogs,
@@ -160,6 +170,12 @@ export function MobileActivityView({
     mission?.id ?? null
   );
 
+  // ask_user 问题卡同款归属切分(与桌面驾驶舱同规则)
+  const { visible: visibleQuestions, hidden: hiddenQuestions } = partitionApprovalsByMission(
+    pendingQuestions,
+    mission?.id ?? null
+  );
+
   const recentLogs = useMemo(() => {
     const scope = mission?.terminalLogs?.length ? mission.terminalLogs : terminalLogs;
     return (scope || []).slice(-40).reverse();
@@ -171,6 +187,47 @@ export function MobileActivityView({
         <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">动态</h1>
       </header>
       <div ref={approvalTopRef} className="scroll-mt-4" />
+
+      {/* ask_user 问题卡(先问后猜):排在待审批之前 —— 回答解锁的是整个任务方向 */}
+      {visibleQuestions.length > 0 && onAnswerQuestion && (
+        <section className="mb-5">
+          <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 px-1">
+            等你回答 · {visibleQuestions.length}
+          </h2>
+          <ul className="space-y-2.5">
+            {visibleQuestions.map((q) => (
+              <li key={q.id}>
+                <QuestionCard q={q} onAnswer={onAnswerQuestion} compact />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* 其他会话的问题卡:细条提示 + 跳回来源会话 */}
+      {hiddenQuestions.length > 0 && (
+        <section className="mb-5">
+          <ul className="space-y-2">
+            {hiddenQuestions.map((q) => (
+              <li key={q.id}>
+                <button
+                  type="button"
+                  onClick={() => q.missionId && onSelectMission(q.missionId)}
+                  className="w-full rounded-xl border border-sky-200 bg-sky-50/60 px-4 py-3 flex items-center justify-between gap-2 shadow-sm active:bg-sky-100/60 transition text-left"
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <HelpCircle className="h-4 w-4 shrink-0 text-sky-600" />
+                    <span className="text-xs text-sky-900 truncate">
+                      有问题等你回答 · {missions.find((m) => m.id === q.missionId)?.title || '其他会话'}
+                    </span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-sky-600" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* 待审批(runner 发布审批只在来源会话展示,其他会话走下方细条提示) */}
       {visibleApprovals.length > 0 && (

@@ -173,6 +173,42 @@ export interface ConnectorSuggestion {
   authorizeUrl?: string;
 }
 
+/** ask_user 问题卡选项(镜像 @agtpilot/protocol 的 QuestionOption) */
+export interface QuestionOption {
+  value: string;
+  label: string;
+  description?: string;
+  recommended?: boolean;
+  /** 选项对照物(markdown),选中时展示(版式/结构类决策的可视化对比) */
+  preview?: string;
+}
+
+/** ask_user 问题卡里的单个问题(镜像 @agtpilot/protocol 的 QuestionItem) */
+export interface QuestionItem {
+  question: string;
+  context?: string;
+  options: QuestionOption[];
+  /** 该问多选(答案按选中项顿号拼接);缺省单选 */
+  multiSelect?: boolean;
+  allowFreeText?: boolean;
+}
+
+/** ask_user 问题卡(模糊需求先问后猜;镜像 @agtpilot/protocol 的 UserQuestion)。
+ *  一次调用可打包 1-3 个相关问题,一张卡答完一次提交;kind='plan' 为计划确认门 */
+export interface PendingQuestion {
+  id: string;
+  /** question=澄清提问(缺省),plan=计划确认(confirm_plan) */
+  kind?: 'question' | 'plan';
+  questions: QuestionItem[];
+  /** plan 卡的任务清单(展示用) */
+  planTasks?: string[];
+  taskId?: string;
+  userId?: string;
+  missionId?: string;
+  /** 超时时刻(ms epoch):到点未答按各问推荐项自动继续 */
+  expiresAt?: number;
+}
+
 export interface ArtifactVisualSlide {
   title?: string;
   subtitle?: string;

@@ -14,6 +14,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: '热点点评/干货/种草,Agent 创作你发布,前两行自带钩子',
     icon: MessagesSquare,
     accent: 'violet',
+    searchGroup: 'research',
     deps: [
       { id: 'newsnow', name: '全网热榜' },
       { id: 'zhihu', name: '知乎' },

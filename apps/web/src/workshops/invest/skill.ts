@@ -14,6 +14,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: '个股/基金体检 · 持仓组合体检 · 盘后复盘,数据带来源与时间戳',
     icon: TrendingUp,
     accent: 'emerald',
+    searchGroup: 'research',
     deps: [
       { id: 'tushare', name: 'Tushare' },
       { id: 'a_stock', name: 'A股实时行情' },
@@ -22,7 +23,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'newsnow', name: '财经热榜' },
     ],
     // 工具白名单 D 层(docs §9.1):报告经确认后邮件投递;行情/热榜 MCP 由 deps
-    // 自动映射,调研走缺省 full 档(含 research_subagent)
+    // 自动映射,调研走 research 档(含 research_subagent)
     activeTools: ['email_send'],
     note: '生成后跳转任务页,Agent 通过你已连接的行情连接器拉取实时行情与估值,财经热榜/网络搜索取新闻与市场热点,输出带来源与时间戳的结构化投研报告。全程只读:不执行任何交易、不动资金;报告经邮件/群机器人发送前需你确认。输出仅供参考,不构成投资建议。',
   },

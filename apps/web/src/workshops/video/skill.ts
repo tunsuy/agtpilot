@@ -35,6 +35,7 @@ export const WORKSHOP_SKILL_DOUYIN: WorkshopSkill = buildVideoSkill('video_douyi
   desc: '标题/分镜表/前 15 秒口播逐字稿/标签成套产出,竖屏快节奏',
   icon: Video,
   accent: 'violet',
+  searchGroup: 'research',
   deps: [
     { id: 'newsnow', name: '全网热榜' },
     { id: 'zhihu', name: '知乎' },
@@ -51,6 +52,7 @@ export const WORKSHOP_SKILL_BILIBILI: WorkshopSkill = buildVideoSkill('video_bil
   desc: '横屏信息密度优先,预留弹幕互动点,含投稿分区建议',
   icon: Tv,
   accent: 'violet',
+  searchGroup: 'research',
   deps: [
     { id: 'newsnow', name: '全网热榜' },
     { id: 'zhihu', name: '知乎' },

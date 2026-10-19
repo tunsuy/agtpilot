@@ -14,6 +14,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: '聚合 AI builder 的 X 动态 / 播客 / 官方博客,一键出日报,每条带原文链接',
     icon: Rss,
     accent: 'sky',
+    searchGroup: 'research',
     deps: [
       { id: 'twitterapi_io', name: 'X / Twitter' },
       { id: 'exa', name: '网络搜索' },

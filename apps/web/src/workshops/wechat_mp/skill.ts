@@ -16,6 +16,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: 'Agent 选题成稿投草稿箱,你逐次审批放行,公众平台后台人工发布',
     icon: Newspaper,
     accent: 'violet',
+    searchGroup: 'research',
     deps: [
       { id: 'newsnow', name: '全网热榜' },
       { id: 'zhihu', name: '知乎' },

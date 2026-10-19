@@ -94,15 +94,17 @@ export interface WorkshopDef {
    */
   activeTools?: string[];
   /**
-   * 工具白名单 · B 层检索组口径(缺省 'full'):
-   * - full:内容工坊标准检索梯度(shared/sources.ts 同源)——search 三件套 +
-   *   newsnow/zhihu/twitter MCP + research_subagent + firecrawl + 参考资料;
-   * - research:去掉社媒热榜 MCP,保留 search 三件套 + research_subagent +
-   *   firecrawl + 参考资料(调研型工坊:雷达/投研/教研);
+   * 工具白名单 · B 层检索组口径(**必填**,无隐式缺省档 —— 新工坊必须显式选档,
+   * 不会悄悄背最重挂载面)。
+   * 2026-10-19 降载:原最重的 full 档(额外直挂 newsnow/zhihu/twitter 社媒热榜
+   * MCP)与「未声明默认 full」兜底一并移除 —— 社媒 MCP 一律走 C 层 deps 声明
+   * (单一事实源),invest/edu 等无社媒 deps 的工坊不再每步白背 2~8k schema:
+   * - research:search 三件套 + research_subagent + firecrawl + 参考资料
+   *   (检索/内容/调研型工坊;社媒热榜按 deps 自动挂);
    * - web:仅 search 三件套(纯生成型:小说/PPT);
    * - none:不挂检索组(封闭数据源工坊:邮件分诊/周报)。
    */
-  searchGroup?: 'full' | 'research' | 'web' | 'none';
+  searchGroup: 'research' | 'web' | 'none';
 }
 
 export const WORKSHOP_CATEGORIES: Array<{ key: string; label: string; accent: WorkshopAccent }> = [

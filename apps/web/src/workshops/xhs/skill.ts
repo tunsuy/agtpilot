@@ -32,6 +32,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     desc: 'Agent 选题写文案配标签,你在手机 App 人工确认发布(合规半自动)',
     icon: Share2,
     accent: 'violet',
+    searchGroup: 'research',
     deps: [
       { id: 'newsnow', name: '全网热榜' },
       { id: 'zhihu', name: '知乎' },

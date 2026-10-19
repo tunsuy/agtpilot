@@ -256,9 +256,9 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
 ### 9.1 工坊工具白名单分配表(2026-10-17 负责人拍板「按你建议来吧」,已实施)
 
 > 实施记录:分支 feat/workshop-tool-whitelist。weekly 拍板走 GitHub 精确名(5 个只读),
-> novel/email_triage 按裁剪口径。落地形态:B 层检索组分四档 `searchGroup:
-> full / research / web / none`(full=内容工坊标准梯度,research=去社媒热榜保留
-> 三件套+子agent+firecrawl+参考资料,web=仅 search 三件套,none=不挂);
+> novel/email_triage 按裁剪口径。落地形态:B 层检索组分档 `searchGroup:
+> research / web / none`(research=三件套+子agent+firecrawl+参考资料,
+> web=仅 search 三件套,none=不挂;原最重 full 档已于 2026-10-19 删除,见本节末增补);
 > C 层特例表 `DEPS_TOOL_OVERRIDES`(email→固定三件、tomato_writer→空、
 > **github_mcp→空即整台默认禁入**,需要 GitHub 的工坊在 D 层按精确名声明);
 > 灰度保险丝 `AGTPILOT_WORKSHOP_TOOLS=0` 整体回退原关键词路由;
@@ -283,10 +283,10 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
   > (store/recall/list)本就被用户空间同名 taskTools 覆盖,插件版唯一存活场景
   > 是 CLI 单用户;整包移除后用户空间版成为唯一记忆实现,跨用户泄漏路径
   > 物理消除。基线净省 ≈1060 tokens/步(插件注册表口径 2131→1070)。
-- **B. 通用检索组**(内容工坊共享,与 `workshops/shared/sources.ts` 检索梯度同源):
-  search_web / search_exa / search_tavily、mcp_newsnow_*、mcp_zhihu_*、
-  mcp_twitterapi_io_*、research_subagent、browser_firecrawl_scrape、
-  read_reference_material。
+- **B. 通用检索组**(按 searchGroup 档位):search_web / search_exa / search_tavily、
+  research_subagent、browser_firecrawl_scrape、read_reference_material。
+  > 2026-10-19 降载:社媒热榜 MCP(mcp_newsnow_* / mcp_zhihu_* / mcp_twitterapi_io_*)
+  > 移出 B 层,一律经 C 层 deps 声明进入(单一事实源;见本节末增补)。
 - **C. deps 映射**:`meta.deps` 连接器 id → `mcp_<id>_*` 前缀(deps 已是单一事实源,
   新工坊自动受益)。特例表:zhihu → zhihu_search / zhihu_global / zhihu_hot 三台;
   email → 固定工具 email_list / email_read / email_send(非 MCP);
@@ -299,15 +299,15 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
 | 2 | xhs | xhs_read_creator_data、xhs_save_note_draft | 续聊投递同 mission 继承 workshopId,白名单天然覆盖 |
 | 3 | wechat_mp | wechat_mp_check_setup、wechat_mp_create_draft | |
 | 4 | zhihu | zhihu_save_article_draft | |
-| 5 | weibo | 无 | 纯 A+B(deps 已含 newsnow/zhihu/twitter/exa) |
+| 5 | weibo | 无 | 纯 A+B(社媒热榜经 deps 已含 newsnow/zhihu/twitter/exa) |
 | 6 | video(抖音/B站) | 无 | A+B |
 | 7 | novel | mcp_fanqie_radar_*(榜单选题) | B 组裁剪:只留 search 三件套,不要推特热榜;写作/入库走服务端不经工具 |
 | 8 | weekly | mcp_atlassian_*、mcp_lark_suite_*、mcp_dingtalk_* + email_list / email_read | GitHub 已拍板:只读精确名 5 个(list_commits / search_issues / list_pull_requests / get_pull_request / get_file_contents),整台不进 |
 | 9 | ppt | ppt_check_env、ppt_publish_deck、ppt_publish_pptx + sandbox_run_command / sandbox_write_file | 唯一保留 sandbox 的工坊(prompt 明确引用) |
 | 10 | email_triage | email_list / email_read / email_send | B 组裁剪:分诊不需要热榜,A+email 三件 |
-| 11 | follow_builders | follow_builders_fetch_feed | B 组保留全量(twitter/exa/search 是核心) |
-| 12 | invest | deps 映射:tushare、a_stock、alphavantage_mcp、coingecko_mcp | +B |
-| 13 | edu | deps 映射:openalex、alphaxiv、huggingface_mcp、deepl_mcp | +B |
+| 11 | follow_builders | follow_builders_fetch_feed | twitter 经 deps 保留;newsnow/zhihu 不再白背(降载) |
+| 12 | invest | deps 映射:tushare、a_stock、alphavantage_mcp、coingecko_mcp | +B(research 档;财经热榜 newsnow 经 deps 保留,zhihu/twitter 不再白背) |
+| 13 | edu | deps 映射:openalex、alphaxiv、huggingface_mcp、deepl_mcp | +B(research 档;社媒热榜全不挂) |
 
 挂载数预估:雷达 ~20、内容工坊 ~25-30、weekly ~35(GitHub 整台时超 30-40 安全线,
 可用精确名压回)、novel/email_triage ~15 以下。
@@ -318,6 +318,18 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
 
 已拍板(2026-10-17「按你建议来吧」):① weekly GitHub 走精确名;② novel /
 email_triage 按裁剪口径。
+
+**增补(2026-10-19 token 盘点放大器④,负责人拍板「改吧」)——full 档降载**:
+16 坊中 9 个 meta(xhs/weibo/zhihu/wechat_mp/video×2/follow_builders/invest/edu)
+原未声明 searchGroup,隐式落到最重 full 档 —— B 层直挂社媒热榜 MCP 通配
+(newsnow/zhihu/twitterapi_io,~2-8k tokens/步,且通配挂载在测量口径里不可见)。
+改动:① full 档与 `?? 'full'` 隐式兜底删除,`searchGroup` 改**必填**(新工坊
+必须显式选档,编译期兜底);② 9 坊逐个显式声明 research 档;③ 社媒热榜 MCP
+一律经 C 层 deps 进入(单一事实源)。功能零损失:社媒六坊(xhs/weibo/zhihu/
+wechat_mp/video×2)deps 本就声明三台社媒,挂载集合不变;真实收益在
+follow_builders(只留 twitter,deps 如此声明)、invest(只留 newsnow 财经热榜)、
+edu(社媒全不挂)。测试:tool-whitelist.test.ts 重写 B 层口径块(17 例全绿,
+新增「社媒只经 deps 进入」「invest/edu 不白背」断言);apps/web tsc 通过。
 
 **增补(2026-10-17 负责人:「子agent的工具绑定逻辑也要跟主agent一样吧」)**:
 plugin-subagent 挂载面与工坊白名单对齐 —— `TaskOptions.activeTools` 透传进

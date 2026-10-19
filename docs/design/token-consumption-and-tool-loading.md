@@ -669,7 +669,35 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
 隔离),plugin-model 31 全绿;core 191 全绿(orchestrator 透传+蒸馏上报不破坏既有用例);
 web mission-efficiency.test.ts 新增 11 例(缺省 300k/余额扣减/关闸/钉 1/负余额防御/
 NaN 兜底/向下取整/env 解析合法-非法-显式 0)21 全绿;apps/web `tsc --noEmit` 通过。
-本地 `next build` 受宿主 1.6GB 内存限制无法验证(OOM,既有环境问题),以 GH Actions 为准。
+本地 `next build` 受宿主 1.6GB 内存限制无法验证(OOM,既有环境问题)。修正(2026-10-19):
+本仓 GitHub Actions 仅有 docker-release(v* 标签/手动触发),PR 侧无 CI 检查——
+合并前以上述本地验证手段为准。
+
+### 9.7 无界注入项封顶:rule 红线字符预算 + 小说 bible 上限(2026-10-19 盘点放大器④,负责人拍板「好 可以」,已实施)
+
+盘点里两个"没有上限的注入口",都走 system prompt / 任务 prompt 每步全量重发,
+被步数放大 20 倍:
+
+**① rule 红线特权通道(memory-service.ts)**:普通记忆有双重封顶(6 条全文 +
+2400 字符),但 rule 类是特权通道 —— ≤10 条、每条全文、单条长度无上限。
+治理:新增总字符预算 `PROMPT_MAX_RULE_CHARS = 4000`,挑选逻辑抽为纯函数
+`selectRuleInjection`(条数+字符双闸,入参按更新时间降序 → 新红线优先保全文,
+贪心装填:中间超长条不挡后面短条)。超预算条目**降级 L0 摘要层,不静默丢**:
+摘要行带显式标记「[红线·全文未注入,执行相关操作前先 read_memory 取全文]」,
+检索轨迹 reason=`rule-chars-cap` 如实落 audit。预算内红线行为零变化。
+
+**② 小说设定集 bible(novel-context.ts)**:随创作只增不减、三个注入点原样全文
+嵌入。治理:`NOVEL_BIBLE_MAX_CHARS = 12000` 硬上限,纯函数 `capNovelBible`
+超限保头 70% + 尾 30%、中段显式标记截断(不静默,MCP output-cap 同原则);
+续写/体检/开书大纲三点统一走封顶。近章摘要/时间线等既有滑动窗口不动
+(本就是常量界)。详见 novel-workshop.md §2 增补。
+
+**留白(有意)**:全书总纲/伏笔台账增长缓慢且是创作正确性关键,暂不封顶;
+章节正文从不进 prompt(滑动窗口设计,负责人确认过)。
+
+**测试**:memory-retrieval.test.ts 新增 3 例(纯函数双闸/贪心/条数闸 + 超长红线
+降级集成 + 预算内回归锁)、novel-context.test.ts 新文件 8 例(纯函数 + 三嵌入点
++ 空态);web 全量 1321 例绿,tsc 通过。
 
 ---
 

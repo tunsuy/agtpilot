@@ -19,7 +19,7 @@ import { renderTemplate } from '../engine';
 import { novelFieldDeliveryEnabled } from './delivery';
 // fs-free 纯模块:novel-store(带 node:fs)绝不能进客户端 bundle(context.ts ←
 // skill.ts ← registry.ts ← 客户端组件);类型与装配函数都住 novel-context
-import { assembleChapterContext, assembleReviewContext, type NovelBook } from '@/lib/novel-context';
+import { assembleChapterContext, assembleReviewContext, capNovelBible, type NovelBook } from '@/lib/novel-context';
 import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
 
 /** 题材预设(表单 chip;可自由输入,不是白名单) */
@@ -132,7 +132,7 @@ function assembleBibleBlock(book: NovelBook): string {
     .join('\n');
   return [
     `## 卖点\n${book.premise || '(空)'}`,
-    `## 设定集\n${book.bible || '(空)'}`,
+    `## 设定集\n${capNovelBible(book.bible) || '(空)'}`,
     `## 人物卡\n${castText || '(空)'}`,
   ].join('\n\n');
 }

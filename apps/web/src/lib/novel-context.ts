@@ -214,6 +214,29 @@ export function isReviewDue(book: Pick<NovelBook, 'progress'> & { lastReviewedCh
 const RECENT_SUMMARIES = 3;
 const RECENT_TIMELINE = 5;
 
+/**
+ * 设定集(bible)注入上限(字符)。bible 随创作只增不减、任务内每步全量重发,
+ * 是小说工坊唯一无界的注入项(2026-10-19 token 盘点放大器④,负责人拍板封顶)。
+ * 超限保头 70% + 尾 30%(世界观核心多在头部、最新增补多在尾部),中段显式
+ * 标记截断 —— 不静默,与 MCP output-cap(§9.3)同原则。
+ */
+export const NOVEL_BIBLE_MAX_CHARS = 12_000;
+
+/** bible 封顶(纯函数):≤ 上限原样返回;超限头尾保留 + 中段截断显式标记 */
+export function capNovelBible(bible: string | undefined | null, maxChars: number = NOVEL_BIBLE_MAX_CHARS): string {
+  const text = String(bible ?? '');
+  if (text.length <= maxChars) return text;
+  const head = Math.floor(maxChars * 0.7);
+  const tail = maxChars - head;
+  const omitted = text.length - head - tail;
+  return (
+    `${text.slice(0, head)}\n` +
+    `(……设定集超长,中段 ${omitted} 字已截断;头尾已保留,完整设定集在书页状态库,` +
+    `写作以已注入部分为准,勿凭空补写被截断的设定……)\n` +
+    `${text.slice(text.length - tail)}`
+  );
+}
+
 function isMajor(c: NovelCharacter): boolean {
   const role = String(c.role || '');
   return /主角|男主|女主|主要|反一|大反派/.test(role);
@@ -280,7 +303,7 @@ export function assembleChapterContext(book: NovelBook, opts: { nextIndex?: numb
   return [
     `## 进度\n已写 ${book.progress.chapterCount} 章 / ${book.progress.wordCount} 字;现在写第 ${nextIndex} 章。`,
     book.volumeSummary ? `## 全书总纲\n${book.volumeSummary}` : '',
-    `## 设定集\n${book.bible || '(空)'}`,
+    `## 设定集\n${capNovelBible(book.bible) || '(空)'}`,
     `## 出场人物卡\n${castText}`,
     `## 本章细纲\n${detailText}`,
     recentSummaries ? `## 近章摘要\n${recentSummaries}` : '',
@@ -315,7 +338,7 @@ export function assembleReviewContext(book: NovelBook): string {
     `## 书目\n《${book.title}》 ${book.genre} · 已写 ${book.progress.chapterCount} 章 / ${book.progress.wordCount} 字`,
     book.premise ? `## 卖点\n${book.premise}` : '',
     book.volumeSummary ? `## 全书总纲\n${book.volumeSummary}` : '',
-    `## 设定集\n${book.bible || '(空)'}`,
+    `## 设定集\n${capNovelBible(book.bible) || '(空)'}`,
     `## 人物卡与当前状态\n${castText || '(空)'}`,
     `## 粗纲/卷纲\n${book.outline || '(空)'}`,
     `## 伏笔台账(全量,注意回收率与超期未回收)\n${ledgerText || '(空)'}`,

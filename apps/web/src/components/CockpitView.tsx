@@ -50,9 +50,11 @@ import {
   FileDown,
   Trash2,
   Loader2,
+  Layers,
 } from 'lucide-react';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { ActivityFeedView } from './ActivityFeedView';
+import { BackgroundChildPanel, extractChildMissionId, childStatusMeta } from './BackgroundChildPanel';
 import { NotePackageList } from './workshops/NotePackageCard';
 import { parseNotePackages } from '../workshops/xhs/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
@@ -72,7 +74,7 @@ import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
 import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
 import { hasWorkshopDeliverable } from '../workshops/deliverable';
 import { resolveArtifactDraft } from '../workshops/registry';
-import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs, findFinalAnswerIndex, turnCreatesPlan } from '../lib/cockpit-blocks';
+import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs, findFinalAnswerIndex, turnCreatesPlan, type CockpitBlock } from '../lib/cockpit-blocks';
 import { KanbanPlanCard } from './KanbanPlanCard';
 import { sourcesForAnswer } from '../lib/search-sources';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
@@ -214,6 +216,10 @@ export function CockpitView({
   }, [onOpenRunnerTask]);
   const runnerTaskForMission = (missionId: string): RunnerTaskSummary | null =>
     runnerTasks.find((t) => t.missionId === missionId) ?? null;
+  // 后台子任务(带 parentMissionId)不占活动列表顶层坑位:父会话行下挂
+  // chip(点开完整子会话 = 逃生舱);过程折叠面板走 BackgroundChildPanel
+  const topLevelMissions = missions.filter((m) => !m.parentMissionId);
+  const childrenOf = (missionId: string) => missions.filter((m) => m.parentMissionId === missionId);
   useEffect(() => {
     (async () => {
       try {
@@ -432,15 +438,15 @@ export function CockpitView({
           {/* 任务列表 */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             <div className="px-2 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-              历史会话 ({missions.length})
+              历史会话 ({topLevelMissions.length})
             </div>
 
-            {missions.length === 0 ? (
+            {topLevelMissions.length === 0 ? (
               <div className="py-8 text-center text-zinc-400 text-xs">
                 暂无历史任务
               </div>
             ) : (
-              missions.map((m) => {
+              topLevelMissions.map((m) => {
                 const isActive = activeMissionId === m.id || (!activeMissionId && m.id === currentMission?.id);
                 // 执行中/等待中的任务不能删(执行回路还在写盘);完成后与中断的可删
                 const deletable = m.status === 'DONE' || m.status === 'INTERRUPTED';
@@ -524,6 +530,32 @@ export function CockpitView({
                       </span>
                     </div>
                     </button>
+
+                    {/* 后台子任务 chip:挂父行下方,点击打开完整子会话(逃生舱);
+                        过程级 live 视图在父会话工具行的 BackgroundChildPanel */}
+                    {childrenOf(m.id).length > 0 && (
+                      <div className="flex flex-wrap gap-1 px-2.5 pb-1.5 pt-0.5">
+                        {childrenOf(m.id).map((c) => {
+                          const cs = childStatusMeta(c);
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => onSelectMission(c.id)}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[9px] font-medium transition max-w-full ${
+                                activeMissionId === c.id
+                                  ? 'border-zinc-300 bg-zinc-100 text-zinc-800'
+                                  : 'border-zinc-200/70 bg-white text-zinc-500 hover:text-zinc-800 hover:bg-zinc-50'
+                              }`}
+                              title={`后台子任务: ${c.title} —— 点击查看完整执行过程`}
+                            >
+                              <span className={`flex items-center gap-0.5 shrink-0 ${cs.cls}`}>{cs.icon}</span>
+                              <span className="truncate">子 · {c.title}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     {/* 删除会话:悬停浮现;两步确认(首点亮红,3s 内再点真删) */}
                     {deletable && (
@@ -882,6 +914,7 @@ export function CockpitView({
                   const renderable = turn.items.filter(
                     (b) =>
                       b.type === 'tools' ||
+                      b.type === 'notice' ||
                       Boolean(b.step.answer || b.step.reasoning) ||
                       b.step.status === 'RUNNING'
                   );
@@ -900,8 +933,14 @@ export function CockpitView({
                   // 工坊成品豁免:步数耗尽强制总结会把成品清单留在中间 step,
                   // 带谓词时边界前移到成品块,卡片收尾直接可见(见 cockpit-blocks)
                   const finalIdx = findFinalAnswerIndex(renderable, hasWorkshopDeliverable);
-                  const processBlocks = finalIdx >= 0 ? renderable.slice(0, finalIdx) : renderable;
+                  const processRegion = finalIdx >= 0 ? renderable.slice(0, finalIdx) : renderable;
                   const finalBlocks = finalIdx >= 0 ? renderable.slice(finalIdx) : [];
+                  // 后台任务通知卡不参与整轮过程折叠:bgNotice 是常显系统事件
+                  // (KanbanPlanCard 同款钉挂语义),最终答复开始流式输出、过程区
+                  // 收起后,通知卡仍原位可见;折叠边界之后的 notice 天然留在
+                  // finalBlocks(常显区)不进 pinnedNotices
+                  const processBlocks: CockpitBlock[] = processRegion.filter((b) => b.type !== 'notice');
+                  const pinnedNotices: CockpitBlock[] = processRegion.filter((b) => b.type === 'notice');
                   const turnOpen = expandedTools[turn.key] ?? finalIdx < 0;
                   // 摘要行计数:工具块数真实动作行,思考块计 1;
                   // 耗时取首步开始 → 末步结束的墙钟时间(思考/检索间隙也计入)
@@ -968,8 +1007,9 @@ export function CockpitView({
                         )}
                         {/* 整轮过程折叠开关:最终回复开始流式输出时,本轮全部
                             过程(工具行 + 中间思考)自动收成这一行,点开原地
-                            展开回看完整时间线 */}
-                        {finalIdx > 0 && (
+                            展开回看完整时间线。notice 卡不计入(常显,且防
+                            「任务过程 · 0 项」空壳行) */}
+                        {finalIdx > 0 && processBlocks.length > 0 && (
                           <button
                             type="button"
                             onClick={() =>
@@ -995,11 +1035,75 @@ export function CockpitView({
                             />
                           </button>
                         )}
-                        {(turnOpen ? processBlocks : []).concat(finalBlocks).map((block) => {
+                        {(turnOpen ? processBlocks : []).concat(pinnedNotices).concat(finalBlocks).map((block) => {
                   // ================= 2a. 工具活动时间线(逐行叙述,无入参出参) =================
                   // Claude Code 式:每个动作一行,行内是用户可读的行动语言(与右侧
                   // 「动态」tab 同源 narrateStep);失败行红显,执行异常在对话上下文
                   // 里可见,不只沉在右侧。原始工具名与入参出参的唯一展示位是动态区
+
+                  // ============ 2n. 后台子任务收尾通知卡(常显系统事件) ============
+                  // step_bg_ 步骤(bgNotice 载荷):完成/失败两态卡,摘要 clamp-3
+                  // 可展开,「查看子任务」打开完整子会话(逃生舱)
+                  if (block.type === 'notice') {
+                    const n = block.step.bgNotice!;
+                    const failed = n.outcome === 'failed';
+                    const noticeKey = `${block.step.id}_notice`;
+                    const noticeOpen = expandedTools[noticeKey] ?? false;
+                    const summary = (n.summary || '').trim();
+                    const clampable = summary.length > 140 || summary.split('\n').length > 3;
+                    return (
+                      <div
+                        key={block.step.id}
+                        className={`rounded-xl border px-3.5 py-2.5 animate-fadeIn ${
+                          failed ? 'border-red-200/70 bg-red-50/40' : 'border-zinc-200/80 bg-zinc-50/70'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          {failed ? (
+                            <AlertCircle className="h-3.5 w-3.5 text-red-500 flex-shrink-0" />
+                          ) : (
+                            <Check className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0" />
+                          )}
+                          <span
+                            className={`text-[11px] font-medium truncate ${failed ? 'text-red-700' : 'text-zinc-700'}`}
+                          >
+                            {failed ? '后台任务失败' : '后台任务完成'} · {n.childTitle}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => onSelectMission(n.childMissionId)}
+                            className="ml-auto flex-shrink-0 flex items-center gap-0.5 text-[10px] text-zinc-400 hover:text-zinc-700 transition"
+                            title="打开子任务完整会话(含全部步骤与回复)"
+                          >
+                            查看子任务 <ChevronRight className="h-3 w-3" />
+                          </button>
+                        </div>
+                        {summary && (
+                          <div className="mt-1.5">
+                            <p
+                              className={`text-[11px] text-zinc-500 leading-relaxed whitespace-pre-wrap break-words ${
+                                noticeOpen || !clampable ? '' : 'line-clamp-3'
+                              }`}
+                            >
+                              {summary}
+                            </p>
+                            {clampable && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedTools((prev) => ({ ...prev, [noticeKey]: !noticeOpen }))
+                                }
+                                className="mt-0.5 text-[10px] text-zinc-400 hover:text-zinc-600 transition"
+                              >
+                                {noticeOpen ? '收起' : '展开全文'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
                   if (block.type === 'tools') {
                     const rows = block.steps.filter((s) => s.tool || s.status === 'FAILED');
                     return (
@@ -1009,16 +1113,27 @@ export function CockpitView({
                           if (!narrated) return null;
                           const isRunning = st.status === 'RUNNING';
                           const isFailed = st.status === 'FAILED';
+                          // 后台子任务派发行:子 mission 状态 chip + chevron 开
+                          // inline 折叠面板(子 mission 随 mission_updated 广播
+                          // 进 missions 列表,find 后 props 变化自然 live 更新)
+                          const bgChildId =
+                            st.tool === 'launch_background_task' ? extractChildMissionId(st) : undefined;
+                          const bgChild = bgChildId ? missions.find((m) => m.id === bgChildId) : undefined;
+                          const bgPanelKey = `${st.id}_bgchild`;
+                          const bgPanelOpen = expandedTools[bgPanelKey] ?? false;
+                          const bgStatus = bgChild ? childStatusMeta(bgChild) : undefined;
                           const getActivityIcon = () => {
                             if (isFailed) return <AlertCircle className="h-3 w-3 text-red-500" />;
                             if (isRunning) return <RotateCw className="h-3 w-3 text-blue-600 animate-spin" />;
                             if (narrated.kind === 'search') return <Search className="h-3 w-3 text-blue-500" />;
                             if (narrated.kind === 'browser') return <Globe className="h-3 w-3 text-indigo-500" />;
                             if (narrated.kind === 'sandbox') return <Code className="h-3 w-3 text-amber-500" />;
+                            if (narrated.kind === 'background') return <Layers className="h-3 w-3 text-violet-500" />;
                             return <Wrench className="h-3 w-3 text-zinc-400" />;
                           };
                           return (
-                            <div key={st.id} className="flex items-center gap-2 min-w-0 animate-fadeIn">
+                            <React.Fragment key={st.id}>
+                            <div className="flex items-center gap-2 min-w-0 animate-fadeIn">
                               <div className="h-4.5 w-4.5 rounded bg-zinc-50 border border-zinc-100 flex items-center justify-center flex-shrink-0">
                                 {getActivityIcon()}
                               </div>
@@ -1032,6 +1147,30 @@ export function CockpitView({
                               {narrated.detail && (
                                 <span className="text-[10px] text-zinc-400 truncate">{narrated.detail}</span>
                               )}
+                              {bgChildId ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedTools((prev) => ({ ...prev, [bgPanelKey]: !bgPanelOpen }))
+                                  }
+                                  className="ml-auto flex-shrink-0 flex items-center gap-1 text-[9px] font-mono transition hover:opacity-70"
+                                  title={bgPanelOpen ? '收起子任务执行过程' : '展开子任务执行过程'}
+                                >
+                                  {bgStatus ? (
+                                    <span className={`flex items-center gap-0.5 ${bgStatus.cls}`}>
+                                      {bgStatus.icon}
+                                      {bgStatus.label}
+                                    </span>
+                                  ) : (
+                                    <span className="text-zinc-400">已派发</span>
+                                  )}
+                                  <ChevronDown
+                                    className={`h-3 w-3 text-zinc-400 transition-transform duration-200 ${
+                                      bgPanelOpen ? 'rotate-180' : ''
+                                    }`}
+                                  />
+                                </button>
+                              ) : (
                               <span className="ml-auto flex-shrink-0">
                                 {isRunning ? (
                                   <span className="text-[9px] text-blue-600 font-mono flex items-center gap-1">
@@ -1046,7 +1185,12 @@ export function CockpitView({
                                   </span>
                                 )}
                               </span>
+                              )}
                             </div>
+                            {bgPanelOpen && (
+                              <BackgroundChildPanel child={bgChild} onOpenChild={onSelectMission} />
+                            )}
+                            </React.Fragment>
                           );
                         })}
                       </div>

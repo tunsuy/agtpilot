@@ -1,7 +1,7 @@
 # plugin-subagent 功能职责与接口规范
 
 - 日期: 2026-10-13
-- 状态: **已过审**(2026-10-13 负责人批准开发);**M1 已实施**:`packages/plugin-subagent`(骨架+SubagentEngine+双层白名单+三重预算闸+单测 29 例)+ app-kit 接线 + `.env.example`/`ARCHITECTURE.md` 变量表。**M2 已实施**(2026-10-14):web transcript JSONL 落盘适配器(`apps/web/src/lib/subagent-transcript.ts`,经 `CreateAgentOptions.subagent` 注入)+ oss_radar/invest/edu 三工坊 Prompt 接入(广度网页调研派 research_subagent)+ 单测 14 例;子步骤 UI 转发(可选项)未做。**MCP 双钥匙已实施**(2026-10-14,负责人批准,原 M3 项提前):plugin-mcp 按 `annotations.readOnlyHint` 注册 `readOnly` 声明 + 子 agent `AGTPILOT_SUBAGENT_MCP_SERVERS` 服务器白名单(双钥匙 AND)+ `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` 前缀逃生口(实测背书);**默认即开放工坊检索连接器**(负责人要求:内置默认 SERVERS=检索类五台、ALLOW_TOOLS=deepwiki/newsnow 前缀;行情类不开;env 可覆盖或 `off` 全关)。**目录标记已实施**(2026-10-14,负责人批准):连接器目录 `McpServerDef.subagentOpen` 必填标记(目录级人工钥匙评审,编译期强制新连接器表态)+ web 宿主经 `resolveMcpServers` 按用户自动注入「已连接 ∩ 已标记」;env 显式设置时 env 优先,行情/写操作类永不标记(测试红线回归)。**机器钥匙自动分类已实施**(2026-10-14,负责人批准):plugin-mcp 连接路径 default-deny 分类(`classify.ts`)——注解权威 → 注解沉默按名称动词启发 → 拿不准拒绝;随连接缓存、重连重判,详情页黄绿灯自动跟随,不再依赖人工逐台配凭证跑测量(逃生口名单/目录红线不动)。§9 集成验收(token 降幅 ≥30%)待真实 run 数据。M3 余下:续聊唤醒、router specialist 档位
+- 状态: **已过审**(2026-10-13 负责人批准开发);**M1 已实施**:`packages/plugin-subagent`(骨架+SubagentEngine+双层白名单+三重预算闸+单测 29 例)+ app-kit 接线 + `.env.example`/`ARCHITECTURE.md` 变量表。**M2 已实施**(2026-10-14):web transcript JSONL 落盘适配器(`apps/web/src/lib/subagent-transcript.ts`,经 `CreateAgentOptions.subagent` 注入)+ oss_radar/invest/edu 三工坊 Prompt 接入(广度网页调研派 research_subagent)+ 单测 14 例;子步骤 UI 转发(可选项)未做。**MCP 双钥匙已实施**(2026-10-14,负责人批准,原 M3 项提前):plugin-mcp 按 `annotations.readOnlyHint` 注册 `readOnly` 声明 + 子 agent `AGTPILOT_SUBAGENT_MCP_SERVERS` 服务器白名单(双钥匙 AND)+ `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS` 前缀逃生口(实测背书);**默认即开放工坊检索连接器**(负责人要求:内置默认 SERVERS=检索类五台、ALLOW_TOOLS=deepwiki/newsnow 前缀;行情类不开;env 可覆盖或 `off` 全关)。**目录标记已实施**(2026-10-14,负责人批准):连接器目录 `McpServerDef.subagentOpen` 必填标记(目录级人工钥匙评审,编译期强制新连接器表态)+ web 宿主经 `resolveMcpServers` 按用户自动注入「已连接 ∩ 已标记」;env 显式设置时 env 优先,行情/写操作类永不标记(测试红线回归)。**机器钥匙自动分类已实施**(2026-10-14,负责人批准):plugin-mcp 连接路径 default-deny 分类(`classify.ts`)——注解权威 → 注解沉默按名称动词启发 → 拿不准拒绝;随连接缓存、重连重判,详情页黄绿灯自动跟随,不再依赖人工逐台配凭证跑测量(逃生口名单/目录红线不动)。§9 集成验收(token 降幅 ≥30%)待真实 run 数据。M3 余下:router specialist 档位(续聊唤醒已于 2026-10-20 由 agent-backend 层的独立子 mission 路线实现,不在本插件内,见 `docs/design/background-child-missions.md`)
 - 前置阅读: `docs/design/multi-agent-landscape-insights.md` §2(Claude Code 边界设计)/§6.1(本插件的原始裁定)、`docs/design/decision-plugin-spec.md`(格式模板)、`ARCHITECTURE.md` §分层铁律 + 新增插件检查单
 - 代码(规划): `packages/plugin-subagent/src/{index.ts, runner.ts, whitelist.ts}`;装配点: `packages/app-kit/src/index.ts`
 
@@ -9,7 +9,7 @@
 
 给主 agent 挂一个**只读检索子 agent 工具**:主模型按需派发"广域调研/多路检索汇总"类子任务,插件在独立消息数组里跑一条完整的子 agent 循环,**边界上只回传一条 final report**,原始检索噪音永不进入主上下文。
 
-非职责:不做 agent 团队协作/实时通信、不做角色专精人设、不执行任何写操作、不替代主循环(嵌套 runTask)、不做子 agent 续聊唤醒(M3 再议)。
+非职责:不做 agent 团队协作/实时通信、不做角色专精人设、不执行任何写操作、不替代主循环(嵌套 runTask)、不做子 agent 续聊唤醒(M3 再议;2026-10-20 注:后台异步任务与完成回注唤醒已按**独立子 mission 路线**在 agent-backend 层落地,见 `docs/design/background-child-missions.md` —— 本插件维持同步检索分工,不在插件内实现唤醒)。
 
 ## 2. 与「多 Agent 推迟不排期」裁定的关系
 
@@ -217,4 +217,4 @@ export interface SubagentPluginConfig {
 |---|---|---|
 | **M1 能跑** | 插件骨架 + `research_subagent` 工具 + 白名单双层过滤 + 三重预算闸 + 强制收敛 + 失败语义 + cordis 事件 + app-kit 接线 + 单测 1-8 | §9 单测全绿;CLI 里手工派一次真实调研跑通 |
 | **M2 好用** | 并发信号量调优 + transcript 落盘适配器(web JSONL)+ 子步骤 UI 转发(可选)+ oss_radar/invest/edu 三工坊 Prompt 接入(在 Prompt 中显式引导"多路检索时派 research_subagent") | §9 集成验收达标 |
-| **M3 可选** | 续聊唤醒(transcript 恢复)、router 按任务类型选 specialist 档位(~~MCP 只读前缀白名单~~ 已于 2026-10-14 提前实施,见状态行与 §4.3) | 视 M2 数据再立项 |
+| **M3 可选** | ~~续聊唤醒(transcript 恢复)~~(2026-10-20 已由独立子 mission 路线实现,不在本插件内,见 `docs/design/background-child-missions.md`;transcript 恢复式唤醒不再排期)、router 按任务类型选 specialist 档位(~~MCP 只读前缀白名单~~ 已于 2026-10-14 提前实施,见状态行与 §4.3) | 视 M2 数据再立项 |

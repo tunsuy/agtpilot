@@ -29,7 +29,7 @@ import {
   estimateToolsBlockTokens,
   historyTokenBudget,
 } from './context-budget';
-import { appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
+import { appendBackgroundNotice, appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
 import { ToolGate } from './tool-gate';
 import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
@@ -690,6 +690,19 @@ export class OrchestratorService extends Service {
               if (withNotice) adjust.messages = withNotice;
             } catch {
               // 治理提示获取失败不影响主流程
+            }
+          }
+          // 后台任务通知注入(压缩之后,与治理提示同一插入点):派生的后台
+          // 子任务完成/失败时,结果摘要在此进入父任务本轮上下文(docs/design/
+          // background-child-missions.md)。放在用户追加消息之前:用户消息
+          // 离末尾最近、注意力权重最高。多条通知由上层合并成一条
+          if (options.getBackgroundNotice) {
+            try {
+              const bgNotice = await options.getBackgroundNotice();
+              const withBgNotice = appendBackgroundNotice(adjust.messages ?? messages, bgNotice);
+              if (withBgNotice) adjust.messages = withBgNotice;
+            } catch {
+              // 后台通知获取失败不影响主流程(消息仍在队列里,下步重试)
             }
           }
           // 用户追加消息注入(压缩之后,与治理提示同一插入点):任务执行中

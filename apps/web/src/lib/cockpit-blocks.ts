@@ -18,7 +18,11 @@ export const EFFICIENCY_STEP_PREFIX = 'step_eff_';
 export type CockpitBlock =
   | { type: 'user'; step: MissionStep }
   | { type: 'tools'; steps: MissionStep[]; key: string }
-  | { type: 'assistant'; step: MissionStep };
+  | { type: 'assistant'; step: MissionStep }
+  // 后台子任务收尾通知(step_bg_ 前缀,带 bgNotice 载荷):独立成块渲染为
+  // 居中系统通知卡 —— 无 role/tool/answer,若不拦截会掉进下方 isTool
+  // catch-all 被折叠进活动块,通知就不可见了
+  | { type: 'notice'; step: MissionStep };
 
 export interface CockpitBlocks {
   blocks: CockpitBlock[];
@@ -105,6 +109,14 @@ export function splitStepsIntoBlocks(steps: MissionStep[]): CockpitBlocks {
       // 效率摘要不参与对话流分块;flush 保证它前后的工具链不被错误合并
       flushTools();
       if (st.title) effNotes.push(st.title);
+      return;
+    }
+
+    if (st.bgNotice) {
+      // 后台任务通知卡:独立成块(照 eff-step 的处理模式,先 flush 防前后
+      // 工具链被错误合并),渲染层按 bgNotice.outcome 出完成/失败两态卡片
+      flushTools();
+      blocks.push({ type: 'notice', step: st });
       return;
     }
 

@@ -85,6 +85,19 @@ export interface MissionStep {
    * 轮末派发时由后端清除,气泡转正常色。
    */
   queued?: boolean;
+  /**
+   * 后台子任务完成/失败通知气泡(docs/design/background-child-missions.md):
+   * 派生的子 mission 收尾时插入父会话的可见系统通知卡,与回注给模型的
+   * 【后台任务通知】消息同源同步落库,刷新后仍在。专用字段(不复用
+   * messageKind:'intervention'——该值全仓无渲染实现),旧数据零迁移。
+   */
+  bgNotice?: {
+    childMissionId: string;
+    childTitle: string;
+    outcome: 'done' | 'failed';
+    /** 结果摘要(finalAnswer/错误信息截断后),通知卡 clamp-3 可展开 */
+    summary?: string;
+  };
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
   /**
    * 物理工具调用 id(编排器逐调用生成,tool_call/tool_result 事件与 ToolSession
@@ -120,6 +133,13 @@ export interface Mission {
   /** 派发来源工坊 id(/api/agent/run 服务端渲染时带上):
    *  记忆蒸馏层据此识别「首条消息是工坊表单参数拼装」,不把单次选择沉淀为长期定位 */
   workshopId?: string;
+  /**
+   * 父任务 id(docs/design/background-child-missions.md):经
+   * launch_background_task 派生的后台子 mission 携带,是子任务身份的唯一
+   * 事实源 —— 完成回注唤醒父任务、活动列表折叠分组、DONE push 抑制、
+   * stop 级联、防递归挂载派发工具全部读它。普通任务无此字段(零迁移)。
+   */
+  parentMissionId?: string;
   /** 任务级累计 token 用量（多轮追问续跑时逐次累加；成本可观测） */
   usage?: { promptTokens: number; completionTokens: number };
   viewport?: ViewportState;

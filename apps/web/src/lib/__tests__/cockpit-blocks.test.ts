@@ -563,3 +563,58 @@ describe('turnCreatesPlan · 看板卡钉挂轮判定', () => {
     expect(turnCreatesPlan((agentTurns[1] as { items: any[] }).items)).toBe(false);
   });
 });
+
+describe('splitStepsIntoBlocks · 后台任务通知块(step_bg_ / bgNotice)', () => {
+  const bgStep = (childId: string, outcome: 'done' | 'failed' = 'done'): MissionStep =>
+    step({
+      id: `step_bg_${childId}`,
+      title: outcome === 'done' ? '后台任务已完成: 竞品调研' : '后台任务失败: 竞品调研',
+      status: outcome === 'done' ? 'DONE' : 'FAILED',
+      bgNotice: { childMissionId: childId, childTitle: '竞品调研', outcome },
+    });
+
+  it('bgNotice 步骤独立成 notice 块 —— 不掉进 tools catch-all 被折叠', () => {
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '调研并汇总'),
+      toolStep('t1', 'launch_background_task'),
+      bgStep('mission_c1'),
+      finalAnswer('a1', '整合后的报告'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'notice', 'assistant']);
+    const notice = blocks[2] as { type: 'notice'; step: MissionStep };
+    expect(notice.step.bgNotice?.childMissionId).toBe('mission_c1');
+  });
+
+  it('FAILED 态通知同样走 notice 块(失败叙述由渲染层按 outcome 呈现)', () => {
+    const { blocks } = splitStepsIntoBlocks([toolStep('t1', 'web_search'), bgStep('mission_c2', 'failed')]);
+    expect(blocks.map((b) => b.type)).toEqual(['tools', 'notice']);
+  });
+
+  it('通知块分隔前后工具链(flushTools 语义,照 eff-step 模式)', () => {
+    const { blocks } = splitStepsIntoBlocks([
+      toolStep('t1', 'web_search'),
+      bgStep('mission_c1'),
+      toolStep('t2', 'sandbox_run_command'),
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(['tools', 'notice', 'tools']);
+  });
+
+  it('不被 legacy-final 判定误收为最终答复(无 role/answer)', () => {
+    const legacy = step({ id: 'm1', role: 'assistant', answer: '中间分析', status: 'DONE' });
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), bgStep('mission_c1'), legacy]);
+    // 通知块插在中间,legacy 最终答复判定不受影响
+    expect(blocks.map((b) => b.type)).toEqual(['user', 'notice', 'assistant']);
+  });
+
+  it('轮末追加的通知归入同一 agent 轮(groupBlocksIntoTurns 不开新轮)', () => {
+    const { blocks } = splitStepsIntoBlocks([
+      userStep('u1', '调研'),
+      finalAnswer('a1', '报告'),
+      bgStep('mission_c1'),
+    ]);
+    const turns = groupBlocksIntoTurns(blocks);
+    expect(turns.map((t) => t.type)).toEqual(['user', 'agent']);
+    const items = (turns[1] as { items: any[] }).items;
+    expect(items.map((b) => b.type)).toEqual(['assistant', 'notice']);
+  });
+});

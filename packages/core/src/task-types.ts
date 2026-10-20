@@ -59,6 +59,15 @@ export interface TaskOptions {
    */
   getUserMessages?: () => string | null | undefined | Promise<string | null | undefined>;
   /**
+   * 后台子任务完成/失败通知(docs/design/background-child-missions.md):
+   * 每步 prepareStep 前调用,返回非空字符串时内核把它作为一条
+   * 【后台任务通知】user 消息追加到本步消息末尾 —— 派生的后台子任务
+   * (独立子 mission)收尾时,其结果摘要经本通道进入父任务正在跑的轮次;
+   * 多条由上层合并成一条。与 getStepNotice/getUserMessages 同款拉取式
+   * 通道,抛错时内核静默跳过。CLI/runner 不注入 = 行为与之前一致。
+   */
+  getBackgroundNotice?: () => string | null | undefined | Promise<string | null | undefined>;
+  /**
    * 超长工具输出全量落盘回调(docs/design/tool-output-spill.md):
    * 工具结果序列化后超过 TOOL_OUTPUT_LIMIT 时,内核先经本回调尝试把全量原文
    * 写入调用方管理的存储(web 层 = 用户上下文目录 v2/<userId>/tool-output/)。

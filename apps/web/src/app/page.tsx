@@ -797,6 +797,14 @@ export default function Workspace() {
       eventSource.addEventListener('mission_created', (e: MessageEvent) => {
         try {
           const mission: Mission = JSON.parse(e.data);
+          // 后台子 mission(带 parentMissionId):只并入列表(父会话行下挂 chip),
+          // 【不抢焦点】—— 无条件切视图会把用户当前会话切走(子任务创建瞬间);
+          // 也不动乐观占位(占位只属于用户亲手发起的会话,父 mission_created 必
+          // 先于任何子任务到达,彼时占位已摘除)
+          if (mission.parentMissionId) {
+            setMissions((prev) => [mission, ...prev.filter((m) => m.id !== mission.id)]);
+            return;
+          }
           // 后端真实会话落地 → 摘除乐观占位会话（真实会话自带用户步骤与思考占位）
           const pendingLocalId = pendingLocalMissionIdRef.current;
           pendingLocalMissionIdRef.current = null;

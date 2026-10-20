@@ -1,5 +1,5 @@
 import { Context } from '@deepseek-ai/cordis';
-import { OrchestratorService, AgentService } from '@agtpilot/core';
+import { OrchestratorService, AgentService, BACKGROUND_NOTICE_PREFIX } from '@agtpilot/core';
 import { createAgentRuntime } from '@agtpilot/app-kit';
 import { ApprovalRequest, ConnectorSuggestion, PlanData, PlanTask, UserQuestion, QuestionAnswerItem } from '@agtpilot/protocol';
 import type { MCPService } from '@agtpilot/plugin-mcp';
@@ -139,11 +139,14 @@ class AgentBackend {
   /**
    * in-flight 任务运行时把手(治理「回退弧→前向弧」传导入口):
    * missionId → { userId, env(taskEnv 活引用,删键即时生效), sandbox(taskSandbox
-   * 活引用,权限提案批准即热更新), notices(治理提示队列) }。
+   * 活引用,权限提案批准即热更新), notices(治理提示队列), bgNotices(后台
+   * 子任务完成通知队列,docs/design/background-child-missions.md) }。
    * governance-bus 收到记忆删除/授权撤销/权限提案裁决事件后写这里,内核 prepareStep
    * 经 getStepNotice 逐条取出注入模型上下文(见 initGovernanceSubscriptions)。
    */
-  private taskRuntimes: Map<string, { userId?: string; env?: Record<string, string>; sandbox?: import('@agtpilot/core').SandboxSessionPolicy; notices: string[] }> = new Map();
+  private taskRuntimes: Map<string, { userId?: string; env?: Record<string, string>; sandbox?: import('@agtpilot/core').SandboxSessionPolicy; notices: string[]; bgNotices: string[] }> = new Map();
+  /** 已投递过收尾通知的后台子任务(终生去重,仿 pushedDoneMissions;done/error 双路可能重复到达) */
+  private notifiedChildren: Set<string> = new Set();
 
   private constructor() {
     this.state = {
@@ -986,6 +989,16 @@ class AgentBackend {
               mission.viewport.status = 'idle';
             }
             this.broadcast({ type: 'mission_updated', data: mission });
+
+            // 后台子任务完成回注(docs/design/background-child-missions.md):
+            // 子 mission DONE → 结果摘要送父任务(在飞 → bgNotices 队列待步
+            // 边界注入;已结束 → 自动唤醒续轮)+ 父会话插通知气泡。异常只
+            // 降级为日志,不炸子任务收尾主流程
+            try {
+              this.deliverChildOutcomeFromMission(mission, 'done', finalAnswer);
+            } catch (e: any) {
+              this.addTerminalLog('stderr', `[Background] 完成回注异常: ${e?.message || e}`, mission.userId);
+            }
           }
 
         this.state.viewport.status = 'idle';
@@ -1033,6 +1046,14 @@ class AgentBackend {
             status: 'FAILED',
           });
           this.broadcast({ type: 'mission_updated', data: mission });
+
+          // 后台子任务失败回注(与 done 同链路;abort-echo 已在上方护栏 break,
+          // 用户主动停止/级联停止天然不会误报失败)
+          try {
+            this.deliverChildOutcomeFromMission(mission, 'failed', errorMsg);
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[Background] 失败回注异常: ${e?.message || e}`, mission.userId);
+          }
         } else {
           // 无归属任务(串台/孤儿事件)的错误仍要留痕:程序日志 + 全局终端流
           this.addTerminalLog('stderr', `[Agent Error] ${errorMsg}`);
@@ -1143,6 +1164,10 @@ class AgentBackend {
       }
 
       if (event.type === 'mission_updated' && event.data?.status === 'DONE' && event.data?.userId) {
+        // 后台子任务不推 DONE:结果经回注由父任务唤醒送达,N 子=N push 刷屏
+        // 且深链落割裂的子会话(docs/design/background-child-missions.md §5);
+        // 父任务被解锁后(pushedDoneMissions.delete)唤醒轮收尾照常推
+        if (event.data.parentMissionId) return;
         const missionId = event.data.id;
         if (!missionId || this.pushedDoneMissions.has(missionId)) return;
         this.pushedDoneMissions.add(missionId);
@@ -1349,6 +1374,16 @@ class AgentBackend {
     // 显示(灰 → 正常),不再挂「排队中」
     this.queuedUserInputs.delete(missionId);
 
+    // 级联停止在飞的后台子任务(docs/design/background-child-missions.md):
+    // 不级联则子任务继续烧 token,且其完成通知会唤醒刚被终止的父任务
+    // (僵尸续轮)。子任务的 abort 回声由 error 事件的 abort-echo 护栏吞掉,
+    // 不会给父会话插失败气泡。天然无递归(子任务不挂派发工具,没有孙任务)
+    for (const m of [...this.state.missions]) {
+      if (m.parentMissionId === missionId && (this.runInflight.has(m.id) || this.activeAbortControllers.has(m.id))) {
+        this.stopMission(m.id);
+      }
+    }
+
     const controller = this.activeAbortControllers.get(missionId);
     if (controller) {
       controller.abort();
@@ -1443,7 +1478,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1586,6 +1621,9 @@ class AgentBackend {
         ],
         conversationMessages: [],
         workshopId: options.workshopId,
+        // 后台子任务身份的唯一事实源(docs/design/background-child-missions.md):
+        // 完成回注唤醒/活动列表折叠/DONE push 抑制/stop 级联/防递归全读它
+        ...(options.parentMissionId ? { parentMissionId: options.parentMissionId } : {}),
         // 逐字段交付契约投影(validator 是函数不可 JSON 化,只存可序列化骨架;
         // 续聊/重启凭 id 经 resolveDeliveryContract 现场重建完整 spec 并重挂工具)
         ...(options.delivery
@@ -1599,7 +1637,12 @@ class AgentBackend {
       };
 
       this.state.missions.unshift(targetMission);
-      this.state.activeMissionId = missionId;
+      // 后台子 mission 不抢全局活跃会话:activeMissionId 影响 init/state 重放
+      // 与无 taskId 日志兜底归属,子任务只是父会话的折叠附属(docs/design/
+      // background-child-missions.md 坑②)
+      if (!options.parentMissionId) {
+        this.state.activeMissionId = missionId;
+      }
 
       if (options.userId) {
         try {
@@ -1623,7 +1666,7 @@ class AgentBackend {
 
     // 本轮登记的运行时把手:finally 里按身份比对删除,防止旧轮收尾时
     // 误删新轮的把手(并发护栏的另一半)
-    let ownRuntime: { userId?: string; env?: Record<string, string>; sandbox?: import('@agtpilot/core').SandboxSessionPolicy; notices: string[] } | undefined;
+    let ownRuntime: { userId?: string; env?: Record<string, string>; sandbox?: import('@agtpilot/core').SandboxSessionPolicy; notices: string[]; bgNotices: string[] } | undefined;
 
     // 异步执行任务生命周期(let 先声明:finally 里按身份比对在飞标记)
     let runPromise: Promise<void> | undefined;
@@ -1785,6 +1828,37 @@ class AgentBackend {
             ];
           } catch (e: any) {
             this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`, uid);
+          }
+
+          // 2.48 后台子任务派发工具(docs/design/background-child-missions.md):
+          // 模型自主决定把长耗时任务后台化 —— launch_background_task 立即返回
+          // 子 mission id,子任务 unattended 独立上下文跑,完成/失败经
+          // 【后台任务通知】通道回注本任务。三个 gate:
+          // - 防递归:子 mission 不挂(含用户点开子会话手动续聊的轮次,读
+          //   targetMission.parentMissionId);
+          // - unattended 轮(cron/IM)不挂:没有主对话承接通知,也防链式派发风暴;
+          // - AGTPILOT_BACKGROUND_TASKS=0 总闸(仿 AGTPILOT_WORKSHOP_TOOLS 先例)
+          try {
+            const isBackgroundChild = Boolean(options.parentMissionId || targetMission.parentMissionId);
+            if (!isBackgroundChild && !options.unattended && process.env.AGTPILOT_BACKGROUND_TASKS !== '0') {
+              const { buildBackgroundTaskTools } = await import('@/lib/background-tasks');
+              const parentMissionId = targetMission.id;
+              taskTools = [
+                ...(taskTools || []),
+                ...buildBackgroundTaskTools({
+                  launch: (childGoal, childTitle) =>
+                    this.runMission(childGoal, {
+                      title: childTitle,
+                      userId: uid,
+                      parentMissionId,
+                      unattended: true,
+                    }).then((m) => ({ missionId: m.id })),
+                  countRunningChildren: () => this.countRunningChildren(parentMissionId),
+                }),
+              ];
+            }
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[Background] 后台任务工具挂载异常: ${e?.message || e}`, uid);
           }
 
           // 2.46 PPT 工坊等 8 个工具模块已并入下方「工具提供方注册表」统一装载
@@ -1983,6 +2057,7 @@ class AgentBackend {
           env: taskEnv,
           sandbox: taskSandbox,
           notices: [],
+          bgNotices: [],
         };
         this.taskRuntimes.set(targetMission.id, ownRuntime);
 
@@ -2049,6 +2124,10 @@ class AgentBackend {
             // 用户追加消息通道(同款拉取式):任务进行中排队的追问在此
             // 合并注入本轮 —— 追问不打断轮次,而是调整它的方向(steering)
             getUserMessages: () => this.drainQueuedUserInputs(targetMission),
+            // 后台任务通知通道(同款拉取式):派生的子 mission 完成/失败的
+            // 结果摘要在此合并注入本轮(一次 drain 全部 join 成一条,多子
+            // 任务同帧收尾只破一次前缀缓存)
+            getBackgroundNotice: () => this.drainBgNotices(targetMission.id),
             system: buildTaskSystemPrompt(userMemoryPrompt),
           });
 
@@ -2252,9 +2331,22 @@ class AgentBackend {
         // 注意顺序:须在上方 runInflight 删除之后,派发的新轮才不会被
         // runMission 的在飞判定误当在飞轮次再次排队。
         const leftover = roundLanded ? this.queuedUserInputs.get(targetMission.id) : undefined;
-        if (leftover && leftover.length > 0) {
+        // 后台任务通知同款兜底(docs/design/background-child-missions.md):
+        // 通知落在最后一个 prepareStep 之后(典型:本轮最终答复流式期间子
+        // 任务收尾),正常落地的轮次自动派发一轮续聊送达;失败/被停的轮次
+        // 不派发(模型侧丢失,用户侧通知气泡已落库可见)
+        const bgLeftover = roundLanded ? ownRuntime?.bgNotices : undefined;
+        if ((leftover && leftover.length > 0) || (bgLeftover && bgLeftover.length > 0)) {
           this.queuedUserInputs.delete(targetMission.id);
-          const merged = leftover.join('\n\n');
+          const parts: string[] = [];
+          if (bgLeftover && bgLeftover.length > 0) {
+            // 唤醒文本经 runMission 以普通 user 消息进模型,前缀显式带上
+            // (与 prepareStep 注入通道 appendBackgroundNotice 加的是同一个)
+            parts.push(`${BACKGROUND_NOTICE_PREFIX}${bgLeftover.join('\n\n')}`);
+            bgLeftover.length = 0;
+          }
+          if (leftover && leftover.length > 0) parts.push(leftover.join('\n\n'));
+          const merged = parts.join('\n\n');
           // 排队气泡已可见,skipUserStep 免得重复推用户步骤
           void this.runMission(merged, {
             userId: targetMission.userId,
@@ -2295,6 +2387,92 @@ class AgentBackend {
       }
     }
     return touched;
+  }
+
+  /** 该父 mission 下在飞的后台子任务数(launch_background_task 并发闸,runInflight 为事实源) */
+  private countRunningChildren(parentMissionId: string): number {
+    let n = 0;
+    for (const m of this.state.missions) {
+      if (m.parentMissionId === parentMissionId && this.runInflight.has(m.id)) n++;
+    }
+    return n;
+  }
+
+  /**
+   * getBackgroundNotice 通道的取数回调(runTask 每步 prepareStep 前调用):
+   * 取走该任务当前全部后台任务通知,合并成一条(内核加【后台任务通知】
+   * 前缀注入)。与治理提示的逐条 shift 不同:一次 drain 全部 —— 多子任务
+   * 同帧收尾一次送达,只破一次前缀缓存。空队列返回 null,内核跳过。
+   */
+  private drainBgNotices(missionId: string): string | null {
+    const rt = this.taskRuntimes.get(missionId);
+    if (!rt || rt.bgNotices.length === 0) return null;
+    const all = rt.bgNotices.splice(0, rt.bgNotices.length);
+    this.addTerminalLog('system', `[Background] 已注入后台任务通知 ${all.length} 条`, rt.userId);
+    return all.join('\n\n');
+  }
+
+  /**
+   * 后台子任务收尾回注(orchestrator done/error 事件挂钩 → lib/background-notify
+   * 纯路由,docs/design/background-child-missions.md):非子任务(无
+   * parentMissionId)零动作;父不在内存(50 条上限挤出等边缘)气泡/回注
+   * 无处落,只留痕。投递去重、截断、气泡幂等、路由决策都在纯模块里。
+   */
+  private deliverChildOutcomeFromMission(child: Mission, outcome: 'done' | 'failed', detail?: string) {
+    const parentId = child.parentMissionId;
+    if (!parentId) return;
+    const parent = this.state.missions.find((m) => m.id === parentId);
+    if (!parent) {
+      this.addTerminalLog(
+        'stderr',
+        `[Background] 父任务 ${parentId} 不在内存,子任务「${child.title}」结果回注跳过`,
+        child.userId
+      );
+      return;
+    }
+    const { deliverChildOutcome, buildBgNoticeStep } = require('@/lib/background-notify');
+    deliverChildOutcome(
+      {
+        childMissionId: child.id,
+        childTitle: child.title,
+        parentMissionId: parentId,
+        outcome,
+        detail,
+      },
+      {
+        isParentRunning: (pid: string) => this.runInflight.has(pid),
+        enqueueNotice: (pid: string, text: string) => {
+          const rt = this.taskRuntimes.get(pid);
+          if (!rt) return false;
+          rt.bgNotices.push(text);
+          return true;
+        },
+        wakeParent: (pid: string, text: string) => {
+          // 唤醒轮不设 unattended(用户可能在场,ask_user 照常可用);
+          // 通知文本以普通 user 消息进模型,前缀与注入通道一致
+          void this.runMission(`${BACKGROUND_NOTICE_PREFIX}${text}`, {
+            missionId: pid,
+            userId: parent.userId,
+            skipUserStep: true,
+          });
+        },
+        appendBubble: (o: any, summary?: string) => {
+          const step = buildBgNoticeStep(o, summary);
+          if (parent.steps.some((s) => s.id === step.id)) return; // 幂等
+          parent.steps.push(step);
+          // mission_updated 广播 → saveUserMission 自动落盘,刷新后气泡仍在
+          this.broadcast({ type: 'mission_updated', data: parent });
+        },
+        unlockParentPush: (pid: string) => {
+          // 父任务首轮 DONE 已进去重集;整合了子任务结果的下一次父完成
+          // 值得再推一次(深链落父会话)。在气泡广播之后调用 —— 气泡的
+          // mission_updated 不会触发误推(那时去重集还挡着)
+          this.pushedDoneMissions.delete(pid);
+        },
+        log: (msg: string) => this.addTerminalLog('system', msg, parent.userId),
+      },
+      this.notifiedChildren
+    );
   }
 
   public initCronScheduler() {

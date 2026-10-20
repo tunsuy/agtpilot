@@ -30,6 +30,7 @@ describe('buildTaskSystemPrompt', () => {
       '公众号草稿箱边界',
       '先问后猜', // 模糊需求提问卡(ask_user)
       '计划确认', // 大任务方案批准门(confirm_plan)
+      '后台子任务', // 长任务后台化(launch_background_task)
       '发布永远由用户本人', // 小红书发布合规红线
       'freepublish', // 公众号群发红线
     ]) {
@@ -156,5 +157,28 @@ describe('buildTaskSystemPrompt', () => {
     expect(s).toContain('先走【先问后猜】问清'); // 与提问分轨:方向不清先问再出计划
     // 规则编号连续:排在先问后猜(13)之后
     expect(s.indexOf('【计划确认】')).toBeGreaterThan(s.indexOf('【先问后猜】'));
+  });
+
+  /**
+   * 后台子任务(docs/design/background-child-missions.md,对齐 Claude Code
+   * run_in_background):正面触发判据(长耗时+独立)+ 通知送达语义(【后台
+   * 任务通知】)+ 反面约束(严禁空等/goal 自包含/禁重复派发/禁链式派发)。
+   * 没有这条规则时模型的典型失败:派发后反复轮询空转,或把强耦合的下一步
+   * 也丢进后台导致主线断档。
+   */
+  it('规则 15 给出后台子任务触发判据、严禁空等与通知整合语义', () => {
+    const s = buildTaskSystemPrompt();
+    expect(s).toContain('【后台子任务】');
+    expect(s).toContain('launch_background_task');
+    expect(s).toContain('【后台任务通知】'); // 通知送达通道名与注入前缀一致
+    expect(s).toContain('严禁】空转等待'); // 派发后先干别的
+    expect(s).toContain('goal 必须自包含'); // 子任务看不到父上下文
+    expect(s).toContain('不能向用户提问'); // unattended 语义
+    expect(s).toContain('整合进当前任务'); // 收通知后的动作
+    expect(s).toContain('不要重复派发同一子任务');
+    expect(s).toContain('不要原样重试'); // 失败改道
+    expect(s).toContain('不超过 4 个'); // 并发闸与工具侧一致
+    // 规则编号连续:排在计划确认(14)之后
+    expect(s.indexOf('【后台子任务】')).toBeGreaterThan(s.indexOf('【计划确认】'));
   });
 });

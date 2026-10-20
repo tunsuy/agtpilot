@@ -19,6 +19,7 @@ export type ActivityKind =
   | 'planner'
   | 'memory'
   | 'notify'
+  | 'background'
   | 'generic';
 
 export interface NarratedActivity {
@@ -100,6 +101,9 @@ function narrateTool(tool: string, args: any = {}): NarratedActivity {
       return { kind: 'connector', label: '发起连接器授权' };
     case 'memory_store':
       return { kind: 'memory', label: '沉淀长期记忆' };
+    case 'launch_background_task':
+      // 派发即返回,子任务过程折叠在工具行的展开面板里(BackgroundChildPanel)
+      return { kind: 'background', label: '派发后台任务', detail: title || clip(args?.goal, 40) };
     case 'memory_recall':
     case 'memory_list':
       return { kind: 'memory', label: '检索长期记忆' };
@@ -137,6 +141,15 @@ function narrateTool(tool: string, args: any = {}): NarratedActivity {
 export function narrateStep(step: MissionStep): NarratedActivity | null {
   if (step.role === 'user') {
     return { kind: 'user', label: '提出请求', detail: clip(step.userPrompt || step.title, 60) };
+  }
+
+  // 后台任务通知步骤(step_bg_ 前缀):无 role/tool/answer,不早退会掉进
+  // FAILED「执行失败」或「完成一轮推理」兜底 —— 通知是系统事件,按结局叙述
+  if (step.bgNotice) {
+    const t = clip(step.bgNotice.childTitle, 40);
+    return step.bgNotice.outcome === 'failed'
+      ? { kind: 'background', label: '后台任务失败', detail: t }
+      : { kind: 'background', label: '后台任务完成', detail: t };
   }
 
   if (!step.tool) {

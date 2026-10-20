@@ -75,7 +75,7 @@ export {
   MIN_HISTORY_BUDGET,
 } from './context-budget';
 export type { ContextBudgetInputs } from './context-budget';
-export { appendStepNotice, STEP_NOTICE_PREFIX } from './notice';
+export { appendStepNotice, STEP_NOTICE_PREFIX, appendBackgroundNotice, BACKGROUND_NOTICE_PREFIX } from './notice';
 export { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 export type { ReasoningMessageLike, StripReasoningResult } from './reasoning';
 export { ToolGate } from './tool-gate';

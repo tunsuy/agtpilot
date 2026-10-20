@@ -195,3 +195,42 @@ describe('narrateStep 停止收尾口径(终止不误述为失败,未启动不�
     expect(a?.label).toBe('回复中断');
   });
 });
+
+describe('narrateStep 后台子任务(派发工具行 + 通知步骤)', () => {
+  it('launch_background_task → 派发后台任务,detail 取 title(缺省回退 goal)', () => {
+    const n = narrateStep(
+      step({ tool: 'launch_background_task', args: { goal: '深度调研竞品 X 的定价策略', title: '竞品调研' } })
+    );
+    expect(n?.kind).toBe('background');
+    expect(n?.label).toBe('派发后台任务');
+    expect(n?.detail).toBe('竞品调研');
+    const noTitle = narrateStep(step({ tool: 'launch_background_task', args: { goal: '深度调研竞品 X' } }));
+    expect(noTitle?.detail).toBe('深度调研竞品 X');
+  });
+
+  it('bgNotice 完成步骤 → 后台任务完成(不掉进「完成一轮推理」兜底)', () => {
+    const n = narrateStep(
+      step({
+        id: 'step_bg_mission_c1',
+        title: '后台任务已完成: 竞品调研',
+        bgNotice: { childMissionId: 'mission_c1', childTitle: '竞品调研', outcome: 'done' },
+      })
+    );
+    expect(n?.kind).toBe('background');
+    expect(n?.label).toBe('后台任务完成');
+    expect(n?.detail).toBe('竞品调研');
+  });
+
+  it('bgNotice 失败步骤 → 后台任务失败(不被叙述成「执行失败」)', () => {
+    const n = narrateStep(
+      step({
+        id: 'step_bg_mission_c2',
+        title: '后台任务失败: 竞品调研',
+        status: 'FAILED',
+        bgNotice: { childMissionId: 'mission_c2', childTitle: '竞品调研', outcome: 'failed' },
+      })
+    );
+    expect(n?.kind).toBe('background');
+    expect(n?.label).toBe('后台任务失败');
+  });
+});

@@ -18,6 +18,7 @@ import {
   X,
   ChevronDown,
   RotateCw,
+  Layers,
 } from 'lucide-react';
 import type { MissionStep } from '../types/agent';
 import { narrateStep, formatActivityDuration, type ActivityKind } from '../lib/activity-narration';
@@ -42,6 +43,7 @@ const KIND_ICON: Record<ActivityKind, React.ComponentType<{ className?: string }
   planner: ListTodo,
   memory: BookOpen,
   notify: Bell,
+  background: Layers,
   generic: Wrench,
 };
 

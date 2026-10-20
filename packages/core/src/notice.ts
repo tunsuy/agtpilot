@@ -69,3 +69,24 @@ export function appendBoardReminder(messages: any[], text?: string | null): any[
   const injected: StepNoticeMessage = { role: 'user', content: `${BOARD_REMINDER_PREFIX}${content}` };
   return [...(messages || []), injected];
 }
+
+/**
+ * 后台任务通知前缀(docs/design/background-child-missions.md):派生的后台
+ * 子任务完成/失败时,其结果摘要经本通道送达父任务 —— 父轮在跑则在下一个
+ * prepareStep 步边界注入,父轮已结束则由上层自动派发唤醒续轮。与治理提示/
+ * 用户追加消息同款机制:一次性系统事件不改写常量 system,user 角色 + 显式
+ * 前缀区别于工具结果与用户闲聊,压缩之后注入防被蒸馏。
+ */
+export const BACKGROUND_NOTICE_PREFIX = '【后台任务通知】';
+
+/**
+ * 把一条后台任务通知作为 user 消息追加到消息数组末尾(不改原数组)。
+ * - text 为空/纯空白时返回 null(调用方跳过,消息保持原样);
+ * - 返回新数组,末尾为 `{ role: 'user', content: 前缀 + text }`。
+ */
+export function appendBackgroundNotice(messages: any[], text?: string | null): any[] | null {
+  const content = typeof text === 'string' ? text.trim() : '';
+  if (!content) return null;
+  const injected: StepNoticeMessage = { role: 'user', content: `${BACKGROUND_NOTICE_PREFIX}${content}` };
+  return [...(messages || []), injected];
+}

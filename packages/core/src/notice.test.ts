@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { appendStepNotice, appendUserMessage, STEP_NOTICE_PREFIX, USER_MESSAGE_PREFIX } from './notice';
+import {
+  appendStepNotice,
+  appendUserMessage,
+  appendBackgroundNotice,
+  STEP_NOTICE_PREFIX,
+  USER_MESSAGE_PREFIX,
+  BACKGROUND_NOTICE_PREFIX,
+} from './notice';
 
 describe('appendStepNotice', () => {
   it('空提示返回 null(调用方跳过注入)', () => {
@@ -79,5 +86,43 @@ describe('appendUserMessage', () => {
     const next = appendUserMessage(messages, '  追问内容  ');
     expect(messages.length).toBe(1);
     expect(next![1].content).toBe(`${USER_MESSAGE_PREFIX}追问内容`);
+  });
+});
+
+/** 后台任务通知注入(docs/design/background-child-missions.md):
+ *  派生的后台子任务完成/失败时,结果摘要经本通道进入父任务 ——
+ *  前缀区别于治理提示与用户追加消息,三者可能同步内先后注入 */
+describe('appendBackgroundNotice', () => {
+  it('空通知返回 null(队列无通知时内核跳过,消息数组保持原样)', () => {
+    const messages = [{ role: 'user', content: 'hi' }];
+    expect(appendBackgroundNotice(messages, null)).toBeNull();
+    expect(appendBackgroundNotice(messages, undefined)).toBeNull();
+    expect(appendBackgroundNotice(messages, '')).toBeNull();
+    expect(appendBackgroundNotice(messages, ' \n ')).toBeNull();
+  });
+
+  it('子任务结果以【后台任务通知】前缀的 user 消息追加到末尾', () => {
+    const messages = [
+      { role: 'user', content: '调研 X 同时回答我 Y' },
+      { role: 'assistant', content: 'Y 的答案…' },
+    ];
+    const notice = '子任务「调研 X」已完成。结果摘要:…';
+    const next = appendBackgroundNotice(messages, notice);
+    expect(next).not.toBeNull();
+    expect(next!.length).toBe(3);
+    expect(next![2]).toEqual({
+      role: 'user',
+      content: `${BACKGROUND_NOTICE_PREFIX}${notice}`,
+    });
+    // 前缀必须区别于另外两个通道
+    expect(BACKGROUND_NOTICE_PREFIX).not.toBe(STEP_NOTICE_PREFIX);
+    expect(BACKGROUND_NOTICE_PREFIX).not.toBe(USER_MESSAGE_PREFIX);
+  });
+
+  it('不修改原消息数组(不可变追加),空白被裁剪', () => {
+    const messages = [{ role: 'user', content: 'hi' }];
+    const next = appendBackgroundNotice(messages, '  子任务完成  ');
+    expect(messages.length).toBe(1);
+    expect(next![1].content).toBe(`${BACKGROUND_NOTICE_PREFIX}子任务完成`);
   });
 });

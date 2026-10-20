@@ -163,6 +163,10 @@ export function MobileActivityView({
     [missions, activeMissionId]
   );
 
+  // 后台子任务(带 parentMissionId)不占任务切换条坑位(与桌面 sidebar 同规则):
+  // 子任务进展在父会话的通知卡/活动行可见;顶层只列用户发起的会话
+  const topMissions = useMemo(() => missions.filter((m) => !m.parentMissionId), [missions]);
+
   // 发布审批归回来源会话(与桌面驾驶舱同规则):切会话不再全局跟随卡片;
   // hidden 走「待你审批」下方的细条提示 + 跳回来源会话,不会静默漏掉
   const { visible: visibleApprovals, hidden: hiddenApprovals } = partitionApprovalsByMission(
@@ -451,11 +455,11 @@ export function MobileActivityView({
       )}
 
       {/* 任务切换 */}
-      {missions.length > 0 && (
+      {topMissions.length > 0 && (
         <section>
           <div className="-mx-4 px-4 overflow-x-auto scrollbar-none">
             <div className="flex gap-2 w-max pb-1">
-              {(showAllMissions ? missions : missions.slice(0, 12)).map((m) => {
+              {(showAllMissions ? topMissions : topMissions.slice(0, 12)).map((m) => {
                 const active = mission?.id === m.id;
                 return (
                   <button
@@ -473,13 +477,13 @@ export function MobileActivityView({
                   </button>
                 );
               })}
-              {missions.length > 12 && (
+              {topMissions.length > 12 && (
                 <button
                   type="button"
                   onClick={() => setShowAllMissions((v) => !v)}
                   className="h-8 px-3.5 rounded-full text-xs font-medium whitespace-nowrap transition border bg-zinc-100 text-zinc-600 border-zinc-200 active:bg-zinc-200"
                 >
-                  {showAllMissions ? '收起' : `全部 ${missions.length}`}
+                  {showAllMissions ? '收起' : `全部 ${topMissions.length}`}
                 </button>
               )}
             </div>

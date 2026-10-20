@@ -458,3 +458,62 @@ describe('isWorktreePristine(自动重试模式选择器:干净从头跑 / 有�
     expect(await isWorktreePristine('/ws/o/r', 'master', pristineExec({ originRangeFail: true, ahead: '0' }))).toBe(true);
   });
 });
+
+describe('prepareRepo · 远端现场收编(仅 PR 跟进任务:origin/<workBranch> 已推送产出)', () => {
+  const fuPack = {
+    ...pack,
+    prFollowUp: { prUrl: 'https://github.com/vllm-project/vllm/pull/999', baseTaskId: 'rtask_0' },
+  } as RunnerTaskPack;
+
+  it('updated + 本地无现场 + origin/<workBranch> 存在 → 收编为 resumed(不重置到基线)', async () => {
+    const root = tmpRoot();
+    const repoDir = path.join(root, 'vllm-project', 'vllm');
+    fs.mkdirSync(path.join(repoDir, '.git'), { recursive: true });
+    const { calls, exec } = recExec(async (_cmd, args) => {
+      // 本地分支不存在(findPriorWork 落空),远端分支存在(上轮已审批推送)
+      if (args.includes(`refs/heads/${pack.workBranch}`)) throw new Error('fatal: invalid reference');
+      if (args.includes('rev-list') && args.some((a) => a === `origin/main..${pack.workBranch}`)) {
+        return { stdout: '3\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const r = await prepareRepo(fuPack, root, exec);
+    expect(r.mode).toBe('resumed');
+    expect(r.baseBranch).toBe('main');
+    // 收编动作:以 origin/<workBranch> 落本地跟踪分支,而非 checkout -B origin/main 重置
+    expect(calls.some((c) => c.args.slice(2).includes(`origin/${pack.workBranch}`) && c.args.includes('-B'))).toBe(true);
+    expect(calls.some((c) => c.args.slice(2).join(' ') === `checkout -B ${pack.workBranch} origin/main`)).toBe(false);
+  });
+
+  it('全新克隆(跨设备跟进)也能收编:clone 后 origin/<workBranch> 存在 → resumed', async () => {
+    const root = tmpRoot();
+    const { exec } = recExec(); // 全成功 mock:show-ref 远端分支命中
+    const r = await prepareRepo(fuPack, root, exec);
+    expect(r.mode).toBe('resumed');
+  });
+
+  it('跟进任务但远端也没有该分支(上轮没推送/首次跟进失败重派)→ 走原重置路径', async () => {
+    const root = tmpRoot();
+    const { calls, exec } = recExec(async (_cmd, args) => {
+      if (args.includes(`refs/remotes/origin/${pack.workBranch}`)) throw new Error('fatal: invalid reference');
+      if (args.includes(`refs/heads/${pack.workBranch}`)) throw new Error('fatal: invalid reference');
+      return { stdout: '', stderr: '' };
+    });
+    const r = await prepareRepo(fuPack, root, exec);
+    expect(r.mode).toBe('cloned');
+    // 收编探测落空后仍走原重置路径:checkout -B <workBranch> origin/main
+    expect(
+      calls.some((c) => c.args.slice(2).join(' ') === `checkout -B ${pack.workBranch} origin/main`)
+    ).toBe(true);
+  });
+
+  it('普通任务(无 prFollowUp)不触发收编:远端同名分支存在也保持旧行为(零额外 git 调用)', async () => {
+    const root = tmpRoot();
+    const repoDir = path.join(root, 'vllm-project', 'vllm');
+    fs.mkdirSync(path.join(repoDir, '.git'), { recursive: true });
+    const { calls, exec } = recExec(); // 全成功 mock(收编若触发会命中)
+    const r = await prepareRepo(pack, root, exec);
+    expect(r.mode).toBe('updated');
+    expect(calls.some((c) => c.args.includes(`refs/remotes/origin/${pack.workBranch}`))).toBe(false);
+  });
+});

@@ -448,3 +448,91 @@ describe('经 fork 派发(viaFork):head 固化为 owner:branch + forkRepo 下行
     expect(getDeviceActions(USER, dev)[0].forkRepo).toBeUndefined();
   });
 });
+
+describe('PR 跟进任务(prFollowUp):审批卡语义 + push-only 固化命令(2026-10-20「响应 review」)', () => {
+  const fuPack = {
+    ...validPack,
+    taskId: 'rtask_fu',
+    prFollowUp: { prUrl: 'https://github.com/owner/repo/pull/77', baseTaskId: 'rtask_p1' },
+  };
+
+  function setupFollowUpAwaiting() {
+    const { code } = createPairCode(USER, T0);
+    const r = redeemPairCode(code, meta, T0);
+    if (!r.ok) throw new Error(`pair failed: ${r.error}`);
+    const dev = r.deviceId;
+    enqueueTask(USER, fuPack, T0);
+    claimNextTask(USER, dev, T0 + 1);
+    const ev = (n: number, type: string, payload?: Record<string, unknown>) => ({
+      eventId: `fu_ev_${n}`,
+      taskId: fuPack.taskId,
+      deviceId: dev,
+      at: T0 + 10 + n,
+      type,
+      payload,
+    });
+    recordRunnerEvents(
+      USER,
+      dev,
+      [
+        ev(1, 'state', { state: 'running' }),
+        ev(2, 'phase1_result', { commitHash: 'fed321', diffstat: ' src/b.py | 2 +-', testTail: 'PASSED' }),
+        ev(3, 'state', { state: 'awaiting_approval' }),
+      ],
+      T0 + 20
+    );
+    return dev;
+  }
+
+  it('审批卡:描述含「PR 跟进…更新既有 PR」,params.followUpPrUrl,命令预览只有一条 git push', () => {
+    setupFollowUpAwaiting();
+    const { task } = createPublishApproval(USER, fuPack.taskId, T0 + 100)!;
+    const req = runnerApprovalToRequest(task, USER)!;
+    expect(req.description).toContain('PR 跟进');
+    expect(req.description).toContain('更新既有 PR');
+    expect((req.params as any).followUpPrUrl).toBe('https://github.com/owner/repo/pull/77');
+    const cmds = (req.params as any).commands as Array<{ cmd: string; args: string[] }>;
+    expect(cmds).toEqual([{ cmd: 'git', args: ['push', '-u', 'origin', 'contrib/fix-9'] }]);
+  });
+
+  it('批准 → 固化命令集仅 git push:不新建 PR,认领留言勾选也不追加', () => {
+    setupFollowUpAwaiting();
+    const { approval } = createPublishApproval(USER, fuPack.taskId, T0 + 100)!;
+    const r = resolvePublishApproval(USER, approval.approvalId, true, { includeClaim: true }, T0 + 200);
+    expect(r.ok).toBe(true);
+    const t = (r as any).task;
+    expect(t.state).toBe('finishing');
+    expect(t.approval.commands).toEqual([{ cmd: 'git', args: ['push', '-u', 'origin', 'contrib/fix-9'] }]);
+    // 设备动作下行同一份固化命令(runner 侧白名单形状 1 照认)
+    const actions = getDeviceActions(USER, t.deviceId!);
+    const pub = actions.find((a) => a.taskId === fuPack.taskId && a.kind === 'publish');
+    expect(pub?.commands).toHaveLength(1);
+  });
+
+  it('phase2_result 无 prUrl(push-only 无 gh pr create 输出)→ 任务 prUrl 兜底任务包里的原 PR', () => {
+    const dev = setupFollowUpAwaiting();
+    const { approval } = createPublishApproval(USER, fuPack.taskId, T0 + 100)!;
+    resolvePublishApproval(USER, approval.approvalId, true, {}, T0 + 200);
+    recordRunnerEvents(
+      USER,
+      dev,
+      [
+        { eventId: 'fu_ev_9', taskId: fuPack.taskId, deviceId: dev, at: T0 + 300, type: 'phase2_result', payload: { approvalId: approval.approvalId } },
+        { eventId: 'fu_ev_10', taskId: fuPack.taskId, deviceId: dev, at: T0 + 301, type: 'state', payload: { state: 'done' } },
+      ],
+      T0 + 310
+    );
+    const t = getRunnerTask(USER, fuPack.taskId, T0 + 400)!;
+    expect(t.state).toBe('done');
+    expect(t.prUrl).toBe('https://github.com/owner/repo/pull/77');
+  });
+
+  it('普通任务(无 prFollowUp)审批卡不受影响:描述照旧、无 followUpPrUrl、两条命令起步', () => {
+    setupAwaitingTask();
+    const { task } = createPublishApproval(USER, validPack.taskId, T0 + 100)!;
+    const req = runnerApprovalToRequest(task, USER)!;
+    expect(req.description).not.toContain('PR 跟进');
+    expect((req.params as any).followUpPrUrl).toBeUndefined();
+    expect((req.params as any).commands).toHaveLength(2);
+  });
+});

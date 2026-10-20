@@ -282,3 +282,29 @@ describe('normalizeDeviceAction(下行动作清洗)', () => {
     expect(normalizeDeviceAction({ ...base, text: '坏\u001b[31m字' })).toBeNull(); // ESC 可伪造终端输出
   });
 });
+
+describe('buildPublishCommands · prExists(PR 跟进任务:只固化 git push)', () => {
+  it('prExists → 单条 git push(白名单形状 1,老 runner 也认;push 到已关联 PR 的分支即更新 PR)', () => {
+    const cmds = buildPublishCommands({ ...BASE_INPUT, prExists: true });
+    expect(cmds).toEqual([{ cmd: 'git', args: ['push', '-u', 'origin', 'contrib/oss-radar-123'] }]);
+    expect(cmds!.every((c) => validatePublishCommand(c) !== null)).toBe(true);
+  });
+
+  it('prExists 忽略 claim/fork 输入:不固化 gh pr create,也不加认领留言', () => {
+    const cmds = buildPublishCommands({ ...BASE_INPUT, prExists: true, includeClaim: true });
+    expect(cmds).toHaveLength(1);
+    const fork = buildPublishCommands({ ...BASE_INPUT, prExists: true, forkHead: 'tunsuy' });
+    expect(fork).toHaveLength(1);
+    expect(fork![0].cmd).toBe('git');
+  });
+
+  it('prExists + 畸形 workBranch → null(拒绝批准,同既有防线)', () => {
+    expect(buildPublishCommands({ ...BASE_INPUT, prExists: true, workBranch: '-rm-rf' })).toBeNull();
+    expect(buildPublishCommands({ ...BASE_INPUT, prExists: true, workBranch: '../escape' })).toBeNull();
+  });
+
+  it('缺省(prExists 未设/false)→ 行为与旧版一致:两条起步', () => {
+    expect(buildPublishCommands(BASE_INPUT)).toHaveLength(2);
+    expect(buildPublishCommands({ ...BASE_INPUT, prExists: false })).toHaveLength(2);
+  });
+});

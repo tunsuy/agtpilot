@@ -64,6 +64,7 @@
       "kind": "clickOrFocus",
       "selector": "#radio label.arco-radio:has-text(\"{channel}\")",
       "params": ["channel"],
+      "requireClick": true,
       "clickTimeoutMs": 8000,
       "focusTimeoutMs": 4000
     },
@@ -76,12 +77,28 @@
       "clickTimeoutMs": 3000,
       "focusTimeoutMs": 1500
     },
-    { "kind": "clickOrFocus", "selector": "button:has-text(\"立即创建\")", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
+    {
+      "kind": "clickOrFocus",
+      "selector": "button:has-text(\"立即创建\")",
+      "requireClick": true,
+      "clickTimeoutMs": 10000,
+      "focusTimeoutMs": 5000
+    },
+    {
+      "kind": "captureResponse",
+      "urlPattern": "api/author/book/create",
+      "pattern": "\"book_id\"\\s*:\\s*\"([0-9A-Za-z_-]+)\"",
+      "output": "fanqieBookId",
+      "optional": true,
+      "flag": "respCaptured",
+      "timeoutMs": 15000
+    },
     {
       "kind": "captureUrl",
       "pattern": "book-info/([0-9A-Za-z_-]+)",
       "output": "fanqieBookId",
-      "timeoutMs": 15000
+      "optional": true,
+      "timeoutMs": 30000
     },
     { "kind": "screenshot", "quality": 65 }
   ],
@@ -90,6 +107,11 @@
       "present": "建书页出现 AI 辅助声明勾选框,已如实代勾「AI辅助」(2026-10-16 拍板:如实声明不是绕过)。",
       "missing": "本次建书页无 AI 辅助声明入口(2026-10-16 侦察:声明入口在发布环节)——发布由你人工完成,届时请如实勾选。",
       "auditMissing": "建书页无 AI 辅助声明入口(声明在发布环节,由作者发布时如实勾选)"
+    },
+    "respCaptured": {
+      "present": "书号取自建书接口响应(captureResponse 主通道)。",
+      "missing": "建书接口响应未捕获(接口改版?),书号改由落地页 URL 兜底捕获。",
+      "auditMissing": "captureResponse 未命中建书接口(路径改版?),已回退 captureUrl"
     }
   },
   "successMessage": "番茄新书已创建,书号 {capture:fanqieBookId}:{note:aiDeclared}该书后续入库章节将自动续传草稿箱。今日开书 {todayCount}/{dailyLimit} 次。"

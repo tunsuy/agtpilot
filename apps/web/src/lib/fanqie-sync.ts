@@ -35,6 +35,7 @@ import {
   getChapterContent,
   listNovelBooks,
   updateNovelFanqie,
+  saveFanqieDiagShot,
   type NovelBook,
   type NovelFanqieState,
 } from './novel-store';
@@ -416,12 +417,14 @@ async function runCreate(item: SyncItem, book: NovelBook): Promise<void> {
 
   // 其余失败(页面改版/超时等):create 一律终态 failed —— 无法区分「提交前失败」与
   // 「已提交但流程断」,自动重试有重复建书风险;显式重试是用户的判断。
+  // 失败现场照(executor 抛错前补拍)落盘书目录,createError 带上路径便于排障。
+  const shot = saveFanqieDiagShot(userId, bookId, 'create', result?.screenshotBase64);
   updateNovelFanqie(userId, bookId, (cur) => ({
     createStatus: 'failed',
     createAttempts: (cur.createAttempts || 0) + 1,
-    createError: String(result?.error || '未知错误').slice(0, 300),
+    createError: String(result?.error || '未知错误').slice(0, 300) + (shot ? `(现场照:${shot})` : ''),
   }));
-  log(`开书失败(终态,需显式重试):《${book.title}》 ${result?.error || ''}`);
+  log(`开书失败(终态,需显式重试):《${book.title}》 ${result?.error || ''}${shot ? ` [${shot}]` : ''}`);
 }
 
 async function runChapter(item: SyncItem, book: NovelBook): Promise<void> {
@@ -483,17 +486,18 @@ async function runChapter(item: SyncItem, book: NovelBook): Promise<void> {
     return;
   }
   const prev = f.chapters?.[key];
+  const chShot = saveFanqieDiagShot(userId, bookId, `chapter-${idx}`, result?.screenshotBase64);
   updateNovelFanqie(userId, bookId, {
     chapters: {
       [key]: {
         status: 'failed',
         attempts: (prev?.attempts || 0) + 1,
-        error: String(result?.error || '未知错误').slice(0, 300),
+        error: String(result?.error || '未知错误').slice(0, 300) + (chShot ? `(现场照:${chShot})` : ''),
         at: Date.now(),
       },
     },
   });
-  log(`第${idx}章同步失败:《${book.title}》 ${result?.error || ''}`);
+  log(`第${idx}章同步失败:《${book.title}》 ${result?.error || ''}${chShot ? ` [${chShot}]` : ''}`);
 }
 
 /** 登录失效连坐:该用户剩余队列项全部落 failed 账本并出队(本轮不再碰该用户) */

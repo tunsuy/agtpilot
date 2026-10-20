@@ -138,6 +138,13 @@ export type SkillStep =
        * 点成时记 true —— notes 机制据此出附注,绝不让条件元素卡死整个流程。
        */
       optional?: boolean;
+      /**
+       * true = 点击本身就是目的(提交按钮/单选钮):click 失败直接抛真实错误,
+       * **禁止**静默降级为 focus —— focus 不会触发提交,降级只会把失败推迟到
+       * 后续捕获步骤,错误现场全丢(2026-10-20 番茄建书 URL 捕获超时事故根因)。
+       * 编辑器聚焦类(clickOrFocus + pressKeys 组合)保持缺省:那里 focus 就是目的。
+       */
+      requireClick?: boolean;
       /** 结果旗标名(供 successMessage 的 {note:flag} 与审计附注引用) */
       flag?: string;
     }
@@ -193,6 +200,33 @@ export type SkillStep =
       timeoutMs?: number;
       /** true = 超时不算失败只跳过(捕获缺失由调用方语义兜底) */
       optional?: boolean;
+    }
+  | {
+      /**
+       * 接口响应捕获(2026-10-20 番茄建书排障后新增):监听器在**流程开始时**
+       * 就挂上(提交响应往往在 click 步骤期间已到达,走到本步再挂就晚了),
+       * 缓冲 URL 命中 urlPattern 的响应体,本步骤轮询缓冲、按 pattern 提取
+       * (捕获组 1 优先)写入 captures[output]。比 captureUrl 更稳:不依赖
+       * 落地页跳转,且服务端拒绝(如「书名已存在」)能带着响应体原文抛出来。
+       *
+       * 语义细则:
+       * - 观察到匹配响应但 pattern 提不出值 = 服务端拒绝/字段改名 → **带响应体
+       *   摘要抛错,optional 不豁免**(这正是最需要的诊断信息);
+       * - optional:true 只豁免「完全没观察到匹配响应」(接口路径改版)→ 跳过
+       *   记 flag false,让后续 captureUrl 兜底。
+       */
+      kind: 'captureResponse';
+      /** 对响应 URL 匹配的正则(圈定目标接口) */
+      urlPattern: string;
+      /** 对响应体匹配的正则(捕获组 1 优先) */
+      pattern: string;
+      /** 捕获值输出名(同 captureUrl.output 规则) */
+      output: string;
+      /** 轮询截止毫秒(500ms 间隔;缺省 15000) */
+      timeoutMs?: number;
+      optional?: boolean;
+      /** 结果旗标名(捕获成功 true;optional 跳过 false) */
+      flag?: string;
     }
   | {
       /** 文本捕获:读 selector 首元素的 innerText,按 pattern 提取写入 captures[output] */
@@ -285,6 +319,7 @@ const STEP_KINDS = new Set([
   'pasteRich',
   'waitForText',
   'captureUrl',
+  'captureResponse',
   'extractText',
   'screenshot',
 ]);
@@ -350,7 +385,7 @@ export function validateScriptSkill(raw: any): string | null {
     if (!s || typeof s !== 'object') return `${at} 不是对象`;
     if (!STEP_KINDS.has(s.kind)) return `${at} 未知动作 ${String(s.kind)}(词汇表是闭集)`;
     // 发布围栏(加载时):任何步骤字符串里出现发布词即拒收 —— 词汇表本无发布动作,这里是双保险
-    const strings = [s.url, s.selector, s.value, s.pattern, s.keys, s.abortIfUrl, s.output]
+    const strings = [s.url, s.selector, s.value, s.pattern, s.keys, s.abortIfUrl, s.output, s.urlPattern]
       .filter((v) => typeof v === 'string') as string[];
     for (const str of strings) {
       if (PUBLISH_FENCE.test(str)) return `${at} 含发布词,拒收(托管终点是草稿箱)`;
@@ -423,6 +458,24 @@ export function validateScriptSkill(raw: any): string | null {
         }
         if (s.kind === 'extractText' && (typeof s.selector !== 'string' || !s.selector.trim())) {
           return `${at} selector 缺失`;
+        }
+        break;
+      }
+      case 'captureResponse': {
+        if (typeof s.urlPattern !== 'string' || !s.urlPattern.trim()) return `${at} urlPattern 缺失`;
+        try {
+          new RegExp(s.urlPattern);
+        } catch {
+          return `${at} urlPattern 不是合法正则`;
+        }
+        if (typeof s.pattern !== 'string' || !s.pattern.trim()) return `${at} pattern 缺失`;
+        try {
+          new RegExp(s.pattern);
+        } catch {
+          return `${at} pattern 不是合法正则`;
+        }
+        if (typeof s.output !== 'string' || !/^[A-Za-z_]\w{0,63}$/.test(s.output)) {
+          return `${at} output 名非法(字母/下划线开头,仅字母数字下划线,≤64 字)`;
         }
         break;
       }
@@ -601,9 +654,39 @@ export async function runSkillSteps(
 ): Promise<{ flags: Record<string, boolean>; screenshotBase64?: string; captures: Record<string, string> }> {
   const flags: Record<string, boolean> = {};
   const captures: Record<string, string> = {};
+  const diagnostics: string[] = [];
   let screenshotBase64: string | undefined;
 
-  for (const step of skill.steps) {
+  // captureResponse 数据源:监听器必须在**流程开始时**就挂上——目标响应常在
+  // click 步骤执行期间已到达,等走到 captureResponse 步骤再挂就晚了。
+  // 只缓冲 URL 命中任一 captureResponse.urlPattern 的响应;body 异步取、限长。
+  const respSteps = skill.steps.filter((s) => s.kind === 'captureResponse');
+  const respBuf: { url: string; body: Promise<string> }[] = [];
+  let respListener: ((res: any) => void) | null = null;
+  if (respSteps.length > 0 && typeof page.on === 'function') {
+    const urlRes = respSteps.map((s: any) => {
+      try {
+        return new RegExp(s.urlPattern);
+      } catch {
+        return null;
+      }
+    });
+    respListener = (res: any) => {
+      try {
+        const url = String(res.url?.() || '');
+        if (!urlRes.some((re) => re && re.test(url))) return;
+        if (respBuf.length >= 50) respBuf.shift(); // 上限防长跑流程堆积
+        const body = Promise.resolve(res.text?.())
+          .then((t: any) => String(t ?? '').slice(0, 4000))
+          .catch(() => '');
+        respBuf.push({ url, body });
+      } catch {}
+    };
+    page.on('response', respListener);
+  }
+
+  try {
+    for (const step of skill.steps) {
     switch (step.kind) {
       case 'goto': {
         // URL 参数化:声明的参数按 args 替换(编码);未声明的占位符原样保留
@@ -656,12 +739,26 @@ export async function runSkillSteps(
           if (step.flag) flags[step.flag] = false;
           break;
         }
+        let clicked = false;
         try {
           await page.click(selector, { timeout: step.clickTimeoutMs || 10000 });
-        } catch {
+          clicked = true;
+        } catch (clickErr: any) {
+          // requireClick:点击本身就是写动作(提交按钮/单选钮)——focus 不会触发提交,
+          // 静默降级只会把失败推迟到后续捕获步骤,真实断点(点击错误)被整个吞掉
+          // (2026-10-20 番茄建书「URL 捕获超时」事故根因)→ 抛原始错误。
+          if (step.requireClick) {
+            throw new Error(
+              `点击失败(requireClick,禁止降级): ${selector} — ${String(clickErr?.message || clickErr).split('\n')[0]}`
+            );
+          }
+          // 编辑器聚焦场景(click 被浮层拦截,focus + pressKeys/insertText 仍可继续)
+          // → 保留降级,但留痕进 diagnostics,失败时随审计错误一起带出
           await page.locator(selector).first().focus({ timeout: step.focusTimeoutMs || 5000 });
+          diagnostics.push(`clickOrFocus 降级为 focus: ${selector}`);
         }
-        if (step.flag) flags[step.flag] = true;
+        // 旗标只认「点击真的成功」:focus 降级不会勾上勾选框、不会提交表单,记 true 是谎报
+        if (step.flag) flags[step.flag] = clicked;
         break;
       }
 
@@ -752,6 +849,49 @@ export async function runSkillSteps(
         break;
       }
 
+      case 'captureResponse': {
+        // 从 respBuf(流程开始就在收集)里找 URL 命中 urlPattern 的响应,按 pattern 提取。
+        // 轮询等待:响应可能在 click 步骤后几百毫秒才到。
+        const urlRe = new RegExp(step.urlPattern);
+        const bodyRe = new RegExp(step.pattern);
+        const deadline = Date.now() + (step.timeoutMs ?? 15000);
+        let value = '';
+        let sawMatchedResponse = false;
+        let lastBody = '';
+        for (;;) {
+          for (const entry of respBuf) {
+            if (!urlRe.test(entry.url)) continue;
+            sawMatchedResponse = true;
+            const body = await entry.body;
+            if (!body) continue;
+            lastBody = body;
+            const m = bodyRe.exec(body);
+            if (m && (m[1] || m[0])) {
+              value = m[1] || m[0];
+              break;
+            }
+          }
+          if (value || Date.now() >= deadline) break;
+          await sleep(500);
+        }
+        if (value) {
+          captures[step.output] = value;
+          if (step.flag) flags[step.flag] = true;
+        } else if (sawMatchedResponse) {
+          // 响应到了但值抠不出 = 服务端拒绝(如「书名已存在」)/字段改名。
+          // 带响应体摘要抛错(optional 不豁免):这是最需要的诊断信息,
+          // 静默跳过会把真失败误报成成功。
+          throw new Error(
+            `响应捕获失败: ${step.urlPattern} 的响应未匹配 ${step.pattern};响应体: ${lastBody.slice(0, 300)}`
+          );
+        } else if (!step.optional) {
+          throw new Error(`响应捕获超时: 未等到匹配 ${step.urlPattern} 的响应(提交未发生或接口改版,需人工核查)`);
+        } else if (step.flag) {
+          flags[step.flag] = false; // 接口路径改版:交给后续 captureUrl 兜底
+        }
+        break;
+      }
+
       case 'extractText': {
         const re = new RegExp(step.pattern);
         let text = '';
@@ -774,6 +914,24 @@ export async function runSkillSteps(
           screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
         } catch {}
         break;
+    }
+  }
+  } catch (err: any) {
+    // 失败截图:成功路径的 screenshot 步骤排在末尾,一抛错就永远到不了,而
+    // 后台同步(番茄 fanqie-sync)失败没有旁观者 —— 抛错前补一张现场照,
+    // 挂到 error 上随结果透出(运行器据此落盘,排障靠它 + 审计错误)。
+    try {
+      const buffer = await page.screenshot({ type: 'jpeg', quality: 65 });
+      if (buffer) err.screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
+    } catch {}
+    // clickOrFocus 降级等留痕一并带出,补进审计错误上下文
+    if (diagnostics.length) err.diagnostics = [...diagnostics];
+    throw err;
+  } finally {
+    if (respListener && typeof page.off === 'function') {
+      try {
+        page.off('response', respListener);
+      } catch {}
     }
   }
   return { flags, screenshotBase64, captures };
@@ -877,8 +1035,13 @@ export function buildScriptSkillTool(
           return { success: false, error: err.userMessage };
         }
         const message = err?.message || String(err);
-        audit('failure', message);
-        return { success: false, error: `执行失败:${message}(可「接管浏览器」人工完成)` };
+        // clickOrFocus 降级等留痕拼进审计错误,补足上下文(排障时知道哪步是降级过的)
+        const diag = Array.isArray(err?.diagnostics) && err.diagnostics.length ? ` | 降级留痕: ${err.diagnostics.join('; ')}` : '';
+        audit('failure', `${message}${diag}`);
+        const failure: any = { success: false, error: `执行失败:${message}(可「接管浏览器」人工完成)` };
+        // 失败现场截图透出(runSkillSteps 抛错前补拍并挂在 err 上;运行器落盘排障)
+        if (typeof err?.screenshotBase64 === 'string') failure.screenshotBase64 = err.screenshotBase64;
+        return failure;
       }
     },
   };

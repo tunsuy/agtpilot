@@ -175,6 +175,32 @@ describe('validateScriptSkill · 清单校验', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(SHIPPED_DIR, 'zhihu-draft.skill.json'), 'utf-8'));
     expect(ss.validateScriptSkill(raw)).toBeNull();
   });
+
+  it('随包发布的 fanqie-create / fanqie-draft.skill.json 本身是合格清单', () => {
+    for (const f of ['fanqie-create.skill.json', 'fanqie-draft.skill.json']) {
+      const raw = JSON.parse(fs.readFileSync(path.join(SHIPPED_DIR, f), 'utf-8'));
+      expect(ss.validateScriptSkill(raw), f).toBeNull();
+    }
+  });
+
+  it('fanqie-create 建书加固在位:提交/频道 requireClick + captureResponse 抠 book_id(引擎需识别 captureResponse,否则部署错序会在此暴露)', () => {
+    const raw = JSON.parse(fs.readFileSync(path.join(SHIPPED_DIR, 'fanqie-create.skill.json'), 'utf-8'));
+    const steps = raw.steps as any[];
+    // 写动作(频道单选 + 立即创建)禁止静默降级 focus
+    const requireClicks = steps.filter((s) => s.kind === 'clickOrFocus' && s.requireClick);
+    expect(requireClicks.length).toBeGreaterThanOrEqual(2);
+    expect(requireClicks.some((s) => /立即创建/.test(s.selector))).toBe(true);
+    // book_id 主通道:captureResponse 直读建书接口响应,落地页 URL 退为兜底
+    const cap = steps.find((s) => s.kind === 'captureResponse');
+    expect(cap).toBeTruthy();
+    expect(cap.urlPattern).toContain('book/create');
+    expect(cap.output).toBe('fanqieBookId');
+    const capUrl = steps.find((s) => s.kind === 'captureUrl');
+    expect(capUrl?.optional).toBe(true); // URL 捕获已降级为兜底
+    // 加固步骤排在提交之后(先点「立即创建」再抓响应/URL)
+    const submitIdx = steps.findIndex((s) => /立即创建/.test(s.selector || ''));
+    expect(steps.findIndex((s) => s.kind === 'captureResponse')).toBeGreaterThan(submitIdx);
+  });
 });
 
 describe('loadScriptSkills · 目录热加载', () => {

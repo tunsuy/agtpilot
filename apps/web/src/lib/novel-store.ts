@@ -480,3 +480,30 @@ export function deleteNovelBook(userId: string, bookId: string): boolean {
     return false;
   }
 }
+
+/**
+ * 落盘一张番茄同步失败现场照(executor 抛错前补拍的 dataURL jpeg)。
+ * 存到 <bookDir>/fanqie-diag/<kind>-<ts>.jpg,返回相对书目录的路径(排障时
+ * 直接进书目录看);失败/无图返回 null,绝不影响同步账本主流程。
+ * kind 用 create / chapter-<n> 区分,同名时间戳天然去重。
+ */
+export function saveFanqieDiagShot(
+  userId: string,
+  bookId: string,
+  kind: string,
+  dataUrl: unknown
+): string | null {
+  if (typeof dataUrl !== 'string') return null;
+  const m = /^data:image\/\w+;base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl);
+  if (!m) return null;
+  try {
+    const dir = path.join(bookDir(userId, bookId), 'fanqie-diag');
+    fs.mkdirSync(dir, { recursive: true });
+    const safeKind = kind.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40);
+    const name = `${safeKind}-${Date.now()}.jpg`;
+    fs.writeFileSync(path.join(dir, name), Buffer.from(m[1].replace(/\s/g, ''), 'base64'));
+    return `fanqie-diag/${name}`;
+  } catch {
+    return null;
+  }
+}

@@ -678,3 +678,114 @@ describe('createSkillService · 统一服务面', () => {
     expect(out.errors.join()).toContain('bad.skill.json');
   });
 });
+
+/**
+ * 2026-10-20 番茄建书「URL 捕获超时」事故三处加固的自证:
+ * ① requireClick —— 写动作点击失败禁止静默降级 focus,抛原始断点;
+ * ② captureResponse —— 直接从建书接口响应抠 book_id,服务端拒绝(书名已存在)
+ *    带响应体原文抛出,不再被落地页 URL 超时整个吞掉;
+ * ③ 失败现场照 —— 后台同步无旁观者,抛错前补拍一张挂到 err/结果上供落盘排障。
+ */
+describe('runSkillSteps · requireClick / captureResponse / 失败现场照(番茄建书事故修复)', () => {
+  /** 带网络监听的假 Page:.on 挂 response 监听器,__emit 同步投喂缓冲响应
+   *  (模拟「响应在 click 步骤执行期间就已到达」——建书接口回包早于落地页跳转) */
+  function respPage(responses: { url: string; body: string }[] = []) {
+    const page: any = fakePage();
+    let listener: ((res: any) => void) | null = null;
+    page.on = vi.fn((ev: string, cb: any) => { if (ev === 'response') listener = cb; });
+    page.off = vi.fn((ev: string, cb: any) => { if (ev === 'response' && cb === listener) listener = null; });
+    page.__emit = () => { for (const r of responses) listener?.({ url: () => r.url, text: async () => r.body }); };
+    return page;
+  }
+
+  it('requireClick:点击失败 → 抛原始错误(禁止降级 focus),并补失败现场照', async () => {
+    const skill = sampleSkill({ steps: [{ kind: 'clickOrFocus', selector: '#editor-submit', requireClick: true }] }) as any;
+    const page = fakePage();
+    (page.click as any) = vi.fn(async () => { throw new Error('element not stable'); });
+    let err: any;
+    try { await runSkillSteps(page, skill, {}); } catch (e) { err = e; }
+    expect(err).toBeTruthy();
+    expect(err.message).toMatch(/点击失败.*requireClick/);
+    expect(err.message).toContain('element not stable'); // 真实断点不被吞
+    expect(page.locator).not.toHaveBeenCalled();          // 未走 focus 降级
+    expect(String(err.screenshotBase64).startsWith('data:image/jpeg;base64,')).toBe(true); // 抛错前补拍现场照
+  });
+
+  it('clickOrFocus 无 requireClick:点击失败 → 降级 focus、旗标 false(不谎报);留痕随后续失败经 err.diagnostics 带出', async () => {
+    // ① 降级成功(无后续失败):旗标记 false(点击没成不能谎报 true),focus 被调用
+    const page = fakePage();
+    (page.click as any) = vi.fn(async () => { throw new Error('intercepted by overlay'); });
+    const out = await runSkillSteps(page, sampleSkill({ steps: [{ kind: 'clickOrFocus', selector: '#editor', flag: 'clicked' }] }) as any, {});
+    expect(out.flags.clicked).toBe(false);
+    expect(page.locator).toHaveBeenCalled(); // 经 locator(sel).first().focus 降级
+
+    // ② 降级留痕在后续步骤失败时随 err.diagnostics 带出(审计能定位哪步是降级过的)
+    const page2 = fakePage();
+    (page2.click as any) = vi.fn(async () => { throw new Error('intercepted'); });
+    let err: any;
+    try {
+      await runSkillSteps(page2, sampleSkill({ steps: [
+        { kind: 'clickOrFocus', selector: '#editor' },                            // 降级(留痕)
+        { kind: 'captureUrl', pattern: 'nope/(\\d+)', output: 'x', timeoutMs: 0 }, // 必抛
+      ] }) as any, {});
+    } catch (e) { err = e; }
+    expect(err.message).toMatch(/URL 捕获超时/);
+    expect(err.diagnostics.join()).toContain('降级为 focus');
+    expect(String(err.screenshotBase64).startsWith('data:image/jpeg;base64,')).toBe(true);
+  });
+
+  it('captureResponse:命中建书接口响应 → 按 pattern 抠出 book_id 进 captures、旗标 true', async () => {
+    const resp = { url: 'https://fanqienovel.com/api/author/book/create/v0/?aid=2329', body: '{"code":0,"data":{"book_id":"7698638757322296382"},"message":"success"}' };
+    const skill = sampleSkill({ steps: [{ kind: 'captureResponse', urlPattern: 'api/author/book/create', pattern: '"book_id"\\s*:\\s*"([0-9A-Za-z_-]+)"', output: 'fanqieBookId', flag: 'respCaptured', timeoutMs: 2000 }] }) as any;
+    const page = respPage([resp]);
+    const p = runSkillSteps(page, skill, {}); // 监听器在此同步挂上
+    page.__emit();                            // 投喂响应(模拟 click 期间到达)
+    const out = await p;
+    expect(out.captures.fanqieBookId).toBe('7698638757322296382');
+    expect(out.flags.respCaptured).toBe(true);
+  });
+
+  it('captureResponse:观察到响应但抠不出值(服务端拒绝/字段改名) → 抛错并带响应体摘要', async () => {
+    const reject = { url: 'https://fanqienovel.com/api/author/book/create/v0/', body: '{"code":40001,"message":"书名已存在","data":null}' };
+    const skill = sampleSkill({ steps: [{ kind: 'captureResponse', urlPattern: 'api/author/book/create', pattern: '"book_id"\\s*:\\s*"([0-9A-Za-z_-]+)"', output: 'bid', timeoutMs: 400 }] }) as any;
+    const page = respPage([reject]);
+    const p = runSkillSteps(page, skill, {});
+    page.__emit();
+    let err: any;
+    try { await p; } catch (e) { err = e; }
+    expect(err.message).toMatch(/响应捕获失败/);
+    expect(err.message).toContain('响应体');
+    expect(err.message).toContain('书名已存在'); // 真实拒绝原因透出(此前被「URL 捕获超时」整个吞掉)
+  });
+
+  it('captureResponse:未等到响应 + optional → 静默跳过、旗标 false(交后续 captureUrl 兜底)', async () => {
+    const skill = sampleSkill({ steps: [{ kind: 'captureResponse', urlPattern: 'api/author/book/create', pattern: '"book_id":"(\\d+)"', output: 'bid', optional: true, flag: 'respCaptured', timeoutMs: 100 }] }) as any;
+    const out = await runSkillSteps(respPage([]), skill, {}); // 从不 __emit
+    expect(out.captures).toEqual({});
+    expect(out.flags.respCaptured).toBe(false);
+  });
+
+  it('captureResponse:未等到响应 + 非 optional → 抛响应捕获超时', async () => {
+    const skill = sampleSkill({ steps: [{ kind: 'captureResponse', urlPattern: 'api/author/book/create', pattern: '"book_id":"(\\d+)"', output: 'bid', timeoutMs: 100 }] }) as any;
+    await expect(runSkillSteps(respPage([]), skill, {})).rejects.toThrow(/响应捕获超时/);
+  });
+
+  it('execute 端到端:步骤失败 → 结果带 screenshotBase64(data URL),审计 failure 拼入降级留痕', async () => {
+    const skill = sampleSkill({
+      name: 'create_fail_demo',
+      steps: [
+        { kind: 'clickOrFocus', selector: '#editor-focus' },                      // 降级(click 抛)→ 留痕
+        { kind: 'clickOrFocus', selector: '#editor-submit', requireClick: true }, // 必抛
+      ],
+    }) as ScriptSkillManifest;
+    const page = fakePage();
+    (page.click as any) = vi.fn(async () => { throw new Error('not stable'); });
+    const store = fakeStore();
+    const res: any = await buildScriptSkillTool(skill, 'u9', fakeBrowser(page), store).execute({ title: 't' }, {});
+    expect(res.success).toBe(false);
+    expect(String(res.screenshotBase64).startsWith('data:image/jpeg;base64,')).toBe(true);
+    const last = store.auditLog.at(-1)!;
+    expect(last.result).toBe('failure');
+    expect(String(last.error)).toContain('降级留痕'); // diagnostics 拼进审计错误,排障可见
+  });
+});

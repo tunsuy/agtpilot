@@ -21,22 +21,26 @@ import {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** fake Page:记录所有输入转发调用 */
+/** fake Page:记录所有输入转发调用 + 按事件名留存处理器(供 dialog/framenavigated 测试触发) */
 function fakePage(opts: { gotoFail?: boolean } = {}): TakeoverPageLike & {
   calls: { method: string; args: any[] }[];
   navigatedTo: string | null;
   mainFrameObj: {};
+  handlers: Map<string, ((arg: any) => void)[]>;
 } {
   const calls: { method: string; args: any[] }[] = [];
+  const handlers = new Map<string, ((arg: any) => void)[]>();
   let currentUrl = 'https://creator.xiaohongshu.com/publish/publish';
   const rec = (method: string, ...args: any[]) => {
     calls.push({ method, args });
     return Promise.resolve();
   };
+  const mainFrameObj = {};
   return {
     calls,
     navigatedTo: null,
-    mainFrameObj: {},
+    mainFrameObj,
+    handlers,
     url: () => currentUrl,
     goto: (url: string) => {
       if (opts.gotoFail) return Promise.reject(new Error('nav blocked'));
@@ -45,9 +49,12 @@ function fakePage(opts: { gotoFail?: boolean } = {}): TakeoverPageLike & {
       return Promise.resolve();
     },
     title: () => Promise.resolve('发布'),
-    on: (event: string, cb: (frame: any) => void) => {
+    on: (event: string, cb: (arg: any) => void) => {
       (fakePage as any).__cb = cb;
+      if (!handlers.has(event)) handlers.set(event, []);
+      handlers.get(event)!.push(cb);
     },
+    mainFrame: () => mainFrameObj,
     keyboard: {
       press: (key: string, o?: any) => rec('key', key, o),
       type: (text: string, o?: any) => rec('type', text, o),
@@ -92,6 +99,52 @@ function fakeCdp() {
       }
     },
   };
+}
+
+/** fake BrowserContext:可注册 'page' 监听并手动模拟新标签打开(测跟随重定向) */
+function fakeContext() {
+  const pageHandlers: ((p: any) => void)[] = [];
+  return {
+    on: (event: string, cb: any) => {
+      if (event === 'page') pageHandlers.push(cb);
+    },
+    off: (event: string, cb: any) => {
+      if (event !== 'page') return;
+      const i = pageHandlers.indexOf(cb);
+      if (i >= 0) pageHandlers.splice(i, 1);
+    },
+    emitPage: (p: any) => {
+      for (const cb of [...pageHandlers]) cb(p);
+    },
+    handlerCount: () => pageHandlers.length,
+  };
+}
+
+/** 带 context()/bringToFront 的 fake Page(用于新标签跟随测试) */
+function fakePageWithCtx(ctx: ReturnType<typeof fakeContext>) {
+  const p = fakePage() as any;
+  p.context = () => ctx;
+  p.bringToFront = () => {
+    p.calls.push({ method: 'bringToFront', args: [] });
+    return Promise.resolve();
+  };
+  return p as ReturnType<typeof fakePage>;
+}
+
+/** 多页 deps:cdpFactory 按 Page 分配独立 fakeCdp(验证旧页停流、新页起流) */
+function makeDepsMulti(firstPage: TakeoverPageLike) {
+  const cdpByPage = new Map<any, ReturnType<typeof fakeCdp>>();
+  const deps: TakeoverDeps = {
+    browser: { acquirePage: () => Promise.resolve(firstPage) },
+    cdpFactory: (p: any) => {
+      if (!cdpByPage.has(p)) cdpByPage.set(p, fakeCdp());
+      return Promise.resolve(cdpByPage.get(p)!.cdp);
+    },
+    flushMs: 10,
+    idleMs: 5000,
+    retentionMs: 30,
+  };
+  return { deps, cdpByPage };
 }
 
 function makeDeps(page: ReturnType<typeof fakePage>, cdpTool = fakeCdp()): TakeoverDeps {
@@ -274,5 +327,98 @@ describe('会话终态', () => {
     await sleep(200);
     const info = getTakeoverSession(id);
     expect(info?.final?.outcome).toBe('idle');
+  });
+});
+
+describe('新标签跟随(popup 重定向)', () => {
+  beforeEach(() => resetTakeoverSessionsForTest());
+  afterEach(() => resetTakeoverSessionsForTest());
+
+  it('站点开新标签 → 投射与输入重定向到最新页,旧页停投射', async () => {
+    const ctx = fakeContext();
+    const page1 = fakePageWithCtx(ctx);
+    const { deps, cdpByPage } = makeDepsMulti(page1);
+    const r = startTakeover('u1', deps);
+    await sleep(30);
+    // 初始:绑首页起了投射
+    expect(cdpByPage.get(page1)!.sent.some((s) => s.method === 'Page.startScreencast')).toBe(true);
+
+    // 站点在流程里开了新标签(如扫码登录弹窗)
+    const page2 = fakePageWithCtx(ctx);
+    ctx.emitPage(page2);
+    await sleep(30);
+
+    const cdp1 = cdpByPage.get(page1)!;
+    const cdp2 = cdpByPage.get(page2)!;
+    // 旧页停投射 + detach
+    expect(cdp1.sent.some((s) => s.method === 'Page.stopScreencast')).toBe(true);
+    // 新页起投射
+    expect(cdp2.sent.some((s) => s.method === 'Page.startScreencast')).toBe(true);
+    // 新页置前
+    expect(page2.calls.some((c) => c.method === 'bringToFront')).toBe(true);
+
+    // 输入重定向到新页,不再落到旧页
+    const id = (r as any).sessionId;
+    const rr = await sendTakeoverInput(id, { type: 'click', x: 10, y: 20 });
+    expect(rr.ok).toBe(true);
+    expect(page2.calls.some((c) => c.method === 'click')).toBe(true);
+    expect(page1.calls.some((c) => c.method === 'click')).toBe(false);
+  });
+
+  it('重定向后向客户端发 status(已切换标签)+ nav(新页地址)', async () => {
+    const ctx = fakeContext();
+    const page1 = fakePageWithCtx(ctx);
+    const { deps } = makeDepsMulti(page1);
+    const r = startTakeover('u1', deps);
+    await sleep(20);
+    const events: TakeoverEvent[] = [];
+    subscribeTakeoverEvents((r as any).sessionId, (e) => events.push(e));
+
+    ctx.emitPage(fakePageWithCtx(ctx));
+    await sleep(30);
+    expect(events.some((e) => e.type === 'status' && e.detail.includes('新打开的标签页'))).toBe(true);
+  });
+
+  it('会话结束 → 摘掉 context 的新标签监听(共享 context 不残留钩子)', async () => {
+    const ctx = fakeContext();
+    const page1 = fakePageWithCtx(ctx);
+    const { deps } = makeDepsMulti(page1);
+    const r = startTakeover('u1', deps);
+    await sleep(20);
+    expect(ctx.handlerCount()).toBe(1);
+    stopTakeover((r as any).sessionId);
+    expect(ctx.handlerCount()).toBe(0);
+  });
+
+  it('重定向时先摘旧页监听再挂新页(同一 context 上监听数不累积)', async () => {
+    const ctx = fakeContext();
+    const page1 = fakePageWithCtx(ctx);
+    const { deps } = makeDepsMulti(page1);
+    startTakeover('u1', deps);
+    await sleep(20);
+    expect(ctx.handlerCount()).toBe(1);
+    ctx.emitPage(fakePageWithCtx(ctx)); // 重定向到 page2
+    await sleep(30);
+    expect(ctx.handlerCount()).toBe(1); // 旧的已摘、新的已挂,净 1
+  });
+});
+
+describe('原生对话框兜底', () => {
+  beforeEach(() => resetTakeoverSessionsForTest());
+  afterEach(() => resetTakeoverSessionsForTest());
+
+  it('dialog → 自动 accept 解阻 + status 留痕', async () => {
+    const page = fakePage();
+    const r = startTakeover('u1', makeDeps(page));
+    await sleep(20);
+    const events: TakeoverEvent[] = [];
+    subscribeTakeoverEvents((r as any).sessionId, (e) => events.push(e));
+
+    const dialogHandlers = page.handlers.get('dialog') || [];
+    expect(dialogHandlers.length).toBe(1);
+    let accepted = false;
+    dialogHandlers[0]({ accept: () => { accepted = true; return Promise.resolve(); } });
+    expect(accepted).toBe(true);
+    expect(events.some((e) => e.type === 'status' && e.detail.includes('对话框'))).toBe(true);
   });
 });

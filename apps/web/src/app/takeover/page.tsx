@@ -61,6 +61,8 @@ export default function TakeoverPage() {
   const [frameInfo, setFrameInfo] = useState<FrameData | null>(null);
   const [insertText, setInsertText] = useState('');
   const [fps, setFps] = useState(0);
+  // 输入被服务端拒绝时的可见回显(替代旧的静默吞错,让「点不动」变成看得见的错误)
+  const [inputErr, setInputErr] = useState('');
 
   const sessionIdRef = useRef<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -68,21 +70,41 @@ export default function TakeoverPage() {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const frameTimesRef = useRef<number[]>([]);
   const pageDimsRef = useRef<{ w: number; h: number }>({ w: 1280, h: 800 });
+  const inputErrTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /** 发送一条输入到接管会话 */
-  const sendInput = useCallback(async (input: unknown) => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    try {
-      await fetch('/api/browser/takeover', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sid, input }),
-      });
-    } catch {
-      // 偶发网络失败忽略;会话本体由 SSE done 事件收口
-    }
+  /** 闪一条输入错误(4s 自动消失;高频 move/scroll 不走这里,防刷屏) */
+  const flashInputErr = useCallback((msg: string) => {
+    setInputErr(msg);
+    if (inputErrTimer.current) clearTimeout(inputErrTimer.current);
+    inputErrTimer.current = setTimeout(() => setInputErr(''), 4000);
   }, []);
+
+  /** 发送一条输入到接管会话;服务端拒绝时回显(高频 move/scroll 静默,防刷屏) */
+  const sendInput = useCallback(
+    async (input: { type: string; [k: string]: unknown }) => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      const loud = input.type !== 'move' && input.type !== 'scroll';
+      try {
+        const res = await fetch('/api/browser/takeover', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: sid, input }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!loud) return;
+        if (data && data.ok === false) {
+          flashInputErr(data.error || '输入未被接受');
+        } else if (!res.ok) {
+          flashInputErr(`输入转发失败(HTTP ${res.status})`);
+        }
+      } catch {
+        // 偶发网络失败:会话本体由 SSE done 事件收口,这里只回显可见错误
+        if (loud) flashInputErr('输入转发失败(网络错误)');
+      }
+    },
+    [flashInputErr]
+  );
 
   /** 帧上屏 + fps 统计 */
   const drawFrame = useCallback((base64: string, w: number, h: number) => {
@@ -197,6 +219,7 @@ export default function TakeoverPage() {
       cancelled = true;
       esRef.current?.close();
       esRef.current = null;
+      if (inputErrTimer.current) clearTimeout(inputErrTimer.current);
     };
   }, [drawFrame]);
 
@@ -371,6 +394,13 @@ export default function TakeoverPage() {
 
       {detail && phase === 'live' && (
         <div className="px-3 pb-2 text-[11px] text-amber-400/80">{detail}</div>
+      )}
+
+      {inputErr && phase === 'live' && (
+        <div className="px-3 pb-2 text-[11px] text-red-400/90 flex items-center gap-1">
+          <MousePointerClick className="h-3 w-3" />
+          {inputErr}
+        </div>
       )}
     </div>
   );

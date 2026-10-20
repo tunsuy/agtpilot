@@ -68,8 +68,16 @@ export interface TakeoverPageLike {
   url(): string;
   goto(url: string, opts?: any): Promise<any>;
   title(): Promise<string>;
-  /** 主框架导航事件(真 Page 有;fake 可省略,省略时不发 nav) */
-  on?(event: string, cb: (frame: any) => void): void;
+  /** 事件订阅(framenavigated / dialog 等;真 Page 有,fake 可省略) */
+  on?(event: string, cb: (arg: any) => void): void;
+  /** 所属 BrowserContext(真 Page 有;用于 context.on('page') 跟随新标签) */
+  context?(): any;
+  /** 置前(真 Page 有;确保投射的是前台页而非后台旧标签) */
+  bringToFront?(): Promise<void>;
+  /** 是否已关闭(真 Page 有) */
+  isClosed?(): boolean;
+  /** 主框架(framenavigated 过滤用;真 Page 有) */
+  mainFrame?(): any;
   keyboard: {
     press(key: string, opts?: any): Promise<void>;
     type(text: string, opts?: any): Promise<void>;
@@ -130,6 +138,10 @@ interface TakeoverSession {
   flushTimer: ReturnType<typeof setInterval> | null;
   idleTimer: ReturnType<typeof setInterval> | null;
   stopRequested: boolean;
+  /** 新标签跟随的清理函数(finish/stop 时 off 掉 context.on('page') 监听,防共享 context 累积) */
+  removePopupFollow?: () => void;
+  /** 重定向串行链(并发弹窗时防 detach/attach 交错) */
+  retargetChain?: Promise<void>;
 }
 
 const sessions = new Map<string, TakeoverSession>();
@@ -227,6 +239,7 @@ async function drive(
     if (session.idleTimer) clearInterval(session.idleTimer);
     session.flushTimer = null;
     session.idleTimer = null;
+    session.removePopupFollow?.();
     // 停流但不关 Page/浏览器:登录态与页面状态留给后续任务/接管复用
     if (session.cdp) {
       session.cdp.send('Page.stopScreencast').catch(() => {});
@@ -246,25 +259,17 @@ async function drive(
     }
   };
 
-  try {
-    emit(session, { type: 'status', detail: '正在接管浏览器…', ts: now() });
-    const page = await deps.browser.acquirePage(session.userId);
-    session.page = page;
+  // —— 投射/重定向的可复用单元(初始附着 + 新标签跟随共用)——
 
-    // 可选初始导航(如直接打开发布页)
-    const initialUrl = opts?.url;
-    if (initialUrl && /^https?:\/\//.test(initialUrl)) {
-      await page.goto(initialUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    }
+  const cdpFactory =
+    deps.cdpFactory ||
+    ((p: TakeoverPageLike) =>
+      (p as any).context().newCDPSession(p) as Promise<CdpSessionLike>);
 
-    // CDP screencast:帧事件 → 合并缓冲 → flush 定时器发最新一帧
-    const cdpFactory =
-      deps.cdpFactory ||
-      ((p: TakeoverPageLike) =>
-        (p as any).context().newCDPSession(p) as Promise<CdpSessionLike>);
+  /** 给指定 Page 挂 CDP screencast,帧写入 session.pendingFrame */
+  async function attachScreencast(page: TakeoverPageLike): Promise<void> {
     const cdp = await cdpFactory(page);
     session.cdp = cdp;
-
     let viewW = 1280;
     let viewH = 800;
     cdp.on('Page.screencastFrame', (f: any) => {
@@ -281,8 +286,137 @@ async function drive(
       maxHeight: 800,
       everyNthFrame: 1,
     });
+  }
 
-    // 帧合并 flush:burst(视频/动画)只发最新,防 SSE 洪泛
+  /** 停当前投射(停流 + detach CDP + 丢弃旧页残帧) */
+  function detachScreencast(): void {
+    if (session.cdp) {
+      session.cdp.send('Page.stopScreencast').catch(() => {});
+      session.cdp.detach().catch(() => {});
+      session.cdp = null;
+    }
+    session.pendingFrame = null;
+  }
+
+  /** 原生对话框兜底:alert/confirm/prompt 不在 screencast 里渲染且会阻塞输入,自动接受解阻并留痕 */
+  function attachDialogHandler(page: TakeoverPageLike): void {
+    if (typeof page.on !== 'function') return;
+    try {
+      page.on('dialog', (dialog: any) => {
+        try {
+          dialog?.accept?.();
+        } catch {}
+        emit(session, {
+          type: 'status',
+          detail: '页面弹出原生对话框,已自动确认解除阻塞',
+          ts: now(),
+        });
+      });
+    } catch {}
+  }
+
+  /** 发一条 nav 事件(带 title 兜底) */
+  function emitNavFor(page: TakeoverPageLike): void {
+    const url = page.url();
+    page
+      .title()
+      .then((title) => emit(session, { type: 'nav', url, title, ts: now() }))
+      .catch(() => emit(session, { type: 'nav', url, ts: now() }));
+  }
+
+  /** 主框架导航 → nav 事件(客户端刷新地址栏) */
+  function attachNavHandler(page: TakeoverPageLike): void {
+    if (typeof page.on !== 'function') return;
+    let navDebounce: ReturnType<typeof setTimeout> | null = null;
+    try {
+      page.on('framenavigated', (frame: any) => {
+        if (session.final) return;
+        try {
+          if (typeof page.mainFrame === 'function' && frame !== page.mainFrame()) return;
+        } catch {
+          // fake Page 无 mainFrame:全部当主框架
+        }
+        if (navDebounce) clearTimeout(navDebounce);
+        navDebounce = setTimeout(() => {
+          if (session.final) return;
+          emitNavFor(page);
+        }, 400);
+      });
+    } catch {}
+  }
+
+  /** 重定向投射与输入到指定 Page(停旧投射 → 置前 → 挂新投射) */
+  async function retargetToPage(page: TakeoverPageLike, reason: string): Promise<void> {
+    if (session.final) return;
+    detachScreencast();
+    session.removePopupFollow?.(); // 摘旧页跟随钩子(共享 context 防监听累积)
+    try {
+      await page.bringToFront?.();
+    } catch {}
+    session.page = page;
+    attachDialogHandler(page);
+    attachNavHandler(page);
+    attachPopupFollow(page);
+    try {
+      await attachScreencast(page);
+    } catch (err: any) {
+      finish('error', `切换到新标签页失败: ${err?.message || String(err)}`);
+      return;
+    }
+    emit(session, { type: 'status', detail: reason, ts: now() });
+    emitNavFor(page);
+  }
+
+  /**
+   * 新标签跟随:站点把流程甩到新标签(扫码登录/OAuth/target=_blank)时,把投射+输入
+   * 重定向到最新页 —— 否则画面与点击都留在旧的启动壳页上,表现为「新开的页面什么都点不了」。
+   * context 与任务/登录共享同一 per-user 持久浏览器;并发任务开新标签也会触发跟随
+   * (POST 层已提示互相干扰)。
+   */
+  function attachPopupFollow(page: TakeoverPageLike): void {
+    let ctx: any = null;
+    try {
+      ctx = typeof page.context === 'function' ? page.context() : null;
+    } catch {}
+    if (!ctx || typeof ctx.on !== 'function') return;
+    const handler = (newPage: any) => {
+      if (session.final) return;
+      // 串行重定向,防并发弹窗 detach/attach 交错
+      session.retargetChain = (session.retargetChain || Promise.resolve())
+        .then(() => retargetToPage(newPage, '已切换到新打开的标签页'))
+        .catch(() => {});
+    };
+    try {
+      ctx.on('page', handler);
+      session.removePopupFollow = () => {
+        try {
+          ctx.off?.('page', handler);
+        } catch {}
+      };
+    } catch {}
+  }
+
+  try {
+    emit(session, { type: 'status', detail: '正在接管浏览器…', ts: now() });
+    const page = await deps.browser.acquirePage(session.userId);
+    session.page = page;
+
+    // 可选初始导航(如直接打开发布页)
+    const initialUrl = opts?.url;
+    if (initialUrl && /^https?:\/\//.test(initialUrl)) {
+      await page.goto(initialUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
+
+    // 置前:共享持久 profile 的 pages()[0] 可能是后台旧标签,确保投射的是前台页
+    try {
+      await page.bringToFront?.();
+    } catch {}
+
+    // CDP screencast + 对话框兜底
+    attachDialogHandler(page);
+    await attachScreencast(page);
+
+    // 帧合并 flush:burst(视频/动画)只发最新,防 SSE 洪泛(session 级,重定向复用)
     session.flushTimer = setInterval(() => {
       if (session.final || !session.pendingFrame) return;
       const { data, w, h } = session.pendingFrame;
@@ -305,34 +439,12 @@ async function drive(
       }
     }, Math.min(idleMs, 5000));
 
-    // 主框架导航 → nav 事件(客户端刷新地址栏)
-    if (page.on) {
-      let navDebounce: ReturnType<typeof setTimeout> | null = null;
-      page.on('framenavigated', (frame: any) => {
-        if (session.final) return;
-        try {
-          if (frame !== (page as any).mainFrame()) return;
-        } catch {
-          // fake Page 无 mainFrame:全部当主框架
-        }
-        if (navDebounce) clearTimeout(navDebounce);
-        navDebounce = setTimeout(() => {
-          if (session.final) return;
-          const url = page.url();
-          page
-            .title()
-            .then((title) => emit(session, { type: 'nav', url, title, ts: now() }))
-            .catch(() => emit(session, { type: 'nav', url, ts: now() }));
-        }, 400);
-      });
-    }
+    // 主框架导航 → nav 事件 + 新标签跟随
+    attachNavHandler(page);
+    attachPopupFollow(page);
 
     // 初始 nav 补发(客户端地址栏立即有值)
-    const url0 = page.url();
-    page
-      .title()
-      .then((title) => emit(session, { type: 'nav', url: url0, title, ts: now() }))
-      .catch(() => emit(session, { type: 'nav', url: url0, ts: now() }));
+    emitNavFor(page);
   } catch (err: any) {
     finish('error', err?.message || String(err));
   }
@@ -456,6 +568,7 @@ export function stopTakeover(sessionId: string): boolean {
   if (session.idleTimer) clearInterval(session.idleTimer);
   session.flushTimer = null;
   session.idleTimer = null;
+  session.removePopupFollow?.();
   if (session.cdp) {
     session.cdp.send('Page.stopScreencast').catch(() => {});
     session.cdp.detach().catch(() => {});

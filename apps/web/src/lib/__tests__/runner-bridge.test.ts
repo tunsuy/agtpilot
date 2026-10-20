@@ -889,3 +889,96 @@ describe('终态任务删除(deleteRunnerTask + 墓碑 → 雷达黑名单不因
     expect(deleteRunnerTask(USER_B, 'rtask_du1', T0 + 50)).toEqual({ ok: false, error: 'not_found' });
   });
 });
+
+describe('本地 CLI 用量补账(phase1_result/error 事件 payload.usage → task.localUsage 累加)', () => {
+  function setup() {
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, validPack, T0)!;
+    claimNextTask(USER_A, r.deviceId, T0 + 10)!;
+    return r;
+  }
+
+  const ev = (over: Record<string, unknown> = {}) => ({
+    eventId: `ev_${Math.random().toString(36).slice(2)}`,
+    taskId: 'rtask_0001',
+    deviceId: 'dev_x',
+    at: T0 + 20,
+    type: 'phase1_result',
+    payload: { commitHash: 'abc' },
+    ...over,
+  });
+
+  it('phase1_result 带 usage → 清洗后落 localUsage(只展示,不碰状态机)', () => {
+    const r = setup();
+    const res = recordRunnerEvents(
+      USER_A,
+      r.deviceId,
+      [
+        ev({
+          deviceId: r.deviceId,
+          payload: {
+            commitHash: 'abc',
+            usage: { inputTokens: 1200, outputTokens: 340, totalCostUsd: 0.004312, numTurns: 7, durationMs: 45000, hacked: 'x' },
+          },
+        }),
+      ],
+      T0 + 30
+    );
+    expect(res.accepted).toBe(1);
+    const task = getRunnerTask(USER_A, 'rtask_0001', T0 + 30)!;
+    expect(task.localUsage).toEqual({ inputTokens: 1200, outputTokens: 340, totalCostUsd: 0.004312, numTurns: 7, durationMs: 45000 });
+    expect(task.state).toBe('dispatched'); // usage 合账不推进状态
+  });
+
+  it('跨轮累加:重派后第二轮 error 带 usage → 与第一轮求和(任务生命周期总量)', () => {
+    const r = setup();
+    recordRunnerEvents(
+      USER_A,
+      r.deviceId,
+      [ev({ deviceId: r.deviceId, payload: { commitHash: 'abc', usage: { inputTokens: 100, outputTokens: 20, totalCostUsd: 0.001 } } })],
+      T0 + 30
+    );
+    recordRunnerEvents(
+      USER_A,
+      r.deviceId,
+      [
+        ev({
+          deviceId: r.deviceId,
+          type: 'error',
+          payload: { message: '验收命令未通过', usage: { inputTokens: 50, outputTokens: 30, totalCostUsd: 0.002, numTurns: 2 } },
+        }),
+      ],
+      T0 + 40
+    );
+    const task = getRunnerTask(USER_A, 'rtask_0001', T0 + 40)!;
+    expect(task.localUsage).toEqual({ inputTokens: 150, outputTokens: 50, totalCostUsd: 0.003, numTurns: 2 });
+    expect(task.error).toBe('验收命令未通过');
+  });
+
+  it('幂等:同 eventId 重发不重复计账(eventId 去重在合账之前)', () => {
+    const r = setup();
+    const e = ev({ deviceId: r.deviceId, payload: { commitHash: 'abc', usage: { inputTokens: 100 } } });
+    recordRunnerEvents(USER_A, r.deviceId, [e], T0 + 30);
+    const again = recordRunnerEvents(USER_A, r.deviceId, [e], T0 + 40);
+    expect(again.accepted).toBe(1); // 幂等重发计已收
+    expect(getRunnerTask(USER_A, 'rtask_0001', T0 + 40)!.localUsage).toEqual({ inputTokens: 100 });
+  });
+
+  it('usage 畸形(全脏值)→ 不落账不报错;老 runner 无 usage → localUsage 保持 undefined', () => {
+    const r = setup();
+    recordRunnerEvents(USER_A, r.deviceId, [ev({ deviceId: r.deviceId, payload: { commitHash: 'abc', usage: { inputTokens: -5 } } })], T0 + 30);
+    recordRunnerEvents(USER_A, r.deviceId, [ev({ deviceId: r.deviceId, payload: { commitHash: 'def' } })], T0 + 40);
+    expect(getRunnerTask(USER_A, 'rtask_0001', T0 + 40)!.localUsage).toBeUndefined();
+  });
+
+  it('progress/state 事件带 usage 不合账(只认终局事件,防进度流灌水)', () => {
+    const r = setup();
+    recordRunnerEvents(
+      USER_A,
+      r.deviceId,
+      [ev({ deviceId: r.deviceId, type: 'progress', payload: { summary: 'x', usage: { inputTokens: 999 } } })],
+      T0 + 30
+    );
+    expect(getRunnerTask(USER_A, 'rtask_0001', T0 + 30)!.localUsage).toBeUndefined();
+  });
+});

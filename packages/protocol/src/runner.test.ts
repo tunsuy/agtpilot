@@ -7,10 +7,13 @@ import {
   isProtocolSupported,
   isTerminalRunnerState,
   canTransitionRunnerTask,
+  capText,
   normalizeTaskPack,
   normalizeRunnerEvent,
   normalizeDeviceMeta,
   normalizeNoAction,
+  normalizeRunnerUsage,
+  addRunnerUsage,
   type RunnerTaskState,
 } from './runner';
 
@@ -282,5 +285,133 @@ describe('版本与配对码', () => {
     expect(isValidPairCodeFormat('ABC0O1IL')).toBe(false); // 含易混字符
     expect(isValidPairCodeFormat('ABC')).toBe(false);
     expect(isValidPairCodeFormat(12345678)).toBe(false);
+  });
+});
+
+describe('capText(内容型字段超限:截断+标记,不静默丢弃)', () => {
+  it('限额内原样(trim 后)', () => {
+    expect(capText('  hello  ', 100)).toBe('hello');
+    expect(capText('x'.repeat(8000), 8000)).toBe('x'.repeat(8000));
+  });
+
+  it('超限 → 截断到限额内,尾部带原长标记(不再整字段消失)', () => {
+    const out = capText('y'.repeat(9000), 8000);
+    expect(out).toBeDefined();
+    expect(out!.length).toBeLessThanOrEqual(8000);
+    expect(out!.endsWith('…[截断 9000→8000]')).toBe(true);
+    expect(out!.startsWith('yyyy')).toBe(true);
+  });
+
+  it('极小限额(标记本身超限)→ 不炸、结果不超限额', () => {
+    const out = capText('z'.repeat(100), 5);
+    expect(out!.length).toBeLessThanOrEqual(5);
+  });
+
+  it('非字符串/空串 → undefined(可选字段缺省语义不变)', () => {
+    expect(capText(undefined, 100)).toBeUndefined();
+    expect(capText(42, 100)).toBeUndefined();
+    expect(capText('   ', 100)).toBeUndefined();
+  });
+});
+
+describe('normalizeTaskPack · 超限内容字段截断而非静默丢弃(2026-10-20 审计修复)', () => {
+  it('issueContext 超 8000 → 截断+标记保留(agent 不再盲跑),旧行为是整字段消失', () => {
+    const p = normalizeTaskPack({ ...validPack, issueContext: 'C'.repeat(9000) })!;
+    expect(p.issueContext).toBeDefined();
+    expect(p.issueContext!.length).toBeLessThanOrEqual(8000);
+    expect(p.issueContext).toContain('…[截断 9000→8000]');
+  });
+
+  it('claimDraft/dispatchNote/acceptance.note/bodyTemplate 同口径截断', () => {
+    const p = normalizeTaskPack({
+      ...validPack,
+      claimDraft: 'D'.repeat(6000),
+      dispatchNote: 'E'.repeat(6000),
+      acceptance: { note: 'F'.repeat(3000) },
+      prDraft: { title: 'fix: t', bodyTemplate: 'G'.repeat(30000) },
+    })!;
+    expect(p.claimDraft!.length).toBeLessThanOrEqual(5000);
+    expect(p.dispatchNote!.length).toBeLessThanOrEqual(5000);
+    expect(p.acceptance.note!.length).toBeLessThanOrEqual(2000);
+    expect(p.prDraft.bodyTemplate.length).toBeLessThanOrEqual(20000);
+    expect(p.prDraft.bodyTemplate).toContain('截断');
+  });
+
+  it('constraints 单条超 500 → 截断保留(不整条丢)', () => {
+    const p = normalizeTaskPack({ ...validPack, constraints: ['H'.repeat(600)] })!;
+    expect(p.constraints).toHaveLength(1);
+    expect(p.constraints[0].length).toBeLessThanOrEqual(500);
+    expect(p.constraints[0]).toContain('…[截断 600→500]');
+  });
+
+  it('命令/标题类字段仍严格拒绝:超限 testCommand 整字段丢弃、prTitle 超限整包 null(截断命令可能变成另一条命令)', () => {
+    const p = normalizeTaskPack({ ...validPack, acceptance: { testCommand: 'pytest ' + 'x'.repeat(600) } })!;
+    expect(p.acceptance.testCommand).toBeUndefined();
+    expect(normalizeTaskPack({ ...validPack, prDraft: { title: 'T'.repeat(301) } })).toBeNull();
+  });
+});
+
+describe('normalizeRunnerUsage(本地 CLI 用量清洗)', () => {
+  it('合法字段保留;整数取整;totalCostUsd 保 6 位小数', () => {
+    expect(
+      normalizeRunnerUsage({
+        inputTokens: 1200.4,
+        outputTokens: 340,
+        cacheReadTokens: 99000,
+        cacheCreationTokens: 100,
+        totalCostUsd: 0.00431249,
+        numTurns: 7,
+        durationMs: 45000,
+      })
+    ).toEqual({
+      inputTokens: 1200,
+      outputTokens: 340,
+      cacheReadTokens: 99000,
+      cacheCreationTokens: 100,
+      totalCostUsd: 0.004312,
+      numTurns: 7,
+      durationMs: 45000,
+    });
+  });
+
+  it('脏值(负数/NaN/Infinity/字符串/多余键)逐字段剔除,合法字段不受牵连', () => {
+    expect(
+      normalizeRunnerUsage({ inputTokens: -5, outputTokens: '900', numTurns: NaN, durationMs: Infinity, cacheReadTokens: 42, hacked: true })
+    ).toEqual({ cacheReadTokens: 42 });
+  });
+
+  it('无一合法字段 / 非对象 → undefined(事件不带 usage 的语义)', () => {
+    expect(normalizeRunnerUsage({})).toBeUndefined();
+    expect(normalizeRunnerUsage({ inputTokens: -1 })).toBeUndefined();
+    expect(normalizeRunnerUsage(null)).toBeUndefined();
+    expect(normalizeRunnerUsage('1200')).toBeUndefined();
+  });
+});
+
+describe('addRunnerUsage(用量累加:runner 侧加重试轮、云端侧加重派轮)', () => {
+  it('两侧字段求和(含 cost 小数)', () => {
+    expect(
+      addRunnerUsage(
+        { inputTokens: 100, outputTokens: 20, totalCostUsd: 0.001 },
+        { inputTokens: 50, outputTokens: 30, numTurns: 2, totalCostUsd: 0.002 }
+      )
+    ).toEqual({ inputTokens: 150, outputTokens: 50, numTurns: 2, totalCostUsd: 0.003 });
+  });
+
+  it('任一侧缺省安全(首跑无 usage / 重试轮无 usage 都不炸)', () => {
+    expect(addRunnerUsage(undefined, { inputTokens: 9 })).toEqual({ inputTokens: 9 });
+    expect(addRunnerUsage({ inputTokens: 9 }, undefined)).toEqual({ inputTokens: 9 });
+    expect(addRunnerUsage(undefined, undefined)).toBeUndefined();
+  });
+
+  it('脏侧先清洗再相加(事件重放/伪造字段不污染账本)', () => {
+    expect(addRunnerUsage({ inputTokens: 10 }, { inputTokens: -999, outputTokens: 5 } as any)).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+    });
+  });
+
+  it('和为 0 的字段不落键(0 值不占存储)', () => {
+    expect(addRunnerUsage({ inputTokens: 0 }, { inputTokens: 0 })).toBeUndefined();
   });
 });

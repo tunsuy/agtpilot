@@ -117,6 +117,7 @@ describe('buildTaskPackFromOpportunity · viaFork(经 fork 派发)', () => {
 
 import {
   describeDispatchConflict,
+  formatRunnerLocalUsage,
   isRunnerTaskActive,
   latestTaskProgress,
   noActionLabel,
@@ -234,6 +235,42 @@ describe('summarizeRunnerTask(云端任务记录 → 概览行)', () => {
     expect(JSON.stringify(withPending)).not.toContain('git 用户名写错了');
     expect('pendingInterjects' in summarizeRunnerTask(record)).toBe(false);
     expect('pendingInterjects' in summarizeRunnerTask({ ...record, pendingInterjects: [] })).toBe(false);
+  });
+
+  it('localUsage 透传(任务详情「本地消耗」行数据源):记录带 → 概览行带;缺省 → 无该键', () => {
+    const usage = { inputTokens: 1200, outputTokens: 340, totalCostUsd: 0.004312 };
+    expect(summarizeRunnerTask({ ...record, localUsage: usage }).localUsage).toEqual(usage);
+    expect('localUsage' in summarizeRunnerTask(record)).toBe(false);
+  });
+});
+
+describe('formatRunnerLocalUsage(本地消耗单行话术,纯函数)', () => {
+  it('全字段:in/out 千位缩写 + cache 合并 + 轮次 + 分钟 + 成本', () => {
+    expect(
+      formatRunnerLocalUsage({
+        inputTokens: 12340,
+        outputTokens: 980,
+        cacheReadTokens: 66000,
+        cacheCreationTokens: 1500,
+        numTurns: 7,
+        durationMs: 480000,
+        totalCostUsd: 0.42,
+      })
+    ).toBe('in 12.3k / out 980 tok · cache 67.5k · 7 轮 · 8 分 · $0.42');
+  });
+
+  it('缺项跳过:只有 token 时不带 cache/轮次/分钟/成本段', () => {
+    expect(formatRunnerLocalUsage({ inputTokens: 100, outputTokens: 20 })).toBe('in 100 / out 20 tok');
+    expect(formatRunnerLocalUsage({ totalCostUsd: 12.5 })).toBe('$12.50');
+  });
+
+  it('小额成本保留 4 位小数(<$0.01);全空 → 空串(UI 不展示该行)', () => {
+    expect(formatRunnerLocalUsage({ totalCostUsd: 0.0043 })).toBe('$0.0043');
+    expect(formatRunnerLocalUsage({})).toBe('');
+  });
+
+  it('不足 1 分钟按 0 分展示;整千缩写去 .0(1000 → 1k)', () => {
+    expect(formatRunnerLocalUsage({ durationMs: 20000, inputTokens: 1000 })).toBe('in 1k / out 0 tok · 0 分');
   });
 });
 

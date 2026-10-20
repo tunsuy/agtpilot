@@ -134,6 +134,30 @@ describe('parseStreamLine(stream-json 宽容解析)', () => {
     expect(parseStreamLine('{"type":"result","subtype":"error_max_turns","result":"x"}')).toMatchObject({ isError: true });
   });
 
+  it('result 行 usage/成本字段 → 解析为清洗后的 usage(本地消耗补账数据源,旧实现在此丢弃)', () => {
+    const ev = parseStreamLine(
+      '{"type":"result","subtype":"success","result":"done","is_error":false,' +
+        '"usage":{"input_tokens":1200,"output_tokens":340,"cache_read_input_tokens":99000,"cache_creation_input_tokens":100},' +
+        '"total_cost_usd":0.00431249,"num_turns":7,"duration_ms":45000}'
+    );
+    expect(ev).toEqual({
+      kind: 'result', text: 'done', isError: false,
+      usage: {
+        inputTokens: 1200, outputTokens: 340, cacheReadTokens: 99000, cacheCreationTokens: 100,
+        totalCostUsd: 0.004312, numTurns: 7, durationMs: 45000,
+      },
+    });
+  });
+
+  it('result 行无 usage / usage 畸形 → 不带 usage 键(旧格式 claude 输出兼容)', () => {
+    expect(parseStreamLine('{"type":"result","subtype":"success","result":"x","is_error":false,"usage":null}')).toEqual({
+      kind: 'result', text: 'x', isError: false,
+    });
+    expect(parseStreamLine('{"type":"result","subtype":"success","result":"x","is_error":false,"usage":{"input_tokens":-5}}')).toEqual({
+      kind: 'result', text: 'x', isError: false,
+    });
+  });
+
   it('非 JSON / 未知类型 / user 消息 → null(不中断流)', () => {
     expect(parseStreamLine('not json')).toBeNull();
     expect(parseStreamLine('')).toBeNull();

@@ -152,6 +152,35 @@ function missionKey(m: any, idx: number): string {
 // ---- 读:目录 → UserScopedData ----
 
 /**
+ * profile.json 轻读(只读热路径专用):页面加载/切页签/周期扫描/推送查询
+ * 往往只要 profile 里的一个小域(connectors/托管开关/订阅等),不该拖着
+ * missions 全量读(每 mission 一文件 + 读基线双重序列化)。
+ * 返回 null = v2 目录不存在(调用方回退 getUserData 全量读,顺带触发懒迁移)。
+ * 纪律:返回值是无基线、未解密的只读投影,不得交给 saveUserData
+ * (缺域对象过脏检查会把没带的域当成「已删空」误删文件)。
+ */
+export function readProfileV2(dataDir: string, userId: string): any | null {
+  const dir = userDirV2(dataDir, userId);
+  if (!fs.existsSync(dir)) return null;
+  return readJsonSafe(path.join(dir, 'profile.json')) || {};
+}
+
+/**
+ * 数组域轻读(JSONL 域 + cronJobs;只读热路径专用,约束同 readProfileV2)。
+ * 返回 null = v2 目录不存在或字段不支持轻读(missions 走全量路径);
+ * 域文件不存在 = 空数组(与全量读语义一致)。
+ */
+export function readArrayDomainV2(dataDir: string, userId: string, field: string): any[] | null {
+  if (field === 'missions') return null;
+  const dir = userDirV2(dataDir, userId);
+  if (!fs.existsSync(dir)) return null;
+  const jsonl = JSONL_DOMAINS.find((d) => d.field === field);
+  if (jsonl) return readJsonlSafe(path.join(dir, jsonl.file));
+  if (field === 'cronJobs') return readJsonSafe(path.join(dir, 'cron-jobs.json')) || [];
+  return null;
+}
+
+/**
  * 从 v2 目录组装用户数据;目录不存在返回 null(调用方据此触发懒迁移)。
  * connectors 保持密文原样返回 —— 解密与明文补加密迁移仍由 getUserData 统一收口。
  * 读取同时以不可枚举属性挂上「读取基线」(各域序列化快照),供写路径脏检查:

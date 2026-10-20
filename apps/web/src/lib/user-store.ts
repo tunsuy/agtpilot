@@ -15,6 +15,8 @@ import {
   listUserIdsV2,
   carryBaseline,
   attachFreshBaseline,
+  readProfileV2,
+  readArrayDomainV2,
 } from './user-store-v2';
 
 /**
@@ -356,6 +358,23 @@ export function getUserData(userId: string): UserScopedData {
   return empty;
 }
 
+/**
+ * profile 域轻读(只读热路径):v2 布局下 profile.json 是个小文件,
+ * 页面加载/切页签/周期扫描只要其中一两个字段时不该拖着 missions 全量读。
+ * 返回 null = 轻读不可用(v2 关闭或目录不存在待懒迁移),调用方回退 getUserData。
+ * 纪律:轻读结果是无基线、connectors 未解密的只读投影,不得交给 saveUserData。
+ */
+function readProfileLight(userId: string): any | null {
+  if (!isV2Enabled()) return null;
+  return readProfileV2(getDataDir(), userId);
+}
+
+/** 数组域轻读(JSONL 域 + cronJobs);约束同 readProfileLight */
+function readArrayDomainLight(userId: string, field: string): any[] | null {
+  if (!isV2Enabled()) return null;
+  return readArrayDomainV2(getDataDir(), userId, field);
+}
+
 export function saveUserData(data: UserScopedData) {
   data.updatedAt = Date.now();
   // 凭证落盘前统一加密（单一收口：所有写路径都经过这里；内存对象不受影响）
@@ -387,6 +406,26 @@ export function saveUserData(data: UserScopedData) {
 
 // 辅助方法：连接器配置
 export function getUserConnectors(userId: string) {
+  // 轻读路径:connectors/activeModelId 都在 profile.json,解密在读取侧补齐
+  // (与 getUserData 同语义)。发现历史明文未迁移加密时回退全量路径 ——
+  // 那条路会顺带补加密回写,轻读路径不承担写盘职责。
+  const profile = readProfileLight(userId);
+  if (profile) {
+    const raw = (profile.connectors || {}) as Record<string, string>;
+    const configs: Record<string, string> = {};
+    let plaintextFound = false;
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof v === 'string' && v && isEncrypted(v)) {
+        configs[k] = decryptSecret(v);
+      } else {
+        configs[k] = v;
+        if (typeof v === 'string' && v) plaintextFound = true;
+      }
+    }
+    if (!plaintextFound) {
+      return { configs, activeModelId: profile.activeModelId || 'deepseek' };
+    }
+  }
   const data = getUserData(userId);
   return {
     configs: data.connectors || {},
@@ -425,8 +464,7 @@ export function setUserActiveModel(userId: string, modelId: string) {
 
 // 辅助方法：记忆库
 export function getUserMemories(userId: string): any[] {
-  const data = getUserData(userId);
-  return data.memories || [];
+  return readArrayDomainLight(userId, 'memories') ?? getUserData(userId).memories ?? [];
 }
 
 export function saveUserMemory(userId: string, memory: any) {
@@ -451,8 +489,7 @@ export function deleteUserMemory(userId: string, memoryId: string) {
 
 // 辅助方法：巡航任务
 export function getUserCronJobs(userId: string): any[] {
-  const data = getUserData(userId);
-  return data.cronJobs || [];
+  return readArrayDomainLight(userId, 'cronJobs') ?? getUserData(userId).cronJobs ?? [];
 }
 
 export function saveUserCronJob(userId: string, job: any) {
@@ -532,8 +569,7 @@ export function deleteUserMission(userId: string, missionId: string) {
 
 // 辅助方法：长期目标 (Long-term Goals & Milestones)
 export function getUserGoals(userId: string): any[] {
-  const data = getUserData(userId);
-  return data.goals || [];
+  return readArrayDomainLight(userId, 'goals') ?? getUserData(userId).goals ?? [];
 }
 
 export function saveUserGoal(userId: string, goal: any) {
@@ -559,6 +595,8 @@ export function deleteUserGoal(userId: string, goalId: string) {
 // 辅助方法：工坊场景档案 (Scenario Profiles —— docs/design/workshop-scenario-loop.md §2)
 // 每用户 × 每场景一份，按 scenarioKey 唯一；upsert 语义同 goals。
 export function getUserScenarioProfiles(userId: string): Record<string, ScenarioProfile> {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.scenarioProfiles || {};
   return getUserData(userId).scenarioProfiles || {};
 }
 
@@ -588,6 +626,8 @@ export function deleteUserScenarioProfile(userId: string, scenarioKey: string): 
 
 // 辅助方法：小红书托管模式与浏览器审计 (scenario-loop P2 —— docs/design/workshop-scenario-loop.md §5)
 export function getXhsManaged(userId: string): XhsManagedRecord | undefined {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.xhsManaged;
   return getUserData(userId).xhsManaged;
 }
 
@@ -609,6 +649,8 @@ export function markXhsLoginAt(userId: string) {
 
 // 知乎托管模式:与小红书三件套同构(开关/风险已读/登录时间)
 export function getZhihuManaged(userId: string): ZhihuManagedRecord | undefined {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.zhihuManaged;
   return getUserData(userId).zhihuManaged;
 }
 
@@ -629,6 +671,8 @@ export function markZhihuLoginAt(userId: string) {
 
 // 番茄作者后台托管模式:与小红书/知乎三件套同构(开关/风险已读/登录时间)
 export function getFanqieManaged(userId: string): FanqieManagedRecord | undefined {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.fanqieManaged;
   return getUserData(userId).fanqieManaged;
 }
 
@@ -657,12 +701,14 @@ export function appendBrowserAudit(userId: string, entry: BrowserAuditEntry): Br
 
 /** 读取审计(最近 limit 条);不传 limit = 全量(≤200) */
 export function getBrowserAudit(userId: string, limit?: number): BrowserAuditEntry[] {
-  const all = getUserData(userId).browserAudit || [];
+  const all = readArrayDomainLight(userId, 'browserAudit') ?? getUserData(userId).browserAudit ?? [];
   return limit ? all.slice(0, limit) : all;
 }
 
 // 辅助方法：Web Push 订阅 (PWA 推送通知)
 export function getUserPushSubscriptions(userId: string): PushSubscriptionRecord[] {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.pushSubscriptions || [];
   return getUserData(userId).pushSubscriptions || [];
 }
 
@@ -689,8 +735,9 @@ export function removeUserPushSubscription(userId: string, endpoint: string) {
 
 // 辅助方法：MCP OAuth 授权记录（tokens / clientInfo / PKCE verifier，整条加密落盘）
 export function getMcpAuth(userId: string, connectorId: string): McpAuthRecord | undefined {
-  const data = getUserData(userId);
-  const raw = data.mcpAuth?.[connectorId];
+  // mcpAuth 落盘即密文,轻读 profile 后按条解密与全量路径同语义
+  const profile = readProfileLight(userId);
+  const raw = profile ? profile.mcpAuth?.[connectorId] : getUserData(userId).mcpAuth?.[connectorId];
   if (!raw) return undefined;
   try {
     const json = decryptSecret(raw);
@@ -724,6 +771,8 @@ export function deleteMcpAuth(userId: string, connectorId: string) {
 
 /** 读取某授权键(connectorId 或 envVar)的当前权限纪元;从未撤销过 = 0 */
 export function getAuthorityEpoch(userId: string, key: string): number {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.authorityEpochs?.[key] || 0;
   return getUserData(userId).authorityEpochs?.[key] || 0;
 }
 
@@ -763,7 +812,7 @@ export function bumpAuthorityEpoch(
 
 /** 读取删除台账(最近在前) */
 export function getDeletionLedger(userId: string): DeletionLedgerEntry[] {
-  return getUserData(userId).deletionLedger || [];
+  return readArrayDomainLight(userId, 'deletionLedger') ?? getUserData(userId).deletionLedger ?? [];
 }
 
 /** 追加删除台账条目(只增不改;单用户最多保留 200 条,防单文件膨胀) */
@@ -819,6 +868,8 @@ export function readMemoryAudit(userId: string, limit = 100): MemoryAuditEntry[]
 
 /** 读取用户沙箱配置(缺省 = 零暴露/零自定义绑定/fence 未设) */
 export function getSandboxConfig(userId: string): SandboxConfigRecord {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.sandbox || {};
   return getUserData(userId).sandbox || {};
 }
 
@@ -856,8 +907,9 @@ export function addPolicyProposal(
 
 /** 列出提案(status 缺省 = 全部,最近在前) */
 export function getPolicyProposals(userId: string, status?: PolicyProposalRecord['status']): PolicyProposalRecord[] {
-  const all = getUserData(userId).policyProposals || [];
-  return status ? all.filter((p) => p.status === status) : all;
+  const profile = readProfileLight(userId);
+  const all = (profile ? profile.policyProposals : getUserData(userId).policyProposals) || [];
+  return status ? all.filter((p: PolicyProposalRecord) => p.status === status) : all;
 }
 
 /**
@@ -1235,6 +1287,32 @@ export function lintConnectorValue(envVar: string, value: string): string[] {
     }
   }
   return warnings;
+}
+
+/**
+ * 全员 profile 轻扫描(周期 sweeper / 启动预热用):只读每个用户的
+ * profile.json,不碰 missions/JSONL 域。15min 周期的番茄 sweeper 与启动
+ * 预热曾走 getAllUsersData —— 为拿 userId 和一个小开关把【所有用户的
+ * 全部 mission 文件】读一遍,是事件循环的周期性无谓重锤。
+ * 返回的 profile 是只读投影(未解密),纪律同 readProfileLight;
+ * v2 关闭时回退 getAllUsersData(旧单文件布局没有更轻的读法)。
+ * 注意:v2 下不做旧文件懒迁移(listUserIdsV2 已含迁移语义)。
+ */
+export function listUserProfilesLight(): Array<{ userId: string; profile: any }> {
+  const dataDir = getDataDir();
+  if (isV2Enabled()) {
+    const out: Array<{ userId: string; profile: any }> = [];
+    for (const userId of listUserIdsV2(dataDir)) {
+      const profile = readProfileV2(dataDir, userId);
+      if (!profile) continue;
+      out.push({
+        userId: typeof profile.userId === 'string' && profile.userId ? profile.userId : userId,
+        profile,
+      });
+    }
+    return out;
+  }
+  return getAllUsersData().map((d) => ({ userId: d.userId, profile: d }));
 }
 
 // 辅助方法：读取所有用户数据（用于服务端启动时加载所有后台定时任务等）

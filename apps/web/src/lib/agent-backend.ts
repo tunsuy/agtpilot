@@ -316,14 +316,16 @@ class AgentBackend {
    */
   private async prewarmMcpConnections() {
     try {
-      const { getAllUsersData } = require('@/lib/user-store');
+      const { listUserProfilesLight } = require('@/lib/user-store');
       const { buildUserMcpServers } = require('@/lib/mcp-connectors');
       const { ensureDeviceTokensFresh } = require('@/lib/mcp-device-flow');
       const mcpSvc = this.mcp;
       if (!mcpSvc?.syncUserServers) return;
       let ready = 0;
       let failed = 0;
-      for (const user of getAllUsersData()) {
+      // 预热只需 userId(建连走 buildUserMcpServers 内部按需轻读连接器),
+      // 不必把所有用户的 mission 全量读一遍
+      for (const user of listUserProfilesLight()) {
         // 重启后先续期临期的设备码 token(长效 token/无记录时零开销 no-op)
         await ensureDeviceTokensFresh(user.userId);
         const servers = buildUserMcpServers(user.userId);
@@ -2545,16 +2547,15 @@ class AgentBackend {
     // 必须等微内核就绪后才能注册 —— 这里异步自驱动，不阻塞调用方
     this.whenReady()
       .then(() => {
-        const { getAllUsersData } = require('@/lib/user-store');
-        const allUsers = getAllUsersData();
+        const { listUserProfilesLight, getUserCronJobs } = require('@/lib/user-store');
         let activeCount = 0;
-        for (const user of allUsers) {
-          if (Array.isArray(user.cronJobs)) {
-            for (const job of user.cronJobs) {
-              if (job.status === 'active') {
-                this.registerUserCronJob(user.userId, job);
-                activeCount++;
-              }
+        // 只需 userId + cronJobs:cronJobs 存在 cron-jobs.json(非 profile.json),
+        // 用轻量 getUserCronJobs 逐用户读,不必 getAllUsersData 全量读所有 mission
+        for (const user of listUserProfilesLight()) {
+          for (const job of getUserCronJobs(user.userId)) {
+            if (job.status === 'active') {
+              this.registerUserCronJob(user.userId, job);
+              activeCount++;
             }
           }
         }

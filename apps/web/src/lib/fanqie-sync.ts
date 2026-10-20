@@ -29,7 +29,7 @@ import {
   type ScriptSkillBrowserService,
 } from '@agtpilot/plugin-skill';
 import { webSkillStore, skillGateAllows } from './script-skills';
-import { getFanqieManaged, getAllUsersData, getBrowserAudit } from './user-store';
+import { getFanqieManaged, listUserProfilesLight, getBrowserAudit } from './user-store';
 import {
   getNovelBook,
   getChapterContent,
@@ -599,14 +599,15 @@ export function ensureFanqieSyncSweeper(): void {
  * 扫描全部开启番茄托管的用户,把 book.json 里的落盘意图翻回队列:
  * - createStatus pending → 重排 create(failed 是终态,绝不自动重排);
  * - 章节 pending → 重排;章节 failed(attempts<3 且距上次 >30min)→ 冷却重试。
- * userIds 参数仅测试注入;缺省走 getAllUsersData() 全量扫描(与 cron 启动路径同源)。
+ * userIds 参数仅测试注入;缺省走 listUserProfilesLight() 全员档案轻扫描 ——
+ * fanqieManaged 开关在 profile.json 里,不该为它把所有用户的 mission 全量读一遍。
  */
 export function runFanqieSyncSweep(userIds?: string[]): { enqueued: number } {
   if (syncKillSwitchOn()) return { enqueued: 0 };
   const users =
     userIds ||
-    getAllUsersData()
-      .filter((u) => u.fanqieManaged?.enabled && u.fanqieManaged?.riskAckAt)
+    listUserProfilesLight()
+      .filter((u) => u.profile.fanqieManaged?.enabled && u.profile.fanqieManaged?.riskAckAt)
       .map((u) => u.userId);
   let enqueued = 0;
   for (const userId of users) {

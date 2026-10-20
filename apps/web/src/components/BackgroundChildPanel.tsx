@@ -62,8 +62,10 @@ export function childStatusMeta(child: Mission): {
   }
   if (child.status === 'DONE') {
     // 执行异常的 mission 也收敛为 DONE(agent-backend error 处理器),真实
-    // 信号是 step_err_ 失败尾步 —— 数据判定,不靠状态字段猜测
-    const failed = (child.steps || []).some((s) => s.id?.startsWith('step_err_'));
+    // 信号是 step_err_ 失败尾步 —— 数据判定,不靠状态字段猜测。
+    // stripped 摘要没有 steps(首屏瘦身),改读投影时前置计算的 hasErrorStep
+    const failed =
+      child.hasErrorStep === true || (child.steps || []).some((s) => s.id?.startsWith('step_err_'));
     if (failed) {
       return {
         label: '失败',

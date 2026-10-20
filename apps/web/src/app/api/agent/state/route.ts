@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getAgentBackend } from '@/lib/agent-backend';
 import { auth } from '@/auth';
 import { getUserMissions } from '@/lib/user-store';
+import { toWireMission } from '@/lib/mission-wire';
 
 export async function GET() {
   const session = await auth();
@@ -27,9 +28,11 @@ export async function GET() {
     const persistedMissions = getUserMissions(userId);
     const activeMemoryMissions = backend.state.missions.filter((m) => m.userId === userId);
     const activeIds = new Set(activeMemoryMissions.map((m) => m.id));
+    // 首屏瘦身(lib/mission-wire.ts):终态历史会话只发摘要,选中再懒回水;
+    // conversationMessages 一律不下发(前端零消费,续聊回水走服务端持久化库)
     scopedMissions = [
-      ...activeMemoryMissions,
-      ...persistedMissions.filter((m) => !activeIds.has(m.id)),
+      ...activeMemoryMissions.map(toWireMission),
+      ...persistedMissions.filter((m) => !activeIds.has(m.id)).map(toWireMission),
     ];
   }
 

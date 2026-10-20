@@ -126,6 +126,10 @@ class AgentBackend {
   private cronSchedulerInitialized = false;
   /** 各任务检查点最近一次落盘时间（节流：≥5s 一次） */
   private checkpointSavedAt: Map<string, number> = new Map();
+  /** broadcast 触发的 mission_updated 落盘节流:missionId → 最近落盘时刻 */
+  private broadcastSavedAt: Map<string, number> = new Map();
+  /** 节流窗尾随补偿定时器:窗口内最后一次更新不丢(终态则立即冲刷) */
+  private broadcastSaveTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   /**
    * 流式增量合并缓冲（taskId → { segments, timer, userId }）：
    * 后端 ~100ms / 160 字符合并一次再广播轻量 assistant_delta SSE 事件，
@@ -1119,12 +1123,17 @@ class AgentBackend {
   }
 
   public broadcast(event: any) {
-    if ((event.type === 'mission_updated' || event.type === 'mission_created') && event.data?.userId) {
-      try {
-        const { saveUserMission } = require('@/lib/user-store');
-        saveUserMission(event.data.userId, event.data);
-      } catch (e) {
-        // ignore
+    if (event.data?.userId) {
+      if (event.type === 'mission_created') {
+        // 新会话记录立即落盘(低频,且刷新/重启后必须可见)
+        this.persistMissionNow(event.data);
+      } else if (event.type === 'mission_updated') {
+        // 节流合并落盘:每次广播都同步 saveUserMission 意味着每次都要
+        // 「全量重读用户存储(50 个 mission 文件)+ 基线双重序列化」,而
+        // mission_updated 在每个步骤边界/工具事件都发(25+ 广播点),任务
+        // 执行期间 Node 事件循环被同步 I/O 持续占住,首屏 state/SSE init
+        // 排在后面 —— 工作台首次进入长时间空列表的主因之一。
+        this.persistMissionCoalesced(event.data);
       }
     }
 
@@ -1137,6 +1146,59 @@ class AgentBackend {
       } catch {
         // ignore subscriber errors
       }
+    }
+  }
+
+  /**
+   * 立即落盘一条 mission(同步 saveUserMission)。mission 是内存活引用
+   * (就地 mutate),落盘时刻的字段即最新状态。失败静默 —— 与既有纪律一致,
+   * 持久化故障不阻塞广播/执行主流程(还有 checkpoint 5s 节流兜底)。
+   */
+  private persistMissionNow(mission: any) {
+    if (!mission?.userId || !mission?.id) return;
+    try {
+      const { saveUserMission } = require('@/lib/user-store');
+      saveUserMission(mission.userId, mission);
+      this.broadcastSavedAt.set(mission.id, Date.now());
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * mission_updated 的节流合并落盘:每 mission ≥3s 一次,窗口内的尾部更新
+   * 用定时器补偿(到期取内存最新引用落盘,不丢最后一次状态);终态
+   * (DONE/INTERRUPTED)立即冲刷并清尾随定时器 —— 完成态是刷新/重启后
+   * 必须可见的强保证点。崩溃最多丢 3s 窗内的过程态,与 checkpoint
+   * 「最近检查点续跑」语义一致,可接受。
+   */
+  private persistMissionCoalesced(mission: any) {
+    if (!mission?.userId || !mission?.id) return;
+    if (mission.status === 'DONE' || mission.status === 'INTERRUPTED') {
+      const pending = this.broadcastSaveTimers.get(mission.id);
+      if (pending) {
+        clearTimeout(pending);
+        this.broadcastSaveTimers.delete(mission.id);
+      }
+      this.persistMissionNow(mission);
+      return;
+    }
+    const now = Date.now();
+    const last = this.broadcastSavedAt.get(mission.id) || 0;
+    if (now - last >= 3000) {
+      this.persistMissionNow(mission);
+      return;
+    }
+    if (!this.broadcastSaveTimers.has(mission.id)) {
+      const timer = setTimeout(() => {
+        this.broadcastSaveTimers.delete(mission.id);
+        // 到期取内存最新引用(mission 就地 mutate;已被移出内存则退事件携带对象)
+        const latest = this.state.missions.find((m) => m.id === mission.id) || mission;
+        this.persistMissionNow(latest);
+      }, 3000 - (now - last));
+      // 不吊住进程退出(开发热重载/优雅停机场景)
+      (timer as any).unref?.();
+      this.broadcastSaveTimers.set(mission.id, timer);
     }
   }
 

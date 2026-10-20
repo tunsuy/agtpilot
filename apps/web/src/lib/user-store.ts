@@ -476,9 +476,26 @@ export function deleteUserCronJob(userId: string, jobId: string) {
 }
 
 // 辅助方法：任务流记录 (Missions)
+
+/**
+ * getUserMissions 短 TTL 读缓存(工作台首屏性能):
+ * /api/agent/state、SSE init、mission/[id] 懒回水在首屏/重连时连环命中,
+ * 每次命中都是一遍「全部 mission 文件同步读 + 解析 + 基线双重序列化」;
+ * 2s TTL + 本进程写路径主动失效,让只读热路径不再反复碰盘。
+ * 只服务只读消费方(路由层 filter/concat/序列化,不改动返回对象);
+ * 写路径(saveUserMission/deleteUserMission)一律走 getUserData 全量读,
+ * 落盘后同步失效缓存,同进程读写不见陈旧数据。
+ */
+const missionsReadCache = new Map<string, { at: number; missions: any[] }>();
+const MISSIONS_READ_CACHE_TTL_MS = 2000;
+
 export function getUserMissions(userId: string): any[] {
+  const hit = missionsReadCache.get(userId);
+  if (hit && Date.now() - hit.at < MISSIONS_READ_CACHE_TTL_MS) return hit.missions;
   const data = getUserData(userId);
-  return data.missions || [];
+  const missions = data.missions || [];
+  missionsReadCache.set(userId, { at: Date.now(), missions });
+  return missions;
 }
 
 export function saveUserMission(userId: string, mission: any) {
@@ -495,6 +512,7 @@ export function saveUserMission(userId: string, mission: any) {
     }
   }
   saveUserData(data);
+  missionsReadCache.delete(userId);
   return data.missions;
 }
 
@@ -502,6 +520,7 @@ export function deleteUserMission(userId: string, missionId: string) {
   const data = getUserData(userId);
   data.missions = (data.missions || []).filter((m: any) => m.id !== missionId);
   saveUserData(data);
+  missionsReadCache.delete(userId);
   // 级联清理该任务的超长工具输出落盘目录(docs/design/tool-output-spill.md §4.5)。
   // 动态 import 避免与 tool-output-store(其静态依赖本模块的 getDataDir)成环;
   // 尽力而为不阻塞删除 —— 清理失败还有预算 LRU 与 TTL 兜底

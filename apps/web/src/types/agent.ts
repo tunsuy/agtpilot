@@ -158,6 +158,16 @@ export interface Mission {
    */
   deliveryContract?: { id: string; fields: Array<{ key: string; label: string; required: boolean }> };
   artifact?: ArtifactState | null;
+  /**
+   * 线上摘要标记(lib/mission-wire.ts):state/init 对终态历史会话只发元信息,
+   * steps/terminalLogs/viewport 置空 —— 选中时经 /api/agent/mission/[id]
+   * 懒回水全量后本标记清除。首屏瘦身,列表渲染不依赖被剥字段。
+   */
+  stripped?: boolean;
+  /** stripped 摘要携带:原始步骤数(占位展示/可观测) */
+  stepCount?: number;
+  /** stripped 摘要携带:失败尾步(step_err_)判定前置计算,子任务 chip「失败」态用 */
+  hasErrorStep?: boolean;
 }
 
 export interface ViewportState {

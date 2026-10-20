@@ -1,6 +1,7 @@
 import { getAgentBackend } from '@/lib/agent-backend';
 import { auth } from '@/auth';
 import { getUserMissions } from '@/lib/user-store';
+import { toWireMission, stripConversation } from '@/lib/mission-wire';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,12 +36,14 @@ export async function GET() {
       if (userId) {
         const persistedMissions = getUserMissions(userId);
         const activeMemoryMissions = backend.state.missions.filter((m) => m.userId === userId);
-        
+
         // 合并：优先取 active 内存中的任务（包含最新进度），其余取持久化历史
         const activeIds = new Set(activeMemoryMissions.map((m) => m.id));
+        // 首屏瘦身(lib/mission-wire.ts):终态历史会话只发摘要(stripped),
+        // 前端选中时经 /api/agent/mission/[id] 懒回水;conversationMessages 一律不下发
         scopedMissions = [
-          ...activeMemoryMissions,
-          ...persistedMissions.filter((m) => !activeIds.has(m.id)),
+          ...activeMemoryMissions.map(toWireMission),
+          ...persistedMissions.filter((m) => !activeIds.has(m.id)).map(toWireMission),
         ];
       }
 
@@ -125,7 +128,14 @@ export async function GET() {
               return;
             }
           }
-          const sseEvent = `event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`;
+          // live 帧瘦身:mission 全量对象含 conversationMessages(整段 LLM 对话,
+          // 含工具结果),前端零消费 —— 只剥它,steps/terminalLogs/viewport 保留
+          // (实时渲染需要)。落盘在 backend.broadcast() 已先行完成,不受影响
+          const wireData =
+            event.type === 'mission_updated' || event.type === 'mission_created'
+              ? stripConversation(event.data)
+              : event.data;
+          const sseEvent = `event: ${event.type}\ndata: ${JSON.stringify(wireData)}\n\n`;
           controller.enqueue(encoder.encode(sseEvent));
         } catch {
           // ignore write errors on closed connection

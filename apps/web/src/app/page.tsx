@@ -705,6 +705,53 @@ export default function Workspace() {
     }
   }, [deepLinkMissionId, missions]);
 
+  /**
+   * 历史会话懒回水(首屏瘦身配套,lib/mission-wire.ts):state/init 对终态
+   * 会话只带摘要(stripped,steps/terminalLogs/viewport 已剥),选中某条时经
+   * /api/agent/mission/[id] 拉全量回填;选中会话的后台子任务一并回水
+   * (子任务面板/失败 chip 要读 steps)。in-flight 集合防重(missions 在
+   * 流式期间高频变化,effect 会反复触发);失败静默,重新选中即重试。
+   */
+  const hydrateInflight = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!activeMissionId) return;
+    const pending = missions.filter(
+      (m) =>
+        m.stripped &&
+        !hydrateInflight.current.has(m.id) &&
+        (m.id === activeMissionId || m.parentMissionId === activeMissionId)
+    );
+    if (pending.length === 0) return;
+    for (const m of pending) {
+      hydrateInflight.current.add(m.id);
+      (async () => {
+        try {
+          const res = await fetch(`/api/agent/mission/${encodeURIComponent(m.id)}`);
+          const data = await res.json();
+          if (data.success && data.mission) {
+            const full: Mission = { ...data.mission, stripped: false };
+            setMissions((prev) =>
+              prev.map((x) => {
+                if (x.id !== full.id) return x;
+                // 竞态防护:回水在飞期间用户已对这条会话发起续聊(本地乐观
+                // 置 ACTIVE/QUEUED),不用旧终态全量盖掉乐观气泡 —— 只清摘要
+                // 标记,权威全量随服务端 mission_updated 很快到达
+                if (x.status !== 'DONE' && x.status !== 'INTERRUPTED') {
+                  return { ...x, stripped: false };
+                }
+                return full;
+              })
+            );
+          }
+        } catch {
+          // 静默:列表仍可浏览,再次选中该会话时重试回水
+        } finally {
+          hydrateInflight.current.delete(m.id);
+        }
+      })();
+    }
+  }, [activeMissionId, missions]);
+
   useEffect(() => {
     if (session?.user?.id && mobileOverlay === 'connectors') {
       loadConnectors();
@@ -719,12 +766,29 @@ export default function Workspace() {
     }
   }, [activeView, session?.user?.id]);
 
+  /**
+   * 线上 missions 合并回本地(首屏瘦身配套):state/init 对终态历史会话只带
+   * 摘要(stripped),若本地已懒回水成全量且状态版本没变,保留本地全量 ——
+   * 避免 SSE 重连 init 重同步把正打开的会话闪回空步骤。其余以线上为准。
+   */
+  const mergeWireMissions = (incoming: Mission[]) => {
+    setMissions((prev) => {
+      if (prev.length === 0) return incoming;
+      const prevById = new Map(prev.map((m) => [m.id, m]));
+      return incoming.map((m) => {
+        const old = prevById.get(m.id);
+        if (old && !old.stripped && m.stripped && old.status === m.status) return old;
+        return m;
+      });
+    });
+  };
+
   const loadAgentState = async () => {
     try {
       const res = await fetch('/api/agent/state');
       const data = await res.json();
       if (data.state) {
-        if (data.state.missions) setMissions(data.state.missions);
+        if (data.state.missions) mergeWireMissions(data.state.missions);
         if (data.state.activeMissionId) setActiveMissionId(data.state.activeMissionId);
         if (data.state.viewport) setViewport(data.state.viewport);
         if (data.state.terminalLogs) setTerminalLogs(data.state.terminalLogs);
@@ -739,6 +803,10 @@ export default function Workspace() {
   };
 
   useEffect(() => {
+    // 会话就绪后再建 SSE:挂载时 session 还在解析,提前连一次 init 全量同步
+    // 马上又因依赖变化被断开重连 —— 首屏白白多付一遍「服务端全量读盘 +
+    // 巨帧下载」。未登录时事件路由本来就会滤掉所有载荷,不连零损失。
+    if (!session?.user?.id) return;
     // SSE 假死自愈:TCP 连接可以「断了一半」——客户端侧仍 ESTABLISHED,
     // EventSource 不触发 onerror,自动重连永远不发生;期间服务端广播的
     // 工具卡/流式答复/完成态全部落空,页面冻在最后一帧,顶部的本地耗时
@@ -762,7 +830,7 @@ export default function Workspace() {
       eventSource.addEventListener('init', (e: MessageEvent) => {
         try {
           const state = JSON.parse(e.data);
-          if (state.missions) setMissions(state.missions);
+          if (state.missions) mergeWireMissions(state.missions);
           if (state.activeMissionId) setActiveMissionId(state.activeMissionId);
           if (state.viewport) setViewport(state.viewport);
           if (state.terminalLogs) setTerminalLogs(state.terminalLogs);

@@ -23,7 +23,7 @@ import { TopicPickList } from '../TopicPickCard';
 import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass, DeliverablePicker } from './shared';
-import { collectWorkshopMaterials, resolveMaterials, uploadMaterialOptions, MATERIAL_COUNT_LIMIT, MATERIAL_UPLOAD_ACCEPT } from '@/workshops/shared/materials';
+import { collectWorkshopMaterials, resolveMaterials, savedMaterialIds, uploadMaterialOptions, MATERIAL_COUNT_LIMIT, MATERIAL_UPLOAD_ACCEPT } from '@/workshops/shared/materials';
 import { useMaterialUploads } from './useMaterialUploads';
 
 interface Props {
@@ -86,11 +86,9 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
       ((missions || []) as Array<{ id: string; title: string; startedAt: number; artifact?: { title?: string; content?: string; type?: string } | null }>)
     ),
   ];
-  const [materialIds, setMaterialIds] = useState<string[]>(
-    Array.isArray(saved.materialIds)
-      ? (saved.materialIds as unknown[]).filter((v): v is string => typeof v === 'string')
-      : []
-  );
+  // 历史回填读 recordRun 实际存的 params.materials(saved.materialIds 从无写入方);
+  // 按当前可选项过滤陈旧 id
+  const [materialIds, setMaterialIds] = useState<string[]>(() => savedMaterialIds(saved, materialOptions));
   const toggleMaterial = (id: string) =>
     setMaterialIds((prev) =>
       prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id].slice(0, MATERIAL_COUNT_LIMIT)
@@ -215,7 +213,9 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
     onRun(preview.prompt, preview.title, { id: workshop.id, params });
   };
 
-  const topicPlaceholder = isVideo
+  const topicPlaceholder = materialIds.length > 0
+    ? `已选 ${materialIds.length} 份交付物:留空即直接以其为素材编写;填写则作为额外角度/指令`
+    : isVideo
     ? '留空则由 Agent 调研全网热榜/搜索热点自动选题,如：AI 工具月度盘点'
     : isXhs && scenarioProfile?.positioning.niche
     ? `留空则按你的「${scenarioProfile.positioning.niche}」赛道调研热点选题`

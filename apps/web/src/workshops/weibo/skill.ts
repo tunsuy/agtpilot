@@ -4,6 +4,7 @@
 import { MessagesSquare } from 'lucide-react';
 import { buildWeiboWorkshopPrompt } from './context';
 import { str, num } from '../shared/params';
+import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill } from '../types';
 
 export const WORKSHOP_SKILL: WorkshopSkill = {
@@ -30,6 +31,7 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         topic: str(params.topic),
         style,
         count: num(params.count),
+        materials: parseMaterials(params.materials),
       }),
       title: `微博内容工坊 · ${style}`,
     };

@@ -49,6 +49,7 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profil
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
   const profileSection = profile ? buildProfileSection(profile) : null;
   const themeId = WECHAT_MD_THEMES.some((x) => x.id === (theme || '').trim()) ? (theme || '').trim() : DEFAULT_WECHAT_MD_THEME_ID;
+  const mats = parseMaterials(materials);
   return (
     renderTemplate(prompt, {
       topic: t,
@@ -57,6 +58,10 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profil
       theme: themeId,
       profileSection: profileSection || '',
       sources: TOPIC_RESEARCH_SOURCES,
-    }) + buildMaterialsSection(parseMaterials(materials))
+      // 空主题互斥分支(引擎不支持嵌套 if,布尔在这里预计算):
+      // 勾了交付物 → 以资料为素材直接编写;未勾 → 调研热点选题
+      materialMode: !t && mats.length > 0,
+      hotResearchMode: !t && mats.length === 0,
+    }) + buildMaterialsSection(mats)
   );
 }

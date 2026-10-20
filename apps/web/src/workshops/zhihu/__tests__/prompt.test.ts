@@ -107,6 +107,27 @@ describe('buildZhihuWorkshopPrompt · 主题缺省降级链', () => {
   });
 });
 
+describe('buildZhihuWorkshopPrompt · 材料模式(勾交付物 + 空主题)', () => {
+  const materials = [{ id: 'art_1', title: '行业研报' }];
+
+  it('空主题 + 有材料:以参考资料为素材直接编写,不进热点调研', () => {
+    const prompt = buildZhihuWorkshopPrompt({ style: '深度分析', count: 1, materials });
+    expect(prompt).toContain('主题:未指定,不需要调研热点选题');
+    expect(prompt).toContain('【参考资料】列出的交付物为核心素材直接编写');
+    expect(prompt).toContain('read_reference_material');
+    expect(prompt).toContain('「深度分析」');
+    expect(prompt).not.toContain('请先调研热点选题');
+    expect(prompt).toContain('【资料1：行业研报】(materialId=art_1)');
+  });
+
+  it('有主题 + 有材料:主题段与材料段并存', () => {
+    const prompt = buildZhihuWorkshopPrompt({ topic: 'RAG 架构演进', style: '深度分析', count: 1, materials });
+    expect(prompt).toContain('主题:RAG 架构演进');
+    expect(prompt).not.toContain('主题:未指定');
+    expect(prompt).toContain('【参考资料】');
+  });
+});
+
 describe('ZHIHU_TOPIC_PRESETS / ZHIHU_ARTICLE_STYLES · 预设契约', () => {
   it('三个方向预设,互不重复', () => {
     expect(ZHIHU_TOPIC_PRESETS).toHaveLength(3);

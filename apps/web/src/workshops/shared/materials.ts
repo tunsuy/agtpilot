@@ -3,10 +3,9 @@
  *
  * 设计:prompt 里只带引用 id + 标题(不进正文),Agent 动笔前用
  * read_reference_material 工具(见 lib/reference-materials.ts)按需拉取全文。
- * 相对内联拼接:prompt 不膨胀、长文不截断、params 体积恒定(file 类型产物
- * 也可引用,正文由工具端解析)。
- * 数据流:表单用 collectWorkshopMaterials(missions) 列出可选交付物,与
- * uploadMaterialOptions(本地上传,GET /api/workshops/materials)混排 →
+ * 相对内联拼接:prompt 不膨胀、长文不截断、params 体积恒定。
+ * 数据流:表单用 collectWorkshopMaterials(missions)(交付物,只列有可读正文的)
+ * 与 uploadMaterialOptions(本地上传,GET /api/workshops/materials)混排列出可选项 →
  * 用户勾选 → 表单把 resolveMaterials(items, ids) 收进 params.materials →
  * 各工坊 skill run() 经 parseMaterials + buildMaterialsSection 拼进 prompt 末尾。
  * 无勾选时 section 为空字符串,拼进 prompt 的结果与原来逐字节一致(金测不受影响)。
@@ -46,7 +45,8 @@ export const MATERIAL_UPLOAD_ACCEPT = [...MATERIAL_TEXT_EXTS, '.pdf', '.docx'].j
 
 /**
  * 从任务列表汇总可选交付物(与 DeliverablesView 同口径:任务 artifact 去重)。
- * 注意 file 类型也列出(正文由 read_reference_material 工具端解析,不再经 prompt)。
+ * 只列有可读正文的交付物:file 类型(pptx 等二进制,正文在服务端文件库)
+ * read_reference_material 解析不了,不进可选项 —— 文本抽取支持后再放开。
  */
 export function collectWorkshopMaterials(
   missions: Array<{
@@ -60,8 +60,7 @@ export function collectWorkshopMaterials(
   const out: MaterialOption[] = [];
   for (const m of missions) {
     const content = m.artifact?.content || '';
-    const isFile = (m.artifact?.type || 'markdown') === 'file';
-    if ((!content && !isFile) || seen.has(content)) continue;
+    if (!content || seen.has(content)) continue;
     seen.add(content);
     out.push({
       id: `art_${m.id}`,
@@ -80,6 +79,19 @@ export function resolveMaterials(options: MaterialOption[], ids: string[]): Work
     .filter((o) => ids.includes(o.id))
     .slice(0, MATERIAL_COUNT_LIMIT)
     .map((o) => ({ id: o.id, title: o.title }));
+}
+
+/**
+ * 表单历史回填:recordRun 存的是 params.materials({id,title} 数组),
+ * 取其 id 并按当前可选项过滤(missions 只留最近 50 条,陈旧 id 属预期)。
+ */
+export function savedMaterialIds(params: Record<string, unknown>, options: MaterialOption[]): string[] {
+  if (!Array.isArray(params.materials)) return [];
+  const valid = new Set(options.map((o) => o.id));
+  return (params.materials as unknown[])
+    .map((m) => (m && typeof m === 'object' ? (m as { id?: unknown }).id : undefined))
+    .filter((v): v is string => typeof v === 'string' && valid.has(v))
+    .slice(0, MATERIAL_COUNT_LIMIT);
 }
 
 /** 收敛表单 params.materials(宽松 Record 透传,防手造/历史脏数据) */

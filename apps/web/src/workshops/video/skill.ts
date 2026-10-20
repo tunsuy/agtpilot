@@ -5,6 +5,7 @@
 import { Video, Tv } from 'lucide-react';
 import { buildVideoScriptPrompt, type VideoPlatformId } from './context';
 import { str, num } from '../shared/params';
+import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill } from '../types';
 
 /** 平台差异装配(旧 run.ts 的 video_douyin/video_bilibili 分支合并) */
@@ -22,6 +23,7 @@ const buildVideoSkill = (
         platform,
         duration,
         count: num(params.count),
+        materials: parseMaterials(params.materials),
       }),
       title: `${platform === 'bilibili' ? 'B站' : '抖音'}短视频脚本工坊 · ${duration}`,
     };

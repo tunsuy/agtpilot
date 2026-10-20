@@ -288,6 +288,38 @@ const EDGE: GoldenCase[] = [
   },
   { label: 'edge-clamp', id: 'weibo', params: { topic: '', count: 99, style: '' } },
   { label: 'edge-clamp', id: 'video_douyin', params: { topic: '', count: 99, duration: '' } },
+  // 材料模式(2026-10-20):勾交付物 + 空主题 → 以资料为素材直接编写;
+  // 主题 + 材料 → 两段并存。既有无材料快照不受影响(平铺 if 假分支消隐,字节一致)
+  {
+    label: 'edge-material-mode',
+    id: 'xhs',
+    params: { topic: '', style: '种草推荐', count: 1, materials: [{ id: 'art_m1', title: '行业研报' }] },
+  },
+  {
+    label: 'edge-material-mode',
+    id: 'zhihu',
+    params: { topic: '', style: '专业干货', count: 1, materials: [{ id: 'art_m1', title: '行业研报' }] },
+  },
+  {
+    label: 'edge-material-mode',
+    id: 'wechat_mp',
+    params: { topic: '', style: '深度长文', count: 1, materials: [{ id: 'art_m1', title: '行业研报' }] },
+  },
+  {
+    label: 'edge-material-mode',
+    id: 'weibo',
+    params: { topic: '', style: '热点点评', count: 1, materials: [{ id: 'art_m1', title: '行业研报' }] },
+  },
+  {
+    label: 'edge-material-mode',
+    id: 'video_douyin',
+    params: { topic: '', duration: '60 秒', count: 1, materials: [{ id: 'art_m1', title: '行业研报' }] },
+  },
+  {
+    label: 'edge-topic-plus-materials',
+    id: 'wechat_mp',
+    params: { topic: 'AI 编程工具横评', style: '深度长文', count: 1, materials: [{ id: 'art_m1', title: '行业研报' }] },
+  },
   { label: 'edge-unknown-scope', id: 'email_triage', params: { scope: 'bogus', draft: false } },
   {
     label: 'edge-unknown-period',

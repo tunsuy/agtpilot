@@ -10,6 +10,7 @@
 import prompt from './prompt.main.md';
 import { renderTemplate } from '../engine';
 import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
+import { buildMaterialsSection, parseMaterials, type WorkshopMaterial } from '../shared/materials';
 
 // ---------- 抖音 / B站 短视频脚本 ----------
 
@@ -23,13 +24,15 @@ export type VideoPlatformId = (typeof VIDEO_PLATFORMS)[number]['id'];
 export const VIDEO_SCRIPT_DURATIONS = ['30 秒', '60 秒', '3 分钟'] as const;
 
 export interface VideoScriptInput {
-  /** 用户指定主题;留空则由 Agent 调研热点选题 */
+  /** 用户指定主题;留空则勾选了参考资料时以资料为素材编写,否则由 Agent 调研热点选题 */
   topic?: string;
   platform: VideoPlatformId | string;
   /** 时长(VIDEO_SCRIPT_DURATIONS 之一) */
   duration: string;
   /** 产出脚本数 1-3 */
   count: number;
+  /** 参考资料(会话交付物勾选);缺省/空时不拼接,prompt 与原来逐字节一致 */
+  materials?: WorkshopMaterial[];
 }
 
 const PLATFORM_NOTES: Record<string, { name: string; style: string; tags: string }> = {
@@ -47,21 +50,28 @@ const PLATFORM_NOTES: Record<string, { name: string; style: string; tags: string
   },
 };
 
-export function buildVideoScriptPrompt({ topic, platform, duration, count }: VideoScriptInput): string {
+export function buildVideoScriptPrompt({ topic, platform, duration, count, materials }: VideoScriptInput): string {
   const t = (topic || '').trim();
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
   const p = PLATFORM_NOTES[platform] || PLATFORM_NOTES.douyin;
-  return renderTemplate(prompt, {
-    topic: t,
-    platformName: p.name,
-    duration,
-    count: n,
-    styleNote: p.style,
-    titleNote:
-      p.name === 'B站'
-        ? '不超过 20 字,信息明确、可带适度悬念'
-        : '不超过 15 字,强钩子、口语化、不造假不标题党',
-    tagsNote: p.tags,
-    sources: TOPIC_RESEARCH_SOURCES,
-  });
+  const mats = parseMaterials(materials);
+  return (
+    renderTemplate(prompt, {
+      topic: t,
+      platformName: p.name,
+      duration,
+      count: n,
+      styleNote: p.style,
+      titleNote:
+        p.name === 'B站'
+          ? '不超过 20 字,信息明确、可带适度悬念'
+          : '不超过 15 字,强钩子、口语化、不造假不标题党',
+      tagsNote: p.tags,
+      sources: TOPIC_RESEARCH_SOURCES,
+      // 空主题互斥分支(引擎不支持嵌套 if,布尔在这里预计算):
+      // 勾了交付物 → 以资料为素材直接编写;未勾 → 调研热点选题
+      materialMode: !t && mats.length > 0,
+      hotResearchMode: !t && mats.length === 0,
+    }) + buildMaterialsSection(mats)
+  );
 }

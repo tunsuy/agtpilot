@@ -11,27 +11,37 @@
 import prompt from './prompt.main.md';
 import { renderTemplate } from '../engine';
 import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
+import { buildMaterialsSection, parseMaterials, type WorkshopMaterial } from '../shared/materials';
 
 // ---------- 微博 ----------
 
 export const WEIBO_WORKSHOP_STYLES = ['热点点评', '干货分享', '生活随记', '种草安利'] as const;
 
 export interface WeiboWorkshopInput {
-  /** 用户指定主题;留空则由 Agent 调研热点选题 */
+  /** 用户指定主题;留空则勾选了参考资料时以资料为素材编写,否则由 Agent 调研热点选题 */
   topic?: string;
   /** 微博类型(WEIBO_WORKSHOP_STYLES 之一或自定义) */
   style: string;
   /** 产出条数 1-3 */
   count: number;
+  /** 参考资料(会话交付物勾选);缺省/空时不拼接,prompt 与原来逐字节一致 */
+  materials?: WorkshopMaterial[];
 }
 
-export function buildWeiboWorkshopPrompt({ topic, style, count }: WeiboWorkshopInput): string {
+export function buildWeiboWorkshopPrompt({ topic, style, count, materials }: WeiboWorkshopInput): string {
   const t = (topic || '').trim();
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
-  return renderTemplate(prompt, {
-    topic: t,
-    style,
-    count: n,
-    sources: TOPIC_RESEARCH_SOURCES,
-  });
+  const mats = parseMaterials(materials);
+  return (
+    renderTemplate(prompt, {
+      topic: t,
+      style,
+      count: n,
+      sources: TOPIC_RESEARCH_SOURCES,
+      // 空主题互斥分支(引擎不支持嵌套 if,布尔在这里预计算):
+      // 勾了交付物 → 以资料为素材直接编写;未勾 → 调研热点选题
+      materialMode: !t && mats.length > 0,
+      hotResearchMode: !t && mats.length === 0,
+    }) + buildMaterialsSection(mats)
+  );
 }

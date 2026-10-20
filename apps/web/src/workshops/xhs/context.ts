@@ -33,6 +33,7 @@ export function buildXhsWorkshopPrompt({ topic, style, count, profile, materials
   const t = (topic || '').trim();
   const n = Math.min(3, Math.max(1, Math.round(count) || 1));
   const profileSection = profile ? buildProfileSection(profile) : null;
+  const mats = parseMaterials(materials);
   return (
     renderTemplate(promptMain, {
       topic: t,
@@ -40,7 +41,11 @@ export function buildXhsWorkshopPrompt({ topic, style, count, profile, materials
       count: n,
       profileSection: profileSection || '',
       sources: TOPIC_RESEARCH_SOURCES,
-    }) + buildMaterialsSection(parseMaterials(materials))
+      // 空主题互斥分支(引擎不支持嵌套 if,布尔在这里预计算):
+      // 勾了交付物 → 以资料为素材直接编写;未勾 → 调研热点选题
+      materialMode: !t && mats.length > 0,
+      hotResearchMode: !t && mats.length === 0,
+    }) + buildMaterialsSection(mats)
   );
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   collectWorkshopMaterials,
   resolveMaterials,
+  savedMaterialIds,
   parseMaterials,
   buildMaterialsSection,
   uploadMaterialOptions,
@@ -26,14 +27,40 @@ describe('collectWorkshopMaterials', () => {
     expect(out.map((o) => o.id)).toEqual(['art_2', 'art_1']);
     expect(out[0]).not.toHaveProperty('content');
   });
-  it('去重相同内容、跳过无正文;file 类型也列出(正文由工具端解析)', () => {
+  it('去重相同内容、跳过无正文;file 类型无可读正文不进可选项(工具解析不了)', () => {
     const out = collectWorkshopMaterials([
       mission('1', 'same'),
       mission('2', 'same'),
       { id: '3', title: '空', startedAt: 1, artifact: null },
-      mission('4', 'binary', { type: 'file' }),
+      mission('4', 'binary', { type: 'file' }), // file 但带正文 → 仍可选
+      { id: '5', title: '纯文件', startedAt: 2, artifact: { title: 'pptx', content: '', type: 'file' } },
     ]);
     expect(out.map((o) => o.id)).toEqual(['art_1', 'art_4']);
+  });
+});
+
+describe('savedMaterialIds(表单历史回填)', () => {
+  const options = collectWorkshopMaterials([mission('1', 'a'), mission('2', 'b')]);
+
+  it('从 recordRun 存的 materials 数组取 id,并按当前可选项过滤陈旧 id', () => {
+    expect(
+      savedMaterialIds({ materials: [{ id: 'art_1', title: '成果1' }, { id: 'art_gone', title: '旧' }] }, options)
+    ).toEqual(['art_1']);
+  });
+
+  it('旧 materialIds 键不再读取;脏数据/缺省返回空', () => {
+    expect(savedMaterialIds({ materialIds: ['art_1'] }, options)).toEqual([]);
+    expect(savedMaterialIds({}, options)).toEqual([]);
+    expect(savedMaterialIds({ materials: 'str' }, options)).toEqual([]);
+    expect(savedMaterialIds({ materials: [null, { id: 1 }, { id: 'art_2' }] }, options)).toEqual(['art_2']);
+  });
+
+  it('超数截断到 MATERIAL_COUNT_LIMIT', () => {
+    const opts = collectWorkshopMaterials(
+      Array.from({ length: MATERIAL_COUNT_LIMIT + 2 }, (_, i) => mission(`m${i}`, `正文${i}`))
+    );
+    const many = opts.map((o) => ({ id: o.id }));
+    expect(savedMaterialIds({ materials: many }, opts)).toHaveLength(MATERIAL_COUNT_LIMIT);
   });
 });
 

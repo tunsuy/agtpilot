@@ -104,6 +104,27 @@ describe('buildWechatMpWorkshopPrompt · 主题缺省降级链', () => {
   });
 });
 
+describe('buildWechatMpWorkshopPrompt · 材料模式(勾交付物 + 空主题)', () => {
+  const materials = [{ id: 'art_1', title: '行业研报' }];
+
+  it('空主题 + 有材料:以参考资料为素材直接编写,不进热点调研', () => {
+    const prompt = buildWechatMpWorkshopPrompt({ style: '深度长文', count: 1, materials });
+    expect(prompt).toContain('主题:未指定,不需要调研热点选题');
+    expect(prompt).toContain('【参考资料】列出的交付物为核心素材直接编写');
+    expect(prompt).toContain('read_reference_material');
+    expect(prompt).toContain('「深度长文」');
+    expect(prompt).not.toContain('请先调研热点选题');
+    expect(prompt).toContain('【资料1：行业研报】(materialId=art_1)');
+  });
+
+  it('有主题 + 有材料:主题段与材料段并存', () => {
+    const prompt = buildWechatMpWorkshopPrompt({ topic: 'AI 编程工具横评', style: '深度长文', count: 1, materials });
+    expect(prompt).toContain('主题:AI 编程工具横评');
+    expect(prompt).not.toContain('主题:未指定');
+    expect(prompt).toContain('【参考资料】');
+  });
+});
+
 describe('WECHAT_MP_TOPIC_PRESETS · 方向预设契约', () => {
   it('三个 AI 垂类方向,互不重复(看行业/追新/上手)', () => {
     expect(WECHAT_MP_TOPIC_PRESETS).toHaveLength(3);

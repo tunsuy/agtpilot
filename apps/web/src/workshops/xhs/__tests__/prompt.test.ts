@@ -92,3 +92,33 @@ describe('buildXhsWorkshopPrompt · 主题缺省回退(P1 降级链)', () => {
     expect(prompt).not.toContain('page=hot_topics');
   });
 });
+
+describe('buildXhsWorkshopPrompt · 材料模式(勾交付物 + 空主题)', () => {
+  const materials = [{ id: 'art_1', title: '行业研报' }];
+
+  it('空主题 + 有材料:以参考资料为素材直接编写,不进热点调研', () => {
+    const prompt = buildXhsWorkshopPrompt({ style: '干货教程', count: 1, materials });
+    expect(prompt).toContain('主题:未指定,不需要调研热点选题');
+    expect(prompt).toContain('【参考资料】列出的交付物为核心素材直接编写');
+    expect(prompt).toContain('read_reference_material');
+    expect(prompt).toContain('「干货教程」');
+    // 热点调研分支不出现
+    expect(prompt).not.toContain('请先调研热点选题');
+    expect(prompt).not.toContain('page=hot_topics');
+    // 材料引用段照常追加
+    expect(prompt).toContain('【资料1：行业研报】(materialId=art_1)');
+  });
+
+  it('有主题 + 有材料:主题段与材料段并存(主题=角度,材料=事实来源)', () => {
+    const prompt = buildXhsWorkshopPrompt({ topic: '羽绒服', style: '种草推荐', count: 1, materials });
+    expect(prompt).toContain('主题:羽绒服');
+    expect(prompt).not.toContain('主题:未指定');
+    expect(prompt).toContain('【参考资料】');
+  });
+
+  it('空主题 + 材料为脏数据(解析后为空):回退热点调研分支', () => {
+    const prompt = buildXhsWorkshopPrompt({ style: '种草推荐', count: 1, materials: [{ title: '无id' }] as any });
+    expect(prompt).toContain('请先调研热点选题');
+    expect(prompt).not.toContain('不需要调研热点选题');
+  });
+});

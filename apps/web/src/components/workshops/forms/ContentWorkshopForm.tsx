@@ -23,7 +23,8 @@ import { TopicPickList } from '../TopicPickCard';
 import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass, DeliverablePicker } from './shared';
-import { collectWorkshopMaterials, resolveMaterials, MATERIAL_COUNT_LIMIT } from '@/workshops/shared/materials';
+import { collectWorkshopMaterials, resolveMaterials, uploadMaterialOptions, MATERIAL_COUNT_LIMIT, MATERIAL_UPLOAD_ACCEPT } from '@/workshops/shared/materials';
+import { useMaterialUploads } from './useMaterialUploads';
 
 interface Props {
   workshop: WorkshopDef;
@@ -77,10 +78,14 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
     typeof saved.count === 'number' ? saved.count : 1
   );
 
-  // ---- 参考资料:会话交付物勾选,收进 params.materials 拼进 prompt ----
-  const materialOptions = collectWorkshopMaterials(
-    ((missions || []) as Array<{ id: string; title: string; startedAt: number; artifact?: { title?: string; content?: string; type?: string } | null }>)
-  );
+  // ---- 参考资料:会话交付物 + 本地上传勾选,收进 params.materials 拼进 prompt ----
+  const uploads = useMaterialUploads();
+  const materialOptions = [
+    ...uploadMaterialOptions(uploads.items),
+    ...collectWorkshopMaterials(
+      ((missions || []) as Array<{ id: string; title: string; startedAt: number; artifact?: { title?: string; content?: string; type?: string } | null }>)
+    ),
+  ];
   const [materialIds, setMaterialIds] = useState<string[]>(
     Array.isArray(saved.materialIds)
       ? (saved.materialIds as unknown[]).filter((v): v is string => typeof v === 'string')
@@ -90,6 +95,12 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
     setMaterialIds((prev) =>
       prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id].slice(0, MATERIAL_COUNT_LIMIT)
     );
+  const uploadMaterials = async (files: File[]) => {
+    const ids = await uploads.upload(files);
+    if (ids.length > 0) {
+      setMaterialIds((prev) => Array.from(new Set([...prev, ...ids])).slice(0, MATERIAL_COUNT_LIMIT));
+    }
+  };
 
   // ---- 真机唤起(免凭证平台):手机端可拉起已登录的原生 App;桌面端 scheme 打不开,给灰提示 ----
   const launch = APP_LAUNCH[workshop.id];
@@ -291,12 +302,19 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
         </div>
       </div>
 
-      {/* 参考资料:会话交付物作为本次创作的背景资料 */}
+      {/* 参考资料:会话交付物 + 本地上传文件作为本次创作的背景资料 */}
       <DeliverablePicker
         options={materialOptions}
         selectedIds={materialIds}
         onToggle={toggleMaterial}
         maxCount={MATERIAL_COUNT_LIMIT}
+        uploadSection={{
+          busy: uploads.busy,
+          error: uploads.error,
+          onUpload: uploadMaterials,
+          onRemove: uploads.remove,
+          accept: MATERIAL_UPLOAD_ACCEPT,
+        }}
       />
 
       {/* 本周选题:立即出选题 + 弹窗内勾选成稿(不用回会话页;定时订阅与任务页手动触发保留) */}

@@ -2,8 +2,8 @@
  * 工坊表单共享 UI:弹窗外壳(标题/说明/Prompt 预览/提交)、单选/多选 Chip 组、输入字段。
  * 各工坊表单只声明字段,视觉与交互节奏在这里统一。
  */
-import React, { useEffect, useState } from 'react';
-import { X, Sparkles, ShieldCheck, Eye, TriangleAlert, FileText, ChevronDown } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { X, Sparkles, ShieldCheck, Eye, TriangleAlert, FileText, ChevronDown, Upload, Trash2 } from 'lucide-react';
 import type { WorkshopDef, WorkshopAccent } from '../registry';
 import type { MaterialOption } from '@/workshops/shared/materials';
 
@@ -150,22 +150,41 @@ export function FieldLabel({ children, optional }: { children: React.ReactNode; 
 }
 
 /**
- * 参考资料选择器:把平时会话的交付物勾选为本次工坊任务的背景资料。
- * 无交付物时整节隐藏,不打扰;有则折叠展示,勾选 id 由表单收进 params.materials。
+ * 参考资料选择器:把平时会话的交付物 + 本地上传文件勾选为本次工坊任务的背景资料。
+ * 交付物与上传混排共享 maxCount 上限;上传条目带「上传」徽章与删除按钮。
+ * uploadSection 传入即启用「本地上传」区(此时无交付物也不再整节隐藏 ——
+ * 上传本身就是资料来源);不传则维持旧行为(无交付物整节隐藏)。
  */
 export function DeliverablePicker({
   options,
   selectedIds,
   onToggle,
   maxCount,
+  uploadSection,
 }: {
   options: MaterialOption[];
   selectedIds: string[];
   onToggle: (id: string) => void;
   maxCount: number;
+  uploadSection?: {
+    busy?: boolean;
+    error?: string | null;
+    /** 选完文件即上传(钩子内部串行处理并刷新列表);回调负责把新 id 自动勾选 */
+    onUpload: (files: File[]) => void;
+    onRemove: (id: string) => void;
+    /** file input 的 accept(与 material-uploads 白名单一致,由调用方给出) */
+    accept?: string;
+  };
 }) {
   const [open, setOpen] = useState(false);
-  if (options.length === 0) return null;
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  if (options.length === 0 && !uploadSection) return null;
+  const countHint =
+    selectedIds.length > 0
+      ? ` · 已选 ${selectedIds.length}`
+      : uploadSection
+        ? ' · 可选 · 交付物或本地上传'
+        : ` · 会话交付物${options.length}份`;
   return (
     <div className="space-y-1.5">
       <button
@@ -175,45 +194,106 @@ export function DeliverablePicker({
       >
         <span>
           参考资料
-          <span className="ml-1.5 text-[10px] text-zinc-400 font-normal">
-            可选{selectedIds.length > 0 ? ` · 已选 ${selectedIds.length}` : ` · 会话交付物${options.length}份`}
-          </span>
+          <span className="ml-1.5 text-[10px] text-zinc-400 font-normal">可选{countHint}</span>
         </span>
         <ChevronDown className={`h-3.5 w-3.5 text-zinc-400 transition ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="max-h-44 overflow-y-auto rounded-xl border border-zinc-200 divide-y divide-zinc-100">
-          {options.map((o) => {
-            const checked = selectedIds.includes(o.id);
-            const disabled = !checked && selectedIds.length >= maxCount;
-            return (
-              <label
-                key={o.id}
-                className={`flex items-start gap-2 px-3 py-2 cursor-pointer transition ${
-                  disabled ? 'opacity-40' : 'hover:bg-zinc-50'
-                } ${checked ? 'bg-zinc-50' : ''}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={disabled}
-                  onChange={() => onToggle(o.id)}
-                  className="mt-0.5 h-3.5 w-3.5 rounded border-zinc-300"
-                />
-                <span className="min-w-0">
-                  <span className="flex items-center gap-1.5 text-xs text-zinc-800 font-medium truncate">
-                    <FileText className="h-3 w-3 shrink-0 text-zinc-400" />
-                    <span className="truncate">{o.title}</span>
-                  </span>
-                  {o.missionTitle && o.missionTitle !== o.title && (
-                    <span className="block text-[10px] text-zinc-400 truncate mt-0.5">
-                      来自任务「{o.missionTitle}」
-                    </span>
-                  )}
+        <div className="rounded-xl border border-zinc-200">
+          {uploadSection && (
+            <div className="px-3 py-2 border-b border-zinc-100">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={uploadSection.busy}
+                  onClick={() => fileRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs text-zinc-700 hover:bg-zinc-50 transition disabled:opacity-50"
+                >
+                  <Upload className="h-3 w-3" />
+                  {uploadSection.busy ? '处理中…' : '上传本地文件'}
+                </button>
+                <span className="text-[10px] text-zinc-400">
+                  文本/代码 ≤2MB · PDF/Word(.docx)≤20MB;上传后自动勾选,存你名下可跨任务复用
                 </span>
-              </label>
-            );
-          })}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  accept={uploadSection.accept}
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    e.target.value = ''; // 同名文件可重选
+                    if (files.length > 0) uploadSection.onUpload(files);
+                  }}
+                />
+              </div>
+              {uploadSection.error && (
+                <p className="mt-1.5 text-[10px] text-rose-600 break-all">{uploadSection.error}</p>
+              )}
+            </div>
+          )}
+          {options.length === 0 ? (
+            <p className="px-3 py-3 text-[10px] text-zinc-400">
+              还没有可选资料:平时会话的交付物会出现在这里,也可以直接上传本地文件。
+            </p>
+          ) : (
+            <div className="max-h-44 overflow-y-auto divide-y divide-zinc-100">
+              {options.map((o) => {
+                const checked = selectedIds.includes(o.id);
+                const disabled = !checked && selectedIds.length >= maxCount;
+                const isUpload = o.id.startsWith('upl_');
+                return (
+                  <div
+                    key={o.id}
+                    className={`flex items-start gap-2 px-3 py-2 transition ${
+                      disabled ? 'opacity-40' : 'hover:bg-zinc-50'
+                    } ${checked ? 'bg-zinc-50' : ''}`}
+                  >
+                    <label className="flex items-start gap-2 cursor-pointer min-w-0 flex-1">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => onToggle(o.id)}
+                        className="mt-0.5 h-3.5 w-3.5 rounded border-zinc-300"
+                      />
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-1.5 text-xs text-zinc-800 font-medium truncate">
+                          <FileText className="h-3 w-3 shrink-0 text-zinc-400" />
+                          <span className="truncate">{o.title}</span>
+                          {isUpload && (
+                            <span className="shrink-0 px-1 py-px rounded bg-sky-50 text-sky-600 text-[9px] font-medium">
+                              上传{o.type === 'pdf' ? ' · PDF' : o.type === 'docx' ? ' · Word' : ''}
+                            </span>
+                          )}
+                        </span>
+                        {o.missionTitle && o.missionTitle !== o.title && (
+                          <span className="block text-[10px] text-zinc-400 truncate mt-0.5">
+                            来自任务「{o.missionTitle}」
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                    {isUpload && uploadSection && (
+                      <button
+                        type="button"
+                        title="删除该上传文件"
+                        disabled={uploadSection.busy}
+                        onClick={() => {
+                          if (checked) onToggle(o.id); // 先取消勾选(删掉的资料不能再被引用)
+                          uploadSection.onRemove(o.id);
+                        }}
+                        className="mt-0.5 p-1 rounded text-zinc-300 hover:text-rose-500 hover:bg-rose-50 transition disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -13,7 +13,8 @@ import type { WorkshopDef } from '../registry';
 import { buildWorkshopRun, type WorkshopRunPayload } from '../run';
 import { recordRun, lastRunOf } from '../history';
 import { ChipGroup, FieldLabel, WorkshopModalShell, inputClass, DeliverablePicker } from './shared';
-import { collectWorkshopMaterials, resolveMaterials, MATERIAL_COUNT_LIMIT } from '@/workshops/shared/materials';
+import { collectWorkshopMaterials, resolveMaterials, uploadMaterialOptions, MATERIAL_COUNT_LIMIT, MATERIAL_UPLOAD_ACCEPT } from '@/workshops/shared/materials';
+import { useMaterialUploads } from './useMaterialUploads';
 
 interface Props {
   workshop: WorkshopDef;
@@ -44,8 +45,12 @@ export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
   );
   const [count, setCount] = useState<number>(typeof saved.count === 'number' ? saved.count : 1);
 
-  // ---- 参考资料:会话交付物勾选,收进 params.materials 拼进 prompt ----
-  const materialOptions = collectWorkshopMaterials((missions || []) as Parameters<typeof collectWorkshopMaterials>[0]);
+  // ---- 参考资料:会话交付物 + 本地上传勾选,收进 params.materials 拼进 prompt ----
+  const uploads = useMaterialUploads();
+  const materialOptions = [
+    ...uploadMaterialOptions(uploads.items),
+    ...collectWorkshopMaterials((missions || []) as Parameters<typeof collectWorkshopMaterials>[0]),
+  ];
   const [materialIds, setMaterialIds] = useState<string[]>(
     Array.isArray(saved.materialIds)
       ? (saved.materialIds as unknown[]).filter((v): v is string => typeof v === 'string')
@@ -55,6 +60,12 @@ export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
     setMaterialIds((prev) =>
       prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id].slice(0, MATERIAL_COUNT_LIMIT)
     );
+  const uploadMaterials = async (files: File[]) => {
+    const ids = await uploads.upload(files);
+    if (ids.length > 0) {
+      setMaterialIds((prev) => Array.from(new Set([...prev, ...ids])).slice(0, MATERIAL_COUNT_LIMIT));
+    }
+  };
 
   // ---- 托管状态(只读;登录/开关都在连接器页,此处 GET /api/zhihu-managed 查状态) ----
   const [managed, setManaged] = useState<ManagedState | null>(null); // null = 加载中
@@ -183,12 +194,19 @@ export function ZhihuWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
         </div>
       </div>
 
-      {/* 参考资料:会话交付物作为本次创作的背景资料 */}
+      {/* 参考资料:会话交付物 + 本地上传文件作为本次创作的背景资料 */}
       <DeliverablePicker
         options={materialOptions}
         selectedIds={materialIds}
         onToggle={toggleMaterial}
         maxCount={MATERIAL_COUNT_LIMIT}
+        uploadSection={{
+          busy: uploads.busy,
+          error: uploads.error,
+          onUpload: uploadMaterials,
+          onRemove: uploads.remove,
+          accept: MATERIAL_UPLOAD_ACCEPT,
+        }}
       />
 
       {/* 托管状态行:登录/开关在连接器页;此处只看状态(未开启不阻塞创作) */}

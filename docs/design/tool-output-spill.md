@@ -51,7 +51,7 @@
 | 机制 | 位置 | 范围 |
 |---|---|---|
 | `read_memory` / `read_mission` | `memory-service.ts:1101/1143`(context-store v2 P2) | 记忆 L0 摘要注入 + 全文按需从 `v2/<userId>/missions/` 拉 |
-| `read_reference_material` | `apps/web/src/lib/reference-materials.ts` | 工坊参考资料:prompt 只带引用 id+标题,8000 字上限 + offset 续读 |
+| `read_reference_material` | `apps/web/src/lib/reference-materials.ts` | 工坊参考资料:prompt 只带引用 id+标题,8000 字上限 + offset 续读(art_* 交付物 / upl_* 本地上传双来源,见 material-uploads.md) |
 | `context_file` / agent-notes | context-store v2 P3 | Agent 主动写文件(对标 Claude memory tool),非框架兜底 |
 
 **通用工具输出路径没有任何 spill**:只有 16KB 截断(§1.1)与浏览器 4000 字窗口(§1.3)。

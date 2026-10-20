@@ -4,7 +4,10 @@ import {
   resolveMaterials,
   parseMaterials,
   buildMaterialsSection,
+  uploadMaterialOptions,
   MATERIAL_COUNT_LIMIT,
+  MATERIAL_UPLOAD_ACCEPT,
+  MATERIAL_TEXT_EXTS,
 } from '../materials';
 
 const mission = (id: string, content: string, extra?: Record<string, unknown>) => ({
@@ -72,5 +75,69 @@ describe('buildMaterialsSection', () => {
     expect(s).toContain('【资料1：研报】(materialId=art_1)');
     expect(s).toContain('read_reference_material');
     expect(s).not.toContain('核心结论');
+  });
+});
+
+describe('本地上传条目(uploadMaterialOptions,2026-10-20)', () => {
+  it('映射 id/标题/类型并按时间倒序', () => {
+    const out = uploadMaterialOptions([
+      { id: 'upl_a1_0123456789abcdef', title: '旧报告', kind: 'pdf', createdAt: 100 },
+      { id: 'upl_b2_0123456789abcdef', title: '新笔记', kind: 'text', createdAt: 200 },
+      { id: 'upl_c3_0123456789abcdef', title: '合同', kind: 'docx', createdAt: 150 },
+    ]);
+    expect(out.map((o) => o.id)).toEqual([
+      'upl_b2_0123456789abcdef',
+      'upl_c3_0123456789abcdef',
+      'upl_a1_0123456789abcdef',
+    ]);
+    expect(out[0].type).toBe('upload'); // text 档统一为 upload(选择器徽章只区分 pdf/docx)
+    expect(out[1].type).toBe('docx');
+    expect(out[2].type).toBe('pdf');
+    expect(out[0].missionTitle).toBeUndefined(); // 上传文件不关联任务
+  });
+  it('过滤非 upl_ id;标题缺失依次回退 fileName → 上传资料', () => {
+    const out = uploadMaterialOptions([
+      { id: 'art_1', title: '交付物不该出现在这', createdAt: 1 },
+      { id: '', title: '空 id', createdAt: 2 },
+      { id: 'upl_d4_0123456789abcdef', title: '', fileName: '原始名.md', createdAt: 3 },
+      { id: 'upl_e5_0123456789abcdef', title: '', createdAt: 4 },
+    ]);
+    expect(out.map((o) => o.id)).toEqual([
+      'upl_e5_0123456789abcdef',
+      'upl_d4_0123456789abcdef',
+    ]);
+    expect(out[1].title).toBe('原始名.md');
+    expect(out[0].title).toBe('上传资料');
+  });
+  it('与交付物混排后共享 MATERIAL_COUNT_LIMIT(resolveMaterials 截断口径不变)', () => {
+    const mixed = [
+      ...uploadMaterialOptions([{ id: 'upl_f6_0123456789abcdef', title: '上传件', createdAt: 5 }]),
+      ...collectWorkshopMaterials([mission('1', 'x')]),
+    ];
+    const ids = new Array(MATERIAL_COUNT_LIMIT + 3).fill('upl_f6_0123456789abcdef');
+    expect(resolveMaterials(mixed, ids).length).toBeLessThanOrEqual(MATERIAL_COUNT_LIMIT);
+  });
+  it('accept 串 = 文本白名单 + pdf/docx;白名单本身不含二进制格式', () => {
+    expect(MATERIAL_UPLOAD_ACCEPT).toContain('.md');
+    expect(MATERIAL_UPLOAD_ACCEPT).toContain('.pdf');
+    expect(MATERIAL_UPLOAD_ACCEPT).toContain('.docx');
+    expect(MATERIAL_TEXT_EXTS).not.toContain('.pdf');
+    expect(MATERIAL_TEXT_EXTS).not.toContain('.docx');
+    expect(MATERIAL_UPLOAD_ACCEPT.split(',')).toHaveLength(MATERIAL_TEXT_EXTS.length + 2);
+  });
+});
+
+describe('buildMaterialsSection 措辞泛化(交付物 + 本地上传)', () => {
+  it('提示两种来源与 PDF/Word 已抽文本,并保留工具指令与 id 行', () => {
+    const s = buildMaterialsSection([
+      { id: 'art_1', title: '研报' },
+      { id: 'upl_a1_0123456789abcdef', title: '产品手册' },
+    ]);
+    expect(s).toContain('【参考资料】');
+    expect(s).toContain('本地上传文件');
+    expect(s).toContain('PDF/Word 已抽取为文本');
+    expect(s).toContain('read_reference_material');
+    expect(s).toContain('【资料1：研报】(materialId=art_1)');
+    expect(s).toContain('【资料2：产品手册】(materialId=upl_a1_0123456789abcdef)');
   });
 });

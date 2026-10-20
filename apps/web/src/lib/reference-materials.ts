@@ -8,6 +8,7 @@
  */
 import type { ToolDefinition } from '@agtpilot/core';
 import { getUserMissions } from './user-store';
+import { loadMaterialUploadManifest, readMaterialText, UPLOAD_ID_RE } from './material-uploads';
 
 /** 服务端单次返回正文上限(字符);超出标记 truncated,Agent 可分段追读 */
 export const REFERENCE_CONTENT_LIMIT = 8000;
@@ -21,8 +22,11 @@ export interface ReferenceMaterialBody {
 }
 
 /**
- * 按引用 id 解析交付物正文。id 形如 `art_<missionId>`(表单勾选时生成),
- * 兼容裸 missionId(容错:历史 params 手填)。
+ * 按引用 id 解析资料正文。两种来源(同一工具、同一分段语义):
+ * - `art_<missionId>`(兼容裸 missionId):会话交付物,正文在 mission JSON;
+ * - `upl_<时间36进制>_<hex>`:本地上传文件(2026-10-20),正文在上传库
+ *   (text 直读原件;pdf/docx 读上传时抽取的纯文本)。
+ * 均按 userId 分区,只能读自己名下的资料。
  */
 export function resolveReferenceMaterial(
   userId: string,
@@ -30,6 +34,19 @@ export function resolveReferenceMaterial(
 ): ReferenceMaterialBody | null {
   const raw = (refId || '').trim();
   if (!raw) return null;
+
+  if (UPLOAD_ID_RE.test(raw)) {
+    const manifest = loadMaterialUploadManifest(userId, raw);
+    const content = readMaterialText(userId, raw);
+    if (!manifest || !content) return null;
+    return {
+      id: raw,
+      title: manifest.title || manifest.fileName || '上传资料',
+      content,
+      truncated: content.length > REFERENCE_CONTENT_LIMIT,
+    };
+  }
+
   const missionId = raw.startsWith('art_') ? raw.slice(4) : raw;
   let missions: any[] = [];
   try {
@@ -54,10 +71,10 @@ export function buildReferenceTools(userId: string): ToolDefinition[] {
     {
       name: 'read_reference_material',
       description:
-        '读取本次任务 prompt【参考资料】段列出的引用交付物全文(只读):' +
-        '传入 materialId(如 art_<任务id>),返回该交付物的标题与正文(超长截断并标记,' +
+        '读取本次任务 prompt【参考资料】段列出的引用资料全文(只读;来源 = 我的会话交付物 art_* 或本地上传文件 upl_*,PDF/Word 上传时已抽取为文本):' +
+        '传入 materialId(如 art_<任务id> 或 upl_*),返回该资料的标题与正文(超长截断并标记,' +
         '需要剩余部分时用 offset 参数继续读)。动笔前必须先把列出的引用全部读一遍,' +
-        '事实、数据、观点优先采用引用内容。只能读你自己的任务交付物,无权读他人任务。',
+        '事实、数据、观点优先采用引用内容。只能读你自己名下的资料,无权读他人任务。',
       dangerLevel: 'low',
       readOnly: true, // 只读并行门控:纯读自己任务的 artifact,无副作用
       // 零命中收敛兜底(token 文档 §9.5):带参考资料的任务不保证命中检索关键词,
@@ -83,7 +100,7 @@ export function buildReferenceTools(userId: string): ToolDefinition[] {
           return {
             success: false,
             error:
-              `引用 ${materialId} 解析失败(任务不存在、无交付物或已被删除)。` +
+              `引用 ${materialId} 解析失败(任务不存在、无交付物、上传文件已删除或正文不可读)。` +
               '降级路径:按 prompt 其它要求与联网调研继续创作,并在成稿处注明该引用不可用。',
           };
         }

@@ -1,10 +1,20 @@
 name: Docker Release to GHCR
 
+# 前置条件(2026-10-20 修复):GHCR 包 tunsuy/agtpilot 由本地 PAT 推送创建,
+# 初始未关联仓库 → GITHUB_TOKEN 推送报 `denied: permission_denied: read_package`
+# (v1.2.0 及三次 dispatch 全灭的根因)。已在包设置页 Connect Repository 关联
+# 本仓库并授予 Write;包若被删重建,需重新关联一次,否则 CI 推送再次被拒。
+
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+
+# 同一时刻只允许一个发布构建(push latest 是独占写,并发会互相覆盖 tag 指向)
+concurrency:
+  group: docker-release
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -21,20 +31,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # pnpm 12 与本地构建机一致(scripts/release-ghcr.sh 同款环境);
+      # 旧值 9 会静默绕过 pnpm-workspace.yaml 的供应链策略(minimumReleaseAge)
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 12
 
+      # Node 20 与运行镜像 node:20-slim 对齐(构建产物与运行时同大版本)
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'pnpm'
 
+      # 严格按提交锁文件安装(可复现 + 供应链策略按锁定版本执行);
+      # 旧值 --frozen-lockfile=false 允许 CI 现场重新解析,产物不可复现
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile=false
+        run: pnpm install --frozen-lockfile
 
+      # web 经 transpilePackages 直编 @agtpilot/core 源码(core 无独立 build),
+      # 单建 web 即得 Dockerfile 所需的 .next/standalone + .next/static
       - name: Build Next.js standalone
         run: pnpm --filter @agtpilot/web build
 
@@ -48,6 +65,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # semver pattern 去掉 v 前缀:git tag v1.4.0 → 镜像 tag 1.4.0,
+      # 与本地 release-ghcr.sh 既有命名一致(GHCR 上已有 1.3.0/1.4.0);
+      # 旧值 type=ref,event=tag 会产出 v1.4.0,双命名并存易错拉
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -55,8 +75,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=ref,event=tag
+            type=semver,pattern={{version}}
 
+      # gha 层缓存:Dockerfile 重型层(playwright/python venv/skills tarball)
+      # 与业务薄层解耦,命中后发布构建只剩 COPY 层,与本地 buildx 缓存同效
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:

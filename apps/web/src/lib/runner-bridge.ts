@@ -605,9 +605,16 @@ export function recordRunnerEvents(
       result.stateChanges.push({ taskId: task.taskId, from, to });
     }
 
-    if (event.type === 'phase2_result' && typeof event.payload?.prUrl === 'string') {
-      task.prUrl = event.payload.prUrl.slice(0, 500);
-      task.updatedAt = now;
+    if (event.type === 'phase2_result') {
+      if (typeof event.payload?.prUrl === 'string') {
+        task.prUrl = event.payload.prUrl.slice(0, 500);
+        task.updatedAt = now;
+      } else if (task.pack.prFollowUp && !task.prUrl) {
+        // PR 跟进任务:发布命令 push-only,没有 gh pr create 输出可提取 PR 链接 ——
+        // 跟进任务的 PR 就是任务包里的原 PR,回流兜底它(任务卡 PR 入口不缺席)
+        task.prUrl = task.pack.prFollowUp.prUrl;
+        task.updatedAt = now;
+      }
     }
     if (event.type === 'error' && typeof event.payload?.message === 'string') {
       task.error = event.payload.message.slice(0, 2000);
@@ -764,6 +771,9 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
   if (!a || a.status !== 'pending') return null;
   const forkRepo = taskForkRepo(userId, task);
   const baseBranch = taskBaseBranch(task);
+  // PR 跟进任务(pack.prFollowUp):发布 = push-only(push 到已关联 PR 的分支即更新
+  // PR;gh pr create 对已有 PR 必败),审批卡描述与命令预览同语义
+  const followUpPrUrl = task.pack.prFollowUp?.prUrl;
   const preview = buildPublishCommands({
     workBranch: task.pack.workBranch,
     baseBranch,
@@ -773,13 +783,16 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
     prTitle: a.prTitle,
     prBody: a.prBody,
     forkHead: forkRepo?.split('/')[0],
+    prExists: Boolean(followUpPrUrl),
   });
   return {
     id: a.approvalId,
     action: 'runner_publish',
-    description: forkRepo
-      ? `发布本地贡献成果:${task.pack.repo}(经 fork ${forkRepo})· 推送 ${task.pack.workBranch} 并向上游创建 PR`
-      : `发布本地贡献成果:${task.pack.repo} · 推送 ${task.pack.workBranch} 并创建 PR`,
+    description: followUpPrUrl
+      ? `发布本地贡献成果(PR 跟进):${task.pack.repo} · 推送 ${task.pack.workBranch} 更新既有 PR`
+      : forkRepo
+        ? `发布本地贡献成果:${task.pack.repo}(经 fork ${forkRepo})· 推送 ${task.pack.workBranch} 并向上游创建 PR`
+        : `发布本地贡献成果:${task.pack.repo} · 推送 ${task.pack.workBranch} 并创建 PR`,
     dangerLevel: 'high',
     params: {
       taskId: task.taskId,
@@ -799,6 +812,8 @@ export function runnerApprovalToRequest(task: RunnerTaskRecord, userId: string):
       claimCommand: task.pack.claimDraft
         ? { cmd: 'gh', args: ['issue', 'comment', task.pack.issueUrl, '--body', task.pack.claimDraft] }
         : undefined,
+      // PR 跟进任务:审批卡展示原 PR 链接与 push-only 文案(命令集只固化 git push)
+      ...(followUpPrUrl ? { followUpPrUrl } : {}),
       // 批准后必执行的两条(展示预览;批准时刻重新固化落盘,以落盘为准)
       commands: preview ?? undefined,
     },
@@ -850,6 +865,9 @@ export function resolvePublishApproval(
       claimDraft: task.pack.claimDraft,
       includeClaim,
       forkHead: forkRepo?.split('/')[0],
+      // PR 跟进任务:只固化 git push(push 到已关联 PR 的分支即更新 PR;
+      // gh pr create 对已有 PR 必败,认领留言无意义 —— prExists 分支全部跳过)
+      prExists: Boolean(task.pack.prFollowUp?.prUrl),
     });
     if (!commands) return { ok: false, error: 'invalid_commands' };
     a.status = 'approved';

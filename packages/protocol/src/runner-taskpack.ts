@@ -61,6 +61,17 @@ export function renderTaskPrompt(pack: RunnerTaskPack, opts?: RenderTaskPromptOp
     lines.push('- 未提交的半成品与你的计划冲突时,可以清理后重新组织,但保留已完成工作的意图;');
     lines.push('- 收尾要求同工作步骤:整理成符合仓库规范的干净 commit。');
   }
+  if (pack.prFollowUp) {
+    lines.push('');
+    lines.push(`【PR 跟进模式】工作分支已有关联 PR:${pack.prFollowUp.prUrl}`);
+    lines.push('本轮任务是回应 review 意见(评论快照在下方【Issue 上下文】里):');
+    lines.push('- 先看清现场:git log 查看分支既有提交(PR 就是它们做的),再逐条对照 review 意见处理;');
+    lines.push('- 改动聚焦 review 指出的范围,不顺手重构无关代码;');
+    lines.push('- 既有提交已推送,**禁止 rebase/reset 改写已推送历史**:新修改用追加 commit 落(上游合并时自会 squash);');
+    lines.push('- 完成后本地 commit 即止:推送到该分支会自动更新 PR,不需要也不能新建 PR(发布门只固化 git push);');
+    lines.push('- 最终回复照常输出 pr-final 围栏:标题沿用原 PR,body 列出本轮按 review 改了什么;');
+    lines.push('- review 意见确实无法满足(与仓库规范冲突/超出本 Issue 范围)时不要硬凑:在最终回复里如实说明理由,能做的部分照常做完。');
+  }
   if (pack.viaFork) {
     lines.push(`说明:本地克隆是你对 ${pack.repo} 的 fork 副本(origin 指向 fork);改动最终以 PR 从 fork 提交给上游,与你的工作方式无关——照常改码、commit 即可。`);
   }
@@ -90,7 +101,12 @@ export function renderTaskPrompt(pack: RunnerTaskPack, opts?: RenderTaskPromptOp
     lines.push('3. 运行仓库相关测试并保证通过(按 CONTRIBUTING 指引)');
   }
   if (pack.acceptance.note) lines.push(`   验收说明:${pack.acceptance.note}`);
-  lines.push('4. 收尾前把 WIP commit 整理成符合仓库规范的干净 commit(git reset --soft 到基线后重新提交即可),信息关联 Issue;不要 push;');
+  if (pack.prFollowUp) {
+    // 跟进任务:已推送历史不可改写(上方【PR 跟进模式】块的红线),第 4 步换追加式收尾
+    lines.push('4. 收尾:新修改整理成符合仓库规范的追加 commit(不要 git reset --soft 重排已推送的既有提交),信息关联 Issue 与 review 意见;不要 push;');
+  } else {
+    lines.push('4. 收尾前把 WIP commit 整理成符合仓库规范的干净 commit(git reset --soft 到基线后重新提交即可),信息关联 Issue;不要 push;');
+  }
   lines.push('5. 在最终回复末尾输出 PR 终稿,格式严格如下(围栏名不可改):');
   lines.push('');
   lines.push('```' + PR_FINAL_FENCE);
@@ -120,6 +136,7 @@ export function renderHandoffPack(pack: RunnerTaskPack): string {
   lines.push(`- Issue:${pack.issueUrl}`);
   lines.push(`- 基线分支:${pack.baseBranch ?? 'main'}(工作分支建议 \`${pack.workBranch}\`)`);
   if (pack.viaFork) lines.push(`- 派发方式:经 fork —— 先 fork 上游 ${pack.repo} 到你的账号,在 fork 里改,PR 从 fork 指向上游`);
+  if (pack.prFollowUp) lines.push(`- PR 跟进:既有 PR ${pack.prFollowUp.prUrl},回应 review 意见改码;推送该分支即自动更新 PR,不要新建 PR、不要改写已推送历史`);
   if (pack.constraints.length > 0) lines.push(`- 约束:${pack.constraints.join(';')}`);
   if (pack.acceptance.testCommand) lines.push(`- 验收:\`${pack.acceptance.testCommand}\`${pack.acceptance.note ? `(${pack.acceptance.note})` : ''}`);
   if (pack.issueContext) lines.push('');

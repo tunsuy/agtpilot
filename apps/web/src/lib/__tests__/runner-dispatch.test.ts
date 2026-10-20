@@ -116,6 +116,7 @@ describe('buildTaskPackFromOpportunity · viaFork(经 fork 派发)', () => {
 // ---------- 概览/时间线(mine + detail 路由与设备页任务列表的数据源) ----------
 
 import {
+  buildFollowUpTaskPack,
   describeDispatchConflict,
   formatRunnerLocalUsage,
   isRunnerTaskActive,
@@ -560,5 +561,95 @@ describe('partitionApprovalsByMission(审批卡按会话归属分区)', () => {
     const { visible } = partitionApprovalsByMission(reqs, 'msn_1');
     expect(visible[0]).toBe(reqs[0]);
     expect(reqs).toHaveLength(1);
+  });
+});
+
+// ---------- 「响应 review」跟进派发(2026-10-20) ----------
+
+describe('buildFollowUpTaskPack(done 任务 → PR 跟进任务包)', () => {
+  const base = {
+    repo: 'vllm-project/vllm',
+    issueUrl: 'https://github.com/vllm-project/vllm/issues/888',
+    workBranch: 'contrib/oss-radar-888',
+    baseBranch: 'main',
+    prUrl: 'https://github.com/vllm-project/vllm/pull/999',
+    baseTaskId: 'rtask_base_1',
+  };
+
+  it('合法 → 完整任务包:复用原工作分支,prFollowUp 身份字段,无认领草稿', () => {
+    const pack = buildFollowUpTaskPack(base, '## Review · r · CHANGES_REQUESTED\n请补单测', { taskId: 'rtask_fu_1' });
+    expect(pack).not.toBeNull();
+    expect(pack!.taskId).toBe('rtask_fu_1');
+    expect(pack!.workBranch).toBe('contrib/oss-radar-888');
+    expect(pack!.baseBranch).toBe('main');
+    expect(pack!.prFollowUp).toEqual({ prUrl: base.prUrl, baseTaskId: 'rtask_base_1' });
+    expect(pack!.claimDraft).toBeUndefined(); // Issue 早已认领,跟进不再留言
+    expect(pack!.issueContext).toContain('请补单测');
+    expect(pack!.prDraft.title).toContain('#999'); // prUrl 提取 PR 编号进标题
+  });
+
+  it('约束含「禁止改写已推送历史,追加 commit」;taskId 缺省自动生成', () => {
+    const pack = buildFollowUpTaskPack(base, 'ctx');
+    expect(pack!.constraints.join('\n')).toContain('禁止 rebase/reset 改写已推送历史');
+    expect(pack!.taskId).toMatch(/^rtask_/);
+  });
+
+  it('reviewContext 空白 → issueContext 缺省(不留空串键)', () => {
+    const pack = buildFollowUpTaskPack(base, '   ');
+    expect(pack!.issueContext).toBeUndefined();
+  });
+
+  it('viaFork 继承:原任务经 fork → 跟进也经 fork(push 目标是 fork);缺省 → 直连', () => {
+    expect(buildFollowUpTaskPack({ ...base, viaFork: true }, 'ctx')!.viaFork).toBe(true);
+    expect(buildFollowUpTaskPack(base, 'ctx')!.viaFork).toBeUndefined();
+  });
+
+  it('prUrl 畸形 → null(整包拒绝,不静默降级为普通派发)', () => {
+    expect(buildFollowUpTaskPack({ ...base, prUrl: 'https://github.com/o/r/pull/abc' }, 'ctx')).toBeNull();
+    expect(buildFollowUpTaskPack({ ...base, prUrl: '' }, 'ctx')).toBeNull();
+  });
+
+  it('dispatchNote 透传;空白 → 缺省', () => {
+    expect(buildFollowUpTaskPack(base, 'ctx', { dispatchNote: '优先处理 review 第 2 条' })!.dispatchNote).toBe('优先处理 review 第 2 条');
+    expect(buildFollowUpTaskPack(base, 'ctx', { dispatchNote: '  ' })!.dispatchNote).toBeUndefined();
+  });
+});
+
+describe('summarizeRunnerTask · followUp / viaFork / baseBranch 透传(跟进 UI 数据源)', () => {
+  const rec = (packExtra: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    ({
+      taskId: 'rtask_1',
+      userId: 'u1',
+      pack: {
+        taskId: 'rtask_1',
+        kind: 'oss_contribution',
+        repo: 'o/r',
+        issueUrl: 'https://github.com/o/r/issues/1',
+        workBranch: 'contrib/x',
+        constraints: [],
+        acceptance: {},
+        prDraft: { title: 't', bodyTemplate: '' },
+        executor: { name: 'claude-code', maxTurns: 10, timeoutMinutes: 5 },
+        ...packExtra,
+      },
+      state: 'done',
+      createdAt: 1,
+      updatedAt: 5,
+      expiresAt: 9,
+      ...extra,
+    } as unknown as RunnerTaskRecord);
+
+  it('pack.prFollowUp → summary.followUp(UI 任务链徽章 + done 卡 PR 链接兜底)', () => {
+    const s = summarizeRunnerTask(rec({ prFollowUp: { prUrl: 'https://github.com/o/r/pull/7', baseTaskId: 'rtask_0' } }));
+    expect(s.followUp).toEqual({ prUrl: 'https://github.com/o/r/pull/7', baseTaskId: 'rtask_0' });
+    expect('followUp' in summarizeRunnerTask(rec({}))).toBe(false);
+  });
+
+  it('viaFork / baseBranch 透传(跟进包继承源);缺省不含键', () => {
+    expect(summarizeRunnerTask(rec({ viaFork: true, baseBranch: 'master' })).viaFork).toBe(true);
+    expect(summarizeRunnerTask(rec({ baseBranch: 'master' })).baseBranch).toBe('master');
+    const plain = summarizeRunnerTask(rec({}));
+    expect('viaFork' in plain).toBe(false);
+    expect('baseBranch' in plain).toBe(false);
   });
 });

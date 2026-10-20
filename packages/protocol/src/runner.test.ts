@@ -8,6 +8,7 @@ import {
   isTerminalRunnerState,
   canTransitionRunnerTask,
   capText,
+  parsePrUrl,
   normalizeTaskPack,
   normalizeRunnerEvent,
   normalizeDeviceMeta,
@@ -413,5 +414,67 @@ describe('addRunnerUsage(用量累加:runner 侧加重试轮、云端侧加重�
 
   it('和为 0 的字段不落键(0 值不占存储)', () => {
     expect(addRunnerUsage({ inputTokens: 0 }, { inputTokens: 0 })).toBeUndefined();
+  });
+});
+
+describe('parsePrUrl(PR 直达链接解析,prFollowUp 校验与云端拉评论共用)', () => {
+  it('精确形状 → owner/repo/prNumber', () => {
+    expect(parsePrUrl('https://github.com/vllm-project/vllm/pull/123')).toEqual({
+      owner: 'vllm-project',
+      repo: 'vllm',
+      prNumber: 123,
+    });
+    // 前后空白容忍(用户粘贴常见)
+    expect(parsePrUrl('  https://github.com/a/b/pull/1  ')!.prNumber).toBe(1);
+  });
+
+  it('非 PR 直达/issues 链接/带尾巴/非 github → null', () => {
+    expect(parsePrUrl('https://github.com/a/b/issues/12')).toBeNull();
+    expect(parsePrUrl('https://github.com/a/b/pull/12?diff=1')).toBeNull();
+    expect(parsePrUrl('https://github.com/a/b/pull/12#issuecomment-1')).toBeNull();
+    expect(parsePrUrl('https://github.com/a/b/pull/')).toBeNull();
+    expect(parsePrUrl('https://gitlab.com/a/b/pull/1')).toBeNull();
+    expect(parsePrUrl('http://github.com/a/b/pull/1')).toBeNull();
+    expect(parsePrUrl(42)).toBeNull();
+    expect(parsePrUrl(undefined)).toBeNull();
+  });
+
+  it("owner/repo 段为 '.'/'..' → null(路径穿越防线)", () => {
+    expect(parsePrUrl('https://github.com/../x/pull/1')).toBeNull();
+    expect(parsePrUrl('https://github.com/./x/pull/1')).toBeNull();
+  });
+});
+
+describe('normalizeTaskPack · prFollowUp(PR 跟进标记:出现即任务身份,畸形整包拒绝)', () => {
+  const fu = { prUrl: 'https://github.com/vllm-project/vllm/pull/999', baseTaskId: 'rtask_base_1' };
+
+  it('合法 prFollowUp 原样保留', () => {
+    const p = normalizeTaskPack({ ...validPack, prFollowUp: fu });
+    expect(p!.prFollowUp).toEqual(fu);
+  });
+
+  it('baseTaskId 缺省 → 只留 prUrl(手工构包可用)', () => {
+    const p = normalizeTaskPack({ ...validPack, prFollowUp: { prUrl: fu.prUrl } });
+    expect(p!.prFollowUp).toEqual({ prUrl: fu.prUrl });
+  });
+
+  it('prUrl 畸形 → 整包 null(不静默降级为普通派发:降级会固化 gh pr create 对已有 PR 必败)', () => {
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: { prUrl: 'https://github.com/a/b/issues/1' } })).toBeNull();
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: { prUrl: 'https://github.com/a/b/pull/1?x=1' } })).toBeNull();
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: { prUrl: '' } })).toBeNull();
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: { prUrl: 42 } })).toBeNull();
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: {} })).toBeNull();
+  });
+
+  it('baseTaskId 畸形 → 整包 null', () => {
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: { ...fu, baseTaskId: 'a b' } })).toBeNull();
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: { ...fu, baseTaskId: 'x'.repeat(129) } })).toBeNull();
+  });
+
+  it('prFollowUp 非对象(字符串/null 除外)→ 整包 null', () => {
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: fu.prUrl })).toBeNull();
+    // null/undefined = 未使用跟进语义,不是畸形 → 正常通过且无该字段
+    expect(normalizeTaskPack({ ...validPack, prFollowUp: null })!.prFollowUp).toBeUndefined();
+    expect(normalizeTaskPack(validPack)!.prFollowUp).toBeUndefined();
   });
 });

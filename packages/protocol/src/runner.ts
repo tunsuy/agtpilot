@@ -102,6 +102,23 @@ export interface RunnerTaskPack {
    * 解决第三方开源仓无推送权限时 push 必败的问题(§6.2)。
    */
   viaFork?: boolean;
+  /**
+   * PR 跟进修改标记(v1 增补字段,2026-10-20「响应 review」):任务是在
+   * **已有 PR** 的工作分支上续改(回应 review 评论),不是开新 PR。语义链:
+   * - runner prepareRepo 保留/收编分支现场(本地续跑,或收编 origin/<workBranch>);
+   * - renderTaskPrompt 注入【PR 跟进模式】块(review 评论随 issueContext 入包);
+   * - 审批批准后固化的发布命令**只有 git push**(分支已关联 PR,push 即更新;
+   *   gh pr create 对已有 PR 必败,认领留言也不再需要)。
+   */
+  prFollowUp?: PrFollowUp;
+}
+
+/** PR 跟进任务的既有 PR 关联(身份字段:prUrl 畸形 → 整包拒收,不静默降级) */
+export interface PrFollowUp {
+  /** 既有 PR 直达链接(https://github.com/owner/repo/pull/N 精确形状) */
+  prUrl: string;
+  /** 原任务 id(可选;UI 任务链关联与审计用,非功能键) */
+  baseTaskId?: string;
 }
 
 /** no-action 原因枚举(agent 核实「无需改动」的例外出口;未知值归 other) */
@@ -351,6 +368,20 @@ const REPO_RE = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
 const BRANCH_RE = /^[\w./-]{1,200}$/;
 const ID_RE = /^[\w-]{1,128}$/;
 
+/**
+ * PR 直达链接解析(prFollowUp 校验与云端「响应 review」拉取评论共用的单一事实源)。
+ * 只认精确形状 https://github.com/owner/repo/pull/N(锚定,不许带 query/fragment/尾巴);
+ * owner/repo 段过 '.'/'..' 防线。非字符串/不匹配 → null。
+ */
+const PR_URL_STRICT_RE = /^https:\/\/github\.com\/([\w.-]{1,100})\/([\w.-]{1,100})\/pull\/(\d{1,10})$/;
+export function parsePrUrl(url: unknown): { owner: string; repo: string; prNumber: number } | null {
+  if (typeof url !== 'string') return null;
+  const m = PR_URL_STRICT_RE.exec(url.trim());
+  if (!m) return null;
+  if (m[1] === '.' || m[1] === '..' || m[2] === '.' || m[2] === '..') return null;
+  return { owner: m[1], repo: m[2], prNumber: Number(m[3]) };
+}
+
 /** 任务包清洗:核心字段缺失/畸形 → null(拒绝派发);可选字段降级缺省 */
 export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
   if (!input || typeof input !== 'object') return null;
@@ -397,6 +428,25 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
   const ex = (o.executor && typeof o.executor === 'object' ? o.executor : null) as Record<string, unknown> | null;
   if (!ex || ex.name !== 'claude-code') return null;
 
+  // PR 跟进标记:出现即任务身份 —— prUrl/baseTaskId 畸形 → 整包拒绝派发。
+  // 不能静默降级为普通派发:降级后批准时会固化 gh pr create,对已有 PR 必败,
+  // 且 prompt 丢掉【PR 跟进模式】语义。拒绝派发是可见失败,与身份字段同策略。
+  let prFollowUp: PrFollowUp | undefined;
+  if (o.prFollowUp !== undefined && o.prFollowUp !== null) {
+    const fu = (typeof o.prFollowUp === 'object' ? o.prFollowUp : {}) as Record<string, unknown>;
+    const fuPrUrl = str(fu.prUrl, 500);
+    if (!fuPrUrl || !parsePrUrl(fuPrUrl)) return null;
+    // baseTaskId 可选,但出现即须合法(超长/带空白也拒绝,不静默丢链 —— 丢了
+    // UI 任务链就断了,且无人知晓)
+    if (fu.baseTaskId !== undefined && fu.baseTaskId !== null) {
+      const baseTaskId = str(fu.baseTaskId, 128);
+      if (!baseTaskId || !ID_RE.test(baseTaskId)) return null;
+      prFollowUp = { prUrl: fuPrUrl, baseTaskId };
+    } else {
+      prFollowUp = { prUrl: fuPrUrl };
+    }
+  }
+
   return {
     taskId,
     kind: 'oss_contribution',
@@ -417,6 +467,7 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
     dispatchNote: capText(o.dispatchNote, 5000),
     // 只认真正的 true(缺省/false/脏值一律视为未经 fork,派发保持直连语义)
     viaFork: o.viaFork === true ? true : undefined,
+    ...(prFollowUp ? { prFollowUp } : {}),
   };
 }
 

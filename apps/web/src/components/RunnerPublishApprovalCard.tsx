@@ -73,6 +73,11 @@ export function RunnerPublishApprovalCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-zinc-900">发布本地贡献成果</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 font-medium">高危 · 对外可见</span>
+            {typeof p.followUpPrUrl === 'string' && p.followUpPrUrl && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 font-medium">
+                PR 跟进 · 只推送更新既有 PR
+              </span>
+            )}
           </div>
           <p className="text-xs text-zinc-600 mt-1 break-all font-mono">
             {String(p.repo || '')} · <span className="text-zinc-500">{String(p.workBranch || '')}</span> →{' '}
@@ -90,6 +95,17 @@ export function RunnerPublishApprovalCard({
             >
               <ExternalLink className="h-3 w-3 shrink-0" />
               Issue 直达
+            </a>
+          )}
+          {typeof p.followUpPrUrl === 'string' && p.followUpPrUrl && (
+            <a
+              href={p.followUpPrUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] text-sky-700 hover:underline mt-1 ml-2 break-all"
+            >
+              <ExternalLink className="h-3 w-3 shrink-0" />
+              原 PR 直达(推送后自动更新)
             </a>
           )}
         </div>
@@ -141,8 +157,9 @@ export function RunnerPublishApprovalCard({
       )}
 
       <p className="text-[10px] text-zinc-500 leading-relaxed">
-        批准后本地 runner 逐条执行固化命令集(git push / gh pr create{claimDraft ? ' / gh issue comment' : ''}),
-        任何一条失败即停并上报;PR 链接自动回流任务卡。拒绝则任务取消,本地分支保留。
+        {p.followUpPrUrl
+          ? '批准后本地 runner 执行固化命令(仅 git push;推送到已关联 PR 的分支即自动更新既有 PR,不新建 PR),失败即停并上报。拒绝则任务取消,本地分支保留。'
+          : `批准后本地 runner 逐条执行固化命令集(git push / gh pr create${claimDraft ? ' / gh issue comment' : ''}),任何一条失败即停并上报;PR 链接自动回流任务卡。拒绝则任务取消,本地分支保留。`}
       </p>
 
       {/* 动作 */}

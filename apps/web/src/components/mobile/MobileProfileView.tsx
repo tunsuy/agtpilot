@@ -16,6 +16,7 @@ import {
   BellOff,
   Smartphone,
   Sparkles,
+  Unplug,
 } from 'lucide-react';
 import { ConnectorApp, CronJobItem, GoalItem } from '../../types/agent';
 import { detectPushSupport, enablePush, disablePush, getPushStatus, PushSupport, PushStatus } from '../../utils/pwaPush';
@@ -324,6 +325,15 @@ export function MobileProfileView({
               <span className="text-xs text-zinc-400">{memoryCount} 条</span>
               <ChevronRight className="h-4 w-4 text-zinc-300" />
             </button>
+          </li>
+          <li>
+            {/* IM 通道运维页(/channel 独立路由):个人微信扫码授权 + 绑定码 */}
+            <a href="/channel" className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-zinc-50 transition">
+              <Unplug className="h-4 w-4 text-zinc-400" />
+              <span className="flex-1 text-sm text-zinc-800">IM 通道</span>
+              <span className="text-xs text-zinc-400">微信/QQ 扫码直连</span>
+              <ChevronRight className="h-4 w-4 text-zinc-300" />
+            </a>
           </li>
         </ul>
         <p className="mt-2 px-1 text-[11px] text-zinc-300 flex items-center gap-1">

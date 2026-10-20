@@ -114,6 +114,27 @@ export interface NoActionFinal {
   evidence: string;
 }
 
+/**
+ * runner 本地 CLI 用量(v1 增补字段,2026-10-20 usage 补账):claude stream-json
+ * 的 result 行自带 usage/total_cost_usd,旧 executor 解析时只取 text/is_error,
+ * 用量数据在源头即被丢弃 → 本地消耗对云端完全不可见。现在:runner 按轮汇总
+ * (含瞬时错误自动重试),随 phase1_result/error 事件 payload.usage 上行;云端跨
+ * 重派轮次累加落 RunnerTaskRecord.localUsage,任务详情展示。
+ * **只展示、不并入 mission token 预算** —— 本地消耗走用户自己的订阅/API key
+ * 计费,云端预算闸(agtpilot/usage)本来就不该也管不到它;审计结论是「账外
+ * 不可见」,补账目标是可见,不是封顶。
+ */
+export interface RunnerLocalUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  /** claude 报告的成本(API key 计费有意义;订阅用户为牌价折算,仅参考) */
+  totalCostUsd?: number;
+  numTurns?: number;
+  durationMs?: number;
+}
+
 /** 云端任务记录(TaskPack + 状态机字段;user-store 侧持久化) */
 export interface RunnerTaskRecord {
   taskId: string;
@@ -150,6 +171,13 @@ export interface RunnerTaskRecord {
    * 雷达「不重复推荐」与派发防重以此为准 —— 一次核验的成本沉淀成永久结论。
    */
   noAction?: NoActionFinal;
+  /**
+   * runner 本地 CLI 用量累计(v1 增补字段,2026-10-20 usage 补账):
+   * phase1_result/error 事件 payload.usage 经 normalizeRunnerUsage 清洗后
+   * 跨轮次求和(重派每轮 runner 报当轮汇总,云端相加 = 任务生命周期总量)。
+   * eventId 幂等去重在合账之前,重发不会重复计账。老 runner 不上报 → undefined。
+   */
+  localUsage?: RunnerLocalUsage;
   /**
    * 用户「终止任务」请求标记(执行中止损):dispatched/running 时置位,
    * 状态不动 —— getDeviceActions 据此下发 cancel 动作,由 runner 杀掉本地
@@ -254,11 +282,65 @@ function optStr(v: unknown, max: number): string | undefined {
   return str(v, max) ?? undefined;
 }
 
+/**
+ * 内容型字段(prose/上下文)的超限处理:**截断 + 标记**,而非静默丢弃整字段。
+ * 审计 2026-10-20:issueContext>8000 时旧行为是整字段消失(str 返回 null),
+ * 本地 agent 在没有任何 Issue 上下文的情况下盲跑,且全程无告警。
+ * 身份/命令类字段(taskId/repo/issueUrl/分支/prTitle/testCommand)仍走 str()
+ * 严格拒绝:拒绝派发是可见失败,截断命令则可能变成另一条命令 —— 都不适用本函数。
+ */
+export function capText(v: unknown, max: number): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  if (!t) return undefined;
+  if (t.length <= max) return t;
+  const marker = `…[截断 ${t.length}→${max}]`;
+  // 限额小到装不下标记(实际限额 ≥500,理论边界):硬截断,契约「结果 ≤ max」不破
+  if (marker.length >= max) return t.slice(0, Math.max(0, max));
+  return t.slice(0, max - marker.length) + marker;
+}
+
 function intOr(v: unknown, min: number, max: number, fallback: number): number {
   const n = typeof v === 'number' ? v : Number(v);
   if (!Number.isFinite(n)) return fallback;
   const i = Math.round(n);
   return Math.min(max, Math.max(min, i));
+}
+
+const USAGE_INT_FIELDS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'numTurns', 'durationMs'] as const;
+
+/** 用量清洗:只认 ≥0 有限数;整数字段取整,totalCostUsd 保 6 位小数;无一合法 → undefined */
+export function normalizeRunnerUsage(input: unknown): RunnerLocalUsage | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const o = input as Record<string, unknown>;
+  const out: RunnerLocalUsage = {};
+  let any = false;
+  for (const f of USAGE_INT_FIELDS) {
+    const v = o[f];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue;
+    out[f] = Math.round(v);
+    any = true;
+  }
+  const cost = o.totalCostUsd;
+  if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0) {
+    out.totalCostUsd = Math.round(cost * 1e6) / 1e6;
+    any = true;
+  }
+  return any ? out : undefined;
+}
+
+/** 用量累加(runner 侧加自动重试轮;云端侧加重派轮):任一侧缺省安全,结果再过清洗 */
+export function addRunnerUsage(a?: RunnerLocalUsage, b?: RunnerLocalUsage): RunnerLocalUsage | undefined {
+  const na = normalizeRunnerUsage(a);
+  const nb = normalizeRunnerUsage(b);
+  if (!na) return nb;
+  if (!nb) return na;
+  const sum: Record<string, number> = {};
+  for (const f of [...USAGE_INT_FIELDS, 'totalCostUsd'] as const) {
+    const v = (na[f] ?? 0) + (nb[f] ?? 0);
+    if (v > 0) sum[f] = v;
+  }
+  return normalizeRunnerUsage(sum);
 }
 
 export function isProtocolSupported(protocolVersion: unknown): boolean {
@@ -298,14 +380,14 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
   const constraints = Array.isArray(o.constraints)
     ? o.constraints
         .slice(0, 20)
-        .map((c) => str(c, 500))
-        .filter((c): c is string => c !== null)
+        .map((c) => capText(c, 500))
+        .filter((c): c is string => c !== undefined)
     : [];
 
   const acc = (o.acceptance && typeof o.acceptance === 'object' ? o.acceptance : {}) as Record<string, unknown>;
   const acceptance = {
     testCommand: optStr(acc.testCommand, 500),
-    note: optStr(acc.note, 2000),
+    note: capText(acc.note, 2000),
   };
 
   const pr = (o.prDraft && typeof o.prDraft === 'object' ? o.prDraft : null) as Record<string, unknown> | null;
@@ -324,15 +406,15 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
     workBranch,
     constraints,
     acceptance,
-    issueContext: optStr(o.issueContext, 8000),
-    claimDraft: optStr(o.claimDraft, 5000),
-    prDraft: { title: prTitle, bodyTemplate: str(pr.bodyTemplate, 20000) ?? '' },
+    issueContext: capText(o.issueContext, 8000),
+    claimDraft: capText(o.claimDraft, 5000),
+    prDraft: { title: prTitle, bodyTemplate: capText(pr.bodyTemplate, 20000) ?? '' },
     executor: {
       name: 'claude-code',
       maxTurns: intOr(ex.maxTurns, 1, 200, 60),
       timeoutMinutes: intOr(ex.timeoutMinutes, 1, 240, 30),
     },
-    dispatchNote: optStr(o.dispatchNote, 5000),
+    dispatchNote: capText(o.dispatchNote, 5000),
     // 只认真正的 true(缺省/false/脏值一律视为未经 fork,派发保持直连语义)
     viaFork: o.viaFork === true ? true : undefined,
   };

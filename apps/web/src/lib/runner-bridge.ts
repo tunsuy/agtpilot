@@ -10,12 +10,14 @@ import {
   PAIR_CODE_TTL_MS,
   RUNNER_TASK_TTL_MS,
   RUNNER_PROTOCOL_VERSION,
+  addRunnerUsage,
   buildPublishCommands,
   canTransitionRunnerTask,
   isTerminalRunnerState,
   isValidPairCodeFormat,
   normalizeNoAction,
   normalizeRunnerEvent,
+  normalizeRunnerUsage,
   normalizeTaskPack,
   normalizeDeviceAction,
   type ApprovalRequest,
@@ -548,7 +550,8 @@ export interface RecordEventsResult {
  * - normalize 失败 / 任务不属于该用户 / 设备冒名(event.deviceId ≠ 认证设备)→ rejected;
  * - eventId 幂等去重(重发批次不重复计);
  * - type='state' 且迁移合法 → 推进任务状态机;非法迁移拒绝该条(不改状态);
- * - phase2_result 携带 prUrl → 回流任务记录。
+ * - phase2_result 携带 prUrl → 回流任务记录;
+ * - phase1_result/error 携带 usage → 清洗累加落 task.localUsage(本地消耗补账)。
  */
 export function recordRunnerEvents(
   userId: string,
@@ -630,6 +633,16 @@ export function recordRunnerEvents(
           task.pendingInterjects = rest.length > 0 ? rest : undefined;
           task.updatedAt = now;
         }
+      }
+    }
+    // 本地 CLI 用量补账(2026-10-20):phase1_result/error 事件带 payload.usage
+    // (runner 报当轮汇总,含自动重试轮)→ 清洗后跨重派轮次累加落任务记录。
+    // 幂等:上方 eventId 去重先行,重发批次不会重复计账。只展示不并入 mission 预算。
+    if ((event.type === 'phase1_result' || event.type === 'error') && event.payload?.usage) {
+      const u = normalizeRunnerUsage(event.payload.usage);
+      if (u) {
+        task.localUsage = addRunnerUsage(task.localUsage, u);
+        task.updatedAt = now;
       }
     }
 

@@ -372,3 +372,89 @@ describe('runTask · 续跑模式(prepare mode=resumed:重派/重领保留上次
     expect(adapter.runOpts[0]?.continuation).toBeUndefined();
   });
 });
+
+describe('runTask · 本地 CLI 用量补账(usage 随终局事件上行,含自动重试轮累计)', () => {
+  const usageA = { inputTokens: 100, outputTokens: 20, totalCostUsd: 0.001, numTurns: 3, durationMs: 30000 };
+  const usageB = { inputTokens: 50, outputTokens: 30, totalCostUsd: 0.002 };
+  const ok = (usage?: Phase1Result['usage']): Phase1Result => ({
+    ok: true, commitHash: 'abc123', diffstat: '1 file', testTail: 'ok', prFinal: { title: 'T', body: 'B' },
+    ...(usage ? { usage } : {}),
+  });
+
+  it('成功路径:phase1_result payload 带 usage(云端据此落 localUsage)', async () => {
+    const { deps, flat } = makeDeps({ adapter: fakeAdapter({ result: ok(usageA) }) });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    const p1 = flat().find((e) => e.type === 'phase1_result')!;
+    expect(p1.payload).toMatchObject({ usage: usageA });
+  });
+
+  it('失败路径:失败轮消耗也已发生 → error payload 照常带 usage', async () => {
+    const { deps, flat } = makeDeps({
+      adapter: fakeAdapter({ result: { ok: false, error: '验收命令未通过', commitHash: 'abc', testTail: 'FAILED', usage: usageA } }),
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('failed');
+    const err = flat().find((e) => e.type === 'error')!;
+    expect(err.payload).toMatchObject({ usage: usageA });
+  });
+
+  it('no-action 路径:error(noAction)payload 同样带 usage(核验也烧了 token)', async () => {
+    const { deps, flat } = makeDeps({
+      adapter: fakeAdapter({
+        result: {
+          ok: true,
+          noAction: { reason: 'already_fixed', evidence: '修复 commit d9bef57 已在基线' },
+          usage: usageA,
+        } as Phase1Result,
+      }),
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('no_action');
+    const err = flat().find((e) => e.type === 'error')!;
+    expect(err.payload).toMatchObject({ usage: usageA, noAction: { reason: 'already_fixed' } });
+  });
+
+  it('自动重试:首轮 retryable 失败带 usageA、重试成功带 usageB → 上行两轮之和', async () => {
+    const { deps, flat } = makeDeps({
+      adapter: fakeAdapter({
+        results: [
+          { ok: false, error: 'claude 退出码 1 · API Error: overloaded', retryable: true, usage: usageA },
+          ok(usageB),
+        ],
+      }),
+      checkPristine: async () => true,
+      retryDelayMs: 0,
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    const p1 = flat().find((e) => e.type === 'phase1_result')!;
+    expect(p1.payload).toMatchObject({
+      usage: { inputTokens: 150, outputTokens: 50, totalCostUsd: 0.003, numTurns: 3, durationMs: 30000 },
+    });
+  });
+
+  it('重试首轮有 usage、重试轮没有 → 仍上行首轮用量(缺省侧安全)', async () => {
+    const { deps, flat } = makeDeps({
+      adapter: fakeAdapter({
+        results: [{ ok: false, error: 'socket hang up', retryable: true, usage: usageA }, ok()],
+      }),
+      checkPristine: async () => true,
+      retryDelayMs: 0,
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(flat().find((e) => e.type === 'phase1_result')!.payload).toMatchObject({ usage: usageA });
+  });
+
+  it('执行器不带 usage(旧 adapter/老 claude 输出)→ payload 无 usage 键(向后兼容)', async () => {
+    const { deps, flat } = makeDeps({ adapter: fakeAdapter({ result: ok() }) });
+    await runTask({ taskId: 'rtask_1', pack: validPack }, deps);
+    expect('usage' in (flat().find((e) => e.type === 'phase1_result')!.payload as object)).toBe(false);
+  });
+
+  it('cancelled 路径不带 usage(终止即止损,本轮消耗不上报 —— 范围决策,PR 说明)', async () => {
+    const { deps, flat } = makeDeps({
+      adapter: fakeAdapter({ result: { ok: false, aborted: true, error: '任务已被云端终止', usage: usageA } }),
+    });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('cancelled');
+    expect(flat().some((e) => e.type === 'error')).toBe(false);
+    const st = flat().find((e) => e.type === 'state' && (e.payload as any).state === 'cancelled')!;
+    expect('usage' in (st.payload as object)).toBe(false);
+  });
+});

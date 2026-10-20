@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   NO_ACTION_REASON_LABELS,
+  addRunnerUsage,
   normalizeTaskPack,
   type RunnerEventType,
+  type RunnerLocalUsage,
   type RunnerTaskPack,
 } from '@agtpilot/protocol';
 import type { ExecutorAdapter, InterjectHandle, ParsedStreamEvent } from './executor';
@@ -161,6 +163,9 @@ export async function runTask(
   }
 
   let result = await runOnce(resumed);
+  // 本地 CLI 用量补账(2026-10-20):按轮累计(首跑 + 自动重试轮),终局随
+  // phase1_result/error 事件上行。云端跨重派轮次再累加,任务详情展示。
+  let localUsage: RunnerLocalUsage | undefined = result.usage;
 
   // 用户止损(aborted 优先于一切重试):上报 cancelled(云端合法迁移落终态),
   // 本地分支保留(与审批拒绝一致)—— 终止就是终止,不进瞬时错误自动重试。
@@ -196,6 +201,7 @@ export async function runTask(
     await flush();
     if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
     result = await runOnce(continuation);
+    localUsage = addRunnerUsage(localUsage, result.usage);
     // 重试途中也可能被终止:同样落 cancelled,不当失败上报
     if (result.aborted) {
       push('state', { state: 'cancelled' });
@@ -216,11 +222,12 @@ export async function runTask(
     const label = NO_ACTION_REASON_LABELS[reason] ?? '无需改动';
     const message = `agent 核实无需改动:${label}。证据:${evidence.slice(0, 500)}`;
     push('progress', { kind: 'system', summary: `no-action · ${label}(证据已回流云端)` });
-    push('error', { message, noAction: { reason, evidence } });
+    push('error', { message, noAction: { reason, evidence }, ...(localUsage ? { usage: localUsage } : {}) });
     push('state', { state: 'failed' });
     await flush();
     audit({ kind: 'task_result', taskId, outcome: 'no_action', reason, evidence: evidence.slice(0, 500) });
     log(`任务 ${taskId} no-action:${label}(证据 ${evidence.length} 字已上行,云端升级 no_action 终态)`);
+    if (localUsage) log(`任务 ${taskId} 本地 claude 用量已上行:${JSON.stringify(localUsage)}`);
     return 'no_action';
   }
 
@@ -236,11 +243,14 @@ export async function runTask(
       // 实探基线分支回流(master 默认仓库回落结果):云端固化 PR --base 以此为准,
       // 派发包里没写 baseBranch 时不能拿缺省 'main' 去开 PR(上游根本没有该分支)
       baseBranch: repo.baseBranch,
+      // 本地 CLI 用量补账(含自动重试轮累计):云端落任务记录,任务详情展示
+      ...(localUsage ? { usage: localUsage } : {}),
     });
     push('state', { state: 'awaiting_approval' });
     await flush();
     audit({ kind: 'task_result', taskId, outcome: 'awaiting_approval', commitHash: result.commitHash });
     log(`任务 ${taskId} Phase 1 完成 → 等待云端审批(commit ${String(result.commitHash ?? '').slice(0, 8)})`);
+    if (localUsage) log(`任务 ${taskId} 本地 claude 用量已上行:${JSON.stringify(localUsage)}`);
     return 'awaiting_approval';
   }
   return fail(result.error || '执行器返回失败(无错误信息)', {
@@ -248,5 +258,7 @@ export async function runTask(
     testTail: result.testTail,
     // 加固 ②:瞬时 API/网关失败 → error 事件带 retryable,云端落任务记录、UI 标「可重试」
     ...(result.retryable ? { retryable: true } : {}),
+    // 失败轮消耗也已发生:usage 照常上行(含自动重试轮累计)
+    ...(localUsage ? { usage: localUsage } : {}),
   });
 }

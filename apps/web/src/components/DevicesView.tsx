@@ -16,6 +16,7 @@ import {
   Square,
   MessageSquare,
   Send,
+  Zap,
 } from 'lucide-react';
 import {
   isRunnerTaskActive,
@@ -25,6 +26,7 @@ import {
   RUNNER_RETRYABLE_LABEL,
   RUNNER_RETRYABLE_HINT,
   tasksForDevice,
+  formatRunnerLocalUsage,
   type RunnerTaskEventView,
   type RunnerTaskSummary,
 } from '../lib/runner-dispatch';
@@ -243,6 +245,17 @@ function DeviceTaskItem({
               </>
             )}
           </div>
+          {/* 本地 claude CLI 消耗(usage 补账):runner 随终局事件上报、云端跨重派轮累加。
+              只展示不并入 mission 预算 —— 走用户自己的订阅/API key 计费 */}
+          {task.localUsage && formatRunnerLocalUsage(task.localUsage) && (
+            <div
+              className="flex items-center gap-1.5 text-[11px] text-zinc-500"
+              title="本地 claude CLI 消耗(runner 随任务上报;走用户自己的订阅/API key 计费,不计入云端 mission 预算)"
+            >
+              <Zap className="h-3 w-3 text-zinc-400 flex-shrink-0" />
+              <span>本地消耗 · {formatRunnerLocalUsage(task.localUsage)}</span>
+            </div>
+          )}
           {task.missionId && missionTitle && onOpenMission && (
             <button
               type="button"

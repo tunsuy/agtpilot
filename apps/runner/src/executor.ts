@@ -4,7 +4,9 @@ import {
   renderTaskPrompt,
   extractPrFinal,
   extractNoActionFinal,
+  normalizeRunnerUsage,
   type NoActionFinal,
+  type RunnerLocalUsage,
   type RunnerTaskPack,
 } from '@agtpilot/protocol';
 import type { ExecAsync } from './repo';
@@ -49,13 +51,22 @@ export interface Phase1Result {
    * 超时 / max_turns / 验收失败 / 无产出 / git 校验失败一律 false(重跑无意义或必复现)。
    */
   retryable?: boolean;
+  /**
+   * 本轮 claude CLI 用量(2026-10-20 usage 补账):stream-json result 行自带
+   * usage/total_cost_usd,旧解析只取 text/is_error 把它丢在源头。会话内多条
+   * result(插话多跑一轮)以最后一条为准(claude 的 usage 是会话累计口径);
+   * task-run 跨自动重试轮求和后随 phase1_result/error 事件上行。
+   * 失败轮也带(消耗已发生)——claude 进程没跑起来(启动失败/超时前无 result)
+   * 则缺省。
+   */
+  usage?: RunnerLocalUsage;
 }
 
 export type ParsedStreamEvent =
   | { kind: 'system'; summary: string }
   | { kind: 'tool'; tool: string; summary: string }
   | { kind: 'text'; summary: string }
-  | { kind: 'result'; text: string; isError: boolean };
+  | { kind: 'result'; text: string; isError: boolean; usage?: RunnerLocalUsage };
 
 export interface ExecutorAdapter {
   name: string;
@@ -192,10 +203,23 @@ export function parseStreamLine(line: string): ParsedStreamEvent | null {
     return null;
   }
   if (o.type === 'result') {
+    // usage 补账(2026-10-20):claude result 行自带会话累计用量与成本,
+    // snake_case → 协议 camelCase,经 normalizeRunnerUsage 清洗(脏值逐字段丢弃)
+    const u = (o.usage && typeof o.usage === 'object' ? o.usage : {}) as Record<string, unknown>;
+    const usage = normalizeRunnerUsage({
+      inputTokens: u.input_tokens,
+      outputTokens: u.output_tokens,
+      cacheReadTokens: u.cache_read_input_tokens,
+      cacheCreationTokens: u.cache_creation_input_tokens,
+      totalCostUsd: o.total_cost_usd,
+      numTurns: o.num_turns,
+      durationMs: o.duration_ms,
+    });
     return {
       kind: 'result',
       text: typeof o.result === 'string' ? o.result : '',
       isError: o.is_error === true || o.subtype === 'error_max_turns' || o.subtype === 'error_during_execution',
+      ...(usage ? { usage } : {}),
     };
   }
   return null;
@@ -355,12 +379,15 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     // ---- 1. headless 跑 agent(流式解析 stream-json → 进度事件;prompt 经 stdin 注入) ----
     const timeoutMs = this.timeoutMs ?? Math.max(1, pack.executor.timeoutMinutes) * 60_000;
     const agent = await this.runClaude(args, prompt, repoDir, timeoutMs, onProgress, opts?.abortSignal, opts?.interjectHandle);
+    // usage 补账:所有出口(成功/失败/no-action/中止)都挂上本轮用量 —— 消耗已发生,
+    // task-run 汇总(含自动重试轮)后随 phase1_result/error 事件上行,云端任务详情展示
+    const withUsage = (r: Phase1Result): Phase1Result => (agent.usage ? { ...r, usage: agent.usage } : r);
     // claude 进程级失败:标注是否瞬时 API/网关错误(供 task-run 自动重试 + 云端标可重试)。
     // 其余 ok:false 分支(git 校验 / 验收)是确定性失败,不带 retryable(缺省即 false)。
     // 用户中止(aborted)优先:终止就是终止,不进自动重试、不标可重试。
     if (!agent.ok) {
-      if (agent.aborted) return { ok: false, error: agent.error, aborted: true };
-      return { ok: false, error: agent.error, retryable: isRetryableClaudeFailure(agent.error) };
+      if (agent.aborted) return withUsage({ ok: false, error: agent.error, aborted: true });
+      return withUsage({ ok: false, error: agent.error, retryable: isRetryableClaudeFailure(agent.error) });
     }
 
     const prFinal = agent.resultText ? extractPrFinal(agent.resultText) : null;
@@ -375,7 +402,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     try {
       commitHash = (await this.exec('git', ['-C', repoDir, 'rev-parse', 'HEAD'])).stdout.trim();
     } catch {
-      return { ok: false, error: '无法读取工作分支 HEAD(git rev-parse 失败)', prFinal };
+      return withUsage({ ok: false, error: '无法读取工作分支 HEAD(git rev-parse 失败)', prFinal });
     }
     let ahead = -1;
     for (const range of [`origin/${base}..HEAD`, `${base}..HEAD`]) {
@@ -388,12 +415,12 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     }
     if (ahead === 0) {
       if (noActionFinal) {
-        return { ok: true, noAction: noActionFinal };
+        return withUsage({ ok: true, noAction: noActionFinal });
       }
-      return { ok: false, error: 'agent 结束但工作分支无本地 commit(没有产出)', prFinal };
+      return withUsage({ ok: false, error: 'agent 结束但工作分支无本地 commit(没有产出)', prFinal });
     }
     if (ahead < 0) {
-      return { ok: false, error: `无法确认相对基线 ${base} 的 commit 数(git rev-list 失败)`, prFinal };
+      return withUsage({ ok: false, error: `无法确认相对基线 ${base} 的 commit 数(git rev-list 失败)`, prFinal });
     }
 
     let diffstat = '';
@@ -416,18 +443,18 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       } catch (e) {
         const err = e as { stdout?: string; stderr?: string; killed?: boolean; message?: string };
         const out = `${err.stdout ?? ''}${err.stderr ? '\n' + err.stderr : ''}`.trim();
-        return {
+        return withUsage({
           ok: false,
           error: err.killed ? '验收命令超时(10 分钟)' : '验收命令未通过',
           commitHash,
           diffstat: diffstat || undefined,
           testTail: tail2k(out || err.message || ''),
           prFinal,
-        };
+        });
       }
     }
 
-    return { ok: true, commitHash, diffstat: diffstat || undefined, testTail, prFinal };
+    return withUsage({ ok: true, commitHash, diffstat: diffstat || undefined, testTail, prFinal });
   }
 
   /** spawn claude 并流式消费 stdout;超时 tree-kill(SIGTERM→5s→SIGKILL,整进程组);
@@ -443,7 +470,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     onProgress?: (e: ParsedStreamEvent) => void,
     abortSignal?: AbortSignal,
     interjectHandle?: InterjectHandle
-  ): Promise<{ ok: boolean; resultText?: string; error?: string; aborted?: boolean }> {
+  ): Promise<{ ok: boolean; resultText?: string; error?: string; aborted?: boolean; usage?: RunnerLocalUsage }> {
     return new Promise((resolve) => {
       if (abortSignal?.aborted) {
         resolve({ ok: false, error: '任务已被终止(派发后云端即取消)', aborted: true });
@@ -461,6 +488,8 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       let resultText = '';
       let resultIsError = false;
       let sawResult = false;
+      // 本进程会话的 claude 用量(最后一条 result 为准 —— claude 的 usage 是会话累计口径)
+      let resultUsage: RunnerLocalUsage | undefined;
       let timedOut = false;
       let aborted = false;
       let settled = false;
@@ -511,7 +540,8 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
         clearTimeout(killTimer);
         abortSignal?.removeEventListener('abort', onAbort);
         if (interjectHandle) interjectHandle.send = null;
-        resolve(r);
+        // 失败路径也带 usage(消耗已发生);claude 没跑到 result(启动失败/超时)则缺省
+        resolve(resultUsage ? { ...r, usage: resultUsage } : r);
       };
 
       child.stdout?.on('data', (chunk: Buffer) => {
@@ -526,6 +556,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
             sawResult = true;
             resultText = ev.text;
             resultIsError = ev.isError;
+            if (ev.usage) resultUsage = ev.usage;
             // 首个 result = agent 认为任务完成:关闭输入,claude 走完当前输出即退。
             // result 前已写入 stdin 的插话仍会被处理(排队消息在 EOF 前有效),
             // 若因此多出一轮,新 result 覆盖 resultText —— 最终以最后一轮为准。

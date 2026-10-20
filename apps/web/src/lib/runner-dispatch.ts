@@ -5,6 +5,7 @@ import {
   renderHandoffPack,
   type NoActionReason,
   type RunnerEvent,
+  type RunnerLocalUsage,
   type RunnerTaskPack,
   type RunnerTaskRecord,
 } from '@agtpilot/protocol';
@@ -67,6 +68,11 @@ export interface RunnerTaskSummary {
   cancelRequested?: boolean;
   /** 待送达插话条数(runner ack 前 UI 显示「插话送达中…」;正文不进列表轮询,数据最小化) */
   pendingInterjects?: number;
+  /**
+   * 本地 claude CLI 消耗累计(runner 随任务终局事件上报,云端跨重派轮次累加)。
+   * 只展示不并入 mission 预算 —— 走用户自己的订阅/API key 计费。老 runner → undefined。
+   */
+  localUsage?: RunnerLocalUsage;
   /** 派发时所处的驾驶舱会话 id(互跳关联键;工坊外派发缺省) */
   missionId?: string;
 }
@@ -151,6 +157,30 @@ export function noActionLabel(reason: string): string {
   return NO_ACTION_REASON_LABELS[reason as NoActionReason] ?? '无需改动';
 }
 
+/** 千位缩写(1234 → 1.2k;999 → 999):本地消耗单行展示用 */
+function fmtK(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(Math.round(n));
+}
+
+/**
+ * 本地 CLI 用量 → 单行话术(纯函数,vitest 直测):
+ * 「in 12.3k / out 4.5k tok · cache 67k · 3 轮 · 8 分 · $0.42」。
+ * 缺项跳过;全空 → ''(UI 层不展示该行)。成本是 claude 报告的牌价折算,
+ * 订阅用户仅供参考(走用户自己的订阅/API key 计费,不进云端预算)。
+ */
+export function formatRunnerLocalUsage(u: RunnerLocalUsage): string {
+  const parts: string[] = [];
+  if (u.inputTokens || u.outputTokens) {
+    parts.push(`in ${fmtK(u.inputTokens ?? 0)} / out ${fmtK(u.outputTokens ?? 0)} tok`);
+  }
+  const cache = (u.cacheReadTokens ?? 0) + (u.cacheCreationTokens ?? 0);
+  if (cache > 0) parts.push(`cache ${fmtK(cache)}`);
+  if (u.numTurns) parts.push(`${u.numTurns} 轮`);
+  if (u.durationMs && u.durationMs >= 1000) parts.push(`${Math.round(u.durationMs / 60000)} 分`);
+  if (u.totalCostUsd) parts.push(`$${u.totalCostUsd < 0.01 ? u.totalCostUsd.toFixed(4) : u.totalCostUsd.toFixed(2)}`);
+  return parts.join(' · ');
+}
+
 /** 云端任务记录 → 概览行(mine / detail 路由同源出口,摘要字段不含完整事件) */
 export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
   const latest = latestTaskProgress(t.events);
@@ -178,6 +208,7 @@ export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
     ...(t.targetDeviceId ? { targetDeviceId: t.targetDeviceId } : {}),
     ...(t.cancelRequested ? { cancelRequested: true } : {}),
     ...(t.pendingInterjects?.length ? { pendingInterjects: t.pendingInterjects.length } : {}),
+    ...(t.localUsage ? { localUsage: t.localUsage } : {}),
     ...(t.missionId ? { missionId: t.missionId } : {}),
     ...(latest ? { latest } : {}),
   };

@@ -17,6 +17,7 @@ import {
   MessageSquare,
   Send,
   Zap,
+  GitPullRequest,
 } from 'lucide-react';
 import {
   isRunnerTaskActive,
@@ -31,6 +32,7 @@ import {
   type RunnerTaskSummary,
 } from '../lib/runner-dispatch';
 import { ConfirmModal } from './ConfirmModal';
+import { FollowUpPrModal } from './FollowUpPrModal';
 
 /**
  * 本地 Runner 设备页(docs/design/local-runner-bridge.md §4,M1)
@@ -78,6 +80,7 @@ function DeviceTaskItem({
   onCancel,
   onDelete,
   onInterject,
+  onFollowUp,
   missionTitle,
   onOpenMission,
 }: {
@@ -90,6 +93,8 @@ function DeviceTaskItem({
   onDelete: (taskId: string) => void;
   /** 中途插话(执行中纠偏):文本入队下发,runner 注入正在执行的会话后回执清除 */
   onInterject: (taskId: string, text: string) => Promise<boolean>;
+  /** 「响应 review」跟进派发(done + 有 PR 的任务;弹窗由页面层持有) */
+  onFollowUp?: (task: RunnerTaskSummary) => void;
   /** 该任务所属会话的标题(派发时关联;会话已删除则无值,不显示入口) */
   missionTitle?: string;
   onOpenMission?: (missionId: string) => void;
@@ -104,6 +109,9 @@ function DeviceTaskItem({
   // 可插话窗口:只有本地正在执行(dispatched/running)才有会话可注入 ——
   // 排队中没人跑、审批中 agent 已收工,插了也没人听
   const interjectable = task.state === 'dispatched' || task.state === 'running';
+  // done 任务的 PR 链接:首选发布回流的 prUrl;跟进任务(push-only 发布无新 PR 输出)
+  // 回落任务包里的原 PR(云端 ingest 已做同款兜底,这里防旧记录)
+  const donePrUrl = task.state === 'done' ? task.prUrl ?? task.followUp?.prUrl : undefined;
   const [interjectText, setInterjectText] = useState('');
   const [interjectBusy, setInterjectBusy] = useState(false);
   const submitInterject = async () => {
@@ -168,9 +176,9 @@ function DeviceTaskItem({
             <MessageSquare className="h-3.5 w-3.5" />
           </button>
         )}
-        {task.state === 'done' && task.prUrl && (
+        {donePrUrl && (
           <a
-            href={task.prUrl}
+            href={donePrUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-0.5 text-[11px] text-sky-600 hover:text-sky-700 hover:underline flex-shrink-0"
@@ -255,6 +263,30 @@ function DeviceTaskItem({
               <Zap className="h-3 w-3 text-zinc-400 flex-shrink-0" />
               <span>本地消耗 · {formatRunnerLocalUsage(task.localUsage)}</span>
             </div>
+          )}
+          {/* PR 跟进任务标记:链回原任务(baseTaskId 只做展示关联,原任务可能已被删除) */}
+          {task.followUp && (
+            <div
+              className="flex items-center gap-1.5 text-[11px] text-zinc-500"
+              title="该任务是对既有 PR 的 review 跟进:复用原工作分支续改,发布只推送更新原 PR(不新建)"
+            >
+              <GitPullRequest className="h-3 w-3 text-sky-500 flex-shrink-0" />
+              <span>
+                PR 跟进任务 · 原任务 <span className="font-mono text-zinc-400">{task.followUp.baseTaskId ?? '(未关联)'}</span>
+              </span>
+            </div>
+          )}
+          {/* 响应 review:done + 有 PR 的任务可派发跟进任务(云端拉 review 评论 → 取舍 → 续跑) */}
+          {donePrUrl && onFollowUp && (
+            <button
+              type="button"
+              onClick={() => onFollowUp(task)}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-sky-200 bg-sky-50 text-[11px] font-medium text-sky-700 hover:bg-sky-100 transition"
+              title="PR 有新 review 要改?拉取评论、取舍后派发跟进任务:复用原工作分支续跑,推送仍过人工审批(只 push 更新既有 PR)"
+            >
+              <MessageSquare className="h-3 w-3" />
+              响应 review(派发跟进任务)
+            </button>
           )}
           {task.missionId && missionTitle && onOpenMission && (
             <button
@@ -382,6 +414,8 @@ export function DevicesView({
   const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<RunnerTaskEventView[] | null>(null);
+  // 「响应 review」跟进派发弹窗(done + 有 PR 的任务;页面层持有,同一时刻一个)
+  const [followUpTask, setFollowUpTask] = useState<RunnerTaskSummary | null>(null);
   // 确认弹窗(替代原生 window.confirm):待执行的危险操作先挂起,确认后才发请求
   const [pendingConfirm, setPendingConfirm] = useState<
     | { kind: 'cancel-task'; taskId: string }
@@ -733,6 +767,7 @@ export function DevicesView({
                             onCancel={(taskId) => setPendingConfirm({ kind: 'cancel-task', taskId })}
                             onDelete={(taskId) => setPendingConfirm({ kind: 'delete-task', taskId })}
                             onInterject={interjectTask}
+                            onFollowUp={setFollowUpTask}
                             missionTitle={t.missionId ? missionTitleById[t.missionId] : undefined}
                             onOpenMission={onOpenMission}
                           />
@@ -752,6 +787,20 @@ export function DevicesView({
           完成后审批卡出现在驾驶舱,push/PR 批准后才真正出门。
         </p>
       </div>
+
+      {/* 「响应 review」跟进派发弹窗:云端拉 PR review 评论 → 用户取舍 → 派发跟进任务
+          (复用原工作分支;发布只 push 更新既有 PR,仍过 Phase 2 审批) */}
+      {followUpTask && (
+        <FollowUpPrModal
+          task={followUpTask}
+          devices={devices.map((d) => ({ deviceId: d.deviceId, hostname: d.hostname, online: d.online, revoked: d.revoked }))}
+          onClose={() => setFollowUpTask(null)}
+          onDispatched={() => {
+            setFollowUpTask(null);
+            refreshTasks(); // 新跟进任务立即出现在设备任务列表
+          }}
+        />
+      )}
 
       {/* 危险操作确认弹窗(终止任务 / 删除记录 / 吊销设备) */}
       <ConfirmModal

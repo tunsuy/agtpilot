@@ -184,21 +184,33 @@ export interface PublishCommandInput {
    * 根本到不了上游。直连派发(origin 即上游)不带,保持 10 元旧形状(旧 runner 兼容)。
    */
   repo?: string;
+  /**
+   * PR 已存在(pack.prFollowUp 跟进任务):只固化 git push —— 分支已关联 PR,
+   * push 即更新 PR;gh pr create 对已有 PR 必败,认领留言(claim)也无意义。
+   * true 时忽略 prTitle/prBody/issueUrl/claimDraft/forkHead/repo(全不需要)。
+   */
+  prExists?: boolean;
 }
 
 /**
  * 构建固化命令集(批准时调用一次,结果随审批单落盘):
- * git push → gh pr create →(可选)gh issue comment。
+ * git push → gh pr create →(可选)gh issue comment;
+ * prExists(PR 跟进)→ 仅 git push(push 到已关联 PR 的分支即更新 PR)。
  * 自洽校验:任何一条过不了 validatePublishCommand → 整体 null(拒绝批准),
  * 保证「固化的必是可执行合法的」。
  */
 export function buildPublishCommands(input: PublishCommandInput): FrozenCommand[] | null {
+  const push: FrozenCommand = { cmd: 'git', args: ['push', '-u', 'origin', input.workBranch] };
+  // PR 跟进:push-only(白名单形状 1 不变,老 runner 也认)
+  if (input.prExists) {
+    return validatePublishCommand(push) !== null ? [push] : null;
+  }
   // 经 fork 派发:push 的 origin 就是 fork 克隆(形状不变);PR 显式 --repo 钉住上游 +
   // head 跨仓形式指向 fork 分支。缺 repo 时 --repo '' 过不了白名单 → 整体 null(拒绝批准)
   const viaFork = input.forkHead !== undefined;
   const head = viaFork ? `${input.forkHead}:${input.workBranch}` : input.workBranch;
   const cmds: FrozenCommand[] = [
-    { cmd: 'git', args: ['push', '-u', 'origin', input.workBranch] },
+    push,
     {
       cmd: 'gh',
       args: [

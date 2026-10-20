@@ -75,6 +75,15 @@ export interface RunnerTaskSummary {
   localUsage?: RunnerLocalUsage;
   /** 派发时所处的驾驶舱会话 id(互跳关联键;工坊外派发缺省) */
   missionId?: string;
+  /**
+   * PR 跟进任务标记(「响应 review」派发):复用原工作分支续改既有 PR;
+   * baseTaskId 关联原任务(UI 任务链)。发布批准后只固化 git push。
+   */
+  followUp?: { prUrl: string; baseTaskId?: string };
+  /** 派发时经 fork(跟进派发继承原任务方式;runner 克隆 fork 副本干活) */
+  viaFork?: boolean;
+  /** 派发时的基线分支(跟进派发继承;缺省 main) */
+  baseBranch?: string;
 }
 
 /**
@@ -210,6 +219,9 @@ export function summarizeRunnerTask(t: RunnerTaskRecord): RunnerTaskSummary {
     ...(t.pendingInterjects?.length ? { pendingInterjects: t.pendingInterjects.length } : {}),
     ...(t.localUsage ? { localUsage: t.localUsage } : {}),
     ...(t.missionId ? { missionId: t.missionId } : {}),
+    ...(t.pack.prFollowUp ? { followUp: t.pack.prFollowUp } : {}),
+    ...(t.pack.viaFork ? { viaFork: true } : {}),
+    ...(t.pack.baseBranch ? { baseBranch: t.pack.baseBranch } : {}),
     ...(latest ? { latest } : {}),
   };
 }
@@ -419,6 +431,60 @@ export function buildTaskPackFromOpportunity(
 export function handoffPackFor(opp: OssOpportunity): string | null {
   const pack = buildTaskPackFromOpportunity(opp);
   return pack ? renderHandoffPack(pack) : null;
+}
+
+/** 跟进派发的原任务要素(设备页 done 任务摘要即可凑齐) */
+export interface FollowUpBase {
+  repo: string;
+  issueUrl: string;
+  /** 原任务的工作分支(复用:runner 收编已推送现场续跑,push 即更新既有 PR) */
+  workBranch: string;
+  baseBranch?: string;
+  /** 既有 PR 直达链接(https://github.com/owner/repo/pull/N) */
+  prUrl: string;
+  /** 原任务 id(任务链关联) */
+  baseTaskId?: string;
+  /** 继承原任务的派发方式(经 fork 时 runner 仍需克隆 fork 副本) */
+  viaFork?: boolean;
+}
+
+/**
+ * 「响应 review」跟进任务包构建(纯函数,vitest 直测):
+ * reviewContext = 云端拉取 + 用户取舍后的评论快照(装进 issueContext ——
+ * Phase 1 禁网,agent 看不到 PR 页面,干活依据必须随包携带)。
+ * prFollowUp 标记 → runner 注入【PR 跟进模式】prompt、审批批准后只固化 git push。
+ * 无认领留言(claimDraft 缺省:Issue 早已认领过);prDraft 仅兜底展示。
+ */
+export function buildFollowUpTaskPack(
+  base: FollowUpBase,
+  reviewContext: string,
+  opts: { taskId?: string; dispatchNote?: string; now?: number } = {}
+): RunnerTaskPack | null {
+  const prNo = base.prUrl.match(/\/pull\/(\d+)/)?.[1];
+  return normalizeTaskPack({
+    taskId: opts.taskId ?? newRunnerTaskId(opts.now),
+    kind: 'oss_contribution',
+    repo: base.repo,
+    issueUrl: base.issueUrl,
+    baseBranch: base.baseBranch,
+    workBranch: base.workBranch,
+    constraints: [
+      '只回应 PR review 意见指出的问题,改动聚焦',
+      '不动无关文件,不顺手重构',
+      '遵循仓库 CONTRIBUTING 的代码风格与提交规范',
+      '既有提交已推送:禁止 rebase/reset 改写已推送历史,新修改用追加 commit 落',
+    ],
+    acceptance: { note: '运行 review 改动涉及的测试,保证通过' },
+    issueContext: reviewContext.trim() || undefined,
+    prDraft: {
+      title: prNo ? `followup: 响应 PR #${prNo} review` : 'followup: 响应 PR review',
+      bodyTemplate: '',
+    },
+    executor: { name: 'claude-code', maxTurns: 60, timeoutMinutes: 30 },
+    dispatchNote: (opts.dispatchNote || '').trim() || undefined,
+    viaFork: base.viaFork === true ? true : undefined,
+    prFollowUp: { prUrl: base.prUrl, ...(base.baseTaskId ? { baseTaskId: base.baseTaskId } : {}) },
+  });
 }
 
 /**

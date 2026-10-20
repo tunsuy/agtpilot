@@ -206,6 +206,53 @@ async function findPriorWork(
 }
 
 /**
+ * 远端现场收编(PR 跟进任务专用,2026-10-20):本地工作分支没有现场,但
+ * origin/<workBranch> 存在(上轮产出已审批推送;跟进任务可能派到另一台设备,
+ * 或原设备工作区被清/分支被删)→ 以 origin/<workBranch> 落本地跟踪分支,按
+ * resumed 续跑 —— 不走 checkout -B origin/<base> 重置(那会把已关联 PR 的
+ * commit 全丢掉,跟进任务等于从基线重做,还会让后续 push 与远端分叉必败)。
+ * 只对 pack.prFollowUp 任务启用:普通派发路径零行为变化(零额外 git 调用)。
+ * 返回生效基线分支名(与 findPriorWork 同口径:任务包基线读不出时探远程默认分支)。
+ */
+async function adoptRemoteWork(
+  repoDir: string,
+  workBranch: string,
+  base: string,
+  exec: ExecAsync
+): Promise<string | null> {
+  try {
+    await exec('git', ['-C', repoDir, 'show-ref', '--verify', '--quiet', `refs/remotes/origin/${workBranch}`]);
+  } catch {
+    return null; // 远端没有该分支 → 无现场可收编(全新派发的常态)
+  }
+  try {
+    await exec('git', ['-C', repoDir, 'checkout', '-B', workBranch, `origin/${workBranch}`]);
+  } catch {
+    return null; // checkout 失败 → 保守回落原重置路径
+  }
+  // 基线判定与 findPriorWork 同口径(ahead range / 审批 PR --base 回流用)
+  const aheadOf = async (b: string): Promise<boolean | null> => {
+    for (const range of [`origin/${b}..${workBranch}`, `${b}..${workBranch}`]) {
+      try {
+        const n = Number((await exec('git', ['-C', repoDir, 'rev-list', '--count', range])).stdout.trim());
+        if (Number.isFinite(n)) return n > 0;
+      } catch {
+        /* 换下一个 range */
+      }
+    }
+    return null;
+  };
+  let effectiveBase = base;
+  const ahead = await aheadOf(base);
+  if (ahead === null || ahead === false) {
+    // 读不出或零领先(如 PR 已被 squash 合并):再探远程默认分支,尽力给出真实基线
+    const remoteDefault = await remoteDefaultBranch(repoDir, exec);
+    if (remoteDefault && remoteDefault !== base) effectiveBase = remoteDefault;
+  }
+  return effectiveBase;
+}
+
+/**
  * repo-local git 身份(user.name/user.email),prepareRepo 在克隆/更新后调用。
  * 只写工作副本的 .git/config,绝不碰设备 global 配置;ghLogin 传 null 时
  * (直连派发保持「零 gh 调用」契约,不额外实探)回落固定兜底身份。
@@ -278,6 +325,17 @@ export async function prepareRepo(
     if (priorBase) {
       await exec('git', ['-C', repoDir, 'checkout', pack.workBranch]);
       return { repoDir, mode: 'resumed', baseBranch: priorBase, ...(forkRepo ? { forkRepo } : {}) };
+    }
+  }
+
+  // 远端现场收编(仅 PR 跟进任务):本地无现场(updated 探测落空)或全新克隆,
+  // 但 origin/<workBranch> 存在(跨设备派发/工作区被清)→ 收编已推送产出按
+  // resumed 续跑。普通派发不进此分支(行为与旧版逐调用一致);跟进任务远端
+  // 无该分支时 show-ref 落空即返回 null,走原重置路径。
+  if (pack.prFollowUp) {
+    const adoptedBase = await adoptRemoteWork(repoDir, pack.workBranch, base, exec);
+    if (adoptedBase) {
+      return { repoDir, mode: 'resumed', baseBranch: adoptedBase, ...(forkRepo ? { forkRepo } : {}) };
     }
   }
 

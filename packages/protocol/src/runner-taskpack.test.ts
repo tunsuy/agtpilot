@@ -244,3 +244,40 @@ describe('协议增补字段(additive:只增不改)', () => {
     expect(renderHandoffPack(basePack)).not.toContain('经 fork');
   });
 });
+
+describe('renderTaskPrompt · PR 跟进模式(prFollowUp,2026-10-20「响应 review」)', () => {
+  const fuPack = { ...basePack, prFollowUp: { prUrl: 'https://github.com/vllm-project/vllm/pull/999', baseTaskId: 'rtask_0' } };
+
+  it('注入【PR 跟进模式】块:原 PR 链接、追加 commit、禁止改写已推送历史、不新建 PR', () => {
+    const p = renderTaskPrompt(fuPack);
+    expect(p).toContain('【PR 跟进模式】');
+    expect(p).toContain('https://github.com/vllm-project/vllm/pull/999');
+    expect(p).toContain('禁止 rebase/reset 改写已推送历史');
+    expect(p).toContain('不需要也不能新建 PR');
+    expect(p).toContain('pr-final');
+  });
+
+  it('第 4 步换成跟进变体:不再 instruct git reset --soft 重排(那会改写已推送历史,push 必被拒)', () => {
+    const p = renderTaskPrompt(fuPack);
+    expect(p).not.toContain('git reset --soft 到基线后重新提交');
+    expect(p).toContain('不要 git reset --soft 重排已推送的既有提交');
+    // 普通任务照旧
+    expect(renderTaskPrompt(basePack)).toContain('git reset --soft 到基线后重新提交');
+  });
+
+  it('缺省包不含跟进块(旧行为逐字节不变)', () => {
+    expect(renderTaskPrompt(basePack)).not.toContain('PR 跟进模式');
+  });
+
+  it('与续跑模式可叠加(本地现场在:resumed + followUp 两块都在)', () => {
+    const p = renderTaskPrompt(fuPack, { continuation: true });
+    expect(p).toContain('【续跑模式】');
+    expect(p).toContain('【PR 跟进模式】');
+  });
+
+  it('renderHandoffPack 含 PR 跟进行(T0 人工降级路径同源)', () => {
+    const h = renderHandoffPack(fuPack);
+    expect(h).toContain('PR 跟进:既有 PR https://github.com/vllm-project/vllm/pull/999');
+    expect(renderHandoffPack(basePack)).not.toContain('PR 跟进');
+  });
+});

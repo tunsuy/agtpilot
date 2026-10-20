@@ -36,6 +36,8 @@ interface NavbarProps {
   onNewMission: () => void;
   onOpenAuth: (tab: 'login' | 'register') => void;
   onOpenDownloadApp?: () => void;
+  /** 唤起 IM 通道弹窗(与「下载移动版」一致的弹窗形态);缺省则回退整页跳转 /channel */
+  onOpenChannel?: () => void;
 }
 
 export function Navbar({
@@ -52,6 +54,7 @@ export function Navbar({
   onNewMission,
   onOpenAuth,
   onOpenDownloadApp,
+  onOpenChannel,
 }: NavbarProps) {
   const isMissionActive = currentMission && currentMission.status === 'ACTIVE';
   const hasPendingApproval = approvalRequests.length > 0;
@@ -243,16 +246,28 @@ export function Navbar({
 
       {/* Right Controls */}
       <div className="flex items-center gap-2 z-10">
-        {/* IM 通道运维页入口(/channel 独立路由:个人微信扫码授权 + 绑定码 + 通道状态)。
-            2026-10-20 负责人反馈「扫码入口页面上没有」—— 页面 c2287bb 就有了,但导航从未接线 */}
-        <a
-          href="/channel"
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 border border-zinc-200/70 transition shadow-2xs"
-          title="IM 通道(微信个人号扫码授权 / 绑定码 / 通道状态)"
-        >
-          <Unplug className="h-3.5 w-3.5 text-zinc-800" />
-          <span className="hidden sm:inline">IM 通道</span>
-        </a>
+        {/* IM 通道入口:桌面端唤起弹窗(ChannelModal,与「下载移动版」一致);
+            未接线 onOpenChannel 时回退整页跳转 /channel(移动端「我的」仍走该路由)。
+            弹窗内容 = 个人微信扫码授权 + 绑定码 + 通道状态,复用 ChannelPanel。 */}
+        {onOpenChannel ? (
+          <button
+            onClick={onOpenChannel}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 border border-zinc-200/70 transition shadow-2xs"
+            title="IM 通道(微信个人号扫码授权 / 绑定码 / 通道状态)"
+          >
+            <Unplug className="h-3.5 w-3.5 text-zinc-800" />
+            <span className="hidden sm:inline">IM 通道</span>
+          </button>
+        ) : (
+          <a
+            href="/channel"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 border border-zinc-200/70 transition shadow-2xs"
+            title="IM 通道(微信个人号扫码授权 / 绑定码 / 通道状态)"
+          >
+            <Unplug className="h-3.5 w-3.5 text-zinc-800" />
+            <span className="hidden sm:inline">IM 通道</span>
+          </a>
+        )}
 
         {onOpenDownloadApp && (
           <button

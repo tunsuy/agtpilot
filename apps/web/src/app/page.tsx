@@ -16,6 +16,7 @@ import { GoalsView } from '../components/GoalsView';
 import { DevicesView } from '../components/DevicesView';
 import { AuthModal } from '../components/AuthModal';
 import { DownloadAppModal } from '../components/DownloadAppModal';
+import { ChannelModal } from '../components/ChannelModal';
 import { useIsMobile } from '../components/mobile/useIsMobile';
 import { findLiveStep } from '../lib/live-steps';
 import { isZombieSse } from '../lib/sse-liveness';
@@ -53,6 +54,7 @@ export default function Workspace() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
+  const [channelModalOpen, setChannelModalOpen] = useState(false);
 
   // Agent 实时状态流
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -1271,6 +1273,7 @@ export default function Workspace() {
             setAuthModalOpen(true);
           }}
           onOpenDownloadApp={() => setDownloadModalOpen(true)}
+          onOpenChannel={() => setChannelModalOpen(true)}
         />
 
         {/* NextAuth Authentication Modal */}
@@ -1284,6 +1287,12 @@ export default function Workspace() {
         <DownloadAppModal
           isOpen={downloadModalOpen}
           onClose={() => setDownloadModalOpen(false)}
+        />
+
+        {/* IM 通道弹窗(右上角「IM 通道」唤起,与下载移动版一致形态) */}
+        <ChannelModal
+          isOpen={channelModalOpen}
+          onClose={() => setChannelModalOpen(false)}
         />
 
         {/* Main Content Area */}

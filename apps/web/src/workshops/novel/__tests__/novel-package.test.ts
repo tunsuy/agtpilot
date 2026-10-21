@@ -238,6 +238,53 @@ describe('parseNovelPackage · 续写包', () => {
   });
 });
 
+describe('parseNovelPackage · 序章包(写第 1 章前的楔子)', () => {
+  const PROLOGUE_FIXTURE = `【书号】
+nv_m3k9x2_a1b2c3
+
+【楔子 · 雨夜】
+${BODY}
+
+【序章摘要】
+暴雨夜神秘人捡走残破手机,镜头停在裂纹深处的徽记,与第 1 章的雨夜呼应。`;
+
+  it('完整解析:书号 + 段头余文当标题 + 正文 + 序章摘要', () => {
+    const pkg = parseNovelPackage(PROLOGUE_FIXTURE);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.kind).toBe('prologue');
+    if (pkg!.kind !== 'prologue') return;
+    expect(pkg!.bookId).toBe('nv_m3k9x2_a1b2c3');
+    expect(pkg!.title).toBe('楔子 · 雨夜');
+    expect(pkg!.content.replace(/\s/g, '').length).toBeGreaterThanOrEqual(200);
+    expect(pkg!.summary).toContain('徽记');
+  });
+
+  it('段头别名:【序章】/【前言】同样命中;无余文时标题缺省「序章」', () => {
+    for (const head of ['序章', '前言']) {
+      const pkg = parseNovelPackage(PROLOGUE_FIXTURE.replace('【楔子 · 雨夜】', `【${head}】`));
+      expect(pkg!.kind).toBe('prologue');
+      if (pkg!.kind === 'prologue') expect(pkg!.title).toBe(head);
+    }
+    // 空标题走「序章」缺省:正文首行是长句(不满足短行标题判定)时 title 兜底
+    const bare = parseNovelPackage(PROLOGUE_FIXTURE.replace('【楔子 · 雨夜】', '【序章】'));
+    if (bare!.kind === 'prologue') expect(bare!.title).toBe('序章');
+  });
+
+  it('与续写包互斥:【序章摘要】≠【本章摘要】,序章头配本章摘要仍按 continue 语义拒绝', () => {
+    // 序章包写错摘要头(【本章摘要】):无 prologueSummary 锚,序章段也非章段 → 降级 null
+    expect(parseNovelPackage(PROLOGUE_FIXTURE.replace('【序章摘要】', '【本章摘要】'))).toBeNull();
+    // 续写包混入序章头:仍解析为 continue(章段优先,序章头不影响判定)
+    const mixed = parseNovelPackage(`【书号】\nnv_m3k9x2_a1b2c3\n\n【楔子 · 雨夜】\n${BODY}\n\n【序章摘要】\n楔子摘要。\n\n【第3章 夜袭】\n${BODY}\n\n【本章摘要】\n夜探仓库。`);
+    expect(mixed!.kind).toBe('continue');
+  });
+
+  it('坏输入诚实降级 null:书号格式错/缺序章摘要/正文过短', () => {
+    expect(parseNovelPackage(PROLOGUE_FIXTURE.replace('nv_m3k9x2_a1b2c3', 'book-123'))).toBeNull();
+    expect(parseNovelPackage(PROLOGUE_FIXTURE.replace('【序章摘要】', '【摘要】'))).toBeNull();
+    expect(parseNovelPackage(PROLOGUE_FIXTURE.replace(BODY, '短。'))).toBeNull();
+  });
+});
+
 describe('parseNovelPackage · 文风锚包(P2 文风学习)', () => {
   const STYLE_TEXT =
     '第一人称冷叙述,段落平均不超过三行。动作戏白描,不堆形容词,打斗用短句快速切换。对白占比高,人物口吻区分明显:主角惜字如金,女主毒舌爱反问。情绪爽点直给,铺垫不超过半章,每章结尾留钩子。氛围重视觉与听觉,环境描写服务于事件铺垫而非抒情。';

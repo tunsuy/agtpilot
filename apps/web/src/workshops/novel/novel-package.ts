@@ -89,10 +89,22 @@ export interface NovelStylePackage {
   style: string;
 }
 
+/** 序章包(开书三段化的可选旁支:写第 1 章前生成楔子/序章) */
+export interface NovelProloguePackage {
+  kind: 'prologue';
+  /** 书号(nv_…;服务端渲染时注入、Agent 回显;入库时按用户书库校验) */
+  bookId: string;
+  title: string;
+  content: string;
+  /** 序章摘要(续写上下文注入用,必填——缺摘要拒绝入库) */
+  summary: string;
+}
+
 export type NovelPackage =
   | NovelGenesisPackage
   | NovelContinuePackage
   | NovelStylePackage
+  | NovelProloguePackage
   | NovelGenesisBiblePackage
   | NovelGenesisOutlinePackage;
 
@@ -123,7 +135,9 @@ type HeaderKey =
   | 'chapter'
   | 'genre'
   | 'chapterWords'
-  | 'synopsis';
+  | 'synopsis'
+  | 'prologue'
+  | 'prologueSummary';
 
 /** 字段头正则(允许行尾追加说明,如【第3章 · 3000字】) */
 const HEADERS: Array<[HeaderKey, RegExp]> = [
@@ -149,10 +163,18 @@ const HEADERS: Array<[HeaderKey, RegExp]> = [
   ['chapterWords', /^\s*【\s*每章字数\s*[^】]*】\s*$/],
   // 只匹配全称「作品简介」——不给其他包的【…简介…】留误吞口子
   ['synopsis', /^\s*【\s*作品简介\s*[^】]*】\s*$/],
+  // 序章摘要:与续写包【本章摘要】不同名,双向互斥(continue 要求本章摘要)
+  ['prologueSummary', /^\s*【\s*序章摘要\s*[^】]*】\s*$/],
 ];
 
 /** 动态章头:【第N章】(N 支持阿拉伯数字;章头允许追加标题,如【第3章 夜袭】) */
 const CHAPTER_HEADER = /^\s*【\s*第\s*([0-9]+)\s*章\s*([^】]*)】\s*$/;
+
+/** 动态序章头:【序章|楔子|前言】(允许追加标题,如【楔子 · 雨夜】——别名词本身
+ *  是标题的一部分,捕获组含别名整串)。负向断言拒吃「摘要」——【序章摘要】是独立
+ *  段头,尾缀规则会把它整行吞成序章正文头(与【伏笔】/【伏笔动作】的贪婪尾缀坑
+ *  同款,双保险不依赖 segmentize 遍历顺序) */
+const PROLOGUE_HEADER = /^\s*【\s*((?:序章(?!摘要)|楔子|前言)[^】]*)】\s*$/;
 
 function matchHeader(line: string): HeaderKey | null {
   for (const [key, re] of HEADERS) {
@@ -161,10 +183,10 @@ function matchHeader(line: string): HeaderKey | null {
   return null;
 }
 
-/** 行扫描:把全文切成 [段键, 行数组] 序列;章段键为 {chapter, claimedIndex, headerRest} */
+/** 行扫描:把全文切成 [段键, 行数组] 序列;章段键为 {chapter, claimedIndex, headerRest};序章段 key='prologue' 带 headerRest */
 interface Segment {
   key: HeaderKey;
-  /** 仅 chapter 段:自称序号与章头余文(可能是章标题) */
+  /** 仅 chapter/prologue 段:自称序号(章)与段头余文(可能是标题) */
   claimedIndex?: number;
   headerRest?: string;
   lines: string[];
@@ -177,6 +199,12 @@ function segmentize(text: string): Segment[] {
     const ch = line.match(CHAPTER_HEADER);
     if (ch) {
       cur = { key: 'chapter', claimedIndex: Number(ch[1]), headerRest: (ch[2] || '').trim(), lines: [] };
+      segs.push(cur);
+      continue;
+    }
+    const pl = line.match(PROLOGUE_HEADER);
+    if (pl) {
+      cur = { key: 'prologue', headerRest: (pl[1] || '').trim(), lines: [] };
       segs.push(cur);
       continue;
     }
@@ -359,11 +387,11 @@ function parseTimelineLines(block: string): string[] {
     .filter(Boolean);
 }
 
-/** 章段 → {title, content, summary}:标题取章头余文或正文首行,摘要取段内【本章摘要】子段 */
-function buildChapter(seg: Segment, nextSegs: Segment[]): { title: string; content: string; summary?: string } | null {
+/** 章段 → {title, content, summary}:标题取章头余文或正文首行,摘要取段内摘要子段(summaryKey:章=【本章摘要】/序章=【序章摘要】,头不同天然互斥) */
+function buildChapter(seg: Segment, nextSegs: Segment[], summaryKey: HeaderKey = 'summary'): { title: string; content: string; summary?: string } | null {
   // 章段自身的 lines 到下一个任意字段头为止(segmentize 已切好);
-  // 【本章摘要】是独立段,紧跟在章段后面才归属本章
-  const summarySeg = nextSegs[0] && nextSegs[0].key === 'summary' ? nextSegs[0] : null;
+  // 摘要是独立段,紧跟在章段后面才归属本章
+  const summarySeg = nextSegs[0] && nextSegs[0].key === summaryKey ? nextSegs[0] : null;
   const bodyLines = [...seg.lines];
   let title = seg.headerRest ? normalizeTitle(seg.headerRest) : '';
   // 无章头标题:正文首个非空行若是短行(<30字且无句读结尾)按标题处理
@@ -390,10 +418,12 @@ function buildChapter(seg: Segment, nextSegs: Segment[]): { title: string; conte
  * 1) 开书包(genesis,旧单次全量):【设定集】+【粗纲】+ 至少一章正文;
  * 2) 设定包(genesis_bible,三段化第一步):【设定集】+【人物卡】,无章正文;
  * 3) 大纲包(genesis_outline,三段化第二步):【粗纲】+【细纲】,无设定集无章正文;
- * 4) 续写包(continue):【书号】(nv_ 前缀)+【本章摘要】+ 章节正文;
- * 5) 文风锚包(style):【文风锚】。
+ * 4) 序章包(prologue):【书号】(nv_ 前缀)+【序章摘要】+ 序章正文(【序章|楔子|前言】头);
+ * 5) 续写包(continue):【书号】(nv_ 前缀)+【本章摘要】+ 章节正文;
+ * 6) 文风锚包(style):【文风锚】。
  * 互斥性:设定包 vs 开书包靠「有无章正文段」区分;大纲包无【设定集】不与
- * 前两者相撞。都不满足返回 null(调用方降级 markdown 渲染)。
+ * 前两者相撞;序章包与续写包靠【序章摘要】≠【本章摘要】天然互斥。
+ * 都不满足返回 null(调用方降级 markdown 渲染)。
  */
 export function parseNovelPackage(text: string): NovelPackage | null {
   if (!text || typeof text !== 'string') return null;
@@ -466,6 +496,28 @@ export function parseNovelPackage(text: string): NovelPackage | null {
       ledgerSeeds: seeds,
       timelineSeeds: parseTimelineLines(joinLines(byKey('timeline')?.lines)),
     };
+  }
+
+  // ---- 序章包:置于续写包之前(【序章摘要】≠【本章摘要】互斥;序章包不含任何
+  // 章段——混入【第N章】+【本章摘要】的杂包按 continue 语义走,不让序章分支抢走
+  // 日更主路径的章正文) ----
+  if (BOOK_ID_RE.test(bookIdRaw) && byKey('prologueSummary') && !hasChapterSeg) {
+    const prologueSeg = segs.find((s) => s.key === 'prologue');
+    if (prologueSeg) {
+      const rest = segs.slice(segs.indexOf(prologueSeg) + 1);
+      const pl = buildChapter(prologueSeg, rest, 'prologueSummary');
+      const summary = joinLines(byKey('prologueSummary')?.lines);
+      if (pl && summary) {
+        return {
+          kind: 'prologue',
+          bookId: bookIdRaw,
+          title: pl.title || '序章',
+          content: pl.content,
+          summary,
+        };
+      }
+    }
+    // 有书号+【序章摘要】但正文不达标/缺段:落到后面各分支判别,兜底 null
   }
 
   // ---- 续写包 ----

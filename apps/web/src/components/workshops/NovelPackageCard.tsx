@@ -56,6 +56,7 @@ import type {
   NovelGenesisBiblePackage,
   NovelGenesisOutlinePackage,
   NovelContinuePackage,
+  NovelProloguePackage,
   NovelStylePackage,
 } from '../../workshops/novel/novel-package';
 import type { NovelBookSummary, NovelFanqieState } from '../../lib/novel-context';
@@ -1005,6 +1006,28 @@ function ContinueCard({ pkg }: { pkg: NovelContinuePackage }) {
   );
 }
 
+// ---- 序章包卡(写第 1 章前的楔子;存库走 B3 的 appendPrologue,这里先只读展示) ----
+
+function PrologueCard({ pkg }: { pkg: NovelProloguePackage }) {
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-zinc-50/70 border-b border-zinc-100">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-700 min-w-0">
+          <BookOpen className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+          <span className="truncate">序章包 · {pkg.title}</span>
+          <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-700 text-[10px] font-medium border border-violet-100">
+            {countWords(pkg.content)}字
+          </span>
+        </span>
+      </div>
+      <div className="p-4 space-y-2.5">
+        <Section label="正文">{pkg.content}</Section>
+        <Section label="序章摘要">{pkg.summary}</Section>
+      </div>
+    </div>
+  );
+}
+
 // ---- 文风锚包卡(P2 文风学习) ----
 
 type StylePhase = 'idle' | 'saving' | 'saved' | 'copied' | 'error';
@@ -1362,5 +1385,6 @@ export function NovelPackageCard({
   if (pkg.kind === 'genesis_bible') return <GenesisBibleCard pkg={pkg} onChain={onChain} progress={progress} />;
   if (pkg.kind === 'genesis_outline') return <GenesisOutlineCard pkg={pkg} onChain={onChain} progress={progress} />;
   if (pkg.kind === 'style') return <StyleAnchorCard pkg={pkg} />;
+  if (pkg.kind === 'prologue') return <PrologueCard pkg={pkg} />;
   return <ContinueCard pkg={pkg} />;
 }

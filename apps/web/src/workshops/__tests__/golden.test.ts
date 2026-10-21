@@ -85,6 +85,16 @@ const GOLDEN_NOVEL_BOOK: NovelBook = {
   ],
 };
 
+/** 序章模式的书状态夹具:零正文章节(chapterCount>0 时序章派发即抛,快照必须用零章书) */
+const GOLDEN_PROLOGUE_BOOK: NovelBook = {
+  ...GOLDEN_NOVEL_BOOK,
+  progress: { chapterCount: 0, wordCount: 0, nextChapter: 1 },
+  chapters: [],
+  summaries: [],
+  detailed: [{ index: 1, title: '雨夜差评', events: '林凡捡到预知手机', hook: '暴雨夜差评' }],
+  timeline: [],
+};
+
 interface GoldenCase {
   label: string;
   id: WorkshopId;
@@ -245,6 +255,13 @@ const FILLED: GoldenCase[] = [
     id: 'novel',
     params: { mode: 'genesis_outline', bookId: GOLDEN_NOVEL_BOOK.bookId, chapterWords: 2500, style: NOVEL_GOLDEN_STYLE },
     ctx: { novelState: GOLDEN_NOVEL_BOOK },
+  },
+  // 序章(楔子):写第 1 章前的可选旁支,零章书才放行
+  {
+    label: 'filled-prologue',
+    id: 'novel',
+    params: { mode: 'prologue', bookId: GOLDEN_PROLOGUE_BOOK.bookId, chapterWords: 2500, style: NOVEL_GOLDEN_STYLE },
+    ctx: { novelState: GOLDEN_PROLOGUE_BOOK },
   },
 ];
 

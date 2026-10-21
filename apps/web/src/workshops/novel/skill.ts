@@ -1,8 +1,8 @@
 /**
  * 网文小说工坊 · skill 包清单(docs/design/novel-workshop.md)
  *
- * 三模式 run():genesis(开新书)/ continue(续写下一章)/ review(全书体检)。
- * continue/review 的书状态经 ctx.novelState 注入:客户端预览由表单带已拉取的
+ * run() 分发:genesis / genesis_bible / genesis_outline / continue / prologue / review / style。
+ * 有书状态依赖的模式(continue/prologue/review/genesis_outline)经 ctx.novelState 注入:客户端预览由表单带已拉取的
  * 书快照;服务端权威渲染由 server-render 的 novel loader 现读 novel-store
  * (loader 放 server-render 侧而非本文件——本文件进客户端 bundle,不得引 fs)。
  *
@@ -21,6 +21,7 @@ import {
   buildNovelGenesisBiblePrompt,
   buildNovelGenesisOutlinePrompt,
   buildNovelContinuePrompt,
+  buildNovelProloguePrompt,
   buildNovelReviewPrompt,
   buildNovelStylePrompt,
   NOVEL_GENRES,
@@ -119,6 +120,26 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         profile: ctx?.scenarioProfile ?? null,
       });
       return { prompt, title: `《${book.title}》第${nextIndex}章` };
+    }
+    // 序章(楔子):写第 1 章前的可选旁支。chapterCount>0 派发即抛——已有正文
+    // 的书不允许中途补序章(不浪费一轮生成;入库侧 savePrologue 同闸双保险)
+    if (mode === 'prologue') {
+      const book: NovelBook | undefined = ctx?.novelState;
+      if (!book) {
+        throw new Error('缺少小说状态:写序章需要已入库的书(缺 bookId 或书不存在)');
+      }
+      if (book.progress.chapterCount > 0) {
+        throw new Error(`《${book.title}》已有正文章节,不能再插入序章(序章只能在写第 1 章之前落库)`);
+      }
+      return {
+        prompt: buildNovelProloguePrompt({
+          book,
+          style: str(params.style),
+          chapterWords: clampChapterWords(params.chapterWords),
+          profile: ctx?.scenarioProfile ?? null,
+        }),
+        title: `《${book.title}》序章`,
+      };
     }
     // 开书第二步:大纲包(粗纲/细纲/伏笔/时间线)。必须拿到第一步入库的书
     // 状态——设定集/人物卡是注入源,没有就拒绝渲染(服务端 loader 保证,

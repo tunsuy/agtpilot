@@ -12,6 +12,7 @@ import promptGenesisOutline from './prompt.genesis-outline.md';
 import promptGenesisBibleLegacy from './prompt.genesis-bible.legacy.md';
 import promptGenesisOutlineLegacy from './prompt.genesis-outline.legacy.md';
 import promptContinue from './prompt.continue.md';
+import promptPrologue from './prompt.prologue.md';
 import promptReview from './prompt.review.md';
 import promptStyle from './prompt.style.md';
 import { renderTemplate } from '../engine';
@@ -157,6 +158,28 @@ export interface NovelContinueInput {
   style?: string;
   chapterWords?: unknown;
   profile?: ScenarioProfile | null;
+}
+
+export interface NovelPrologueInput {
+  book: NovelBook;
+  style?: string;
+  chapterWords?: unknown;
+  profile?: ScenarioProfile | null;
+}
+
+/** 序章(楔子):写第 1 章前的可选旁支,复用大纲包的设定地基装配 */
+export function buildNovelProloguePrompt(input: NovelPrologueInput): string {
+  const { book } = input;
+  const profileSection = input.profile ? buildProfileSection(input.profile) : null;
+  return renderTemplate(promptPrologue, {
+    bookTitle: book.title,
+    bookId: book.bookId,
+    bibleBlock: assembleBibleBlock(book),
+    outline: book.outline || '(空)',
+    style: String(input.style || '').trim() || book.style || NOVEL_STYLES[0],
+    chapterWords: clampChapterWords(input.chapterWords),
+    profileSection: profileSection || '',
+  });
 }
 
 /** 续写下一章:恒定上下文装配 + 低水位细纲补充指令 */

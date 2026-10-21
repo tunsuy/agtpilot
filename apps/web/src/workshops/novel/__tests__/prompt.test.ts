@@ -10,6 +10,7 @@ import {
   buildNovelGenesisBiblePrompt,
   buildNovelGenesisOutlinePrompt,
   buildNovelContinuePrompt,
+  buildNovelProloguePrompt,
   buildNovelReviewPrompt,
   buildNovelStylePrompt,
   STYLE_SAMPLES_MAX,
@@ -298,6 +299,51 @@ describe('开书三段化 · 第二步大纲包 prompt(genesis_outline)', () => 
   it('缺书状态诚实抛错:第二步必须吃第一步入库的书', () => {
     expect(() => WORKSHOP_SKILL.run({ mode: 'genesis_outline', bookId: 'nv_x_000000' })).toThrow(
       /缺少小说状态/
+    );
+  });
+});
+
+describe('序章 prompt(prologue)', () => {
+  // 序章只在写第 1 章前允许:chapterCount 必须为 0(chapterCount>0 派发即抛)
+  const zeroBook = () =>
+    makeBook({
+      progress: { chapterCount: 0, wordCount: 0, nextChapter: 1 },
+      chapters: [],
+      summaries: [],
+      prologue: undefined,
+    });
+
+  it('书号逐字内嵌 + 设定地基(卖点/设定集/人物卡)与粗纲注入;契约三锚 + 摘要必填威慑', () => {
+    const p = buildNovelProloguePrompt({ book: zeroBook(), style: '快节奏爽文', chapterWords: 2500 });
+    expect(p).toContain('《铁拳少年》');
+    expect(p).toContain('nv_test01_a1b2c3');
+    expect(p).toContain('## 卖点');
+    expect(p).toContain('青铜→白银→黄金');
+    expect(p).toContain('**林凡**');
+    expect(p).toContain('第一卷·崛起(1-30章)。');
+    expect(p).toContain('文风锚:快节奏爽文');
+    expect(p).toContain('2500');
+    for (const anchor of ['【书号】', '【序章】', '【序章摘要】']) {
+      expect(p).toContain(anchor);
+    }
+    expect(p).not.toContain('【本章摘要】'); // 与续写包契约互斥,不得混头
+    expect(p).toContain('缺它会被拒绝入库');
+    expect(p).toContain('严禁调用任何发布/投稿/自动上传类工具');
+    expect(p).toContain('不复述粗纲第 1 章的事件'); // 与第 1 章分工的职能约束
+  });
+
+  it('skill.run() 分发:零章书正常渲染;缺状态/已有正文诚实抛错', () => {
+    const run = WORKSHOP_SKILL.run(
+      { mode: 'prologue', bookId: 'nv_test01_a1b2c3', style: '快节奏爽文' },
+      { novelState: zeroBook() }
+    );
+    expect(run.title).toBe('《铁拳少年》序章');
+    expect(run.prompt).toContain('nv_test01_a1b2c3');
+    expect(run.delivery).toBeUndefined(); // 单轮文本包,无逐字段交付契约
+
+    expect(() => WORKSHOP_SKILL.run({ mode: 'prologue', bookId: 'nv_x_000000' })).toThrow(/缺少小说状态/);
+    expect(() => WORKSHOP_SKILL.run({ mode: 'prologue', bookId: 'nv_test01_a1b2c3' }, { novelState: makeBook() })).toThrow(
+      /已有正文章节,不能再插入序章/
     );
   });
 });

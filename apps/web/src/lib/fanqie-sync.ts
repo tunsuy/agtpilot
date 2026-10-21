@@ -450,7 +450,13 @@ async function runChapter(item: SyncItem, book: NovelBook): Promise<void> {
   }
 
   const content = getChapterContent(userId, bookId, idx);
-  const title = book.chapters[idx - 1]?.title || `第${idx}章`;
+  // 番茄草稿标题按技能契约拼「第N章 章名」完整格式(生产实测:库里存的是裸章名
+  // 「雨夜」或兜底纯序号「第N章」,原样透传导致草稿标题缺序号或缺章名)。
+  // 章名可能已带「第N章」前缀(模型章头余文/正文首行原样入库),且自称序号可能
+  // 与书库编号漂移 —— 一律剥掉旧前缀,以书库权威序号重拼;无章名回落纯序号。
+  const rawTitle = String(book.chapters[idx - 1]?.title || '').trim();
+  const chapterName = rawTitle.replace(/^第\s*[0-9]+\s*章\s*/, '').trim();
+  const title = chapterName ? `第${idx}章 ${chapterName}` : `第${idx}章`;
   if (!content || !content.trim()) {
     updateNovelFanqie(userId, bookId, {
       chapters: { [key]: { status: 'failed', error: '本地章节正文缺失,无法同步', at: Date.now() } },

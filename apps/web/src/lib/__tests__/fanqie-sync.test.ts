@@ -321,6 +321,36 @@ describe('chapter 项与登录失效', () => {
   });
 });
 
+describe('草稿标题拼装(第N章 章名)', () => {
+  it('裸章名补序号;已带前缀按书库序号重拼(漂移纠正);无章名回落纯序号', async () => {
+    bothSkills();
+    mocks.executeImpl = async () => ({ success: true });
+    const book = createNovelBook(USER, {
+      title: '标题拼装',
+      genre: '都市',
+      premise: '草稿标题格式测试',
+      chapters: [
+        { title: '雨夜', content: LONG_BODY, summary: 's' }, // 裸章名(解析器主流产物)
+        { title: '第2章 雨夜', content: LONG_BODY, summary: 's' }, // 已带正确前缀 → 原样
+        { title: '第99章 漂移', content: LONG_BODY, summary: 's' }, // 自称序号漂移 → 以书库为准
+        { title: '', content: LONG_BODY, summary: 's' }, // 无章名 → 入库兜底「第4章」
+      ],
+    });
+    updateNovelFanqie(USER, book.bookId, { fanqieBookId: '111', createStatus: 'created' });
+
+    for (let i = 1; i <= 4; i++) maybeEnqueueFanqieChapter(USER, book.bookId, i);
+    await __fanqieSyncTest.waitIdle();
+
+    const draft = mocks.executeCalls.filter((c) => c.skill === DRAFT_SKILL);
+    expect(draft.map((d) => d.args.title)).toEqual([
+      '第1章 雨夜',
+      '第2章 雨夜',
+      '第3章 漂移',
+      '第4章',
+    ]);
+  });
+});
+
 describe('串行与软避让', () => {
   it('FIFO:多书多章按入队顺序全局串行执行', async () => {
     bothSkills();

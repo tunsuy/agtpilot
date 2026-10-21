@@ -323,6 +323,7 @@ export function assembleChapterContext(book: NovelBook, opts: { nextIndex?: numb
     `## 设定集\n${capNovelBible(book.bible) || '(空)'}`,
     `## 出场人物卡\n${castText}`,
     `## 本章细纲\n${detailText}`,
+    book.prologue?.summary ? `## 序章摘要\n${book.prologue.summary}` : '',
     recentSummaries ? `## 近章摘要\n${recentSummaries}` : '',
     openLedger ? `## 伏笔台账(未回收,写到相关情节时必须呼应或回收)\n${openLedger}` : '',
     timelineTail ? `## 时间线(近${RECENT_TIMELINE}条,严禁时间矛盾)\n${timelineTail}` : '',

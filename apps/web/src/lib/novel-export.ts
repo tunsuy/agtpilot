@@ -21,9 +21,16 @@ function chapterHeading(book: NovelBook, index: number): string {
   return /^第\s*[0-9一二三四五六七八九十百千]+\s*章/.test(title) ? title : `第${index}章 ${title}`;
 }
 
-/** 按 meta 顺序取全部有正文的章(缺文件跳过,不产半章) */
+/** 按顺序取全部有正文的篇目:序章(若有)在最前占 0 号位,之后按 meta 顺序逐章
+ *  (缺文件跳过,不产半章)。EPUB 的 ch ID 按位置编号,序章插入后自动顺移零改动 */
 function collectChapters(book: NovelBook, readChapter: ChapterReader): Array<{ index: number; heading: string; content: string }> {
   const out: Array<{ index: number; heading: string; content: string }> = [];
+  if (book.prologue) {
+    const content = readChapter(0);
+    if (content != null && content.trim()) {
+      out.push({ index: 0, heading: String(book.prologue.title || '').trim() || '序章', content });
+    }
+  }
   for (const meta of book.chapters) {
     const content = readChapter(meta.index);
     if (content == null || !content.trim()) continue;

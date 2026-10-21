@@ -7,6 +7,7 @@ import {
   getPrologueContent,
   createNovelBook,
   appendChapter,
+  savePrologue,
   mergeNovelOutline,
   deleteNovelBook,
   markNovelReviewed,
@@ -35,8 +36,9 @@ import { buildNovelTxt, buildNovelEpub } from '@/lib/novel-export';
  *      续写/审查表单的服务端现读同源数据);&chapter=N → 附该章正文;
  *      &export=txt|epub → 全书导出直下(P1,附件流,不落 artifact-files)。
  * POST action=create(设定包建书,书名幂等)/ mergeOutline(大纲包并书)/ append(续写包反思写回) /
- *      delete / markReviewed(体检提醒落点)/ updateStyle(文风锚)/ updateSynopsis(作品简介)/
- *      setFanqieSync(书级同步开关)/ retryFanqieSync(显式重试)/ bindFanqieBook(手动绑定番茄书号)。
+ *      appendPrologue(序章入库,硬顺序闸:仅零章书)/ delete / markReviewed(体检提醒落点)/
+ *      updateStyle(文风锚)/ updateSynopsis(作品简介)/ setFanqieSync(书级同步开关)/
+ *      retryFanqieSync(显式重试)/ bindFanqieBook(手动绑定番茄书号)。
  *
  * 边界:书号入库前按当前登录用户校验(getNovelBook 按 userId 隔离);
  * 章序号永远由 novel-store 按 progress.nextChapter 分配,请求体传什么不算什么;
@@ -187,6 +189,18 @@ function toCreateInput(body: any): CreateNovelInput | null {
   };
 }
 
+/** 序章包入库载荷:正文+摘要必填,标题可选(缺省归「序章」由 novel-store 落) */
+function toPrologueInput(body: any): { title: string; content: string; summary: string } | null {
+  const content = typeof body?.content === 'string' ? body.content : '';
+  const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';
+  if (!content.trim() || !summary) return null;
+  return {
+    title: typeof body.title === 'string' ? body.title.trim() : '',
+    content,
+    summary,
+  };
+}
+
 function toAppendInput(body: any): AppendChapterInput | null {
   const content = typeof body?.content === 'string' ? body.content : '';
   const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';
@@ -316,6 +330,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, bookId, progress: book.progress, reviewDue: isReviewDue(book) });
     }
 
+    if (action === 'appendPrologue') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      const book = bookId ? getNovelBook(userId, bookId) : null;
+      if (!book) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      // 硬顺序闸与 store 双保险:派发端(skill)已拦一道,这里 400 给人看的错
+      if (book.progress.chapterCount !== 0) {
+        return NextResponse.json(
+          { success: false, error: '已有正文章节,不能再插入序章(序章只在写第 1 章前落库)' },
+          { status: 400 }
+        );
+      }
+      if (book.prologue) {
+        return NextResponse.json({ success: false, error: '序章已存在,拒绝覆盖' }, { status: 400 });
+      }
+      const input = toPrologueInput(body);
+      if (!input) {
+        return NextResponse.json(
+          { success: false, error: '序章包不完整:需要正文与序章摘要(缺摘要拒绝入库,不落半截状态)' },
+          { status: 400 }
+        );
+      }
+      const saved = savePrologue(userId, bookId, input);
+      // 序章同步意图(maybeEnqueue 内部守卫 book.prologue 才入队,idx 0)
+      enqueueFanqie(() => maybeEnqueueFanqieChapter(userId, bookId, 0));
+      return NextResponse.json({ success: true, bookId, progress: saved.progress });
+    }
+
     if (action === 'setFanqieSync') {
       const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
       if (!bookId || !getNovelBook(userId, bookId)) {
@@ -331,7 +374,12 @@ export async function POST(req: NextRequest) {
       if (!bookId || !getNovelBook(userId, bookId)) {
         return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
       }
-      const chapterIndex = Number.isFinite(Number(body?.chapterIndex)) ? Math.floor(Number(body.chapterIndex)) : undefined;
+      // typeof 硬化:Number(null)/Number('') → 0 会误指序章(显式 0 走 Number.isFinite
+      // 本就安全,但 null/空串被强转成 0 就成了「重试序章」的假指令)
+      const chapterIndex =
+        typeof body?.chapterIndex === 'number' && Number.isFinite(body.chapterIndex)
+          ? Math.floor(body.chapterIndex)
+          : undefined;
       const retried = retryFanqieSync(userId, bookId, chapterIndex);
       return NextResponse.json({ success: true, bookId, retried });
     }

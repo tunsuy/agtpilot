@@ -87,3 +87,19 @@ export function deriveContinueSaved(
   const covered = claimed > 0 ? hit.progress.chapterCount >= claimed : hit.progress.chapterCount > 0;
   return covered ? toDerived(hit) : null;
 }
+
+/**
+ * 序章包:书号命中书库且该书已有序章(hasPrologue)→ 已入库。
+ * 回显书号未命中(书被删/串书)时不派生 —— 归属未定绝不猜,仍走下拉指认流程。
+ * 序章是一次性槽位(已存在即拒绝覆盖),不存在「后章抬高计数」的模糊地带。
+ */
+export function derivePrologueSaved(
+  pkg: { bookId: string },
+  books: NovelBookSummary[] | null
+): DerivedBookState | null {
+  if (!books) return null;
+  const bookId = String(pkg.bookId || '').trim();
+  if (!bookId) return null;
+  const hit = books.find((b) => b.bookId === bookId);
+  return hit && hit.hasPrologue ? toDerived(hit) : null;
+}

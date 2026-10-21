@@ -10,6 +10,7 @@ import {
   deriveBibleSaved,
   deriveContinueSaved,
   deriveOutlineSaved,
+  derivePrologueSaved,
 } from '../novel-card-state';
 import type { NovelBookSummary } from '../novel-context';
 
@@ -111,5 +112,28 @@ describe('deriveContinueSaved(书号命中 + 章数覆盖自称章号)', () => {
     // 数据面无风险:服务端 append 恒按 progress.nextChapter 落章,不可能写重内容。
     const books = [mkBook({ progress: { chapterCount: 10, wordCount: 30000, nextChapter: 11 } })];
     expect(deriveContinueSaved({ bookId: 'nv_1', claimedIndex: 2 }, books)?.chapterCount).toBe(10);
+  });
+});
+
+describe('derivePrologueSaved(书号命中 + 已落序章)', () => {
+  it('books 未加载 / 书号空 → 不派生', () => {
+    expect(derivePrologueSaved({ bookId: 'nv_1' }, null)).toBeNull();
+    expect(derivePrologueSaved({ bookId: '' }, [mkBook()])).toBeNull();
+  });
+
+  it('书号未命中 → 不派生(归属未定绝不猜)', () => {
+    expect(derivePrologueSaved({ bookId: 'nv_x' }, [mkBook()])).toBeNull();
+  });
+
+  it('命中但 hasPrologue 缺省/false → 不派生;hasPrologue=true → 已入库', () => {
+    expect(derivePrologueSaved({ bookId: 'nv_1' }, [mkBook()])).toBeNull();
+    const d = derivePrologueSaved({ bookId: 'nv_1' }, [mkBook({ hasPrologue: true })]);
+    expect(d?.bookId).toBe('nv_1');
+    // 序章不动 nextChapter:零章书 + 序章 → nextChapter 仍 1(链「写第 1 章」用)
+    const zero = derivePrologueSaved(
+      { bookId: 'nv_1' },
+      [mkBook({ hasPrologue: true, progress: { chapterCount: 0, wordCount: 0, nextChapter: 1 } })]
+    );
+    expect(zero?.nextChapter).toBe(1);
   });
 });

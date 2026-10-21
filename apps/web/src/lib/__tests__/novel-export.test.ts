@@ -75,6 +75,24 @@ describe('buildNovelTxt', () => {
     expect(txt).not.toContain('第2章'); // 空正文跳过
     expect(txt).toContain('第3章 t3');
   });
+
+  it('有序章:序章标题在最前(第 1 章之前),标题用 meta.title 缺省「序章」', () => {
+    const PL = '暴雨夜,有人在巷口捡走一部碎屏手机。\n\n裂纹深处像有字。';
+    // 有标题
+    const titled = buildNovelTxt(
+      makeBook({ prologue: { title: '楔子 · 雨夜', wordCount: 30, createdAt: 1, summary: 's' } }),
+      reader({ 0: PL, 1: CH1, 2: CH2 })
+    );
+    expect(titled.indexOf('楔子 · 雨夜')).toBeGreaterThan(0);
+    expect(titled.indexOf('楔子 · 雨夜')).toBeLessThan(titled.indexOf('第1章'));
+    // 无标题缺省「序章」;meta 有但正文缺失(reader 0 → null)时序章整体跳过
+    const untitled = buildNovelTxt(
+      makeBook({ prologue: { title: '', wordCount: 30, createdAt: 1, summary: 's' } }),
+      reader({ 1: CH1, 2: CH2 })
+    );
+    expect(untitled).not.toContain('序章');
+    expect(untitled).toContain('第1章 雨夜差评');
+  });
 });
 
 // ---- ZIP 二进制布局 ----
@@ -248,5 +266,26 @@ describe('buildNovelEpub', () => {
     );
     const opf = parseZip(epub).find((e) => e.name === 'OEBPS/content.opf')!.data.toString('utf8');
     expect(opf).toContain('<dc:title>A&amp;B &lt; C</dc:title>');
+  });
+
+  it('有序章:序章占 ch001(manifest/spine 顺移),目录序章在章前', () => {
+    const PL = '暴雨夜,有人在巷口捡走一部碎屏手机。';
+    const epub = buildNovelEpub(
+      makeBook({ prologue: { title: '楔子 · 雨夜', wordCount: 20, createdAt: 1, summary: 's' } }),
+      reader({ 0: PL, 1: CH1, 2: CH2 }),
+      NOW
+    );
+    const entries = parseZip(epub);
+    // 位置化 ch ID:序章插入后自动顺移,章数 = 序章 + 2 章
+    expect(entries.filter((e) => /^OEBPS\/ch\d+\.xhtml$/.test(e.name)).map((e) => e.name)).toEqual([
+      'OEBPS/ch001.xhtml',
+      'OEBPS/ch002.xhtml',
+      'OEBPS/ch003.xhtml',
+    ]);
+    const ch001 = entries.find((e) => e.name === 'OEBPS/ch001.xhtml')!.data.toString('utf8');
+    expect(ch001).toContain('<h2>楔子 · 雨夜</h2>');
+    const nav = entries.find((e) => e.name === 'OEBPS/nav.xhtml')!.data.toString('utf8');
+    expect(nav.indexOf('楔子 · 雨夜')).toBeGreaterThan(0);
+    expect(nav.indexOf('楔子 · 雨夜')).toBeLessThan(nav.indexOf('第1章'));
   });
 });

@@ -10,6 +10,9 @@
  *   mergeOutline,书号经用户书库校验)+ 「继续:写开篇第 1 章」走续写管线
  *   + 入库后「订阅日更」快捷块(开书途中一键开通,免回表单切续写模式);
  * - 续写包:章节 + 反思五连预览 + 「存入书库」(action=append,写回状态库);
+ * - 序章包(零章书旁支):楔子正文+摘要 + 「存入书库」(action=appendPrologue,
+ *   第 0 篇落库不占章节索引)+ 入库后「继续:写第 1 章」;大纲卡在零章书且
+ *   未落序章时给「先写序章」链式入口(prologue 模式,一次性动作);
  * - 文风锚包(P2 文风学习):文风锚全文 + 绑书时「写回本书」(action=updateStyle),
  *   未绑书时可复制留作开书文风锚;
  * - 旧开书包(单次全量):历史任务重渲染兼容,照旧走 create。
@@ -65,6 +68,7 @@ import {
   deriveBibleSaved,
   deriveOutlineSaved,
   deriveContinueSaved,
+  derivePrologueSaved,
 } from '../../lib/novel-card-state';
 import type { WorkshopRunPayload } from './run';
 import type { DeliveryProgressView } from '../../lib/workshop-delivery-view';
@@ -601,6 +605,18 @@ function GenesisOutlineCard({
     );
   };
 
+  /** 「先写序章」:零章书(chainNextChapter===1 ⟺ chapterCount===0)且未落过序章时给入口,
+   *  派发 prologue 模式;已有序章/已有正文章节由派发端与 API 硬闸双保险拒绝 */
+  const chainPrologue = () => {
+    if (!effectiveBookId || chainNextChapter !== 1 || !onChain) return;
+    const bookTitle = effectiveBook?.title || targetBook?.title || '本书';
+    onChain(
+      { id: 'novel', params: { mode: 'prologue', bookId: effectiveBookId } },
+      { prompt: `为《${bookTitle}》写序章(楔子):放在第 1 章之前,抛钩子不抢正文的戏`, title: `《${bookTitle}》序章` }
+    );
+  };
+  const prologueAvailable = chainNextChapter === 1 && !effectiveBook?.hasPrologue;
+
   // 有效书号存在即查本书已有日更(同书全局至多一条活跃,与表单续写模式同一判定);
   // 派生书号同样驱动 —— 重开历史大纲卡也能看到订阅态并直接改订/退订(修「日更入口消失」)
   useEffect(() => {
@@ -763,11 +779,17 @@ function GenesisOutlineCard({
             {save.message}
           </p>
         )}
-        {effectiveBookId && chainNextChapter && onChain && (
-          <div className="flex items-center justify-end">
-            <ChainButton onClick={chainOpening} icon={PenLine} label={`继续:写第 ${chainNextChapter} 章`} />
+        {(effectiveBookId && chainNextChapter && onChain) || prologueAvailable ? (
+          <div className="flex items-center flex-wrap justify-end gap-2">
+            {/* 序章入口:可选旁支,只在大纲刚落地(零章书)且未落过序章时给 */}
+            {prologueAvailable && onChain && (
+              <ChainButton onClick={chainPrologue} icon={Sparkles} label="先写序章" />
+            )}
+            {effectiveBookId && chainNextChapter && onChain && (
+              <ChainButton onClick={chainOpening} icon={PenLine} label={`继续:写第 ${chainNextChapter} 章`} />
+            )}
           </div>
-        )}
+        ) : null}
 
         {/* 日更快捷订阅:开书途中(书号+细纲就绪的最早时刻)一键开通,免回表单切续写模式;
             门槛 = 有效书号(本次入库或派生命中)→ 重开历史大纲卡也显示订阅态 */}
@@ -1006,9 +1028,81 @@ function ContinueCard({ pkg }: { pkg: NovelContinuePackage }) {
   );
 }
 
-// ---- 序章包卡(写第 1 章前的楔子;存库走 B3 的 appendPrologue,这里先只读展示) ----
+// ---- 序章包卡(写第 1 章前的楔子,一次性入库) ----
 
-function PrologueCard({ pkg }: { pkg: NovelProloguePackage }) {
+function PrologueCard({ pkg, onChain }: { pkg: NovelProloguePackage; onChain?: NovelChainHandler }) {
+  const [save, setSave] = useState<SaveState>({ phase: 'idle' });
+  // 书号校验同续写包:回显书号按用户书库核对,未命中(书被删/串书)给下拉指认
+  const [books, setBooks] = useState<NovelBookSummary[] | null>(null);
+  const [chosenBookId, setChosenBookId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const list = await fetchBookSummaries();
+      if (alive) setBooks(list);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const claimedValid = useMemo(
+    () => (books ? books.some((b) => b.bookId === pkg.bookId) : null),
+    [books, pkg.bookId]
+  );
+  const targetBookId = claimedValid ? pkg.bookId : chosenBookId;
+  const targetBook = books?.find((b) => b.bookId === targetBookId) || null;
+  // 零章书才能落序章(服务端硬闸):目标书已有正文时禁存并明示,不让人点完才报错
+  const targetWritable = !targetBook || targetBook.progress.chapterCount === 0;
+
+  // 「已在书库」派生:书号命中且已有序章 → 历史卡片重挂载直接回填 saved 态
+  useEffect(() => {
+    if (!books) return;
+    const derived = derivePrologueSaved(pkg, books);
+    if (!derived) return;
+    setSave((cur) => (cur.phase === 'idle' ? { phase: 'saved', derived: true, ...derived } : cur));
+  }, [books]);
+
+  const handleSave = async () => {
+    if (!targetBookId) return;
+    setSave({ phase: 'saving' });
+    try {
+      const res = await fetch('/api/novels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // kind 是判别字段不入库;载荷书号以用户校验/指认结果为准
+        body: JSON.stringify({
+          action: 'appendPrologue',
+          bookId: targetBookId,
+          title: pkg.title,
+          content: pkg.content,
+          summary: pkg.summary,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.progress) {
+        setSave({ phase: 'saved', bookId: targetBookId, ...data.progress });
+      } else {
+        setSave({ phase: 'error', message: data.error || '入库失败' });
+      }
+    } catch (err: any) {
+      setSave({ phase: 'error', message: err?.message || '网络异常' });
+    }
+  };
+
+  // 序章不动 nextChapter(恒 1);入库/派生命中即给「写第 1 章」链式入口
+  const effectiveBookId = save.phase === 'saved' ? save.bookId : claimedValid ? pkg.bookId : null;
+  const effectiveBook = books?.find((b) => b.bookId === effectiveBookId) || null;
+  const chainOpening = () => {
+    if (!effectiveBookId || !onChain) return;
+    const bookTitle = effectiveBook?.title || targetBook?.title || '本书';
+    onChain(
+      { id: 'novel', params: { mode: 'continue', bookId: effectiveBookId } },
+      { prompt: `继续《${bookTitle}》:序章已就位,写第 1 章进入核心冲突`, title: `《${bookTitle}》第1章` }
+    );
+  };
+
   return (
     <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-zinc-50/70 border-b border-zinc-100">
@@ -1020,9 +1114,74 @@ function PrologueCard({ pkg }: { pkg: NovelProloguePackage }) {
           </span>
         </span>
       </div>
+
       <div className="p-4 space-y-2.5">
         <Section label="正文">{pkg.content}</Section>
         <Section label="序章摘要">{pkg.summary}</Section>
+
+        {/* 书号校验:回显书号未命中书库时,给下拉指认(书被删/串书绝不猜归属) */}
+        {books !== null && claimedValid === false && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 space-y-1.5">
+            <p className="text-[11px] text-amber-700 flex items-start gap-1 leading-relaxed">
+              <TriangleAlert className="h-3.5 w-3.5 mt-px shrink-0" />
+              回显书号 <span className="font-mono">{pkg.bookId}</span> 不在你的书库中(书可能被删除,或 Agent 串了书号)。请指认这篇序章入哪本书:
+            </p>
+            {books.length > 0 ? (
+              <select
+                value={chosenBookId || ''}
+                onChange={(e) => setChosenBookId(e.target.value || null)}
+                className="w-full px-2.5 py-1.5 rounded-lg border border-amber-300 bg-white text-xs text-zinc-900 focus:outline-none focus:border-amber-500"
+              >
+                <option value="">— 请选择书目 —</option>
+                {books.map((b) => (
+                  <option key={b.bookId} value={b.bookId}>
+                    《{b.title}》 已写{b.progress.chapterCount}章
+                    {b.hasPrologue ? ' · 已有序章' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-[11px] text-amber-700">书库为空:请先用「开新书」建书,这篇序章无法入库。</p>
+            )}
+          </div>
+        )}
+
+        {/* 目标书已有正文:序章窗口已关,明示原因(与 400 同口径) */}
+        {!targetWritable && (
+          <p className="text-[11px] text-amber-600 flex items-start gap-1 leading-relaxed">
+            <TriangleAlert className="h-3.5 w-3.5 mt-px shrink-0" />
+            《{targetBook?.title}》已有正文章节,序章只能在写第 1 章之前落库(存量书不支持补序章)。
+          </p>
+        )}
+
+        <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-zinc-100">
+          <span className="text-[10px] text-zinc-400 leading-relaxed min-w-0">
+            序章作为第 0 篇落库(不占章节索引,进度不动),入库后自动同步番茄草稿箱;一次性动作,已有序章拒绝覆盖。
+          </span>
+          <SaveButton
+            onSave={handleSave}
+            state={save}
+            disabled={!targetBookId || !targetWritable}
+            label="存入书库"
+            savedLabel={
+              save.phase === 'saved'
+                ? `${save.derived ? '已在书库 · 序章就位' : '已入库 · 序章就位'} · 书号 ${save.bookId}`
+                : ''
+            }
+          />
+        </div>
+        {save.phase === 'error' && (
+          <p className="text-[11px] text-red-600 flex items-start gap-1">
+            <TriangleAlert className="h-3.5 w-3.5 mt-px shrink-0" />
+            {save.message}
+          </p>
+        )}
+        {save.phase === 'saved' && onChain && (
+          <div className="flex items-center justify-end">
+            <ChainButton onClick={chainOpening} icon={PenLine} label="继续:写第 1 章" />
+          </div>
+        )}
+        {save.phase === 'saved' && <FanqieSyncRow bookId={save.bookId} />}
       </div>
     </div>
   );
@@ -1355,7 +1514,7 @@ function FanqieSyncRow({ bookId }: { bookId: string }) {
               onClick={() => void post({ action: 'retryFanqieSync', bookId, chapterIndex: n })}
               className="px-2 py-0.5 rounded-md border border-red-200 bg-white text-red-600 text-[10px] hover:bg-red-50 transition disabled:opacity-50"
             >
-              第{n}章 · 重试
+              {n === 0 ? '序章 · 重试' : `第${n}章 · 重试`}
             </button>
           ))}
         </div>
@@ -1385,6 +1544,6 @@ export function NovelPackageCard({
   if (pkg.kind === 'genesis_bible') return <GenesisBibleCard pkg={pkg} onChain={onChain} progress={progress} />;
   if (pkg.kind === 'genesis_outline') return <GenesisOutlineCard pkg={pkg} onChain={onChain} progress={progress} />;
   if (pkg.kind === 'style') return <StyleAnchorCard pkg={pkg} />;
-  if (pkg.kind === 'prologue') return <PrologueCard pkg={pkg} />;
+  if (pkg.kind === 'prologue') return <PrologueCard pkg={pkg} onChain={onChain} />;
   return <ContinueCard pkg={pkg} />;
 }

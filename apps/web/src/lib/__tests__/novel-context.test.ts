@@ -110,3 +110,25 @@ describe('三个 prompt 嵌入点全部封顶(续写/体检/开书大纲)', () =
     expect(assembleChapterContext(makeBook({ bible: '' }), { nextIndex: 3 })).toContain('## 设定集\n(空)');
   });
 });
+
+describe('assembleChapterContext · 序章摘要注入(近章摘要之前,预算恒定)', () => {
+  it('有序章:「## 序章摘要」出现在近章摘要之前,写第 1 章时同样注入', () => {
+    const book = makeBook({
+      prologue: { title: '楔子 · 雨夜', wordCount: 2000, createdAt: 1, summary: '暴雨夜神秘人捡走碎屏手机,裂纹深处有徽记。' },
+    });
+    const ctx = assembleChapterContext(book, { nextIndex: 3 });
+    expect(ctx).toContain('## 序章摘要\n暴雨夜神秘人捡走碎屏手机,裂纹深处有徽记。');
+    expect(ctx.indexOf('## 序章摘要')).toBeGreaterThan(0);
+    expect(ctx.indexOf('## 序章摘要')).toBeLessThan(ctx.indexOf('## 近章摘要'));
+    // 序章摘要排在章细纲之后、近章摘要之前(与设定集同区,不进反思写回)
+    expect(ctx.indexOf('## 序章摘要')).toBeGreaterThan(ctx.indexOf('## 本章细纲'));
+  });
+
+  it('无序章/序章无摘要:不出现空段(不产「## 序章摘要\n」空壳)', () => {
+    expect(assembleChapterContext(makeBook(), { nextIndex: 3 })).not.toContain('## 序章摘要');
+    const noSummary = makeBook({
+      prologue: { title: '楔子', wordCount: 2000, createdAt: 1 },
+    } as Partial<NovelBook>);
+    expect(assembleChapterContext(noSummary, { nextIndex: 3 })).not.toContain('## 序章摘要');
+  });
+});

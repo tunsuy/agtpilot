@@ -1,5 +1,5 @@
 /**
- * 网文小说工坊表单 · 四模式(开新书/续写下一章/全书体检/文风学习)
+ * 网文小说工坊表单 · 五模式(开新书/续写下一章/写序章/全书体检/文风学习)
  * docs/design/novel-workshop.md §5-§7
  *
  * 续写/审查需要书状态:表单从 /api/novels 拉书库列表与全书快照,
@@ -18,7 +18,7 @@
  * 书自己的锚为准(表单风格选择只属于开书),否则写回的锚永远被表单值盖掉。
  */
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, CalendarClock, Download, Loader2, PenLine, Sparkles, Stethoscope } from 'lucide-react';
+import { BookOpen, CalendarClock, Download, Feather, Loader2, PenLine, Sparkles, Stethoscope } from 'lucide-react';
 import {
   NOVEL_GENRES,
   NOVEL_STYLES,
@@ -45,11 +45,12 @@ interface Props {
   onEditProfile?: () => void;
 }
 
-type NovelMode = 'genesis' | 'continue' | 'review' | 'style';
+type NovelMode = 'genesis' | 'continue' | 'prologue' | 'review' | 'style';
 
 const MODES: Array<{ id: NovelMode; name: string; icon: typeof BookOpen }> = [
   { id: 'genesis', name: '开新书', icon: BookOpen },
   { id: 'continue', name: '续写下一章', icon: PenLine },
+  { id: 'prologue', name: '写序章', icon: Feather },
   { id: 'review', name: '全书体检', icon: Stethoscope },
   { id: 'style', name: '文风学习', icon: Sparkles },
 ];
@@ -68,7 +69,9 @@ const postCron = (body: Record<string, unknown>) =>
 export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, onEditProfile }: Props) {
   const saved = lastRunOf(workshop.id)?.params || {};
   const [mode, setMode] = useState<NovelMode>(
-    saved.mode === 'continue' || saved.mode === 'review' || saved.mode === 'style' ? saved.mode : 'genesis'
+    saved.mode === 'continue' || saved.mode === 'prologue' || saved.mode === 'review' || saved.mode === 'style'
+      ? saved.mode
+      : 'genesis'
   );
 
   // ---- 开新书参数 ----
@@ -147,8 +150,8 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
   };
 
   const needBook = mode !== 'genesis';
-  /** 续写/审查必须先有书;文风学习绑书可选——不绑定也能纯提炼(预览不依赖书快照) */
-  const requiresBook = mode === 'continue' || mode === 'review' || (mode === 'style' && Boolean(bookId));
+  /** 续写/序章/审查必须先有书;文风学习绑书可选——不绑定也能纯提炼(预览不依赖书快照) */
+  const requiresBook = mode === 'continue' || mode === 'prologue' || mode === 'review' || (mode === 'style' && Boolean(bookId));
 
   useEffect(() => {
     if (!needBook || books !== null) return;
@@ -228,8 +231,8 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
       mode: mode === 'genesis' ? 'genesis_bible' : mode,
       genre: customGenre.trim() || genre,
       premise,
-      // 续写走书自己的文风锚(含「文风学习」写回的);表单风格选择只属于开书
-      style: mode === 'continue' ? '' : customStyle.trim() || style,
+      // 序章走书自己的文风锚(同续写);开书/文风学习用表单值
+      style: mode === 'continue' || mode === 'prologue' ? '' : customStyle.trim() || style,
       chapterWords,
       bookId,
       focus,
@@ -322,9 +325,11 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
       ? '开始开书'
       : mode === 'continue'
         ? '生成下一章'
-        : mode === 'review'
-          ? '开始体检'
-          : '提炼文风锚';
+        : mode === 'prologue'
+          ? '生成序章'
+          : mode === 'review'
+            ? '开始体检'
+            : '提炼文风锚';
 
   return (
     <WorkshopModalShell
@@ -638,6 +643,35 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
                   发布到任何平台永远由你手动操作。
                 </p>
               </div>
+            </>
+          )}
+
+          {book && mode === 'prologue' && (
+            <>
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 px-3 py-2.5 text-[11px] text-zinc-500 leading-relaxed">
+                序章(楔子)放在第 1 章之前,作为第 0 篇落库(不占章节索引、不动进度)。
+                生成时注入设定地基与粗纲,与第 1 章分工:抛钩子,不复述第 1 章事件。
+              </div>
+              {/* 硬顺序闸的表单前置提示:零章书才放行(服务端同闸双保险) */}
+              {book.progress.chapterCount > 0 ? (
+                <p className="text-[11px] text-amber-600 leading-relaxed rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2.5">
+                  《{book.title}》已有正文章节,不能再插入序章(序章只在写第 1 章之前落库)。
+                </p>
+              ) : book.prologue ? (
+                <p className="text-[11px] text-amber-600 leading-relaxed rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2.5">
+                  《{book.title}》已有序章(一次性槽位,不覆盖);直接「续写下一章」即可。
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  <FieldLabel>序章字数</FieldLabel>
+                  <ChipGroup
+                    options={CHAPTER_WORDS.map((n) => ({ id: n, name: `${n}` }))}
+                    value={chapterWords}
+                    onChange={setChapterWords}
+                    accent={workshop.accent}
+                  />
+                </div>
+              )}
             </>
           )}
 

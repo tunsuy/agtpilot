@@ -88,6 +88,12 @@ apps/web(策略层)                 packages/plugin-channel(能力层)
 - 出站客服消息 `message/custom/send`(msgtype=text),access_token 走 `stable_token`(内存缓存,提前 5min 过期,与 web 侧 wechat-mp.ts 同款策略但独立小实现 —— 插件不得 import app 代码)。
 - 纯函数(XML 解析/归一化)带 vitest 用例;fetch 注入可测。
 - 关注事件(subscribe)由 callback 路由被动回复欢迎语 + 绑定指引,不进 agent。
+- **多租户(2026-10-21 负责人拍板:公众号凭证按用户各配各的,全局 env 退为单租户兜底)**:
+  - 凭证复用连接器页「微信公众号(草稿箱直连)」那份 `WECHAT_MP_CREDENTIAL`(加密存 user-store),一份凭证同时服务草稿箱直连与 IM 客服消息;适配器经应用层注入的 `credentialResolver(openid → 凭证)` 按会话解析,token 缓存按 appId 分键。
+  - 会话归属:回调 URL 带 `?u=<userId>`(每用户专属,IM 通道面板展示),webhook 入站时 `learnWechatMpOwner(openid, ownerUserId)` 落盘(channel-store);出站凭证解析用**公众号主人**而非绑定用户 —— 粉丝绑自己的账号跑任务,客服消息永远从收到消息的那个公众号发出。归属学习必须先于 `ingestWebhook` 扇出(fanOut 同步 await 处理器,绑定引导回复在返回前就会发出)。
+  - 签名:每用户专属 Token(面板生成/轮换,`channel-mp-tokens.json`;仅认证入口可生成,回调 GET 只 peek 不落盘),带 `u` 的请求只认专属 Token 不回落全局;无 `u` 的旧形态(全局 `WECHAT_TOKEN` + env 凭证 + 6 位登录验证码语义)原样保留。
+  - 注册:env 凭证在场 → factory 静态单租户(行为不变);缺失但有解析器 → 仍注册 wechat_mp(多租户形态,凭证门槛移到 send/ingest,fail-closed)。
+  - 平台硬门槛不变:客服消息仅**认证服务号** + 用户 48h 内有互动。
 
 ### wechat_personal(复用 npm 包)
 - factory `fromEnv` 直接注册;扫码登录助手在 app 层 API 路由消费。
@@ -98,7 +104,7 @@ apps/web(策略层)                 packages/plugin-channel(能力层)
 | 变量 | 默认 | 作用 |
 |---|---|---|
 | `AGTPILOT_CHANNELS` | 开 | `0` = channel-service 不启动(总闸) |
-| `WECHAT_MP_APPID` / `WECHAT_MP_APPSECRET` | 空(通道关闭) | 公众号客服消息凭证;缺省 wechat_mp 不注册(fail-closed) |
+| `WECHAT_MP_APPID` / `WECHAT_MP_APPSECRET` | 空(单租户形态关闭) | 公众号客服消息凭证 · **全局单租户兜底**;按用户多租户形态不需要(凭证走连接器页,见 §5 wechat-mp 多租户) |
 | `WECHAT_PERSONAL_BOT_TOKEN` / `WECHAT_PERSONAL_BASE_URL` | 空(通道关闭) | iLink bot 凭证(扫码后写 channel-store 亦可,env 优先) |
 | `QQ_ONEBOT_WS_URL` / `QQ_ONEBOT_ACCESS_TOKEN` | 空(通道关闭) | NapCat forward-WS 端点 / 鉴权 token |
 | `AGTPILOT_CHANNEL_ACK_MS` | 8000 | 超过该时长未完成先发「处理中」ack;`0` = 关闭 ack |
@@ -107,7 +113,7 @@ apps/web(策略层)                 packages/plugin-channel(能力层)
 
 ## 7. 部署形态
 
-- 公众号:微信后台把回调 URL 指到本部署 `/api/wechat/callback`(既有),Token 用 `WECHAT_TOKEN`。
+- 公众号(按用户,主形态):每用户在 IM 通道面板取专属回调 URL(`/api/wechat/callback?u=<userId>`)与 Token,填到自己公众号的公众平台「服务器配置」;凭证在连接器页配置。全局单租户旧形态(微信后台把回调 URL 指到无参 `/api/wechat/callback`,Token 用 `WECHAT_TOKEN`)保留为部署兜底。
 - 微信个人号:零公网依赖(纯出站长轮询)。扫码一次即得 token。
 - QQ:负责人侧跑 NapCat(docker,挂一个 QQ 号),开 forward-WS 指向 agtpilot 可达地址;`QQ_ONEBOT_WS_URL=ws://<napcat>:3001/onebot/v11/ws`。
 

@@ -21,7 +21,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   store.__resetInMemoryState();
-  for (const f of ['channel-bindings.json', 'channel-conversations.json', 'channel-credentials.json']) {
+  for (const f of [
+    'channel-bindings.json',
+    'channel-conversations.json',
+    'channel-credentials.json',
+    'channel-mp-tokens.json',
+    'channel-mp-owners.json',
+  ]) {
     try {
       fs.unlinkSync(path.join(tmpDir, f));
     } catch {}
@@ -154,5 +160,31 @@ describe('消息去重', () => {
     expect(store.isDuplicateMessage('wechat_mp', 'm-599')).toBe(true);
     // 最旧一条已被逐出 → 视为新消息(去重窗口是尽力而为,平台重推在秒级)
     expect(store.isDuplicateMessage('wechat_mp', 'm-0')).toBe(false);
+  });
+});
+
+describe('公众号 IM(按用户多租户):专属 Token / 会话归属', () => {
+  it('peek 不自动生成(未认证请求不得落盘);ensure 生成后稳定幂等;rotate 换值', () => {
+    expect(store.peekWechatMpImToken('u1')).toBeNull();
+    const t1 = store.ensureWechatMpImToken('u1');
+    expect(t1).toMatch(/^[0-9a-f]{32}$/);
+    expect(store.ensureWechatMpImToken('u1')).toBe(t1); // 幂等:不重复生成
+    expect(store.peekWechatMpImToken('u1')).toBe(t1);
+    const t2 = store.rotateWechatMpImToken('u1');
+    expect(t2).toMatch(/^[0-9a-f]{32}$/);
+    expect(t2).not.toBe(t1);
+    expect(store.peekWechatMpImToken('u1')).toBe(t2);
+    expect(store.peekWechatMpImToken('u2')).toBeNull(); // 按用户隔离
+  });
+
+  it('会话归属:learn/find 往返;改派覆盖;未知 openid 与空值 → null/不落盘', () => {
+    expect(store.findWechatMpOwner('oX')).toBeNull();
+    store.learnWechatMpOwner('oX', 'owner1');
+    expect(store.findWechatMpOwner('oX')).toBe('owner1');
+    store.learnWechatMpOwner('oX', 'owner2'); // 改派覆盖
+    expect(store.findWechatMpOwner('oX')).toBe('owner2');
+    store.learnWechatMpOwner('', 'owner1'); // 空 openid 不落盘
+    store.learnWechatMpOwner('oY', ''); // 空归属不落盘
+    expect(store.findWechatMpOwner('oY')).toBeNull();
   });
 });

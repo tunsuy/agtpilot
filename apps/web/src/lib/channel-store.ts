@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { getDataDir } from './user-store';
 
 /**
@@ -124,6 +125,60 @@ export function getChannelCredentials(): StoredChannelCredentials {
 export function saveChannelCredentials(patch: Partial<StoredChannelCredentials>): void {
   const cur = getChannelCredentials();
   writeJson(CREDENTIALS_FILE, { ...cur, ...patch, updatedAt: new Date().toISOString() });
+}
+
+// ── 公众号 IM(按用户多租户,2026-10-21):专属回调 Token / 会话归属 ──
+//
+// 凭证本体复用连接器页那份(WECHAT_MP_CREDENTIAL,加密存 user-store),这里只存
+// 两样通道侧状态:
+// - 回调 Token:公众平台「服务器配置」签名密钥,每用户随机生成、可轮换。
+//   面板(已认证)可取可轮换;未认证请求(回调 GET 校验)只读不生成 ——
+//   任意人拿任意 userId 打回调 URL 不得造成落盘状态。
+// - 会话归属:openid → 收到该消息的公众号主人 userId。webhook 入站时学习,
+//   出站客服消息据此解析该用哪份凭证(粉丝可能绑的是自己的账号,但回复
+//   永远走公众号主人的凭证)。
+
+const MP_TOKENS_FILE = 'channel-mp-tokens.json';
+const MP_OWNERS_FILE = 'channel-mp-owners.json';
+
+interface MpTokenEntry {
+  token: string;
+  createdAt: string;
+}
+
+/** 读用户专属回调 Token;未生成过返回 null(绝不自动生成,见上) */
+export function peekWechatMpImToken(userId: string): string | null {
+  const all = readJson<Record<string, MpTokenEntry>>(MP_TOKENS_FILE, {});
+  return all[userId]?.token ?? null;
+}
+
+/** 取或生成用户专属回调 Token(仅认证入口调用:面板 API) */
+export function ensureWechatMpImToken(userId: string): string {
+  return peekWechatMpImToken(userId) ?? rotateWechatMpImToken(userId);
+}
+
+/** 轮换 Token(旧值即废;公众平台服务器配置需同步更新) */
+export function rotateWechatMpImToken(userId: string): string {
+  const all = readJson<Record<string, MpTokenEntry>>(MP_TOKENS_FILE, {});
+  const token = crypto.randomBytes(16).toString('hex');
+  all[userId] = { token, createdAt: new Date().toISOString() };
+  writeJson(MP_TOKENS_FILE, all);
+  return token;
+}
+
+/** 学习会话归属:openid → 公众号主人 userId(值未变化不落盘) */
+export function learnWechatMpOwner(openid: string, ownerUserId: string): void {
+  if (!openid || !ownerUserId) return;
+  const all = readJson<Record<string, string>>(MP_OWNERS_FILE, {});
+  if (all[openid] === ownerUserId) return;
+  all[openid] = ownerUserId;
+  writeJson(MP_OWNERS_FILE, all);
+}
+
+/** 查会话归属(出站凭证解析用);未学习过返回 null */
+export function findWechatMpOwner(openid: string): string | null {
+  const all = readJson<Record<string, string>>(MP_OWNERS_FILE, {});
+  return all[openid] ?? null;
 }
 
 // ── 绑定码(内存,10min TTL,单次消费) ──

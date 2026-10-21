@@ -45,3 +45,22 @@ describe('buildChannelsFromEnv', () => {
     }
   });
 });
+
+describe('buildChannelsFromEnv · 公众号多租户解析器', () => {
+  const resolver = () => null;
+
+  it('env 凭证缺失 + 解析器在场 → 仍注册 wechat_mp(按用户形态)', () => {
+    const ids = buildChannelsFromEnv({}, { wechatMpCredentialResolver: resolver }).map((a) => a.channel);
+    expect(ids).toEqual(['wechat_mp']);
+  });
+
+  it('env 凭证在场 → factory 静态注册,不叠加第二个 wechat_mp', () => {
+    const adapters = buildChannelsFromEnv(FULL_ENV, { wechatMpCredentialResolver: resolver });
+    expect(adapters.filter((a) => a.channel === 'wechat_mp')).toHaveLength(1);
+  });
+
+  it('无解析器 → 旧行为不变(凭证不全不注册)', () => {
+    expect(buildChannelsFromEnv({})).toEqual([]);
+    expect(registeredChannelIds({ WECHAT_MP_APPID: 'wx' })).toEqual([]);
+  });
+});

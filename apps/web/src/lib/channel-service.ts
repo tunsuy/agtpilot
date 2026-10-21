@@ -2,9 +2,12 @@ import { getAgentBackend } from './agent-backend';
 import { logRuntime } from './runtime-log';
 import * as store from './channel-store';
 import { extractFinalAnswer, parseChannelCommand } from './channel-utils';
+import { getUserConnectors } from './user-store';
+import { WECHAT_MP_CRED_KEY, parseWechatMpCredential } from './wechat-mp';
 import type { Mission } from '../types/agent';
 import {
   buildChannelsFromEnv,
+  parseWechatMpXml,
   requestWeixinLoginQr,
   pollWeixinLoginStatus,
   WechatPersonalChannelAdapter,
@@ -69,7 +72,11 @@ class ChannelManager {
         logRuntime('WARN', 'channel', 'ctx.channel 不可用(plugin-channel 未挂载?),通道服务跳过');
         return;
       }
-      const adapters = buildChannelsFromEnv(this.collectEnv());
+      const adapters = buildChannelsFromEnv(this.collectEnv(), {
+        // 公众号多租户:每用户各配自己的公众号(连接器页凭证),出站按会话解析;
+        // 全局 env 凭证在场时 registry 优先走静态单租户形态(部署兜底,行为不变)
+        wechatMpCredentialResolver: (conversationId) => this.resolveWechatMpCredentials(conversationId),
+      });
       const attached: string[] = [];
       for (const adapter of adapters) {
         try {
@@ -113,13 +120,39 @@ class ChannelManager {
   }
 
   /**
+   * 公众号多租户凭证解析(注入给适配器):openid → 会话归属公众号主人
+   * (webhook 入站时学习,channel-store 持久化)→ 该用户连接器页凭证
+   * (与草稿箱直连同一份 WECHAT_MP_CREDENTIAL)。解析不到返回 null,
+   * 适配器回落静态 env 凭证(单租户兜底);皆无则 send fail-closed。
+   * 注意归属是「公众号主人」而非绑定用户:粉丝绑自己的账号跑任务,
+   * 但客服消息永远从收到消息的那个公众号发出。
+   */
+  private resolveWechatMpCredentials(conversationId: string): { appId: string; appSecret: string } | null {
+    const ownerUserId = store.findWechatMpOwner(conversationId);
+    if (!ownerUserId) return null;
+    return parseWechatMpCredential(getUserConnectors(ownerUserId).configs[WECHAT_MP_CRED_KEY]);
+  }
+
+  /**
    * 公众号 webhook 入口:应用层路由(api/wechat/callback)把原始 XML 交这里,
    * 后台异步处理(平台要求 5s 内响应,agent 任务远超此时长 → 被动回复静默,
    * 实际答复走客服消息)。未挂 wechat_mp 通道时返回 false,路由回退旧提示语。
+   *
+   * ownerUserId(带 u 参数的按用户回调必传):先学习 openid 归属再扇出 ——
+   * ingestWebhook 内部同步 await 消息处理器,绑定引导等回复在返回前就会发出,
+   * 归属必须赶在第一条回复之前落盘,否则出站凭证解析不到。
    */
-  async ingestWechatMpWebhook(rawXml: string): Promise<boolean> {
+  async ingestWechatMpWebhook(rawXml: string, ownerUserId?: string): Promise<boolean> {
     const channel = getAgentBackend().ctx?.channel;
     if (!channel) return false;
+    if (ownerUserId) {
+      try {
+        const openid = parseWechatMpXml(rawXml).fromUserName;
+        if (openid) store.learnWechatMpOwner(openid, ownerUserId);
+      } catch {
+        // 畸形 XML:归属学习跳过,交给适配器 ingest 返回 null
+      }
+    }
     const msg = await channel.ingestWebhook('wechat_mp', rawXml);
     return msg !== null;
   }
@@ -127,6 +160,27 @@ class ChannelManager {
   wechatMpAttached(): boolean {
     const channel = getAgentBackend().ctx?.channel;
     return !!channel?.status().some((s) => s.channel === 'wechat_mp');
+  }
+
+  /**
+   * 全局单租户路径(无 u 参数的旧回调)是否可用:env 凭证 + 适配器挂载双就绪。
+   * 多租户下适配器恒挂载(解析器在场即注册),旧路径必须另查 env 凭证 ——
+   * 否则全局公众号没配凭证也会 ingest,回复时才发现无凭证可用。
+   */
+  wechatMpGlobalReady(): boolean {
+    return (
+      Boolean(process.env.WECHAT_MP_APPID?.trim() && process.env.WECHAT_MP_APPSECRET?.trim()) &&
+      this.wechatMpAttached()
+    );
+  }
+
+  /** 按用户路径(带 u 参数)的凭证门槛:该用户连接器页配了 AppID:AppSecret 才收消息 */
+  wechatMpUserReady(userId: string): boolean {
+    try {
+      return Boolean(parseWechatMpCredential(getUserConnectors(userId).configs[WECHAT_MP_CRED_KEY]));
+    } catch {
+      return false;
+    }
   }
 
   // ── 入站主流程 ──

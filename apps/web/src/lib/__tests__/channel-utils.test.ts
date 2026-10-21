@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { extractFinalAnswer, parseChannelCommand } from '../channel-utils';
+import crypto from 'crypto';
+import { extractFinalAnswer, parseChannelCommand, verifyWechatCallbackSignature } from '../channel-utils';
 
 /**
  * channel-utils 纯函数用例(铁律 6)。
@@ -75,5 +76,28 @@ describe('parseChannelCommand', () => {
     // 指令词混在句子里不算(必须整句匹配)
     expect(parseChannelCommand('我想解绑账号')).toBeNull();
     expect(parseChannelCommand('请绑定 123456 谢谢')).toBeNull();
+  });
+});
+
+describe('verifyWechatCallbackSignature(微信官方签名算法)', () => {
+  const sha1Sorted = (...parts: string[]) =>
+    crypto.createHash('sha1').update([...parts].sort().join('')).digest('hex');
+
+  it('token/timestamp/nonce 字典序拼接 SHA1 命中 → true', () => {
+    const sig = sha1Sorted('tok_abc', '1700000000', 'nonce1');
+    expect(verifyWechatCallbackSignature('tok_abc', sig, '1700000000', 'nonce1')).toBe(true);
+  });
+
+  it('错 token / 错签名 / 缺参数 / 空 token → false', () => {
+    const sig = sha1Sorted('tok_abc', '1700000000', 'nonce1');
+    expect(verifyWechatCallbackSignature('bad_tok', sig, '1700000000', 'nonce1')).toBe(false);
+    expect(verifyWechatCallbackSignature('tok_abc', 'deadbeef', '1700000000', 'nonce1')).toBe(false);
+    expect(verifyWechatCallbackSignature('tok_abc', sig, null, 'nonce1')).toBe(false);
+    expect(verifyWechatCallbackSignature('tok_abc', sig, '1700000000', undefined)).toBe(false);
+    expect(verifyWechatCallbackSignature('', sig, '1700000000', 'nonce1')).toBe(false);
+  });
+
+  it('签名长度不等 → false(timingSafeEqual 前置长度守卫,不 throw)', () => {
+    expect(verifyWechatCallbackSignature('tok_abc', 'abc', '1700000000', 'nonce1')).toBe(false);
   });
 });

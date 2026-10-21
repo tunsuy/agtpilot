@@ -8,17 +8,19 @@
  * 2. 桌面端右上角「IM 通道」按钮唤起的弹窗(ChannelModal)——
  *    与「下载移动版」一致的弹窗形态,不再整页跳转。
  *
- * 三件事:
+ * 四件事:
  * 1. 通道状态总览(GET /api/channel/status)
- * 2. 微信个人号(iLink)扫码授权:取码 → 手机微信扫码 → 轮询到 confirmed 自动落盘热挂载
+ * 2. 微信公众号按用户配置(GET/POST /api/channel/wechat-mp):凭证复用连接器页,
+ *    面板展示专属回调 URL + Token(生成/轮换,仅本人可见)
+ * 3. 微信个人号(iLink)扫码授权:取码 → 手机微信扫码 → 轮询到 confirmed 自动落盘热挂载
  *    (POST/GET /api/channel/wechat-personal/qr;bot_token 永不回显到本面板)
- * 3. 生成 IM 绑定码(POST /api/channel/bind-code):在任意已接入通道对机器人发「绑定 <码>」
+ * 4. 生成 IM 绑定码(POST /api/channel/bind-code):在任意已接入通道对机器人发「绑定 <码>」
  *
  * 不含页面外框(min-h-screen)与标题头 —— 由调用方(页面/弹窗)各自提供,避免标题重复。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { QrCode, RefreshCw, Link2, Unplug, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { QrCode, RefreshCw, Link2, Unplug, CheckCircle2, XCircle, Loader2, Megaphone, Copy, Eye, EyeOff, RotateCw } from 'lucide-react';
 
 interface AdapterStatus {
   channel: string;
@@ -31,6 +33,14 @@ interface StatusResponse {
   ready: boolean;
   adapters: AdapterStatus[];
   recentErrors: Array<{ channel: string; code: string; message: string; retryable: boolean; at?: string }>;
+}
+
+/** 公众号按用户配置(GET /api/channel/wechat-mp) */
+interface MpConfig {
+  configured: boolean;
+  appId: string | null;
+  callbackPath: string;
+  token: string;
 }
 
 type QrPhase = 'idle' | 'loading' | 'scanning' | 'confirmed' | 'expired' | 'error';
@@ -63,6 +73,12 @@ export function ChannelPanel() {
   const [bindCode, setBindCode] = useState('');
   const [bindErr, setBindErr] = useState('');
 
+  // 公众号按用户配置
+  const [mp, setMp] = useState<MpConfig | null>(null);
+  const [mpErr, setMpErr] = useState('');
+  const [mpTokenShown, setMpTokenShown] = useState(false);
+  const [copiedKey, setCopiedKey] = useState('');
+
   const loadStatus = useCallback(async () => {
     try {
       const res = await fetch('/api/channel/status');
@@ -78,12 +94,58 @@ export function ChannelPanel() {
     }
   }, []);
 
+  const loadMpConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/channel/wechat-mp');
+      const data = await res.json();
+      if (data.success) {
+        setMp(data);
+        setMpErr('');
+      } else {
+        setMpErr(data.error || '公众号配置获取失败');
+      }
+    } catch {
+      setMpErr('公众号配置获取失败(未登录或服务未启动)');
+    }
+  }, []);
+
   useEffect(() => {
     void loadStatus();
+    void loadMpConfig();
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [loadStatus]);
+  }, [loadStatus, loadMpConfig]);
+
+  async function copyText(key: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((k) => (k === key ? '' : k)), 1500);
+    } catch {
+      // 剪贴板不可用(非 https 等):忽略,用户可手动选中复制
+    }
+  }
+
+  async function rotateMpToken() {
+    if (!window.confirm('轮换后旧 Token 立即失效,需要同步更新公众平台「服务器配置」里的 Token。确定轮换?')) return;
+    try {
+      const res = await fetch('/api/channel/wechat-mp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'rotate' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMp((cur) => (cur ? { ...cur, token: data.token } : cur));
+        setMpTokenShown(true);
+      } else {
+        setMpErr(data.error || 'Token 轮换失败');
+      }
+    } catch {
+      setMpErr('Token 轮换失败(网络错误)');
+    }
+  }
 
   async function renderQr(content: string) {
     const url = await QRCode.toDataURL(content, {
@@ -229,6 +291,86 @@ export function ChannelPanel() {
         )}
       </section>
 
+      {/* 公众号(按用户配置,多租户) */}
+      <section className="rounded-xl border border-zinc-200 bg-white p-4">
+        <h2 className="font-semibold flex items-center gap-2 mb-2">
+          <Megaphone size={16} /> 微信公众号(各配各的)
+        </h2>
+        <p className="text-sm text-zinc-500 mb-3">
+          用你自己的公众号当 IM 通道:凭证复用连接器页「微信公众号(草稿箱直连)」那份
+          AppID:AppSecret(一份凭证同时服务草稿箱直连与 IM 客服消息),不再依赖服务端全局配置。
+          把下面的专属回调 URL 与 Token 填到公众平台「设置与开发 → 基本配置 → 服务器配置」
+          (明文模式)即可。
+        </p>
+        {mpErr && <p className="text-sm text-red-600 mb-2">{mpErr}</p>}
+        {mp && (
+          <div className="space-y-3">
+            <p className={`text-sm flex items-center gap-1.5 ${mp.configured ? 'text-emerald-600' : 'text-amber-600'}`}>
+              {mp.configured ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+              {mp.configured
+                ? `凭证已配置${mp.appId ? `(AppID: ${mp.appId})` : ''}`
+                : '凭证未配置 —— 请到连接器页「微信公众号(草稿箱直连)」卡片填写 AppID:AppSecret'}
+            </p>
+            <div className="space-y-2 text-sm">
+              <div>
+                <p className="text-xs text-zinc-400 mb-1">专属回调 URL(公众平台服务器配置 · URL)</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 min-w-0 truncate px-2 py-1.5 rounded-lg bg-zinc-50 border border-zinc-200 text-xs">
+                    {typeof window !== 'undefined' ? `${window.location.origin}${mp.callbackPath}` : mp.callbackPath}
+                  </code>
+                  <button
+                    onClick={() =>
+                      void copyText(
+                        'url',
+                        `${typeof window !== 'undefined' ? window.location.origin : ''}${mp.callbackPath}`,
+                      )
+                    }
+                    className="shrink-0 p-1.5 rounded-lg border border-zinc-200 text-zinc-500 hover:text-zinc-800"
+                    title="复制回调 URL"
+                  >
+                    {copiedKey === 'url' ? <CheckCircle2 size={14} className="text-emerald-600" /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-zinc-400 mb-1">专属 Token(公众平台服务器配置 · Token;仅你本人可见)</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 min-w-0 truncate px-2 py-1.5 rounded-lg bg-zinc-50 border border-zinc-200 text-xs font-mono">
+                    {mpTokenShown ? mp.token : '•'.repeat(32)}
+                  </code>
+                  <button
+                    onClick={() => setMpTokenShown((v) => !v)}
+                    className="shrink-0 p-1.5 rounded-lg border border-zinc-200 text-zinc-500 hover:text-zinc-800"
+                    title={mpTokenShown ? '隐藏' : '显示'}
+                  >
+                    {mpTokenShown ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                  <button
+                    onClick={() => void copyText('token', mp.token)}
+                    className="shrink-0 p-1.5 rounded-lg border border-zinc-200 text-zinc-500 hover:text-zinc-800"
+                    title="复制 Token"
+                  >
+                    {copiedKey === 'token' ? <CheckCircle2 size={14} className="text-emerald-600" /> : <Copy size={14} />}
+                  </button>
+                  <button
+                    onClick={() => void rotateMpToken()}
+                    className="shrink-0 p-1.5 rounded-lg border border-zinc-200 text-zinc-500 hover:text-zinc-800"
+                    title="轮换 Token(旧值即废)"
+                  >
+                    <RotateCw size={14} />
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              平台硬门槛:客服消息 API 仅对<b>认证服务号</b>开放(订阅号可投草稿箱但开不了 IM 对话),
+              且主动回复仅限用户 48 小时内有互动。配置完成后关注公众号发「绑定 &lt;6位码&gt;」
+              (下方生成)即可对话。
+            </p>
+          </div>
+        )}
+      </section>
+
       {/* 个人微信扫码 */}
       <section className="rounded-xl border border-zinc-200 bg-white p-4">
         <h2 className="font-semibold flex items-center gap-2 mb-2">
@@ -303,7 +445,8 @@ export function ChannelPanel() {
       </section>
 
       <footer className="text-xs text-zinc-400">
-        公众号通道需服务端配置 WECHAT_MP_APPID/APPSECRET;QQ 通道需独立机器跑
+        公众号通道按用户配置(上方区块,凭证复用连接器页);全局 env
+        WECHAT_MP_APPID/APPSECRET 仅单租户部署兜底。QQ 通道需独立机器跑
         NapCat(部署见 docs/design/channel-plugin.md §7)。
       </footer>
     </div>

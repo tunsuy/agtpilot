@@ -264,3 +264,80 @@ describe('WechatMpChannelAdapter 收发', () => {
     await a.stop();
   });
 });
+
+describe('WechatMpChannelAdapter 多租户(credentialResolver)', () => {
+  it('仅解析器(无静态凭证)→ probe/start 就绪;send 按会话解析凭证,token 缓存按 appId 分键', async () => {
+    const { impl, calls } = stubFetch((c) =>
+      c.url.includes('stable_token')
+        ? { access_token: `TOK-${c.body.appid}`, expires_in: 7200 }
+        : { errcode: 0, errmsg: 'ok', msgid: 9 },
+    );
+    const a = new WechatMpChannelAdapter({
+      fetchImpl: impl,
+      credentialResolver: (cid) =>
+        cid === 'oA' ? { appId: 'wx_A', appSecret: 'sec_A' } : cid === 'oB' ? { appId: 'wx_B', appSecret: 'sec_B' } : null,
+    });
+    expect((await a.probeCredentials()).ok).toBe(true);
+    await a.start({ onMessage: () => {} });
+    await a.send({ conversationId: 'oA', text: 'x' });
+    await a.send({ conversationId: 'oB', text: 'x' });
+    await a.send({ conversationId: 'oA', text: 'y' }); // 缓存命中,不再换 token
+    const tokenCalls = calls.filter((c) => c.url.includes('stable_token'));
+    expect(tokenCalls).toHaveLength(2);
+    expect(tokenCalls[0].body).toMatchObject({ appid: 'wx_A', secret: 'sec_A' });
+    expect(tokenCalls[1].body).toMatchObject({ appid: 'wx_B', secret: 'sec_B' });
+    // 各自会话用各自的 token 发送
+    const sends = calls.filter((c) => c.url.includes('custom/send'));
+    expect(sends[0].url).toContain('access_token=TOK-wx_A');
+    expect(sends[1].url).toContain('access_token=TOK-wx_B');
+    await a.stop();
+  });
+
+  it('解析不到 → 回落静态 env 凭证;两者皆无 → credential_invalid(fail-closed,不回显密钥)', async () => {
+    const { impl, calls } = stubFetch((c) =>
+      c.url.includes('stable_token') ? tokenOk : { errcode: 0, errmsg: 'ok' },
+    );
+    const withStatic = new WechatMpChannelAdapter({
+      appId: APPID,
+      appSecret: SECRET,
+      fetchImpl: impl,
+      credentialResolver: () => null,
+    });
+    await withStatic.start({ onMessage: () => {} });
+    await expect(withStatic.send({ conversationId: 'oX', text: 'x' })).resolves.toBeDefined();
+    expect(calls.filter((c) => c.url.includes('stable_token'))[0].body).toMatchObject({ appid: APPID });
+    await withStatic.stop();
+
+    const bare = new WechatMpChannelAdapter({ fetchImpl: impl, credentialResolver: () => null });
+    await bare.start({ onMessage: () => {} }); // 解析器在场 → start 就绪(凭证门槛在 send)
+    try {
+      await bare.send({ conversationId: 'oX', text: 'x' });
+      expect.unreachable();
+    } catch (e: any) {
+      expect(e.code).toBe('credential_invalid');
+      expect(e.message).not.toContain(SECRET);
+    }
+    await bare.stop();
+  });
+
+  it('解析器可异步;空白凭证视为解析不到;凭证值 trim 后使用', async () => {
+    const { impl, calls } = stubFetch((c) =>
+      c.url.includes('stable_token') ? tokenOk : { errcode: 0, errmsg: 'ok' },
+    );
+    const a = new WechatMpChannelAdapter({
+      fetchImpl: impl,
+      credentialResolver: async (cid) =>
+        cid === 'oA' ? { appId: ' wx_A ', appSecret: ' sec_A ' } : { appId: '  ', appSecret: '' },
+    });
+    await a.start({ onMessage: () => {} });
+    await expect(a.send({ conversationId: 'oA', text: 'x' })).resolves.toBeDefined();
+    expect(calls.filter((c) => c.url.includes('stable_token'))[0].body).toMatchObject({
+      appid: 'wx_A',
+      secret: 'sec_A',
+    });
+    await expect(a.send({ conversationId: 'oZ', text: 'x' })).rejects.toMatchObject({
+      code: 'credential_invalid',
+    });
+    await a.stop();
+  });
+});

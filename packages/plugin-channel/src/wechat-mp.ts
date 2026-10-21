@@ -23,6 +23,11 @@ import {
  * stable_token(POST body 携带凭证,URL 零密钥 —— 日志/错误天然卫生),
  * 内存缓存、提前 5min 过期、40001/42001 强刷重试一次。
  *
+ * 多租户(2026-10-21 负责人拍板:公众号凭证按用户各配各的,复用连接器页
+ * 「微信公众号(草稿箱直连)」那份,全局 env 退为单租户部署兜底):
+ * 应用层注入 credentialResolver(openid → 归属用户凭证),send 按会话解析;
+ * token 缓存按 appId 分键。解析器与静态凭证皆无 → send fail-closed。
+ *
  * 诚实边界:
  * - 客服消息要求认证服务号 + 用户 48h 内有互动,平台侧限制,适配器无法绕过。
  * - Phase 1 仅文本消息;事件（关注/取关/菜单）返回 null,由应用层路由自行
@@ -40,9 +45,26 @@ const TOKEN_EXPIRY_BUFFER_S = 300;
 const SEND_TIMEOUT_MS = 15_000;
 const TOKEN_TIMEOUT_MS = 10_000;
 
+export type WechatMpCredentials = { appId: string; appSecret: string };
+
+/**
+ * 多租户凭证解析器(应用层注入,插件不碰存储 —— 契约密钥卫生红线同款):
+ * conversationId(openid) → 拥有该会话的公众号凭证。返回 null = 解析不到
+ * (回落静态 env 凭证;两者皆无 → send 报 credential_invalid,fail-closed)。
+ */
+export type WechatMpCredentialResolver = (
+  conversationId: string,
+) => Promise<WechatMpCredentials | null> | WechatMpCredentials | null;
+
 export type WechatMpAdapterOptions = {
-  appId: string;
-  appSecret: string;
+  /** 静态凭证(单租户 env 形态);注入 credentialResolver 时可缺省 */
+  appId?: string;
+  appSecret?: string;
+  /**
+   * 多租户凭证解析器:按会话解析凭证,优先于静态 appId/appSecret
+   * (每用户各配自己的公众号,env 退为单租户部署兜底)。
+   */
+  credentialResolver?: WechatMpCredentialResolver;
   /** 缺省 https://api.weixin.qq.com(测试注入)。 */
   apiBase?: string;
   /** 缺省全局 fetch(测试注入)。 */
@@ -130,7 +152,8 @@ export class WechatMpChannelAdapter implements ChannelAdapter {
   private started = false;
   private state: AdapterConnectionState = 'disconnected';
   private events: ChannelAdapterEvents | null = null;
-  private tokenCache: TokenCache | null = null;
+  /** access_token 缓存按 appId 分键(多租户:每用户公众号各自缓存,换绑即失效) */
+  private tokenCache = new Map<string, TokenCache>();
 
   constructor(private readonly opts: WechatMpAdapterOptions) {}
 
@@ -152,7 +175,7 @@ export class WechatMpChannelAdapter implements ChannelAdapter {
   async stop(): Promise<void> {
     this.started = false;
     this.events = null;
-    this.tokenCache = null;
+    this.tokenCache.clear();
     this.setState('disconnected');
   }
 
@@ -179,7 +202,16 @@ export class WechatMpChannelAdapter implements ChannelAdapter {
     if (!text) {
       throw new ChannelAdapterError(this.channel, 'send_failed', '空文本拒绝发送');
     }
-    const data = await this.postWithToken('/cgi-bin/message/custom/send', {
+    // 多租户:按会话解析凭证(解析器优先,静态 env 兜底);皆无 → fail-closed
+    const cred = await this.resolveCredentials(touser);
+    if (!cred) {
+      throw new ChannelAdapterError(
+        this.channel,
+        'credential_invalid',
+        '该会话未解析到公众号凭证(归属用户未在连接器页配置,且无全局 env 凭证)',
+      );
+    }
+    const data = await this.postWithToken(cred, '/cgi-bin/message/custom/send', {
       touser,
       msgtype: 'text',
       text: { content: text },
@@ -189,26 +221,43 @@ export class WechatMpChannelAdapter implements ChannelAdapter {
 
   /** 非破坏性凭证检查:只看配置存在性（不动网络）,永不 throw、不回显值。 */
   async probeCredentials(): Promise<CredentialProbe> {
+    // 多租户形态:解析器在场即视为就绪(每会话凭证在 send 时按需解析,fail-closed 在 send)
+    if (this.opts.credentialResolver) return { ok: true };
     if (!this.opts.appId?.trim() || !this.opts.appSecret?.trim()) {
-      return { ok: false, reason: 'WECHAT_MP_APPID / WECHAT_MP_APPSECRET 缺失' };
+      return { ok: false, reason: 'WECHAT_MP_APPID / WECHAT_MP_APPSECRET 缺失(且未注入多租户凭证解析器)' };
     }
     return { ok: true };
   }
 
   // ── 内部 ──
 
-  /** stable_token 换取 access_token（内存缓存,提前 5min 过期,force 强刷）。 */
-  private async accessToken(force = false): Promise<string> {
+  /** 会话 → 凭证:多租户解析器优先,静态 env 凭证兜底;皆无 → null(调用方 fail-closed) */
+  private async resolveCredentials(conversationId: string): Promise<WechatMpCredentials | null> {
+    if (this.opts.credentialResolver) {
+      const cred = await this.opts.credentialResolver(conversationId);
+      if (cred?.appId?.trim() && cred?.appSecret?.trim()) {
+        return { appId: cred.appId.trim(), appSecret: cred.appSecret.trim() };
+      }
+    }
+    const appId = this.opts.appId?.trim();
+    const appSecret = this.opts.appSecret?.trim();
+    if (appId && appSecret) return { appId, appSecret };
+    return null;
+  }
+
+  /** stable_token 换取 access_token（按 appId 内存缓存,提前 5min 过期,force 强刷）。 */
+  private async accessToken(cred: WechatMpCredentials, force = false): Promise<string> {
     const now = Date.now();
-    if (!force && this.tokenCache && this.tokenCache.expiresAtMs > now) {
-      return this.tokenCache.token;
+    const cached = this.tokenCache.get(cred.appId);
+    if (!force && cached && cached.expiresAtMs > now) {
+      return cached.token;
     }
     const res = await this.fetchJson(
       '/cgi-bin/stable_token',
       {
         grant_type: 'client_credential',
-        appid: this.opts.appId.trim(),
-        secret: this.opts.appSecret.trim(),
+        appid: cred.appId,
+        secret: cred.appSecret,
         ...(force ? { force_refresh: true } : {}),
       },
       TOKEN_TIMEOUT_MS,
@@ -223,17 +272,22 @@ export class WechatMpChannelAdapter implements ChannelAdapter {
       );
     }
     const expiresInS = Number(res.expires_in) > 0 ? Number(res.expires_in) : 7200;
-    this.tokenCache = {
+    const entry = {
       token: res.access_token,
       expiresAtMs: now + Math.max(expiresInS - TOKEN_EXPIRY_BUFFER_S, 60) * 1000,
     };
-    return this.tokenCache.token;
+    this.tokenCache.set(cred.appId, entry);
+    return entry.token;
   }
 
   /** 带 token 的 POST;token 过期类错误强刷重试一次。 */
-  private async postWithToken(path: string, body: Record<string, unknown>): Promise<Record<string, any>> {
+  private async postWithToken(
+    cred: WechatMpCredentials,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, any>> {
     for (const force of [false, true]) {
-      const token = await this.accessToken(force);
+      const token = await this.accessToken(cred, force);
       const res = await this.fetchJson(
         `${path}?access_token=${encodeURIComponent(token)}`,
         body,

@@ -33,7 +33,9 @@ export function buildDraftDeliveryIndex(
     if (s.tool !== deliverTool || s.status !== 'DONE') continue;
     const t = s.args?.title;
     if (typeof t === 'string' && t.trim()) titles.add(t.trim());
-    const b = s.args?.body ?? s.args?.content;
+    // 正文键归一:zhihu/xhs 用 body,旧公众号续聊步骤用 content,
+    // 公众号工具/直连步骤用 markdown(此前漏了 markdown,公众号防重复一直只靠标题)
+    const b = s.args?.body ?? s.args?.content ?? s.args?.markdown;
     if (typeof b === 'string' && b.trim()) bodies.add(b.trim());
   }
   return { titles, bodies };

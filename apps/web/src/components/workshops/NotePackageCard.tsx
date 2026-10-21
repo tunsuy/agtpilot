@@ -7,8 +7,11 @@
  * 新格式交付物是成品——标题为 Agent 拍板的唯一终版(直接展示);历史记录的
  * 多候选标题保留点选交互。封面/正文/标签独立复制、一键整卡复制(标题→正文→标签,
  * 对齐小红书发布页粘贴顺序)。复制走 nativeBridge.copyToClipboard(Capacitor → web 降级)。
- * 底部存草稿按钮 → 续聊同一 mission;投递指令与托管门引导来自 xhs 工坊包声明的
- * draft spec(CockpitView 经 resolveArtifactDraft 解析后传入),卡片不持工域知识。
+ * 底部存草稿按钮,两条路径(投递指令与托管门引导来自 xhs 工坊包声明的
+ * draft spec,CockpitView 经 resolveArtifactDraft 解析后传入,卡片不持工域知识):
+ * - direct(首选,「文档+脚本」模式):确认弹窗(HIL)→ POST
+ *   /api/workshops/deliver 服务端直调落稿工具,正文不过模型、不耗 token;
+ * - 无 direct 声明时回退旧路径:续聊同一 mission,Agent 按投递指令调工具。
  */
 import React, { useState } from 'react';
 import { Copy, Check, FileText, ChevronDown, SendHorizonal } from 'lucide-react';
@@ -19,6 +22,8 @@ import {
   type NotePackageParseResult,
 } from '../../workshops/xhs/note-package';
 import { isDraftDelivered, type DraftDeliveryIndex } from '../../lib/draft-delivery';
+import { ConfirmModal } from '../ConfirmModal';
+import { postDirectDelivery } from './direct-deliver-client';
 import type { Mission } from '../../types/agent';
 
 /** 卡片侧的投递声明形状(来自工坊包 ArtifactDraftSpec,结构兼容即可) */
@@ -26,6 +31,12 @@ export interface NoteDraftSpecProp {
   label: string;
   build: (pkg: NotePackage, titleIndex: number) => string;
   disabledHint?: string;
+  /** 直连投递声明(有 = 按钮走服务端直调,不再续聊过模型) */
+  direct?: {
+    platform: string;
+    buildPayload: (pkg: NotePackage, titleIndex: number) => Record<string, unknown>;
+    confirmText: (pkg: NotePackage, titleIndex: number) => string;
+  };
 }
 
 /** 单字段复制按钮:成功打勾、失败明示,不静默假成功 */
@@ -81,6 +92,11 @@ function NotePackageCard({
 }) {
   const [selectedTitle, setSelectedTitle] = useState(0);
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  /** 直连投递:确认弹窗(HIL)/在飞/失败内联报错/本地已投递态 */
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [justDelivered, setJustDelivered] = useState(false);
 
   const handleCopyAll = async () => {
     const ok = await copyToClipboard(buildNotePackageCopyText(pkg, selectedTitle));
@@ -88,13 +104,39 @@ function NotePackageCard({
     setTimeout(() => setCopyState('idle'), 2000);
   };
 
-  /** 存草稿箱:续聊同一 mission,Agent 按工坊声明的投递指令调存草稿工具(需我审批) */
+  /** 存草稿箱:direct 声明 = 确认弹窗 → 服务端直调(正文不过模型);否则回退旧续聊路径 */
   const handleDraft = () => {
     if (!draft) return;
+    if (draft.direct) {
+      setErrorText('');
+      setConfirmOpen(true);
+      return;
+    }
     onRunMission?.(draft.build(pkg, selectedTitle), undefined, missionId || undefined);
   };
 
-  const delivered = isDraftDelivered(draftDelivered, pkg.titles[selectedTitle], pkg.body);
+  /** 弹窗确认后:POST /api/workshops/deliver;失败关弹窗、内联报错,按钮可重试 */
+  const handleConfirmDeliver = async () => {
+    if (!draft?.direct) return;
+    setSending(true);
+    const res = await postDirectDelivery(
+      draft.direct.platform,
+      draft.direct.buildPayload(pkg, selectedTitle),
+      missionId,
+    );
+    setSending(false);
+    setConfirmOpen(false);
+    if (res.success) {
+      setJustDelivered(true);
+      setErrorText('');
+    } else {
+      setErrorText(res.error || '投递失败');
+    }
+  };
+
+  const delivered =
+    justDelivered || isDraftDelivered(draftDelivered, pkg.titles[selectedTitle], pkg.body);
+  const inFlight = draftInFlight || sending;
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
@@ -221,18 +263,20 @@ function NotePackageCard({
           </div>
         )}
 
-        {/* 存草稿箱:续聊本 mission → Agent 按工坊声明调存草稿工具(high 审批门);发布永远人工。
-            投递终态从 mission 步骤推导:已落稿 → 已投递不可再点(防重复存草稿);
-            任务在飞 → 投递中禁用;审批被拒/失败 → 无 DONE 步骤,按钮回到可点(可重试) */}
-        {onRunMission && draft && draftEnabled && (
+        {/* 存草稿箱:direct 声明 = 确认弹窗(HIL)→ 服务端直调落稿工具,正文不过模型;
+            无声明回退旧续聊路径(Agent 调工具,high 审批门)。发布永远人工。
+            投递终态从 mission 步骤推导(直连成功也会回写同形 DONE 步骤):
+            已落稿 → 已投递不可再点(防重复);任务在飞/直连在飞 → 禁用;
+            失败 → 内联报错,按钮回到可点(可重试) */}
+        {draft && draftEnabled && (draft.direct || onRunMission) && (
           <button
             type="button"
             onClick={handleDraft}
-            disabled={delivered || draftInFlight}
+            disabled={delivered || inFlight}
             className={`w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition shadow-xs ${
               delivered
                 ? 'bg-zinc-100 text-zinc-400 cursor-default'
-                : draftInFlight
+                : inFlight
                   ? 'bg-emerald-300 text-white cursor-not-allowed'
                   : 'bg-emerald-600 hover:bg-emerald-700 text-white'
             }`}
@@ -242,7 +286,7 @@ function NotePackageCard({
                 <Check className="h-3.5 w-3.5" />
                 已存入草稿箱
               </>
-            ) : draftInFlight ? (
+            ) : inFlight ? (
               <>
                 <span className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
                 投递中…
@@ -254,6 +298,29 @@ function NotePackageCard({
               </>
             )}
           </button>
+        )}
+
+        {/* 直连投递失败:内联报错(托管门引导/频控/网络),按钮保持可点重试 */}
+        {errorText && !delivered && (
+          <p className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-[11px] text-red-600 leading-relaxed">
+            {errorText}
+          </p>
+        )}
+
+        {/* HIL 确认弹窗(等价旧编排审批门的逐次放行):确认后才发起直连投递 */}
+        {draft?.direct && (
+          <ConfirmModal
+            open={confirmOpen}
+            title="直连投递确认"
+            message={draft.direct.confirmText(pkg, selectedTitle)}
+            confirmText="确认投递"
+            cancelText="再想想"
+            busy={sending}
+            onConfirm={handleConfirmDeliver}
+            onClose={() => {
+              if (!sending) setConfirmOpen(false);
+            }}
+          />
         )}
       </div>
     </div>

@@ -41,6 +41,23 @@ export interface WorkshopDep {
 }
 
 /**
+ * 直连投递声明(「文档+脚本」模式的服务端执行面,模型零参与):
+ * 卡片按钮 → HIL 确认弹窗 → POST /api/workshops/deliver → 服务端直调
+ * 落稿工具(与模型路径同一个工具实现,限频/审计/围栏全保留)。正文走
+ * 前端→服务端→平台,不进对话上下文 —— 旧续聊投递要把整篇正文内嵌进消息、
+ * 模型再逐字重吐进工具参数,一篇长文过模型两次外加整段历史重算,直连后
+ * 投递轮 token 成本归零。
+ */
+export interface DirectDraftDelivery<Pkg> {
+  /** 平台键(服务端白名单,与落稿工具一一对应;不在册的一律拒绝) */
+  platform: 'wechat_mp' | 'zhihu' | 'xhs';
+  /** pkg + 选中标题索引 → 落稿工具入参 payload(纯函数;服务端还会按工具 schema 白名单二次过滤) */
+  buildPayload: (pkg: Pkg, titleIndex: number) => Record<string, unknown>;
+  /** HIL 确认弹窗文案(支持 \n 换行):点明配额消耗与「终点是草稿箱、发布仍人工」 */
+  confirmText: (pkg: Pkg, titleIndex: number) => string;
+}
+
+/**
  * 存草稿投递声明:结构化交付物 → 平台存草稿工具的续聊指令(工域知识,归工坊包)。
  * 卡片按 mission 的 workshopId 经注册表解析到这里,不再按任务标题嗅探目标平台。
  */
@@ -51,8 +68,12 @@ export interface ArtifactDraftSpec<Pkg> {
    * 续聊指令 builder(纯函数):选中标题索引 → 指令文本。参数逐字内嵌(零漂移),
    * 且必须带纯执行边界句(调研与标题已定稿,勿重复调研/生成新候选)——
    * 生产实例(2026-10-11):只约束参数挡不住模型对上轮工作流的模式补全。
+   * 注意:声明了 direct 的工坊,卡片按钮走直连投递,不再经此续聊路径
+   * (build 保留给模型自主流程的工域知识与契约测试)。
    */
   build: (pkg: Pkg, titleIndex: number) => string;
+  /** 直连投递声明(按钮首选路径;缺省时回落续聊 build) */
+  direct?: DirectDraftDelivery<Pkg>;
   /** 托管写操作门:依赖的托管连接器 id;未声明 = 凭证内置,按钮恒可用 */
   managedGate?: 'xhs' | 'zhihu';
   /** managedGate 未开启时的引导文案(替代按钮) */

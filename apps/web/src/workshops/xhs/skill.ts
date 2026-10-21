@@ -5,7 +5,11 @@
  */
 import { Share2 } from 'lucide-react';
 import { buildXhsWorkshopPrompt, buildXhsWeeklyTopicsPrompt } from './context';
-import { buildXhsDraftReplyText } from './draft';
+import {
+  buildXhsDraftReplyText,
+  buildXhsDraftPayload,
+  buildXhsDraftConfirm,
+} from './draft';
 import { str, num } from '../shared/params';
 import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill, CronScenarioSpec } from '../types';
@@ -49,8 +53,13 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         kind: 'note-package',
         label: '小红书笔记包',
         draft: {
-          label: '存入草稿箱(经我审批后写入,发布由我在小红书 App 完成)',
+          label: '存入草稿箱(直连写入,发布由我在小红书 App 完成)',
           build: buildXhsDraftReplyText,
+          direct: {
+            platform: 'xhs',
+            buildPayload: buildXhsDraftPayload,
+            confirmText: buildXhsDraftConfirm,
+          },
           deliverTool: 'xhs_save_note_draft',
           managedGate: 'xhs',
           disabledHint:

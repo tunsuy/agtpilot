@@ -3,7 +3,11 @@
  */
 import { Newspaper } from 'lucide-react';
 import { buildWechatMpWorkshopPrompt } from './context';
-import { buildWechatMpDraftReplyText } from './draft';
+import {
+  buildWechatMpDraftReplyText,
+  buildWechatMpDraftPayload,
+  buildWechatMpDraftConfirm,
+} from './draft';
 import { str, num } from '../shared/params';
 import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill } from '../types';
@@ -33,8 +37,13 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         kind: 'article-package',
         label: '公众号文章包',
         draft: {
-          label: '投草稿箱(经我审批后写入,发布由我在后台人工完成)',
+          label: '投草稿箱(直连写入,发布由我在后台人工完成)',
           build: buildWechatMpDraftReplyText,
+          direct: {
+            platform: 'wechat_mp',
+            buildPayload: buildWechatMpDraftPayload,
+            confirmText: buildWechatMpDraftConfirm,
+          },
           deliverTool: 'wechat_mp_create_draft',
         },
       },

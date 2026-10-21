@@ -21,7 +21,7 @@ const step = (over: Partial<MissionStep>): MissionStep => ({
 const DONE_SAVE = step({ tool: 'xhs_save_note_draft', args: { title: '标题A', body: '正文内容' } });
 
 describe('buildDraftDeliveryIndex', () => {
-  it('落稿工具 DONE 调用的标题/正文进索引;body/content 双字段名都归一', () => {
+  it('落稿工具 DONE 调用的标题/正文进索引;body/content/markdown 三键名都归一', () => {
     const idx = buildDraftDeliveryIndex(
       [DONE_SAVE, step({ tool: 'wechat_mp_create_draft', args: { title: '标题B', content: '公众号正文' } })],
       'wechat_mp_create_draft',
@@ -29,6 +29,17 @@ describe('buildDraftDeliveryIndex', () => {
     expect(idx.titles.has('标题B')).toBe(true);
     expect(idx.bodies.has('公众号正文')).toBe(true);
     expect(idx.titles.has('标题A')).toBe(false); // 其他工具的调用不相干
+  });
+
+  it('公众号 markdown 键也归一到正文索引(直连步骤/真实工具步骤用 markdown 而非 body/content)', () => {
+    // 生产缺口:wechat_mp_create_draft 的参数键是 markdown,旧归一链只认 body/content,
+    // 公众号防重复投递一直只靠标题命中(模型/用户改标题就失效)
+    const idx = buildDraftDeliveryIndex(
+      [step({ tool: 'wechat_mp_create_draft', args: { title: '标题C', markdown: '公众号正文MD' } })],
+      'wechat_mp_create_draft',
+    );
+    expect(idx.bodies.has('公众号正文MD')).toBe(true);
+    expect(isDraftDelivered(idx, '被改过的标题', '公众号正文MD')).toBe(true); // 正文兜底生效
   });
 
   it('失败/执行中的落稿调用不算投递成功(被拒后可重试)', () => {

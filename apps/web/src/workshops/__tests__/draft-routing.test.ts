@@ -105,3 +105,83 @@ describe('resolveArtifactDraft · 按 mission.workshopId 路由(声明驱动,不
     expect(resolveArtifactDraft(undefined, 'note-package')?.disabledHint).toContain('托管写操作');
   });
 });
+
+describe('draft.direct 直连投递声明(「文档+脚本」模式:正文不过模型)', () => {
+  it('三工坊平台声明与 payload 键名对齐各自工具契约', () => {
+    // 公众号:wechat_mp_create_draft(title/digest/markdown;theme 由服务端从任务提取)
+    const mp = resolveArtifactDraft('wechat_mp', 'article-package');
+    expect(mp?.direct?.platform).toBe('wechat_mp');
+    expect(mp?.direct?.buildPayload(article, 0)).toEqual({
+      title: '大模型落地:别再谈概念了',
+      digest: '大模型落地的关键不在工程化路径。',
+      markdown: article.body,
+    });
+    // 知乎:zhihu_save_article_draft(title/body,body 传 Markdown 原文)
+    const zh = resolveArtifactDraft('zhihu', 'article-package');
+    expect(zh?.direct?.platform).toBe('zhihu');
+    expect(zh?.direct?.buildPayload(article, 1)).toEqual({
+      title: '从 demo 到生产的三道坎',
+      body: article.body,
+    });
+    // 小红书:xhs_save_note_draft(title/body/tags 数组)
+    const xhs = resolveArtifactDraft('xhs', 'note-package');
+    expect(xhs?.direct?.platform).toBe('xhs');
+    expect(xhs?.direct?.buildPayload(note, 0)).toEqual({
+      title: '平价通勤穿搭合集',
+      body: note.body,
+      tags: ['通勤穿搭', '平价穿搭'],
+    });
+  });
+
+  it('payload 不带任何指令性文本(纯数据,零模型参与);标题索引越界收敛', () => {
+    const mp = resolveArtifactDraft('wechat_mp', 'article-package');
+    const payload = mp?.direct?.buildPayload(article, 99);
+    expect(payload?.title).toBe('从 demo 到生产的三道坎'); // 越界收敛到末位
+    expect(mp?.direct?.buildPayload(article, -3).title).toBe('大模型落地:别再谈概念了');
+    // 键集合固定,没有塞给模型的指令字段
+    expect(Object.keys(payload || {}).sort()).toEqual(['digest', 'markdown', 'title']);
+  });
+
+  it('小红书 tags:截断到 10(工具 schema 上限的前置防线)', () => {
+    const many: NotePackage = {
+      ...note,
+      tags: Array.from({ length: 14 }, (_, i) => `标签${i}`),
+    };
+    const xhs = resolveArtifactDraft('xhs', 'note-package');
+    const tags = xhs?.direct?.buildPayload(many, 0).tags as string[];
+    expect(tags).toHaveLength(10);
+    expect(tags[0]).toBe('标签0');
+  });
+
+  it('confirmText(HIL 弹窗文案)点明直连语义/配额/人工发布边界', () => {
+    const mp = resolveArtifactDraft('wechat_mp', 'article-package');
+    const text = mp?.direct?.confirmText(article, 0) || '';
+    expect(text).toContain('《大模型落地:别再谈概念了》');
+    expect(text).toContain('直连投递');
+    expect(text).toContain('不经过 AI 对话');
+    expect(text).toContain('配额');
+    expect(text).toContain('人工完成');
+
+    const zh = resolveArtifactDraft('zhihu', 'article-package');
+    expect(zh?.direct?.confirmText(article, 0)).toContain('知乎草稿');
+    const xhs = resolveArtifactDraft('xhs', 'note-package');
+    expect(xhs?.direct?.confirmText(note, 0)).toContain('小红书草稿');
+  });
+
+  it('续聊 build 路径保留(模型自主流程兜底 + 旧数据回放),与 direct 同源同参', () => {
+    // direct 存在不意味着 build 作废:三工坊声明两者并存
+    for (const [ws, kind] of [
+      ['wechat_mp', 'article-package'],
+      ['zhihu', 'article-package'],
+      ['xhs', 'note-package'],
+    ] as const) {
+      const spec = resolveArtifactDraft(ws, kind);
+      expect(spec?.direct).toBeDefined();
+      expect(typeof spec?.build).toBe('function');
+    }
+    // build 仍产出内嵌全文的续聊指令(旧行为不变)
+    expect(resolveArtifactDraft('wechat_mp', 'article-package')?.build(article, 0)).toContain(
+      'wechat_mp_create_draft'
+    );
+  });
+});

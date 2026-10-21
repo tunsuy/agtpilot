@@ -3,7 +3,11 @@
  */
 import { PenLine } from 'lucide-react';
 import { buildZhihuWorkshopPrompt, ZHIHU_ARTICLE_STYLES } from './context';
-import { buildZhihuDraftReplyText } from './draft';
+import {
+  buildZhihuDraftReplyText,
+  buildZhihuDraftPayload,
+  buildZhihuDraftConfirm,
+} from './draft';
 import { str, num } from '../shared/params';
 import { parseMaterials } from '../shared/materials';
 import type { WorkshopSkill } from '../types';
@@ -33,8 +37,13 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         kind: 'article-package',
         label: '知乎文章包',
         draft: {
-          label: '存入知乎草稿(经我审批后填入,发布由我在知乎人工完成)',
+          label: '存入知乎草稿(直连填入,发布由我在知乎人工完成)',
           build: buildZhihuDraftReplyText,
+          direct: {
+            platform: 'zhihu',
+            buildPayload: buildZhihuDraftPayload,
+            confirmText: buildZhihuDraftConfirm,
+          },
           deliverTool: 'zhihu_save_article_draft',
           managedGate: 'zhihu',
           disabledHint:

@@ -207,7 +207,7 @@ export function DeliverablePicker({
                   type="button"
                   disabled={uploadSection.busy}
                   onClick={() => fileRef.current?.click()}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs text-zinc-700 hover:bg-zinc-50 transition disabled:opacity-50"
+                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs text-zinc-700 hover:bg-zinc-50 transition disabled:opacity-50"
                 >
                   <Upload className="h-3 w-3" />
                   {uploadSection.busy ? '处理中…' : '上传本地文件'}

@@ -215,6 +215,61 @@ describe('missions 每任务一文件', () => {
   });
 });
 
+describe('missions 保留窗口 · 手动/巡航分账(cruise-session-split)', () => {
+  /** 插入一条终态会话(startedAt 决定新旧) */
+  const saveRun = (uid: string, id: string, startedAt: number, extra: any = {}) =>
+    us.saveUserMission(uid, { id, goal: id, status: 'DONE', startedAt, steps: [], ...extra });
+
+  it('手动会话留最近 50,超限淘汰最旧且磁盘文件真实回收', () => {
+    const uid = 'cap-manual';
+    for (let i = 0; i < 55; i++) saveRun(uid, `manual_${i}`, 1000 + i);
+    const list = us.getUserMissions(uid);
+    expect(list).toHaveLength(50);
+    const ids = new Set(list.map((m: any) => m.id));
+    expect(ids.has('manual_54')).toBe(true); // 最新保留
+    expect(ids.has('manual_5')).toBe(true); // 第 50 新保留
+    expect(ids.has('manual_4')).toBe(false); // 最旧 5 条淘汰
+    // v2 每任务一文件:淘汰即 unlink,不残留占盘
+    expect(fs.existsSync(path.join(udir(uid), 'missions', 'manual_54.json'))).toBe(true);
+    expect(fs.existsSync(path.join(udir(uid), 'missions', 'manual_4.json'))).toBe(false);
+  });
+
+  it('巡航会话每任务留最近 20,不挤占手动窗口(改造前混算 50 会顶掉手动历史)', () => {
+    const uid = 'cap-cron';
+    for (let i = 0; i < 30; i++) saveRun(uid, `manual_${i}`, 1000 + i);
+    for (let i = 0; i < 25; i++)
+      saveRun(uid, `cron_a_${i}`, 2000 + i, { cronJobId: 'cron_a', title: '【自动巡航】任务A' });
+    const list = us.getUserMissions(uid);
+    const ids = list.map((m: any) => m.id);
+    // 手动 30 条一条没掉(旧行为:25 条巡航进来后只剩 25 条手动)
+    expect(ids.filter((id: string) => id.startsWith('manual_'))).toHaveLength(30);
+    const a = ids.filter((id: string) => id.startsWith('cron_a_'));
+    expect(a).toHaveLength(20);
+    expect(a).toContain('cron_a_24'); // 最新保留
+    expect(a).not.toContain('cron_a_4'); // 最旧 5 次淘汰
+    // 整体维持 startedAt 新前旧后(unshift 序不变量)
+    const started = list.map((m: any) => m.startedAt);
+    expect(started).toEqual([...started].sort((x, y) => y - x));
+  });
+
+  it('多个巡航任务各算各的窗口;旧数据无 cronJobId 按标题分组', () => {
+    const uid = 'cap-multi';
+    for (let i = 0; i < 22; i++)
+      saveRun(uid, `cron_b_${i}`, 3000 + i, { cronJobId: 'cron_b', title: '【自动巡航】任务B' });
+    for (let i = 0; i < 3; i++)
+      saveRun(uid, `cron_c_${i}`, 5000 + i, { cronJobId: 'cron_c', title: '【自动巡航】任务C' });
+    // 旧形态:无 cronJobId,靠标题前缀识别身份、标题分组
+    for (let i = 0; i < 21; i++) saveRun(uid, `legacy_${i}`, 7000 + i, { title: '【自动巡航】旧任务' });
+    const ids = us.getUserMissions(uid).map((m: any) => m.id);
+    expect(ids.filter((id: string) => id.startsWith('cron_b_'))).toHaveLength(20);
+    expect(ids.filter((id: string) => id.startsWith('cron_c_'))).toHaveLength(3); // 独立窗口不被 B 拖累
+    const legacy = ids.filter((id: string) => id.startsWith('legacy_'));
+    expect(legacy).toHaveLength(20);
+    expect(legacy).toContain('legacy_20');
+    expect(legacy).not.toContain('legacy_0');
+  });
+});
+
 describe('开关回退 · AGTPILOT_CONTEXT_STORE_V2=0', () => {
   it('关闭 → 走旧单文件路径;重新打开 → 懒迁移接管', () => {
     process.env.AGTPILOT_CONTEXT_STORE_V2 = '0';

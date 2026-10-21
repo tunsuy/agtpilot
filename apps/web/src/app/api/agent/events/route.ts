@@ -1,7 +1,7 @@
 import { getAgentBackend } from '@/lib/agent-backend';
 import { auth } from '@/auth';
 import { getUserMissions } from '@/lib/user-store';
-import { toWireMission, stripConversation } from '@/lib/mission-wire';
+import { splitMissionsForWire, stripConversation } from '@/lib/mission-wire';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,18 +33,25 @@ export async function GET() {
 
       // 1. 发送初始化状态（如果未登录，则不发送任何历史任务；如果已登录，合并用户专属任务与内存中的进行中任务）
       let scopedMissions: any[] = [];
+      let cronRuns: any[] = [];
+      let cronDeliverables: any[] = [];
       if (userId) {
         const persistedMissions = getUserMissions(userId);
         const activeMemoryMissions = backend.state.missions.filter((m) => m.userId === userId);
 
         // 合并：优先取 active 内存中的任务（包含最新进度），其余取持久化历史
         const activeIds = new Set(activeMemoryMissions.map((m) => m.id));
-        // 首屏瘦身(lib/mission-wire.ts):终态历史会话只发摘要(stripped),
-        // 前端选中时经 /api/agent/mission/[id] 懒回水;conversationMessages 一律不下发
-        scopedMissions = [
-          ...activeMemoryMissions.map(toWireMission),
-          ...persistedMissions.filter((m) => !activeIds.has(m.id)).map(toWireMission),
-        ];
+        // 首屏瘦身(lib/mission-wire.ts):终态历史会话只发摘要,前端选中时经
+        // /api/agent/mission/[id] 懒回水;conversationMessages 一律不下发。
+        // 巡航会话分流(docs/design/cruise-session-split.md):工作台 missions
+        // 只装手动会话,巡航拆成执行历史行 + 交付物摘要两路轻量投影
+        const split = splitMissionsForWire([
+          ...activeMemoryMissions,
+          ...persistedMissions.filter((m) => !activeIds.has(m.id)),
+        ]);
+        scopedMissions = split.missions;
+        cronRuns = split.cronRuns;
+        cronDeliverables = split.cronDeliverables;
       }
 
       const activeMissionId = userId
@@ -55,6 +62,9 @@ export async function GET() {
         ...backend.state,
         missions: scopedMissions,
         activeMissionId,
+        // 巡航会话分流下行(docs/design/cruise-session-split.md),与 state 路由同构
+        cronRuns,
+        cronDeliverables,
         // 终端日志按归属过滤（未标记 userId 的全局系统日志保留）
         terminalLogs: userId
           ? backend.state.terminalLogs.filter((l) => !l.userId || l.userId === userId)

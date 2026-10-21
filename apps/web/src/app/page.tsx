@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import { CopilotKit } from '@copilotkit/react-core';
 import { Navbar } from '../components/Navbar';
@@ -38,9 +38,11 @@ import {
   ConnectorApp,
   MemoryItem,
   CronJobItem,
+  CronRunMeta,
   GoalItem,
   GoalMilestone,
 } from '../types/agent';
+import { isCronMission, toCronRunMeta, toWireMission } from '../lib/mission-wire';
 import type { CronScenario } from '../lib/cron-scenario';
 
 export default function Workspace() {
@@ -137,6 +139,11 @@ export default function Workspace() {
 
   // 主动巡航 Cron Jobs 状态
   const [cronJobs, setCronJobs] = useState<CronJobItem[]>([]);
+  // 巡航会话分流(docs/design/cruise-session-split.md):巡航会话不进工作台
+  // missions 列表,执行历史行(cronRuns)给巡航中心任务卡,交付物摘要行
+  // (cronDeliverables)并入交付库/工坊素材选择器的数据源
+  const [cronRuns, setCronRuns] = useState<CronRunMeta[]>([]);
+  const [cronDeliverables, setCronDeliverables] = useState<Mission[]>([]);
 
   const loadCronJobs = async () => {
     try {
@@ -218,11 +225,40 @@ export default function Workspace() {
       });
       const data = await res.json();
       if (data.jobs) setCronJobs(data.jobs);
-      setActiveView('cockpit');
+      // 不再跳工作台:巡航会话不进工作台列表(cruise-session-split),
+      // 留在巡航页看「最近执行」实时冒出新行,想细看再点「查看会话」
     } catch (e) {
       console.error(e);
     }
   };
+
+  /**
+   * 从巡航中心打开某次执行的会话详情:巡航会话不随 state/init 下发,
+   * 现场经 /api/agent/mission/[id] 懒回水全量后注入会话列表并跳工作台
+   * (列表侧按 isCronMission 过滤,仅选中期间可见,不占历史会话坑位)。
+   */
+  const openCronRun = async (missionId: string) => {
+    try {
+      const res = await fetch(`/api/agent/mission/${encodeURIComponent(missionId)}`);
+      const data = await res.json();
+      if (!data.success || !data.mission) return;
+      const full: Mission = { ...data.mission, stripped: false };
+      setMissions((prev) => [full, ...prev.filter((m) => m.id !== full.id)]);
+      setActiveMissionId(full.id);
+      setActiveView('cockpit');
+      setMobileTab('activity');
+      setMobileOverlay(null);
+    } catch {
+      // 静默:再次点击即重试
+    }
+  };
+
+  // 交付库/工坊素材选择器数据源:手动会话 + 巡航交付物摘要行(按 id 去重,
+  // 点开注入的巡航会话已在 missions 里,优先用其全量行)
+  const deliverableMissions = useMemo(() => {
+    const seen = new Set(missions.map((m) => m.id));
+    return [...missions, ...cronDeliverables.filter((m) => !seen.has(m.id))];
+  }, [missions, cronDeliverables]);
 
   // 长期目标与里程碑状态
   const [goals, setGoals] = useState<GoalItem[]>([]);
@@ -705,6 +741,21 @@ export default function Workspace() {
     }
   }, [deepLinkMissionId, missions]);
 
+  // 深链目标不在下发列表 = 巡航会话(state/init 已分流,不再进工作台 missions,
+  // docs/design/cruise-session-split.md):延时兜底现场懒回水注入后打开。
+  // 手动会话由上方 exists effect 命中,不会走到这里;openCronRun 对手动会话
+  // 同样幂等可用(慢网下 init 迟到时误触发也无害)
+  useEffect(() => {
+    if (!deepLinkMissionId) return;
+    if (missions.some((m) => m.id === deepLinkMissionId)) return;
+    const target = deepLinkMissionId;
+    const t = setTimeout(() => {
+      void openCronRun(target);
+      setDeepLinkMissionId((cur) => (cur === target ? null : cur));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [deepLinkMissionId, missions]);
+
   /**
    * 历史会话懒回水(首屏瘦身配套,lib/mission-wire.ts):state/init 对终态
    * 会话只带摘要(stripped,steps/terminalLogs/viewport 已剥),选中某条时经
@@ -789,6 +840,8 @@ export default function Workspace() {
       const data = await res.json();
       if (data.state) {
         if (data.state.missions) mergeWireMissions(data.state.missions);
+        if (data.state.cronRuns) setCronRuns(data.state.cronRuns);
+        if (data.state.cronDeliverables) setCronDeliverables(data.state.cronDeliverables);
         if (data.state.activeMissionId) setActiveMissionId(data.state.activeMissionId);
         if (data.state.viewport) setViewport(data.state.viewport);
         if (data.state.terminalLogs) setTerminalLogs(data.state.terminalLogs);
@@ -831,6 +884,8 @@ export default function Workspace() {
         try {
           const state = JSON.parse(e.data);
           if (state.missions) mergeWireMissions(state.missions);
+          if (state.cronRuns) setCronRuns(state.cronRuns);
+          if (state.cronDeliverables) setCronDeliverables(state.cronDeliverables);
           if (state.activeMissionId) setActiveMissionId(state.activeMissionId);
           if (state.viewport) setViewport(state.viewport);
           if (state.terminalLogs) setTerminalLogs(state.terminalLogs);
@@ -867,6 +922,14 @@ export default function Workspace() {
       eventSource.addEventListener('mission_created', (e: MessageEvent) => {
         try {
           const mission: Mission = JSON.parse(e.data);
+          // 巡航会话分流(docs/design/cruise-session-split.md):不进工作台
+          // 列表、不抢焦点(旧行为:巡航触发会把用户当前会话硬切到巡航会话,
+          // 日更任务每天打断一次)。执行历史行进 cronRuns,巡航中心实时可见
+          if (isCronMission(mission)) {
+            const row = toCronRunMeta(mission);
+            setCronRuns((prev) => [row, ...prev.filter((r) => r.id !== row.id)]);
+            return;
+          }
           // 后台子 mission(带 parentMissionId):只并入列表(父会话行下挂 chip),
           // 【不抢焦点】—— 无条件切视图会把用户当前会话切走(子任务创建瞬间);
           // 也不动乐观占位(占位只属于用户亲手发起的会话,父 mission_created 必
@@ -893,7 +956,29 @@ export default function Workspace() {
       eventSource.addEventListener('mission_updated', (e: MessageEvent) => {
         try {
           const updated: Mission = JSON.parse(e.data);
+          // missions 里只有手动会话 + 从巡航中心点开注入的巡航会话;
+          // 未点开的巡航会话 map 是 no-op,不会混进工作台列表
           setMissions((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+          if (isCronMission(updated)) {
+            // 巡航执行历史行实时刷新(状态翻转/失败尾步/交付物标记)
+            const row = toCronRunMeta(updated);
+            setCronRuns((prev) =>
+              [row, ...prev.filter((r) => r.id !== row.id)].sort(
+                (a, b) => (b.startedAt || 0) - (a.startedAt || 0)
+              )
+            );
+            // 终态且带交付物 → 补入交付物索引(交付库/工坊素材选择器消费;
+            // 与 state/init 的 cronDeliverables 同构:终态摘要投影,含 artifact)
+            if (
+              (updated.status === 'DONE' || updated.status === 'INTERRUPTED') &&
+              updated.artifact?.content
+            ) {
+              setCronDeliverables((prev) => [
+                toWireMission(updated) as Mission,
+                ...prev.filter((x) => x.id !== updated.id),
+              ]);
+            }
+          }
         } catch (err) {
           console.error(err);
         }
@@ -1195,7 +1280,7 @@ export default function Workspace() {
                   if (depId) setConnectorLocate(depId);
                   setMobileOverlay('connectors');
                 }}
-                missions={missions}
+                missions={deliverableMissions}
               />
             )}
             {mobileOverlay === 'memories' && (
@@ -1213,6 +1298,8 @@ export default function Workspace() {
                 onToggleJob={handleToggleCronJob}
                 onDeleteJob={handleDeleteCronJob}
                 onTriggerJob={handleTriggerCronJob}
+                runs={cronRuns}
+                onOpenRun={openCronRun}
               />
             )}
           </div>
@@ -1249,7 +1336,7 @@ export default function Workspace() {
               {mobileTab === 'deliverables' && (
                 <DeliverablesView
                   artifact={artifact}
-                  missions={missions}
+                  missions={deliverableMissions}
                   variant="mobile"
                   onOpenCockpit={() => setMobileTab('activity')}
                   onRunMission={handleRun}
@@ -1447,7 +1534,7 @@ export default function Workspace() {
                   if (depId) setConnectorLocate(depId);
                   handleViewChange('connectors');
                 }}
-                missions={missions}
+                missions={deliverableMissions}
               />
             </main>
           )}
@@ -1485,6 +1572,8 @@ export default function Workspace() {
                 onToggleJob={handleToggleCronJob}
                 onDeleteJob={handleDeleteCronJob}
                 onTriggerJob={handleTriggerCronJob}
+                runs={cronRuns}
+                onOpenRun={openCronRun}
               />
             </main>
           )}
@@ -1493,7 +1582,7 @@ export default function Workspace() {
             <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
               <DeliverablesView
                 artifact={artifact}
-                missions={missions}
+                missions={deliverableMissions}
                 onOpenCockpit={() => setActiveView('cockpit')}
                 onRunMission={handleRun}
               />

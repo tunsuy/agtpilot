@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { encryptSecret, decryptSecret, isEncrypted } from './secret-box';
 import { getGovernanceBus } from './governance-bus';
+import { isCronMission } from './mission-wire';
 import type { ScenarioProfile } from './scenario-profile';
 import { isPrivateOrReservedIp, DEFAULT_CREDENTIAL_BINDINGS } from '@agtpilot/core';
 import {
@@ -535,6 +536,11 @@ export function getUserMissions(userId: string): any[] {
   return missions;
 }
 
+/** 保留窗口(docs/design/cruise-session-split.md):手动会话最近 50 条 */
+export const MISSIONS_MANUAL_CAP = 50;
+/** 保留窗口:巡航会话每任务最近 20 次(旧数据无 cronJobId,按标题分组) */
+export const MISSIONS_PER_CRON_JOB_CAP = 20;
+
 export function saveUserMission(userId: string, mission: any) {
   const data = getUserData(userId);
   data.missions = data.missions || [];
@@ -543,10 +549,26 @@ export function saveUserMission(userId: string, mission: any) {
     data.missions[existingIdx] = { ...data.missions[existingIdx], ...mission };
   } else {
     data.missions.unshift(mission);
-    // 仅保留最近 50 条任务记录，避免单文件无限膨胀
-    if (data.missions.length > 50) {
-      data.missions = data.missions.slice(0, 50);
+    // 保留窗口按来源分账:手动会话与巡航会话各算各的,互不挤占 ——
+    // 此前混算 50 条,一个日更巡航任务 50 天就把手动会话全部顶出窗口。
+    // data.missions 新前旧后(unshift 序),顺序遍历即"留最近 N 条"。
+    const manual: any[] = [];
+    const cronByJob = new Map<string, any[]>();
+    for (const m of data.missions) {
+      if (!isCronMission(m)) {
+        if (manual.length < MISSIONS_MANUAL_CAP) manual.push(m);
+        continue;
+      }
+      const key = String(m.cronJobId || m.title);
+      const list = cronByJob.get(key) || [];
+      if (list.length < MISSIONS_PER_CRON_JOB_CAP) {
+        list.push(m);
+        cronByJob.set(key, list);
+      }
     }
+    data.missions = [...manual, ...[...cronByJob.values()].flat()].sort(
+      (a: any, b: any) => (b.startedAt || 0) - (a.startedAt || 0)
+    );
   }
   saveUserData(data);
   missionsReadCache.delete(userId);

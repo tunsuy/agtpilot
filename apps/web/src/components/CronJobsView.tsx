@@ -16,29 +16,52 @@ import {
   HelpCircle,
   Timer,
   Zap,
+  History,
 } from 'lucide-react';
-import { CronJobItem } from '../types/agent';
+import { CronJobItem, CronRunMeta } from '../types/agent';
 import { formatCronNextRun, isValidCronPattern } from '@/lib/cron-utils';
+import { CRUISE_TITLE_PREFIX } from '@/lib/mission-wire';
 import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
 import { buildOssRadarPrompt } from '@/workshops/oss_radar/context';
 import type { CronScenario } from '@/lib/cron-scenario';
 
 interface CronJobsViewProps {
   jobs: CronJobItem[];
+  /** 巡航执行历史行(state/init cronRuns 下行 + SSE 广播实时更新) */
+  runs?: CronRunMeta[];
   onCreateJob: (job: { name: string; pattern: string; prompt: string; scenario?: CronScenario }) => Promise<void>;
   onUpdateJob?: (job: { id: string; name: string; pattern: string; prompt: string }) => Promise<void>;
   onToggleJob: (id: string) => Promise<void>;
   onDeleteJob: (id: string) => Promise<void>;
   onTriggerJob?: (id: string) => Promise<void>;
+  /** 点开某次执行的会话详情(懒回水后跳工作台打开) */
+  onOpenRun?: (missionId: string) => void;
+}
+
+/** 执行历史行的状态展示(与工作台会话状态枚举对齐) */
+const RUN_STATUS_META: Record<string, { text: string; dot: string }> = {
+  ACTIVE: { text: '执行中', dot: 'bg-blue-500 animate-pulse' },
+  QUEUED: { text: '排队中', dot: 'bg-blue-300' },
+  WAITING_APPROVAL: { text: '等待中', dot: 'bg-blue-300' },
+  DONE: { text: '已完成', dot: 'bg-emerald-500' },
+  INTERRUPTED: { text: '已中断', dot: 'bg-zinc-400' },
+};
+
+function formatRunTime(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 export function CronJobsView({
   jobs,
+  runs,
   onCreateJob,
   onUpdateJob,
   onToggleJob,
   onDeleteJob,
   onTriggerJob,
+  onOpenRun,
 }: CronJobsViewProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
@@ -48,6 +71,13 @@ export function CronJobsView({
   const [isSaving, setIsSaving] = useState(false);
   // 预设带来的场景标记(scenario 任务触发时按最新档案重建 prompt,表单里的 prompt 仅作展示快照)
   const [presetScenario, setPresetScenario] = useState<CronScenario | null>(null);
+
+  // 该任务的执行历史行:结构化 jobId 优先;旧数据(无 jobId)按标题约定匹配
+  // (runs 服务端已按 startedAt 新前旧后排序)
+  const runsOf = (job: CronJobItem) =>
+    (runs || []).filter(
+      (r) => r.jobId === job.id || (!r.jobId && r.title === `${CRUISE_TITLE_PREFIX}${job.name}`)
+    );
 
   const presets: Array<{ title: string; pattern: string; prompt: string; scenario?: CronScenario }> = [
     {
@@ -325,6 +355,57 @@ export function CronJobsView({
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
+                  </div>
+
+                  {/* 最近执行(docs/design/cruise-session-split.md):巡航会话不再进
+                      工作台历史会话列表,执行历史直接在任务卡下展示,点开跳工作台看详情 */}
+                  <div className="mt-3 pt-3 border-t border-zinc-100">
+                    <p className="text-[11px] font-medium text-zinc-400 mb-1.5 flex items-center gap-1">
+                      <History className="h-3 w-3" /> 最近执行
+                    </p>
+                    {runsOf(job).length === 0 ? (
+                      <p className="text-[11px] text-zinc-300">暂无执行记录</p>
+                    ) : (
+                      <>
+                        <ul className="space-y-1">
+                          {runsOf(job)
+                            .slice(0, 5)
+                            .map((r) => {
+                              const meta = RUN_STATUS_META[r.status] || { text: r.status, dot: 'bg-zinc-300' };
+                              const failed = r.status === 'DONE' && r.hasErrorStep;
+                              return (
+                                <li key={r.id} className="flex items-center gap-2 text-[11px] text-zinc-500">
+                                  <span
+                                    className={`h-1.5 w-1.5 rounded-full shrink-0 ${failed ? 'bg-red-500' : meta.dot}`}
+                                  />
+                                  <span className="font-mono text-zinc-400 shrink-0">{formatRunTime(r.startedAt)}</span>
+                                  <span className={failed ? 'text-red-500' : r.status === 'DONE' ? 'text-emerald-600' : 'text-zinc-500'}>
+                                    {failed ? '已完成(有失败步骤)' : meta.text}
+                                  </span>
+                                  {r.hasArtifact && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-600 border border-violet-200/60 shrink-0">
+                                      交付物
+                                    </span>
+                                  )}
+                                  {onOpenRun && (
+                                    <button
+                                      onClick={() => onOpenRun(r.id)}
+                                      className="ml-auto shrink-0 text-[11px] text-zinc-400 hover:text-violet-600 transition"
+                                    >
+                                      查看会话 →
+                                    </button>
+                                  )}
+                                </li>
+                              );
+                            })}
+                        </ul>
+                        {runsOf(job).length > 5 && (
+                          <p className="text-[10px] text-zinc-300 mt-1">
+                            仅显示最近 5 次(每任务保留最近 20 次,更早的自动清理)
+                          </p>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               );

@@ -60,3 +60,75 @@ export function toWireMission(m: any): any {
     stripped: true,
   };
 }
+
+/** 巡航会话标题前缀(agent-backend 两条巡航触发路径统一拼装) */
+export const CRUISE_TITLE_PREFIX = '【自动巡航】';
+
+/**
+ * 巡航会话判定(docs/design/cruise-session-split.md):结构化标记 cronJobId
+ * 为唯一事实源;旧数据无该字段,按标题前缀兜底识别(零迁移)。
+ * 纯谓词,服务端(下行分流/持久化分窗)与客户端(列表过滤/广播路由)共用。
+ */
+export function isCronMission(m: any): boolean {
+  if (!m || typeof m !== 'object') return false;
+  if (typeof m.cronJobId === 'string' && m.cronJobId.trim()) return true;
+  return typeof m.title === 'string' && m.title.startsWith(CRUISE_TITLE_PREFIX);
+}
+
+/**
+ * 巡航会话 → 执行历史行(state/init 的 cronRuns 下行)。
+ * 与 toWireMission 的终态摘要不同:任何状态都只发元信息(不带 steps/artifact
+ * 正文),巡航中心列表渲染够用,详情走 /api/agent/mission/[id] 懒回水。
+ * hasErrorStep 复用 toWireMission 同款尾步判定(已算好的 stripped 行直接沿用)。
+ */
+export function toCronRunMeta(m: any): any {
+  const hasErrorStep =
+    typeof m?.hasErrorStep === 'boolean'
+      ? m.hasErrorStep
+      : Array.isArray(m?.steps) &&
+        m.steps.some((s: any) => typeof s?.id === 'string' && s.id.startsWith('step_err_'));
+  return {
+    id: m.id,
+    ...(m.cronJobId ? { jobId: m.cronJobId } : {}),
+    title: m.title,
+    status: m.status,
+    startedAt: m.startedAt,
+    hasErrorStep,
+    hasArtifact: Boolean(m.artifact?.content),
+  };
+}
+
+/** 巡航执行历史行下行上限(纯元信息,轻量) */
+export const CRON_RUNS_WIRE_CAP = 100;
+/** 巡航交付物摘要行下行上限(含 artifact 正文,交付库/素材选择器跨会话消费) */
+export const CRON_DELIVERABLES_WIRE_CAP = 50;
+
+/**
+ * state/init 下行分流(docs/design/cruise-session-split.md):merged 为内存 +
+ * 持久化合并去重后的该用户全量会话。手动会话 → toWireMission 进工作台
+ * missions;巡航会话不再进工作台,拆成两路轻量投影:
+ * - cronRuns:执行历史行(巡航中心任务卡「最近执行」消费);
+ * - cronDeliverables:终态且带交付物正文的摘要行(交付库/工坊素材消费)。
+ *   ACTIVE 巡航会话的交付物随会话演进,不进静态索引,DONE 后经广播补入。
+ */
+export function splitMissionsForWire(merged: any[]): {
+  missions: any[];
+  cronRuns: any[];
+  cronDeliverables: any[];
+} {
+  const manual: any[] = [];
+  const cron: any[] = [];
+  for (const m of merged) {
+    if (isCronMission(m)) cron.push(m);
+    else manual.push(m);
+  }
+  cron.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  return {
+    missions: manual.map(toWireMission),
+    cronRuns: cron.slice(0, CRON_RUNS_WIRE_CAP).map(toCronRunMeta),
+    cronDeliverables: cron
+      .filter((m) => TERMINAL_STATUSES.has(m.status) && m.artifact?.content)
+      .slice(0, CRON_DELIVERABLES_WIRE_CAP)
+      .map(toWireMission),
+  };
+}

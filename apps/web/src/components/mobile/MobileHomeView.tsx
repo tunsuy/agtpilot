@@ -3,6 +3,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ArrowUp, Loader2, Square, ChevronRight, CheckCircle2, AlertCircle, Hourglass, ShieldQuestion } from 'lucide-react';
 import { Mission } from '../../types/agent';
+import { isCronMission } from '../../lib/mission-wire';
 
 interface MobileHomeViewProps {
   missions: Mission[];
@@ -60,12 +61,20 @@ export function MobileHomeView({
   const [draft, setDraft] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // 巡航会话不进移动端首页的进行中/最近完成列表(执行历史在巡航中心,
+  // docs/design/cruise-session-split.md)
   const ongoing = useMemo(
-    () => missions.filter((m) => m.status === 'ACTIVE' || m.status === 'QUEUED' || m.status === 'WAITING_APPROVAL'),
+    () =>
+      missions.filter(
+        (m) => !isCronMission(m) && (m.status === 'ACTIVE' || m.status === 'QUEUED' || m.status === 'WAITING_APPROVAL')
+      ),
     [missions]
   );
   const recentDone = useMemo(
-    () => missions.filter((m) => m.status !== 'ACTIVE' && m.status !== 'QUEUED' && m.status !== 'WAITING_APPROVAL'),
+    () =>
+      missions.filter(
+        (m) => !isCronMission(m) && m.status !== 'ACTIVE' && m.status !== 'QUEUED' && m.status !== 'WAITING_APPROVAL'
+      ),
     [missions]
   );
   const [showAllHistory, setShowAllHistory] = useState(false);

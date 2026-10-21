@@ -24,6 +24,7 @@ import { QuestionCard } from '../QuestionCard';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
+import { isCronMission } from '../../lib/mission-wire';
 import { isRunnerTaskActive, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, partitionApprovalsByMission, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { formatTokenCount } from '../../lib/mission-efficiency';
 import { ConfirmModal } from '../ConfirmModal';
@@ -164,8 +165,15 @@ export function MobileActivityView({
   );
 
   // 后台子任务(带 parentMissionId)不占任务切换条坑位(与桌面 sidebar 同规则):
-  // 子任务进展在父会话的通知卡/活动行可见;顶层只列用户发起的会话
-  const topMissions = useMemo(() => missions.filter((m) => !m.parentMissionId), [missions]);
+  // 子任务进展在父会话的通知卡/活动行可见;顶层只列用户发起的会话。
+  // 巡航会话不占坑(与桌面同规则):仅从巡航中心点开且正被选中时可见
+  const topMissions = useMemo(
+    () =>
+      missions.filter(
+        (m) => !m.parentMissionId && (!isCronMission(m) || m.id === activeMissionId)
+      ),
+    [missions, activeMissionId]
+  );
 
   // 发布审批归回来源会话(与桌面驾驶舱同规则):切会话不再全局跟随卡片;
   // hidden 走「待你审批」下方的细条提示 + 跳回来源会话,不会静默漏掉

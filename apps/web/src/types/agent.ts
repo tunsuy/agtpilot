@@ -134,6 +134,13 @@ export interface Mission {
    *  记忆蒸馏层据此识别「首条消息是工坊表单参数拼装」,不把单次选择沉淀为长期定位 */
   workshopId?: string;
   /**
+   * 巡航任务 id(docs/design/cruise-session-split.md):定时触发与巡航页「立即
+   * 执行」派生的会话携带,是「巡航会话 vs 手动会话」分流的身份事实源 ——
+   * 工作台列表过滤、state/init 下行分流、持久化分窗保留(手动 50 / 每任务 20)
+   * 全读它。旧数据无此字段,按标题【自动巡航】前缀兜底识别(isCronMission)。
+   */
+  cronJobId?: string;
+  /**
    * 父任务 id(docs/design/background-child-missions.md):经
    * launch_background_task 派生的后台子 mission 携带,是子任务身份的唯一
    * 事实源 —— 完成回注唤醒父任务、活动列表折叠分组、DONE push 抑制、
@@ -168,6 +175,26 @@ export interface Mission {
   stepCount?: number;
   /** stripped 摘要携带:失败尾步(step_err_)判定前置计算,子任务 chip「失败」态用 */
   hasErrorStep?: boolean;
+}
+
+/**
+ * 巡航会话执行历史行(state/init 的 cronRuns 下行,docs/design/cruise-session-split.md)。
+ * 巡航会话不再进工作台 missions 列表,巡航中心任务卡下的「最近执行」读本行;
+ * 刻意不带 steps/artifact 正文 —— 详情经 /api/agent/mission/[id] 懒回水,
+ * 交付物走独立的 cronDeliverables 摘要行。
+ */
+export interface CronRunMeta {
+  /** 会话(mission)id */
+  id: string;
+  /** 归属巡航任务 id;旧数据(标题前缀兜底识别的)无此字段,前端按任务名匹配 */
+  jobId?: string;
+  title: string;
+  status: Mission['status'];
+  startedAt: number;
+  /** 失败尾步标记(列表红点) */
+  hasErrorStep?: boolean;
+  /** 是否带交付物(列表 chip;正文在 cronDeliverables / 懒回水里) */
+  hasArtifact?: boolean;
 }
 
 export interface ViewportState {

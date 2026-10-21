@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getAgentBackend } from '@/lib/agent-backend';
 import { auth } from '@/auth';
 import { getUserMissions } from '@/lib/user-store';
-import { toWireMission } from '@/lib/mission-wire';
+import { splitMissionsForWire } from '@/lib/mission-wire';
 
 export async function GET() {
   const session = await auth();
@@ -24,16 +24,23 @@ export async function GET() {
   }
 
   let scopedMissions: any[] = [];
+  let cronRuns: any[] = [];
+  let cronDeliverables: any[] = [];
   if (userId) {
     const persistedMissions = getUserMissions(userId);
     const activeMemoryMissions = backend.state.missions.filter((m) => m.userId === userId);
     const activeIds = new Set(activeMemoryMissions.map((m) => m.id));
     // 首屏瘦身(lib/mission-wire.ts):终态历史会话只发摘要,选中再懒回水;
-    // conversationMessages 一律不下发(前端零消费,续聊回水走服务端持久化库)
-    scopedMissions = [
-      ...activeMemoryMissions.map(toWireMission),
-      ...persistedMissions.filter((m) => !activeIds.has(m.id)).map(toWireMission),
-    ];
+    // conversationMessages 一律不下发(前端零消费,续聊回水走服务端持久化库)。
+    // 巡航会话分流(docs/design/cruise-session-split.md):工作台 missions 只装
+    // 手动会话;巡航拆成执行历史行 + 交付物摘要两路轻量投影
+    const split = splitMissionsForWire([
+      ...activeMemoryMissions,
+      ...persistedMissions.filter((m) => !activeIds.has(m.id)),
+    ]);
+    scopedMissions = split.missions;
+    cronRuns = split.cronRuns;
+    cronDeliverables = split.cronDeliverables;
   }
 
   const activeMissionId = userId
@@ -44,6 +51,10 @@ export async function GET() {
     ...backend.state,
     missions: scopedMissions,
     activeMissionId,
+    // 巡航会话分流下行(docs/design/cruise-session-split.md):执行历史行 +
+    // 交付物摘要,巡航中心与交付库/素材选择器各自消费
+    cronRuns,
+    cronDeliverables,
     terminalLogs: userId ? backend.state.terminalLogs : [],
     // 挂起审批按归属过滤，与 events 路由同规则，避免串台/泄露
     approvalRequests: userId

@@ -10,11 +10,7 @@ import { CalendarClock, Lightbulb, Loader2, Smartphone } from 'lucide-react';
 import { XHS_WORKSHOP_STYLES, buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
 import { WEIBO_WORKSHOP_STYLES } from '@/workshops/weibo/context';
 import { VIDEO_SCRIPT_DURATIONS } from '@/workshops/video/context';
-import {
-  findLatestTopicPicks,
-  hasRunningTopicMission,
-  type TopicPicksMissionLike,
-} from '@/workshops/xhs/topic-picks';
+import { type TopicPick } from '@/workshops/xhs/topic-picks';
 import { openAppScheme, isNativePlatform } from '../../../utils/nativeBridge';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { CronJobItem, Mission } from '../../../types/agent';
@@ -34,7 +30,8 @@ interface Props {
   scenarioProfile?: ScenarioProfile | null;
   /** 点击摘要条「查看/编辑」打开档案向导 */
   onEditProfile?: () => void;
-  /** 全量任务列表(WorkshopsView 下传):弹窗内嵌最近一次选题清单的可勾选卡片 */
+  /** 任务列表(WorkshopsView 下传,含巡航交付物摘要行):「参考资料」选择器的会话交付物来源。
+   *  选题清单不再从这里找 —— 巡航会话分流后前端列表没有锚点行,改服务端查询(下方 topicState) */
   missions?: Mission[];
 }
 
@@ -199,8 +196,39 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
   );
 
   // ---- 本周选题:弹窗内「立即出选题 + 勾选成稿」(闭环从会话页搬进弹窗) ----
-  const topicPicks = isXhs ? findLatestTopicPicks((missions || []) as TopicPicksMissionLike[]) : null;
-  const topicRunning = isXhs ? hasRunningTopicMission(missions || []) : false;
+  // 查找改服务端查询(/api/workshops/xhs/topic-picks):巡航会话分流下行后
+  // 前端会话列表不再有锚点行,且终态摘要本就不带步骤正文(旧前端查找刷新
+  // 后即解析不到,半残)。服务端直查持久化库全量 steps,刷新后清单稳定可见。
+  const [topicState, setTopicState] = useState<{
+    picks: TopicPick[];
+    fallback: string | null;
+    missionId: string | null;
+    running: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (!isXhs) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/workshops/xhs/topic-picks');
+        const data = await res.json();
+        if (!cancelled && data.success) setTopicState(data);
+      } catch {
+        // 静默:弹窗退回「立即出选题」入口
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isXhs]);
+  const topicPicks =
+    topicState && topicState.picks.length > 0
+      ? {
+          missionId: topicState.missionId,
+          result: { picks: topicState.picks, fallback: topicState.fallback },
+        }
+      : null;
+  const topicRunning = Boolean(topicState?.running);
   /** 发起选题任务:与订阅同款 prompt(已托管登录则读小红书热门话题,否则降级),标题带标记供弹窗回查 */
   const launchTopics = () =>
     onRun(

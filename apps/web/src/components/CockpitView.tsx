@@ -55,6 +55,7 @@ import {
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { ActivityFeedView } from './ActivityFeedView';
 import { BackgroundChildPanel, extractChildMissionId, childStatusMeta } from './BackgroundChildPanel';
+import { isCronMission } from '../lib/mission-wire';
 import { NotePackageList } from './workshops/NotePackageCard';
 import { parseNotePackages } from '../workshops/xhs/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
@@ -217,8 +218,12 @@ export function CockpitView({
   const runnerTaskForMission = (missionId: string): RunnerTaskSummary | null =>
     runnerTasks.find((t) => t.missionId === missionId) ?? null;
   // 后台子任务(带 parentMissionId)不占活动列表顶层坑位:父会话行下挂
-  // chip(点开完整子会话 = 逃生舱);过程折叠面板走 BackgroundChildPanel
-  const topLevelMissions = missions.filter((m) => !m.parentMissionId);
+  // chip(点开完整子会话 = 逃生舱);过程折叠面板走 BackgroundChildPanel。
+  // 巡航会话(cronJobId/【自动巡航】前缀)不占坑:执行历史在巡航中心任务卡下,
+  // 仅从巡航中心点开注入且正被选中时可见(docs/design/cruise-session-split.md)
+  const topLevelMissions = missions.filter(
+    (m) => !m.parentMissionId && (!isCronMission(m) || m.id === activeMissionId)
+  );
   const childrenOf = (missionId: string) => missions.filter((m) => m.parentMissionId === missionId);
   useEffect(() => {
     (async () => {

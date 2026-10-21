@@ -1550,7 +1550,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string; cronJobId?: string } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1693,6 +1693,9 @@ class AgentBackend {
         ],
         conversationMessages: [],
         workshopId: options.workshopId,
+        // 巡航会话身份标记(docs/design/cruise-session-split.md):工作台列表
+        // 过滤、state/init 下行分流、持久化分窗保留全读它
+        ...(options.cronJobId ? { cronJobId: options.cronJobId } : {}),
         // 后台子任务身份的唯一事实源(docs/design/background-child-missions.md):
         // 完成回注唤醒/活动列表折叠/DONE push 抑制/stop 级联/防递归全读它
         ...(options.parentMissionId ? { parentMissionId: options.parentMissionId } : {}),
@@ -2619,6 +2622,7 @@ class AgentBackend {
           title: `【自动巡航】${jobInfo.name}`,
           userId,
           workshopId: cronWorkshopId(jobInfo),
+          cronJobId: jobInfo.id,
           unattended: true, // 无人值守:不挂 ask_user(提问没人答)
         });
       } catch (err: any) {
@@ -2672,6 +2676,7 @@ class AgentBackend {
         title: `【自动巡航】${jobInfo.name}`,
         userId,
         workshopId: cronWorkshopId(jobInfo),
+        cronJobId: jobInfo.id,
         unattended: true, // 与定时触发同语义:巡航 prompt 已定型,不留提问悬挂点
       });
     } catch (err: any) {

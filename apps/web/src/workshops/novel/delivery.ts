@@ -42,6 +42,7 @@ const BIBLE_FIELDS: DeliverableFieldSpec[] = [
   field(NOVEL_BIBLE_CONTRACT_ID, '卖点', true, '一句话题材卖点:卖什么、给谁看、爽在哪'),
   field(NOVEL_BIBLE_CONTRACT_ID, '设定集', true, '世界观 markdown:世界规则/力量体系(写死层级与上限)/势力与地理/关键道具术语'),
   field(NOVEL_BIBLE_CONTRACT_ID, '人物卡', true, '主要人物 4-8 人:「## 姓名」起卡,逐行 - 定位:/外貌:/性格:/动机:/口癖:/关系:/弧光:'),
+  field(NOVEL_BIBLE_CONTRACT_ID, '作品简介', true, '150-300字读者向简介:平台书页口吻,抛核心钩子,不剧透设定期之后的剧情'),
   field(NOVEL_BIBLE_CONTRACT_ID, '题材', false, '仅一行:回显本任务给定的题材'),
   field(NOVEL_BIBLE_CONTRACT_ID, '文风锚', false, '仅一行:回显本任务给定的文风锚原文,不增删改'),
   field(NOVEL_BIBLE_CONTRACT_ID, '每章字数', false, '仅一行:回显本任务给定的每章字数数字'),

@@ -40,6 +40,9 @@ const GENESIS_FIXTURE = `【书名】
 - 动机:查清父亲失踪真相
 - 当前状态:刚以卧底身份入职差评教团
 
+【作品简介】
+外卖骑手林凡暴雨夜捡到一部能预知差评的神秘手机,每躲开一单差评就变强一分。差评教团的追杀、室友苏晚的卧底身份、手机裂纹背后的来历,全都指向一个更大的局。
+
 【粗纲】
 第一卷·崛起(1-30章):林凡获得手机,躲差评变强,卷入教团阴谋。
 第二卷·白银(31-80章):正面抗衡教团,揭开苏晚父亲失踪案。
@@ -119,6 +122,7 @@ describe('parseNovelPackage · 开书包', () => {
     expect(pkg!.premise).toContain('预知差评的手机');
     expect(pkg!.bible).toContain('不可跳级');
     expect(pkg!.outline).toContain('第二卷');
+    expect(pkg!.synopsis).toContain('预知差评的神秘手机');
 
     expect(pkg!.characters).toHaveLength(2);
     const lin = pkg!.characters[0];
@@ -308,9 +312,12 @@ describe('parseNovelPackage · 设定包(开书三段化第一步)', () => {
 ## 苏晚
 - 定位:女主
 - 性格:毒舌心软
-- 动机:查清父亲失踪真相`;
+- 动机:查清父亲失踪真相
 
-  it('契约样例完整解析:回显段(题材/文风锚/每章字数)+ 书名/卖点/设定集/人物卡,无章正文', () => {
+【作品简介】
+外卖骑手林凡捡到一部能预知差评的神秘手机,每躲开一单差评就变强一分。差评教团的追杀、室友苏晚的卧底身份,全都指向一个更大的局。`;
+
+  it('契约样例完整解析:回显段(题材/文风锚/每章字数)+ 书名/卖点/设定集/人物卡/作品简介,无章正文', () => {
     const pkg = parseNovelPackage(BIBLE_FIXTURE);
     expect(pkg).not.toBeNull();
     expect(pkg!.kind).toBe('genesis_bible');
@@ -324,17 +331,29 @@ describe('parseNovelPackage · 设定包(开书三段化第一步)', () => {
     expect(pkg!.genre).toBe('都市异能');
     expect(pkg!.style).toContain('三章一小爽五章一大爽');
     expect(pkg!.chapterWords).toBe(3000);
+    expect(pkg!.synopsis).toContain('预知差评的神秘手机');
   });
 
   it('模型漏回显段:回显字段缺省(undefined),主锚(设定集+人物卡)仍解析', () => {
     const pkg = parseNovelPackage(
-      BIBLE_FIXTURE.replace('【题材】\n都市异能\n\n', '').replace('【每章字数】\n3000\n\n', '')
+      BIBLE_FIXTURE
+        .replace('【题材】\n都市异能\n\n', '')
+        .replace('【每章字数】\n3000\n\n', '')
+        .replace(/\n\n【作品简介】[\s\S]*$/, '\n')
     );
     expect(pkg!.kind).toBe('genesis_bible');
     if (pkg!.kind !== 'genesis_bible') return;
     expect(pkg!.genre).toBeUndefined();
     expect(pkg!.chapterWords).toBeUndefined();
+    expect(pkg!.synopsis).toBeUndefined();
     expect(pkg!.bible).toContain('不可跳级');
+  });
+
+  it('【作品简介】只匹配全称:【项目简介】等变体头不落 synopsis 段(不误吞他包字段头)', () => {
+    const pkg = parseNovelPackage(BIBLE_FIXTURE.replace('【作品简介】', '【项目简介】'));
+    expect(pkg!.kind).toBe('genesis_bible');
+    if (pkg!.kind !== 'genesis_bible') return;
+    expect(pkg!.synopsis).toBeUndefined();
   });
 
   it('与文风锚包互斥:回显的【文风锚】不吞设定包(有设定集/人物卡就不是文风锚包)', () => {
@@ -488,6 +507,8 @@ describe('validateDeliverField · novel_bible', () => {
     expect(validateDeliverField('novel_bible', '题材', '都市')).toEqual([]);
     expect(validateDeliverField('novel_bible', '文风锚', '爽文快节奏:短段落强钩子')).toEqual([]);
     expect(validateDeliverField('novel_bible', '每章字数', '3000')).toEqual([]);
+    const synopsis = '外卖骑手林凡捡到一部能预知差评的神秘手机,每躲开一单差评就变强一分。'.repeat(3);
+    expect(validateDeliverField('novel_bible', '作品简介', synopsis)).toEqual([]);
   });
 
   it('结构/篇幅不合格给可执行错误(非空)', () => {
@@ -496,6 +517,8 @@ describe('validateDeliverField · novel_bible', () => {
     expect(validateDeliverField('novel_bible', '设定集', '太短').length).toBeGreaterThan(0);
     expect(validateDeliverField('novel_bible', '人物卡', '## 林凡\n- 定位:主角').length).toBeGreaterThan(0); // 不足 4 张
     expect(validateDeliverField('novel_bible', '每章字数', '300').length).toBeGreaterThan(0); // 域外
+    expect(validateDeliverField('novel_bible', '作品简介', '一句话太短').length).toBeGreaterThan(0); // < 50
+    expect(validateDeliverField('novel_bible', '作品简介', '简介段落。'.repeat(300)).length).toBeGreaterThan(0); // > 500
   });
 
   it('content 首行误带【字段头】先剥掉再校验', () => {
@@ -539,6 +562,7 @@ describe('assembleNovelDelivery', () => {
       卖点: '外卖骑手捡到预知差评的手机',
       设定集: '世界观:近未来江城。力量体系:青铜→白银→黄金。'.repeat(3),
       人物卡: FOUR_CARDS,
+      作品简介: '外卖骑手林凡捡到预知差评的神秘手机,躲差评变强,卷入教团阴谋,室友身份成谜。',
       题材: '都市',
       文风锚: '爽文快节奏:短段落强钩子',
       每章字数: '3000',
@@ -550,6 +574,7 @@ describe('assembleNovelDelivery', () => {
       expect(pkg!.characters.length).toBe(4);
       expect(pkg!.genre).toBe('都市');
       expect(pkg!.chapterWords).toBe(3000);
+      expect(pkg!.synopsis).toContain('预知差评的神秘手机');
     }
   });
 

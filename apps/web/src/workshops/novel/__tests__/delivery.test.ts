@@ -44,14 +44,14 @@ function makeBook(): NovelBook {
 describe('NOVEL_DELIVERY_CONTRACTS', () => {
   it('设定包契约字段 = 模板交付说明里的字段名(逐个出现在 prompt 里)', () => {
     const contract = NOVEL_DELIVERY_CONTRACTS[NOVEL_BIBLE_CONTRACT_ID];
-    expect(contract.fields.map((f) => f.key)).toEqual(['书名', '卖点', '设定集', '人物卡', '题材', '文风锚', '每章字数']);
+    expect(contract.fields.map((f) => f.key)).toEqual(['书名', '卖点', '设定集', '人物卡', '作品简介', '题材', '文风锚', '每章字数']);
     const p = buildNovelGenesisBiblePrompt({ genre: '都市', style: NOVEL_STYLES[0], chapterWords: 3000 });
     for (const f of contract.fields) {
       expect(p).toContain(f.key);
     }
-    // required 标记:书名/卖点/设定集/人物卡 必交付
+    // required 标记:书名/卖点/设定集/人物卡/作品简介 必交付
     const required = contract.fields.filter((f) => f.required).map((f) => f.key);
-    expect(required).toEqual(['书名', '卖点', '设定集', '人物卡']);
+    expect(required).toEqual(['书名', '卖点', '设定集', '人物卡', '作品简介']);
   });
 
   it('大纲包契约字段 = 模板交付说明里的字段名', () => {

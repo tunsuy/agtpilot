@@ -31,6 +31,8 @@ export interface NovelGenesisPackage {
   ledgerSeeds: Array<{ content: string; plantedChapter: number }>;
   timelineSeeds: string[];
   chapters: Array<{ title: string; content: string; summary?: string }>;
+  /** 作品简介(平台书页用;历史包读容忍,缺省不报错) */
+  synopsis?: string;
 }
 
 /** 开书三段化 · 第一步设定包:书名/卖点/设定集/人物卡(无正文,锚=设定集+人物卡) */
@@ -45,6 +47,8 @@ export interface NovelGenesisBiblePackage {
   genre?: string;
   style?: string;
   chapterWords?: number;
+  /** 作品简介(平台书页用;漏交付时缺省,卡片走兜底) */
+  synopsis?: string;
 }
 
 /** 开书三段化 · 第二步大纲包:粗纲/细纲/伏笔/时间线(锚=粗纲+细纲,无正文) */
@@ -118,7 +122,8 @@ type HeaderKey =
   | 'styleAnchor'
   | 'chapter'
   | 'genre'
-  | 'chapterWords';
+  | 'chapterWords'
+  | 'synopsis';
 
 /** 字段头正则(允许行尾追加说明,如【第3章 · 3000字】) */
 const HEADERS: Array<[HeaderKey, RegExp]> = [
@@ -142,6 +147,8 @@ const HEADERS: Array<[HeaderKey, RegExp]> = [
   // 三段化回显段(设定包:题材/文风锚/每章字数——表单值经模型回显,卡片据此串下一步)
   ['genre', /^\s*【\s*题材\s*[^】]*】\s*$/],
   ['chapterWords', /^\s*【\s*每章字数\s*[^】]*】\s*$/],
+  // 只匹配全称「作品简介」——不给其他包的【…简介…】留误吞口子
+  ['synopsis', /^\s*【\s*作品简介\s*[^】]*】\s*$/],
 ];
 
 /** 动态章头:【第N章】(N 支持阿拉伯数字;章头允许追加标题,如【第3章 夜袭】) */
@@ -412,6 +419,7 @@ export function parseNovelPackage(text: string): NovelPackage | null {
     if (chapters.length === 0) return null;
     const title = normalizeTitle(firstLine(byKey('title')?.lines)) || '无题';
     const { seeds } = parseLedgerLines(joinLines(byKey('ledger')?.lines), 'genesis');
+    const genesisSynopsis = joinLines(byKey('synopsis')?.lines);
     return {
       kind: 'genesis',
       title,
@@ -423,6 +431,7 @@ export function parseNovelPackage(text: string): NovelPackage | null {
       ledgerSeeds: seeds,
       timelineSeeds: parseTimelineLines(joinLines(byKey('timeline')?.lines)),
       chapters,
+      ...(genesisSynopsis ? { synopsis: genesisSynopsis } : {}),
     };
   }
 
@@ -432,6 +441,7 @@ export function parseNovelPackage(text: string): NovelPackage | null {
     // 表单值回显段(题材/文风锚/每章字数):模型漏回显时为空,卡片给缺省
     const styleEcho = joinLines(byKey('styleAnchor')?.lines);
     const wordsEcho = firstLine(byKey('chapterWords')?.lines).replace(/[^0-9]/g, '');
+    const synopsis = joinLines(byKey('synopsis')?.lines);
     return {
       kind: 'genesis_bible',
       title,
@@ -441,6 +451,7 @@ export function parseNovelPackage(text: string): NovelPackage | null {
       genre: joinLines(byKey('genre')?.lines) || undefined,
       style: styleEcho || undefined,
       chapterWords: wordsEcho ? clampChapterWords(wordsEcho) : undefined,
+      synopsis: synopsis || undefined,
     };
   }
 
@@ -574,6 +585,12 @@ export function validateDeliverField(contractId: string, field: string, rawConte
         return dense(content) >= 100
           ? []
           : ['设定集过短(≥100字):世界规则/力量体系(层级与上限)/势力与地理/关键道具术语'];
+      case '作品简介': {
+        const len = dense(content);
+        if (len < 50) return ['作品简介过短(建议 150-300 字,最少 50 字):平台书页口吻,抛核心钩子,不剧透设定期之后的剧情'];
+        if (len > 500) return ['作品简介过长(≤500 字,建议 150-300):删掉复述设定的部分,只留钩子与悬念'];
+        return [];
+      }
       case '人物卡': {
         const cards = parseCharacters(content);
         if (cards.length < CHAR_CARDS_MIN) {
@@ -641,6 +658,7 @@ export function assembleNovelDelivery(
     const words = firstLineOf(get('每章字数')).replace(/[^0-9]/g, '');
     const genre = get('题材');
     const style = get('文风锚');
+    const synopsis = get('作品简介');
     return {
       kind: 'genesis_bible',
       title: normalizeTitle(firstLineOf(get('书名'))) || '无题',
@@ -650,6 +668,7 @@ export function assembleNovelDelivery(
       ...(genre ? { genre } : {}),
       ...(style ? { style } : {}),
       ...(words ? { chapterWords: clampChapterWords(words) } : {}),
+      ...(synopsis ? { synopsis } : {}),
     };
   }
   if (contractId === 'novel_outline') {

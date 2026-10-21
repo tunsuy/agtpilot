@@ -685,8 +685,32 @@ export async function runSkillSteps(
     page.on('response', respListener);
   }
 
+  // 新标签跟随:站点写操作可能把下一步的目标开在新标签(番茄「新建章节」2026-10-21
+  // 实测:编辑器开新页,执行器留在旧页等 .editor-title 永远等不到)。语义与接管一致:
+  // context 'page' 事件串行切到最新页;captureResponse 监听在新页补挂(旧页不摘,
+  // 防切换窗口期漏响应)。步骤循环每轮先等 retargetChain,避免重定向与步骤竞态。
+  let active: any = page;
+  const listenerPages: any[] = respListener ? [page] : [];
+  let retargetChain: Promise<void> = Promise.resolve();
+  const onPopup = (newPage: any) => {
+    retargetChain = retargetChain
+      .then(() => {
+        if (!newPage || newPage === active) return;
+        active = newPage;
+        if (respListener && typeof newPage.on === 'function') {
+          newPage.on('response', respListener);
+          listenerPages.push(newPage);
+        }
+        diagnostics.push(`跟随新标签: ${String(newPage.url?.() || '(地址未就绪)').slice(0, 120)}`);
+      })
+      .catch(() => {});
+  };
+  const popupCtx = typeof page.context === 'function' ? page.context() : null;
+  if (popupCtx && typeof popupCtx.on === 'function') popupCtx.on('page', onPopup);
+
   try {
     for (const step of skill.steps) {
+    await retargetChain;
     switch (step.kind) {
       case 'goto': {
         // URL 参数化:声明的参数按 args 替换(编码);未声明的占位符原样保留
@@ -694,7 +718,7 @@ export async function runSkillSteps(
         for (const p of step.params || []) {
           url = url.replaceAll(`{${p}}`, encodeURIComponent(String(args?.[p] ?? '')));
         }
-        await page.goto(url, { waitUntil: step.waitUntil || 'domcontentloaded', timeout: step.timeoutMs || 30000 });
+        await active.goto(url, { waitUntil: step.waitUntil || 'domcontentloaded', timeout: step.timeoutMs || 30000 });
         break;
       }
 
@@ -706,12 +730,12 @@ export async function runSkillSteps(
         let ready = false;
         for (let i = 0; i < retries; i++) {
           await sleep(interval);
-          if ((await page.locator(selector).count()) > 0) {
+          if ((await active.locator(selector).count()) > 0) {
             ready = true;
             break;
           }
           // 轮询期间被重定向回登录页 = 登录态在导航后才失效
-          if (step.abortIfUrl && new RegExp(step.abortIfUrl, 'i').test(String(page.url?.() || ''))) {
+          if (step.abortIfUrl && new RegExp(step.abortIfUrl, 'i').test(String(active.url?.() || ''))) {
             throw new SkillAbort(
               skill.login?.hint || '登录态已失效,请重新扫码登录后重试。',
               step.abortAs || 'not_logged_in'
@@ -725,7 +749,7 @@ export async function runSkillSteps(
       }
 
       case 'fill':
-        await page.fill(stepSelector(step, args), stepValue(step, args), { timeout: step.timeoutMs || 20000 });
+        await active.fill(stepSelector(step, args), stepValue(step, args), { timeout: step.timeoutMs || 20000 });
         break;
 
       case 'clickOrFocus': {
@@ -735,13 +759,13 @@ export async function runSkillSteps(
           throw new Error(`发布围栏拦截: 选择器含发布词(${selector})`);
         }
         // 条件元素(optional):不存在 → 静默跳过,旗标记 false(notes 出附注,不炸流程)
-        if (step.optional && (await page.locator(selector).count().catch(() => 0)) === 0) {
+        if (step.optional && (await active.locator(selector).count().catch(() => 0)) === 0) {
           if (step.flag) flags[step.flag] = false;
           break;
         }
         let clicked = false;
         try {
-          await page.click(selector, { timeout: step.clickTimeoutMs || 10000 });
+          await active.click(selector, { timeout: step.clickTimeoutMs || 10000 });
           clicked = true;
         } catch (clickErr: any) {
           // requireClick:点击本身就是写动作(提交按钮/单选钮)——focus 不会触发提交,
@@ -754,7 +778,7 @@ export async function runSkillSteps(
           }
           // 编辑器聚焦场景(click 被浮层拦截,focus + pressKeys/insertText 仍可继续)
           // → 保留降级,但留痕进 diagnostics,失败时随审计错误一起带出
-          await page.locator(selector).first().focus({ timeout: step.focusTimeoutMs || 5000 });
+          await active.locator(selector).first().focus({ timeout: step.focusTimeoutMs || 5000 });
           diagnostics.push(`clickOrFocus 降级为 focus: ${selector}`);
         }
         // 旗标只认「点击真的成功」:focus 降级不会勾上勾选框、不会提交表单,记 true 是谎报
@@ -763,11 +787,11 @@ export async function runSkillSteps(
       }
 
       case 'pressKeys':
-        await page.keyboard.press(step.keys);
+        await active.keyboard.press(step.keys);
         break;
 
       case 'insertText':
-        await page.keyboard.insertText(stepValue(step, args));
+        await active.keyboard.insertText(stepValue(step, args));
         break;
 
       case 'pasteRich': {
@@ -783,7 +807,7 @@ export async function runSkillSteps(
           // paste 处理读 clipboardData,不校验 isTrusted(待真机验证的平台假设)。
           // 函数体用 new Function 构造:既可整体序列化传给 Playwright evaluate,
           // 又能在单测里被假 page 直接调用。
-          await page.evaluate(
+          await active.evaluate(
             new Function(
               'opts',
               `const target = document.querySelector(opts.selector);
@@ -804,12 +828,12 @@ export async function runSkillSteps(
         // 校验:编辑器仍空 = 编辑器不认合成 paste → 回退 insertText 排版化纯文本
         let editorText = '';
         try {
-          editorText = await page.locator(step.selector).first().innerText({ timeout: 2000 });
+          editorText = await active.locator(step.selector).first().innerText({ timeout: 2000 });
         } catch {
           editorText = '';
         }
         if (!editorText || !editorText.trim()) {
-          await page.keyboard.insertText(plain);
+          await active.keyboard.insertText(plain);
           flags[flag] = false;
         } else {
           flags[flag] = true;
@@ -820,7 +844,7 @@ export async function runSkillSteps(
       case 'waitForText': {
         const flag = step.flag || 'textFound';
         try {
-          await page.getByText(new RegExp(step.pattern)).first().waitFor({ timeout: step.timeoutMs || 10000 });
+          await active.getByText(new RegExp(step.pattern)).first().waitFor({ timeout: step.timeoutMs || 10000 });
           flags[flag] = true;
         } catch {
           if (!step.optional) throw new Error(`等待文案超时: ${step.pattern}`);
@@ -830,12 +854,12 @@ export async function runSkillSteps(
       }
 
       case 'captureUrl': {
-        // 轮询 page.url() 直到正则命中(SPA 跳转/落地重定向有延迟),500ms 间隔
+        // 轮询 active.url() 直到正则命中(SPA 跳转/落地重定向有延迟),500ms 间隔
         const re = new RegExp(step.pattern);
         const deadline = Date.now() + (step.timeoutMs ?? 15000);
         let value = '';
         for (;;) {
-          const m = re.exec(String(page.url?.() || ''));
+          const m = re.exec(String(active.url?.() || ''));
           const v = m ? m[1] || m[0] : '';
           if (v) {
             value = v;
@@ -896,7 +920,7 @@ export async function runSkillSteps(
         const re = new RegExp(step.pattern);
         let text = '';
         try {
-          text = await page.locator(step.selector).first().innerText({ timeout: step.timeoutMs ?? 10000 });
+          text = await active.locator(step.selector).first().innerText({ timeout: step.timeoutMs ?? 10000 });
         } catch {
           text = '';
         }
@@ -910,7 +934,7 @@ export async function runSkillSteps(
       case 'screenshot':
         // 截图随结果返回(用户在审批/任务页可肉眼核对);失败静默,不影响成败
         try {
-          const buffer = await page.screenshot({ type: 'jpeg', quality: step.quality || 65 });
+          const buffer = await active.screenshot({ type: 'jpeg', quality: step.quality || 65 });
           screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
         } catch {}
         break;
@@ -921,16 +945,24 @@ export async function runSkillSteps(
     // 后台同步(番茄 fanqie-sync)失败没有旁观者 —— 抛错前补一张现场照,
     // 挂到 error 上随结果透出(运行器据此落盘,排障靠它 + 审计错误)。
     try {
-      const buffer = await page.screenshot({ type: 'jpeg', quality: 65 });
+      const buffer = await active.screenshot({ type: 'jpeg', quality: 65 });
       if (buffer) err.screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
     } catch {}
     // clickOrFocus 降级等留痕一并带出,补进审计错误上下文
     if (diagnostics.length) err.diagnostics = [...diagnostics];
     throw err;
   } finally {
-    if (respListener && typeof page.off === 'function') {
+    // 响应监听挂过的每一页都摘(原页 + 跟随过的新标签);context 弹窗监听一并摘除
+    for (const lp of listenerPages) {
+      if (respListener && typeof lp.off === 'function') {
+        try {
+          lp.off('response', respListener);
+        } catch {}
+      }
+    }
+    if (popupCtx && typeof popupCtx.off === 'function') {
       try {
-        page.off('response', respListener);
+        popupCtx.off('page', onPopup);
       } catch {}
     }
   }

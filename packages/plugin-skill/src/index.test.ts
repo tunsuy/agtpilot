@@ -789,3 +789,71 @@ describe('runSkillSteps · requireClick / captureResponse / 失败现场照(番�
     expect(String(last.error)).toContain('降级留痕'); // diagnostics 拼进审计错误,排障可见
   });
 });
+
+describe('runSkillSteps · 新标签跟随(编辑器开新页,如番茄新建章节)', () => {
+  /** 假 context:登记 'page' 监听、手动模拟站点开新标签 */
+  function fakeCtx() {
+    const handlers: ((p: any) => void)[] = [];
+    return {
+      on: (ev: string, cb: any) => {
+        if (ev === 'page') handlers.push(cb);
+      },
+      off: (ev: string, cb: any) => {
+        const i = handlers.indexOf(cb);
+        if (i >= 0) handlers.splice(i, 1);
+      },
+      emit: (p: any) => [...handlers].forEach((h) => h(p)),
+      count: () => handlers.length,
+    };
+  }
+
+  /** 带 context() 的假 Page;只认自己那份特征选择器(验证步骤真的换了页) */
+  function pageWithCtx(ctx: ReturnType<typeof fakeCtx>, findable: string) {
+    const p: any = fakePage();
+    p.context = () => ctx;
+    p.locator = vi.fn((sel: string) => {
+      const visible = String(sel).includes(findable);
+      return {
+        count: vi.fn(async () => (visible ? 1 : 0)),
+        first: () => ({ focus: vi.fn(async () => {}), innerText: vi.fn(async () => '') }),
+      };
+    });
+    return p;
+  }
+
+  it('click 期间站点开新标签 → 后续步骤切到新页,旧页不再收输入;context 监听收摊摘除', async () => {
+    const ctx = fakeCtx();
+    const oldPage = pageWithCtx(ctx, '#old-only');
+    const newPage = pageWithCtx(ctx, '#editor');
+    // 点击「新建章节」这类按钮时站点开新标签:click 执行中 emit popup
+    oldPage.click = vi.fn(async () => {
+      ctx.emit(newPage);
+    });
+    const skill = sampleSkill({
+      steps: [
+        { kind: 'goto', url: 'https://example.com/list' },
+        { kind: 'clickOrFocus', selector: '#open-editor' },
+        { kind: 'waitForSelector', selector: '#editor', retries: 3, intervalMs: 5 },
+        { kind: 'fill', selector: '#editor', param: 'title' },
+      ],
+    });
+    await runSkillSteps(oldPage, skill, { title: 'hi' });
+    expect(newPage.fill).toHaveBeenCalledWith('#editor', 'hi', expect.anything());
+    expect(oldPage.fill).not.toHaveBeenCalled();
+    expect(ctx.count()).toBe(0); // 共享 context 不残留钩子
+  });
+
+  it('无 popup 的普通流程不受影响(不挂多余监听、步骤仍走原页)', async () => {
+    const ctx = fakeCtx();
+    const page = pageWithCtx(ctx, '#editor');
+    const skill = sampleSkill({
+      steps: [
+        { kind: 'goto', url: 'https://example.com/write' },
+        { kind: 'fill', selector: '#editor', param: 'title' },
+      ],
+    });
+    await runSkillSteps(page, skill, { title: 'yo' });
+    expect(page.fill).toHaveBeenCalledWith('#editor', 'yo', expect.anything());
+    expect(ctx.count()).toBe(0);
+  });
+});

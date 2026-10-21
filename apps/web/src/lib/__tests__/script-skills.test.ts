@@ -524,10 +524,11 @@ describe('注册表版 zhihu_save_article_draft · execute 全链路', () => {
 });
 
 describe('随包 fanqie-draft.skill.json · 番茄章节存草稿', () => {
-  /** 番茄编辑器假 Page:.editor-title/.editor-content/新建章节/存草稿 可寻,其余不可寻 */
+  /** 番茄编辑器假 Page:标题输入框/正文 ProseMirror/新建章节/存草稿 可寻,其余不可寻
+   * (2026-10-21 实测选择器:站点改 serial-* 系,编辑器开在新标签由执行器跟随) */
   function fakeFanqiePage(opts: { redirectLogin?: boolean; savedFails?: boolean } = {}) {
     const state = { url: 'about:blank' };
-    const FINDABLE = ['.editor-title', '新建章节', 'editor-content', '存草稿'];
+    const FINDABLE = ['请输入标题', '新建章节', '.serial-editor-content', '存草稿'];
     return {
       goto: vi.fn(async (url: string) => {
         state.url = opts.redirectLogin
@@ -602,7 +603,7 @@ describe('随包 fanqie-draft.skill.json · 番茄章节存草稿', () => {
       `https://fanqienovel.com/main/writer/chapter-manage/${okArgs.bookId}`,
       expect.anything()
     );
-    expect(page.fill).toHaveBeenCalledWith('.editor-title', okArgs.title, expect.anything());
+    expect(page.fill).toHaveBeenCalledWith('input[placeholder="请输入标题"]', okArgs.title, expect.anything());
     expect(page.keyboard.press).toHaveBeenCalledWith('Control+a');
     // insertText + markdown-plain:Markdown 记号被剥除(标题 ▍ 前缀,不再有 ##)
     const inserted = (page.keyboard.insertText as any).mock.calls[0][0] as string;

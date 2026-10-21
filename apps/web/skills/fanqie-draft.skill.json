@@ -45,18 +45,24 @@
       "abortAs": "not_logged_in",
       "timeoutError": "章节管理页未渲染:新建章节按钮始终未出现(页面改版或 bookId 无效,需人工核查 fanqienovel.com/main/writer/chapter-manage)"
     },
-    { "kind": "clickOrFocus", "selector": "button:has-text(\"新建章节\")", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
+    {
+      "kind": "clickOrFocus",
+      "selector": "button:has-text(\"新建章节\")",
+      "requireClick": true,
+      "clickTimeoutMs": 10000,
+      "focusTimeoutMs": 5000
+    },
     {
       "kind": "waitForSelector",
-      "selector": ".editor-title",
+      "selector": "input[placeholder=\"请输入标题\"]",
       "retries": 10,
       "intervalMs": 2000,
       "abortIfUrl": "login|passport|signin",
       "abortAs": "not_logged_in",
-      "timeoutError": "章节编辑器未渲染:标题栏始终未出现(页面改版,需人工核查番茄章节编辑器)"
+      "timeoutError": "章节编辑器未渲染:标题输入框始终未出现(页面改版,需人工核查番茄章节编辑器;2026-10-21 实测编辑器开在新标签且选择器改 serial-* 系)"
     },
-    { "kind": "fill", "selector": ".editor-title", "param": "title", "timeoutMs": 20000 },
-    { "kind": "clickOrFocus", "selector": ".editor-content", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
+    { "kind": "fill", "selector": "input[placeholder=\"请输入标题\"]", "param": "title", "timeoutMs": 20000 },
+    { "kind": "clickOrFocus", "selector": ".serial-editor-content .ProseMirror", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },
     { "kind": "pressKeys", "keys": "Control+a" },
     { "kind": "insertText", "param": "body", "transform": "markdown-plain" },
     { "kind": "clickOrFocus", "selector": "button:has-text(\"存草稿\")", "clickTimeoutMs": 10000, "focusTimeoutMs": 5000 },

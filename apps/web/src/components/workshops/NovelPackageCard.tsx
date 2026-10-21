@@ -313,6 +313,7 @@ function GenesisCard({ pkg }: { pkg: NovelGenesisPackage }) {
             )
             .join('\n\n')}
         </Section>
+        {pkg.synopsis && <Section label="作品简介" count={`${countWords(pkg.synopsis)}字`}>{pkg.synopsis}</Section>}
         <Section label="粗纲/卷纲" count={`${countWords(pkg.outline)}字`}>{pkg.outline}</Section>
         {pkg.detailed.length > 0 && (
           <Section label="细纲池" count={`${pkg.detailed.length}条`}>
@@ -474,6 +475,7 @@ function GenesisBibleCard({
             )
             .join('\n\n')}
         </Section>
+        {pkg.synopsis && <Section label="作品简介" count={`${countWords(pkg.synopsis)}字`}>{pkg.synopsis}</Section>}
         {pkg.style && <Section label="文风锚(回显)" count={`${countWords(pkg.style)}字`}>{pkg.style}</Section>}
 
         <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-zinc-100">

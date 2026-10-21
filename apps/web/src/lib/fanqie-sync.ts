@@ -336,10 +336,12 @@ function mapChannel(genre: string): '男频' | '女频' {
  * 开书参数(技能契约:title/intro/channel;commit 6 侦察 2026-10-16 定稿)。
  * 阅读/内容标签、主角名、封面在建书页均**选填**(标签是服务端 ID 下拉,自动化
  * 脆且无必需价值)→ 不代填,作者可在书信息页自补。书名平台上限 15 字预截断;
- * 简介平台要求 50-500 字且选填 → 不足 50 字传空串留空,绝不凑字。
+ * 简介优先取开书时交付的作品简介(读者向文案,质量优于大纲拼凑),缺省回落
+ * premise → 总纲 → 粗纲;平台要求 50-500 字且选填 → 不足 50 字传空串留空,绝不凑字。
  */
 function buildCreateArgs(book: NovelBook): Record<string, string> {
   const introSource =
+    String(book.synopsis || '').trim() ||
     String(book.premise || '').trim() ||
     String(book.volumeSummary || '').trim() ||
     String(book.outline || '').trim();

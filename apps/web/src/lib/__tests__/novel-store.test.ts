@@ -22,6 +22,8 @@ import {
   countWords,
   markNovelReviewed,
   updateNovelStyle,
+  updateNovelSynopsis,
+  MAX_SYNOPSIS_CHARS,
   mergeNovelOutline,
   findNovelBookByTitle,
   updateNovelFanqie,
@@ -454,6 +456,33 @@ describe('updateNovelStyle · 文风锚写回(P2)', () => {
     expect(() => updateNovelStyle('u1', book.bookId, 'x'.repeat(MAX_STYLE_CHARS + 1))).toThrow(/文风锚超长/);
     expect(() => updateNovelStyle('u1', 'nv_nope_000000', 'x')).toThrow(/书不存在/);
     expect(getNovelBook('u1', book.bookId)!.style).toBe('爽文快节奏'); // 原值未被污染
+  });
+});
+
+describe('synopsis · 作品简介(开书交付 + 手动改)', () => {
+  it('createNovelBook:输入带简介落盘,重读可见;不带则字段缺省(读容忍)', () => {
+    const withSynopsis = createNovelBook('u1', {
+      title: '铁拳少年',
+      premise: '外卖骑手捡到预知差评的手机',
+      synopsis: '外卖骑手林凡捡到一部能预知差评的神秘手机,每躲开一单差评就变强一分。',
+    });
+    expect(withSynopsis.synopsis).toContain('预知差评的神秘手机');
+    expect(getNovelBook('u1', withSynopsis.bookId)!.synopsis).toContain('预知差评的神秘手机');
+
+    const without = createNovelBook('u1', { title: '无简介书' });
+    expect(without.synopsis).toBeUndefined();
+  });
+
+  it('updateNovelSynopsis:合法简介落盘;空/超长/书不存在抛错,不落脏值(直接上平台书页)', () => {
+    const book = seedBook();
+    const updated = updateNovelSynopsis('u1', book.bookId, '读者向简介:暴雨夜的神秘手机,躲差评就变强。');
+    expect(updated.synopsis).toBe('读者向简介:暴雨夜的神秘手机,躲差评就变强。');
+    expect(getNovelBook('u1', book.bookId)!.synopsis).toBe(updated.synopsis);
+
+    expect(() => updateNovelSynopsis('u1', book.bookId, '  ')).toThrow(/作品简介为空/);
+    expect(() => updateNovelSynopsis('u1', book.bookId, 'x'.repeat(MAX_SYNOPSIS_CHARS + 1))).toThrow(/作品简介超长/);
+    expect(() => updateNovelSynopsis('u1', 'nv_nope_000000', 'x')).toThrow(/书不存在/);
+    expect(getNovelBook('u1', book.bookId)!.synopsis).toBe(updated.synopsis); // 原值未被污染
   });
 });
 

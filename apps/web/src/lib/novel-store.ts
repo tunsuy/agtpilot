@@ -237,6 +237,7 @@ export function createNovelBook(userId: string, input: CreateNovelInput): NovelB
     genre: String(input.genre || '').trim(),
     premise: String(input.premise || '').trim(),
     style: String(input.style || '').trim(),
+    ...(String(input.synopsis || '').trim() ? { synopsis: String(input.synopsis).trim() } : {}),
     status: 'active',
     createdAt: now,
     updatedAt: now,
@@ -439,6 +440,25 @@ export function updateNovelStyle(userId: string, bookId: string, style: string):
   if (!next) throw new Error('文风锚为空,拒绝写入(会长期注入续写 prompt,不落脏值)');
   if (next.length > MAX_STYLE_CHARS) throw new Error(`文风锚超长(> ${MAX_STYLE_CHARS} 字),拒绝写入`);
   book.style = next;
+  book.updatedAt = Date.now();
+  atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
+  return book;
+}
+
+/** 作品简介上限:对齐番茄平台 intro 上限 500 字(超长必是误粘贴正文) */
+export const MAX_SYNOPSIS_CHARS = 500;
+
+/**
+ * 更新一本书的作品简介(存量书手动编辑的落库点)。
+ * 空简介/超长抛错——简介喂给番茄建书 intro,脏值会直接上平台书页。
+ */
+export function updateNovelSynopsis(userId: string, bookId: string, synopsis: string): NovelBook {
+  const book = readBookJson(userId, bookId);
+  if (!book) throw new Error(`书不存在: ${bookId}`);
+  const next = String(synopsis || '').trim();
+  if (!next) throw new Error('作品简介为空,拒绝写入(会直接上平台书页,不落脏值)');
+  if (next.length > MAX_SYNOPSIS_CHARS) throw new Error(`作品简介超长(> ${MAX_SYNOPSIS_CHARS} 字),拒绝写入`);
+  book.synopsis = next;
   book.updatedAt = Date.now();
   atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
   return book;

@@ -120,6 +120,8 @@ export interface NovelBook {
   premise: string;
   /** 文风锚(平台调性 + 叙事口吻 + 禁忌) */
   style: string;
+  /** 作品简介(平台书页读者向简介;开书设定包交付,存量书可手动改;读容忍) */
+  synopsis?: string;
   status: 'active' | 'paused' | 'finished';
   createdAt: number;
   updatedAt: number;
@@ -170,6 +172,8 @@ export interface CreateNovelInput {
   genre?: string;
   premise?: string;
   style?: string;
+  /** 作品简介(开书设定包交付;建书落库,番茄建书 intro 优先取) */
+  synopsis?: string;
   bible?: string;
   characters?: NovelCharacter[];
   outline?: string;

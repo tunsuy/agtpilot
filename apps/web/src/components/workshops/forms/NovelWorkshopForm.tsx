@@ -107,6 +107,45 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
   const [cronMsg, setCronMsg] = useState<string | null>(null);
   const [subHour, setSubHour] = useState<number>(9);
 
+  // ---- 作品简介手动编辑(存量书唯一全书入口;番茄建书 intro 优先取它) ----
+  const [synopsisDraft, setSynopsisDraft] = useState<string>('');
+  const [synopsisBusy, setSynopsisBusy] = useState(false);
+  const [synopsisMsg, setSynopsisMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSynopsisDraft(typeof book?.synopsis === 'string' ? book.synopsis : '');
+    setSynopsisMsg(null);
+  }, [book?.bookId, book?.synopsis]);
+
+  const handleSaveSynopsis = async () => {
+    if (!bookId || synopsisBusy) return;
+    const synopsis = synopsisDraft.trim();
+    if (!synopsis) {
+      setSynopsisMsg('简介不能为空');
+      return;
+    }
+    setSynopsisBusy(true);
+    setSynopsisMsg(null);
+    try {
+      const res = await fetch('/api/novels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateSynopsis', bookId, synopsis }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setBook((cur) => (cur ? { ...cur, synopsis } : cur));
+        setSynopsisMsg('已保存');
+      } else {
+        setSynopsisMsg(data.error || '保存失败');
+      }
+    } catch (err: any) {
+      setSynopsisMsg(err?.message || '网络异常');
+    } finally {
+      setSynopsisBusy(false);
+    }
+  };
+
   const needBook = mode !== 'genesis';
   /** 续写/审查必须先有书;文风学习绑书可选——不绑定也能纯提炼(预览不依赖书快照) */
   const requiresBook = mode === 'continue' || mode === 'review' || (mode === 'style' && Boolean(bookId));
@@ -491,6 +530,37 @@ export function NovelWorkshopForm({ workshop, onRun, onClose, scenarioProfile, o
                 EPUB
               </a>
               <span className="text-[10px] text-zinc-400">下载后人工审阅,投稿平台由你操作</span>
+            </div>
+          )}
+
+          {/* 作品简介(平台书页用;开书时交付,存量书在此手动改——番茄建书 intro 优先取它) */}
+          {book && bookId && (
+            <div className="space-y-1.5">
+              <FieldLabel>作品简介</FieldLabel>
+              <textarea
+                value={synopsisDraft}
+                onChange={(e) => setSynopsisDraft(e.target.value)}
+                rows={4}
+                placeholder="读者向简介(150-300 字,平台书页口吻):开篇抛核心钩子,收在让读者想点开第 1 章的悬念上。"
+                className={textareaClass}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-zinc-400 leading-relaxed">
+                  {synopsisMsg ? (
+                    <span className={synopsisMsg === '已保存' ? 'text-emerald-600' : 'text-rose-500'}>{synopsisMsg}</span>
+                  ) : (
+                    '番茄建书简介优先取这段;平台上已建书的简介请到平台手动改。'
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSaveSynopsis}
+                  disabled={synopsisBusy || synopsisDraft.trim() === (book.synopsis || '')}
+                  className={`shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-medium text-white transition disabled:opacity-50 ${accent.btn}`}
+                >
+                  {synopsisBusy ? '保存中…' : '保存简介'}
+                </button>
+              </div>
             </div>
           )}
 

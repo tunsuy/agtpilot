@@ -201,6 +201,33 @@ describe('create 项状态机', () => {
     expect(draft[0].args).toMatchObject({ bookId: '712345', title: '第1章 雨夜', body: LONG_BODY });
   });
 
+  it('建书 intro 优先取作品简介(读者向文案);无简介回落 premise', async () => {
+    bothSkills();
+    mocks.executeImpl = async (name) =>
+      name === CREATE_SKILL ? { success: true, captures: { fanqieBookId: '7123' } } : { success: true };
+    const synopsis = '暴雨夜里外卖骑手林凡捡到一部能预知差评的神秘手机,每躲开一单差评就变强一分,差评教团的追杀随之而来,室友的身份也成谜,一切指向一个更大的局。'.repeat(2);
+    const longPremise = '外卖骑手捡到预知差评的神秘手机,每躲开一单差评就变强,卷入差评教团阴谋,室友身份成谜。'.repeat(2);
+    const withSynopsis = createNovelBook(USER, {
+      title: '简介优先',
+      genre: '都市',
+      premise: longPremise, // 也够 50 字——简介必须赢
+      synopsis,
+    });
+
+    maybeEnqueueFanqieBookCreate(USER, withSynopsis.bookId);
+    await __fanqieSyncTest.waitIdle();
+    const create = mocks.executeCalls.find((c) => c.skill === CREATE_SKILL);
+    expect(create?.args).toMatchObject({ title: '简介优先', intro: synopsis.slice(0, 500) });
+
+    // 无简介:回落 premise(premise 够 50 字才上,不凑字)
+    mocks.executeCalls = [];
+    const noSynopsis = createNovelBook(USER, { title: '回落', genre: '都市', premise: longPremise });
+    maybeEnqueueFanqieBookCreate(USER, noSynopsis.bookId);
+    await __fanqieSyncTest.waitIdle();
+    const fallback = mocks.executeCalls.find((c) => c.skill === CREATE_SKILL);
+    expect(fallback?.args.intro).toBe(longPremise.slice(0, 500));
+  });
+
   it('成功但未捕获书号 → 终态 failed,绝不自动重试;sweep 也不捞', async () => {
     bothSkills();
     const bookId = seedBook();

@@ -10,9 +10,11 @@ import {
   deleteNovelBook,
   markNovelReviewed,
   updateNovelStyle,
+  updateNovelSynopsis,
   findNovelBookByTitle,
   isReviewDue,
   MAX_STYLE_CHARS,
+  MAX_SYNOPSIS_CHARS,
   type CreateNovelInput,
   type AppendChapterInput,
 } from '@/lib/novel-store';
@@ -32,7 +34,7 @@ import { buildNovelTxt, buildNovelEpub } from '@/lib/novel-export';
  *      续写/审查表单的服务端现读同源数据);&chapter=N → 附该章正文;
  *      &export=txt|epub → 全书导出直下(P1,附件流,不落 artifact-files)。
  * POST action=create(设定包建书,书名幂等)/ mergeOutline(大纲包并书)/ append(续写包反思写回) /
- *      delete / markReviewed(体检提醒落点)/ updateStyle(文风锚)/
+ *      delete / markReviewed(体检提醒落点)/ updateStyle(文风锚)/ updateSynopsis(作品简介)/
  *      setFanqieSync(书级同步开关)/ retryFanqieSync(显式重试)/ bindFanqieBook(手动绑定番茄书号)。
  *
  * 边界:书号入库前按当前登录用户校验(getNovelBook 按 userId 隔离);
@@ -178,6 +180,7 @@ function toCreateInput(body: any): CreateNovelInput | null {
       : [],
     timelineSeeds: Array.isArray(body.timelineSeeds) ? body.timelineSeeds.filter((t: any) => typeof t === 'string') : [],
     ...(typeof body.volumeSummary === 'string' ? { volumeSummary: body.volumeSummary } : {}),
+    ...(strField(body.synopsis).trim() ? { synopsis: strField(body.synopsis).trim() } : {}),
   };
 }
 
@@ -366,6 +369,22 @@ export async function POST(req: NextRequest) {
       }
       const book = updateNovelStyle(userId, bookId, style);
       return NextResponse.json({ success: true, bookId, style: book.style });
+    }
+
+    if (action === 'updateSynopsis') {
+      const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+      if (!bookId || !getNovelBook(userId, bookId)) {
+        return NextResponse.json({ success: false, error: `书不存在或无权访问: ${bookId || '(缺 bookId)'}` }, { status: 404 });
+      }
+      const synopsis = typeof body?.synopsis === 'string' ? body.synopsis.trim() : '';
+      if (!synopsis) {
+        return NextResponse.json({ success: false, error: '作品简介不能为空' }, { status: 400 });
+      }
+      if (synopsis.length > MAX_SYNOPSIS_CHARS) {
+        return NextResponse.json({ success: false, error: `作品简介超长(> ${MAX_SYNOPSIS_CHARS} 字)` }, { status: 400 });
+      }
+      const book = updateNovelSynopsis(userId, bookId, synopsis);
+      return NextResponse.json({ success: true, bookId, synopsis: book.synopsis });
     }
 
     if (action === 'delete') {

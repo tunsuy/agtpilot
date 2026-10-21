@@ -13,7 +13,7 @@
         "type": "string",
         "description": "作品 ID:网页版「章节管理」页地址里的那一段(fanqienovel.com/main/writer/chapter-manage/<bookId>),或让用户从「作品管理」进入章节管理后看地址栏"
       },
-      "title": { "type": "string", "description": "章节标题(如「第12章 风起」;只写标题本体,不要带书名)" },
+      "title": { "type": "string", "description": "章节标题本体(如「风起」;只写标题本体,不要带书名,也不要带「第N章」序号——番茄编辑器按目录位置自动加固定序号,标题里再带会显示成双编号)" },
       "body": { "type": "string", "description": "章节正文(纯小说行文;建议 1000 字以上,填入前自动剥除偶发的 Markdown 记号)" }
     },
     "required": ["bookId", "title", "body"]

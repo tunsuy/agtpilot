@@ -478,13 +478,13 @@ async function runChapter(item: SyncItem, book: NovelBook): Promise<void> {
   if (idx === 0) {
     title = String(book.prologue?.title || '').trim() || '序章';
   } else {
-    // 番茄草稿标题按技能契约拼「第N章 章名」完整格式(生产实测:库里存的是裸章名
-    // 「雨夜」或兜底纯序号「第N章」,原样透传导致草稿标题缺序号或缺章名)。
-    // 章名可能已带「第N章」前缀(模型章头余文/正文首行原样入库),且自称序号可能
-    // 与书库编号漂移 —— 一律剥掉旧前缀,以书库权威序号重拼;无章名回落纯序号。
+    // 番茄草稿标题只传章名本体(生产实测 2026-10-21:编辑器标题行前面的「第N章」
+    // 是平台按目录位置自动编的固定序号,删不掉;标题里再带序号会显示成
+    // 「第2章 第1章 章名」双编号)。章名可能自带「第N章」前缀(模型章头余文/
+    // 正文首行原样入库)且自称序号可能与书库漂移 —— 一律剥掉只留本体;
+    // 无章名回落「未命名」(技能要求标题非空)。
     const rawTitle = String(book.chapters[idx - 1]?.title || '').trim();
-    const chapterName = rawTitle.replace(/^第\s*[0-9]+\s*章\s*/, '').trim();
-    title = chapterName ? `第${idx}章 ${chapterName}` : `第${idx}章`;
+    title = rawTitle.replace(/^第\s*[0-9]+\s*章\s*/, '').trim() || '未命名';
   }
   if (!content || !content.trim()) {
     updateNovelFanqie(userId, bookId, {

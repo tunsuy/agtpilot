@@ -198,7 +198,7 @@ describe('create 项状态机', () => {
     // 草稿参数用的是番茄书号 + 本地章标题 + 本地正文
     const draft = mocks.executeCalls.filter((c) => c.skill === DRAFT_SKILL);
     expect(draft).toHaveLength(2);
-    expect(draft[0].args).toMatchObject({ bookId: '712345', title: '第1章 雨夜', body: LONG_BODY });
+    expect(draft[0].args).toMatchObject({ bookId: '712345', title: '雨夜', body: LONG_BODY });
   });
 
   it('建书 intro 优先取作品简介(读者向文案);无简介回落 premise', async () => {
@@ -348,8 +348,8 @@ describe('chapter 项与登录失效', () => {
   });
 });
 
-describe('草稿标题拼装(第N章 章名)', () => {
-  it('裸章名补序号;已带前缀按书库序号重拼(漂移纠正);无章名回落纯序号', async () => {
+describe('草稿标题拼装(只传章名,平台自动加位置序号)', () => {
+  it('裸章名原样;自带前缀剥掉(漂移纠正);无章名回落未命名', async () => {
     bothSkills();
     mocks.executeImpl = async () => ({ success: true });
     const book = createNovelBook(USER, {
@@ -358,9 +358,9 @@ describe('草稿标题拼装(第N章 章名)', () => {
       premise: '草稿标题格式测试',
       chapters: [
         { title: '雨夜', content: LONG_BODY, summary: 's' }, // 裸章名(解析器主流产物)
-        { title: '第2章 雨夜', content: LONG_BODY, summary: 's' }, // 已带正确前缀 → 原样
-        { title: '第99章 漂移', content: LONG_BODY, summary: 's' }, // 自称序号漂移 → 以书库为准
-        { title: '', content: LONG_BODY, summary: 's' }, // 无章名 → 入库兜底「第4章」
+        { title: '第2章 雨夜', content: LONG_BODY, summary: 's' }, // 已带正确前缀 → 剥掉
+        { title: '第99章 漂移', content: LONG_BODY, summary: 's' }, // 自称序号漂移 → 剥掉
+        { title: '', content: LONG_BODY, summary: 's' }, // 无章名 → 回落「未命名」
       ],
     });
     updateNovelFanqie(USER, book.bookId, { fanqieBookId: '111', createStatus: 'created' });
@@ -369,12 +369,7 @@ describe('草稿标题拼装(第N章 章名)', () => {
     await __fanqieSyncTest.waitIdle();
 
     const draft = mocks.executeCalls.filter((c) => c.skill === DRAFT_SKILL);
-    expect(draft.map((d) => d.args.title)).toEqual([
-      '第1章 雨夜',
-      '第2章 雨夜',
-      '第3章 漂移',
-      '第4章',
-    ]);
+    expect(draft.map((d) => d.args.title)).toEqual(['雨夜', '雨夜', '漂移', '未命名']);
   });
 });
 
@@ -427,7 +422,7 @@ describe('序章同步(账本 key "0")', () => {
     expect(fanqieOf(book.bookId)?.chapters?.['1']?.status).toBe('synced');
     const drafts = mocks.executeCalls.filter((c) => c.skill === DRAFT_SKILL);
     // 序章在前;正文章名带「第N章」前缀的按重拼口径原样(剥后重拼结果一致)
-    expect(drafts.map((d) => d.args.title)).toEqual(['楔子', '第1章 开端']);
+    expect(drafts.map((d) => d.args.title)).toEqual(['楔子', '开端']);
   });
 
   it('序章 failed → sweeper 冷却到期捞回;book 级 retry 也翻 "0"', async () => {

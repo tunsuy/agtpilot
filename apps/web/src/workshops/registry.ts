@@ -175,22 +175,29 @@ export function resolveArtifactDraft<K extends 'article-package' | 'note-package
 }
 
 /**
- * 工坊声明的结构化交付物类型(article-package / note-package / oss-opportunity);
- * 未声明此类交付物的工坊(PPT / 小说 / 视频 / 微博 / 手输任务等)→ null。
+ * 工坊声明的结构化交付物类型(article-package / note-package / oss-opportunity /
+ * text-deliverable);未声明交付物的工坊(PPT / 小说 / 邮件 / 手输任务等)→ null。
  *
  * 服务端收尾据此决定是否把成品自动落进交付库(见 shared/deliverable-publish.ts):
- * 声明了包类交付物的内容工坊(知乎/公众号=文章包,小红书=笔记包)与声明机会清单的
- * 开源雷达(oss-opportunity)才参与,声明驱动、不靠任务标题嗅探,新增工坊自动纳入。
+ * 声明了包类交付物的内容工坊(知乎/公众号=文章包,小红书=笔记包)、声明机会清单的
+ * 开源雷达(oss-opportunity)、声明纯文本成品的视频/微博工坊(text-deliverable,
+ * 最终答复原样落库)才参与,声明驱动、不靠任务标题嗅探,新增工坊自动纳入。
  */
 export function resolveDeliverableKind(
   workshopId: string | undefined
-): 'article-package' | 'note-package' | 'oss-opportunity' | null {
+): 'article-package' | 'note-package' | 'oss-opportunity' | 'text-deliverable' | null {
   if (!workshopId || !((workshopId as WorkshopId) in WORKSHOP_SKILLS)) return null;
   const artifacts = WORKSHOP_SKILLS[workshopId as WorkshopId].meta.artifacts || [];
   const pkg = artifacts.find(
-    (a) => a.kind === 'article-package' || a.kind === 'note-package' || a.kind === 'oss-opportunity'
+    (a) =>
+      a.kind === 'article-package' ||
+      a.kind === 'note-package' ||
+      a.kind === 'oss-opportunity' ||
+      a.kind === 'text-deliverable'
   );
-  return pkg ? (pkg.kind as 'article-package' | 'note-package' | 'oss-opportunity') : null;
+  return pkg
+    ? (pkg.kind as 'article-package' | 'note-package' | 'oss-opportunity' | 'text-deliverable')
+    : null;
 }
 
 /**

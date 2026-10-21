@@ -23,6 +23,8 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
       { id: 'exa', name: '网络搜索' },
     ],
     note: 'Agent 产出正文/话题标签/配图建议。复制满意的一条 → 表单底部「唤起微博」→ 手机 App 粘贴、人工核对后发布。已连接热榜/搜索类连接器时选题走实时热点。',
+    // 纯文本成品:收尾服务端把最终答复原样落交付库(零模型参与,交付库/成果画布可见)
+    artifacts: [{ kind: 'text-deliverable', label: '微博图文文案' }],
   },
   run: (params) => {
     const style = str(params.style, '热点点评');

@@ -89,7 +89,14 @@ export interface ArtifactDraftSpec<Pkg> {
 export type ArtifactSpec =
   | { kind: 'article-package'; label: string; draft?: ArtifactDraftSpec<ArticlePackage> }
   | { kind: 'note-package'; label: string; draft?: ArtifactDraftSpec<NotePackage> }
-  | { kind: 'oss-opportunity'; label: string };
+  | { kind: 'oss-opportunity'; label: string }
+  /**
+   * 纯文本工坊成品(视频脚本/微博文案):无卡片解析器、无草稿直投,成品就是
+   * 最终答复文本本身。声明后任务收尾由服务端把最终答复原样落进交付库
+   * (mission.artifact,见 shared/deliverable-publish.ts 的 text-deliverable 分支),
+   * 驾驶舱成果画布与交付物库直接可见,零模型参与。
+   */
+  | { kind: 'text-deliverable'; label: string };
 
 export interface WorkshopDef {
   id: WorkshopId;

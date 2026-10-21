@@ -92,8 +92,14 @@ describe('resolveDeliverableKind(声明驱动:仅声明结构化交付物的工�
     expect(resolveDeliverableKind('oss_radar')).toBe('oss-opportunity');
   });
 
-  it('未声明结构化交付物的工坊 → null(PPT/小说/视频/微博/邮件等)', () => {
-    for (const id of ['ppt', 'novel', 'video_douyin', 'video_bilibili', 'weibo', 'email_triage', 'weekly']) {
+  it('视频/微博声明纯文本成品 → text-deliverable(收尾原样落库)', () => {
+    expect(resolveDeliverableKind('video_douyin')).toBe('text-deliverable');
+    expect(resolveDeliverableKind('video_bilibili')).toBe('text-deliverable');
+    expect(resolveDeliverableKind('weibo')).toBe('text-deliverable');
+  });
+
+  it('未声明交付物的工坊 → null(PPT/小说/邮件/周报等)', () => {
+    for (const id of ['ppt', 'novel', 'email_triage', 'weekly']) {
       expect(resolveDeliverableKind(id)).toBeNull();
     }
   });
@@ -159,5 +165,90 @@ describe('resolveDeliverableKind · 开源雷达参与收尾自动落地', () =>
     expect(resolveDeliverableKind('oss_radar')).toBe('oss-opportunity');
     expect(resolveDeliverableKind('novel')).toBeNull();
     expect(resolveDeliverableKind(undefined)).toBeNull();
+  });
+});
+
+describe('buildWorkshopDeliverable · text-deliverable(视频脚本/微博文案)', () => {
+  const videoScript = [
+    '【标题】',
+    '3 分钟看懂大模型落地',
+    '【脚本分镜】',
+    '| 时间 | 画面 | 台词/口播 | 字幕要点 |',
+    '|---|---|---|---|',
+    `| 0-15s | 实拍开场 | ${'钩子口播逐字稿内容。'.repeat(4)} | 痛点 |`,
+    '【口播开头】',
+    '你还在为大模型落地发愁吗?'.repeat(4),
+    '【标签与分区】',
+    '#大模型 #AI落地 · 知识区',
+    '【封面文案】',
+    '主标题:大模型落地 / 副标题:三道坎',
+    '【发布提示】',
+    '工作日晚 8 点发布;拍摄难度低,可用现成素材。',
+  ].join('\n');
+
+  const weiboPost = [
+    '【正文】',
+    '今天聊聊大模型落地的真相:大多数团队卡在工程化,不是模型本身。'.repeat(3),
+    '【话题标签】',
+    '#大模型# #AI落地#',
+    '【配图建议】',
+    '3 张:架构图 + 数据对比 + 现场图',
+    '【发布提示】',
+    '午间 12 点发布;涉行业数据以官方通报为准。',
+  ].join('\n');
+
+  it('单条视频脚本:标题取【标题】锚行,正文原样落库不重渲染,count=1', () => {
+    const d = buildWorkshopDeliverable('text-deliverable', videoScript, '抖音短视频脚本工坊 · 60 秒');
+    expect(d).not.toBeNull();
+    expect(d!.count).toBe(1);
+    expect(d!.title).toBe('3 分钟看懂大模型落地');
+    expect(d!.content).toBe(videoScript.trim());
+    expect(d!.content).toContain('【脚本分镜】');
+  });
+
+  it('微博文案无【标题】字段 → 标题回落任务名;【正文】锚即可入库', () => {
+    const d = buildWorkshopDeliverable('text-deliverable', weiboPost, '微博内容工坊 · 热点点评');
+    expect(d).not.toBeNull();
+    expect(d!.title).toBe('微博内容工坊 · 热点点评');
+    expect(d!.content).toBe(weiboPost.trim());
+  });
+
+  it('多条以 --- 分隔:count=条数,标题回落任务名(集合语义,同包类)', () => {
+    const two = `${weiboPost}\n---\n${weiboPost.replace('大模型落地', '智能体落地')}`;
+    const d = buildWorkshopDeliverable('text-deliverable', two, '微博内容工坊 · 干货分享');
+    expect(d!.count).toBe(2);
+    expect(d!.title).toBe('微博内容工坊 · 干货分享');
+    expect(d!.content).toContain('---');
+  });
+
+  it('过短(不足 80 字符)/无契约锚(散文总结)/空答复 → null,绝不发布非成品', () => {
+    expect(buildWorkshopDeliverable('text-deliverable', '【标题】\n太短了', 't')).toBeNull();
+    expect(
+      buildWorkshopDeliverable(
+        'text-deliverable',
+        '好的,我已经完成了本次任务的检索与整理,以下是过程说明。'.repeat(5),
+        't'
+      )
+    ).toBeNull();
+    expect(buildWorkshopDeliverable('text-deliverable', '', 't')).toBeNull();
+  });
+
+  it('收尾倒扫 steps:final 是散文、成品在中间步骤 → 取带锚成品(oss 同款)', () => {
+    const prose = '脚本已经写完了,你可以在上面的步骤里看到完整内容。'.repeat(4);
+    const d = buildWorkshopDeliverable('text-deliverable', prose, '抖音短视频脚本工坊', [
+      '开始检索热点…',
+      videoScript,
+      prose,
+    ]);
+    expect(d).not.toBeNull();
+    expect(d!.title).toBe('3 分钟看懂大模型落地');
+    expect(d!.content).toBe(videoScript.trim());
+  });
+
+  it('steps 里也没有带锚成品 → null(强制总结轮不产出交付件)', () => {
+    const prose = '很抱歉,本次任务未能完成脚本创作。'.repeat(4);
+    expect(
+      buildWorkshopDeliverable('text-deliverable', prose, 't', ['检索中…', '检索失败'])
+    ).toBeNull();
   });
 });

@@ -45,6 +45,8 @@ export const WORKSHOP_SKILL_DOUYIN: WorkshopSkill = buildVideoSkill('video_douyi
     { id: 'exa', name: '网络搜索' },
   ],
   note: 'Agent 产出标题/分镜脚本/口播稿/标签/封面文案。你拍摄剪辑后 → 表单底部「唤起抖音」→ App 上传、人工核对后发布。已连接热榜/搜索类连接器时选题走实时热点。',
+  // 纯文本成品:收尾服务端把最终答复原样落交付库(零模型参与,交付库/成果画布可见)
+  artifacts: [{ kind: 'text-deliverable', label: '抖音短视频脚本' }],
 });
 
 export const WORKSHOP_SKILL_BILIBILI: WorkshopSkill = buildVideoSkill('video_bilibili', 'bilibili', {
@@ -62,4 +64,6 @@ export const WORKSHOP_SKILL_BILIBILI: WorkshopSkill = buildVideoSkill('video_bil
     { id: 'exa', name: '网络搜索' },
   ],
   note: 'Agent 产出标题/分镜脚本/口播稿/标签分区/封面文案。你拍摄剪辑后 → 表单底部「唤起哔哩哔哩」→ App 上传、人工核对后发布。已连接热榜/搜索类连接器时选题走实时热点。',
+  // 纯文本成品:收尾服务端把最终答复原样落交付库(零模型参与,交付库/成果画布可见)
+  artifacts: [{ kind: 'text-deliverable', label: 'B站短视频脚本' }],
 });

@@ -945,7 +945,9 @@ class AgentBackend {
             // 复用同一套解析器从最终答复抽出成品,发布成一份 markdown 交付物(与
             // artifact_render 同一落地通路:mission.artifact + 广播持久化)。开源雷达的
             // 机会清单同样参与(oss-opportunity 声明驱动;步数耗尽时清单留在中间 step,
-            // buildWorkshopDeliverable 倒扫 steps 取源)。模型已自行发布过(mission.artifact
+            // buildWorkshopDeliverable 倒扫 steps 取源)。视频脚本/微博文案以
+            // text-deliverable 声明参与:契约字段头文本本身即交付件,原样落库(同款
+            // 倒扫;无契约锚/过短 = 非成品,绝不发布)。模型已自行发布过(mission.artifact
             // 已存在)则跳过;非成品格式解析不出包也绝不发布。
             if (mission.workshopId && !mission.artifact) {
               try {
@@ -961,10 +963,16 @@ class AgentBackend {
                   );
                   const svc = (this.ctx as any)?.artifact;
                   if (deliv && svc) {
-                    // 量词/标签随 kind:机会清单按「条」,包类成品按「篇」
-                    const isOss = kind === 'oss-opportunity';
-                    const label = isOss ? '贡献机会清单' : '内容工坊成品';
-                    const unit = isOss ? '条' : '篇';
+                    // 量词/标签随 kind:机会清单按「条」,纯文本成品(视频脚本/微博文案)
+                    // 按「份」,包类成品按「篇」
+                    const label =
+                      kind === 'oss-opportunity'
+                        ? '贡献机会清单'
+                        : kind === 'text-deliverable'
+                          ? '工坊成品文本'
+                          : '内容工坊成品';
+                    const unit =
+                      kind === 'oss-opportunity' ? '条' : kind === 'text-deliverable' ? '份' : '篇';
                     svc.createOrUpdateArtifact(
                       {
                         title: deliv.title,

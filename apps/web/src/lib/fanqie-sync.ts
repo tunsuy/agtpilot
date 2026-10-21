@@ -33,6 +33,7 @@ import { getFanqieManaged, listUserProfilesLight, getBrowserAudit } from './user
 import {
   getNovelBook,
   getChapterContent,
+  getPrologueContent,
   listNovelBooks,
   updateNovelFanqie,
   saveFanqieDiagShot,
@@ -75,7 +76,7 @@ interface SyncItem {
   userId: string;
   bookId: string;
   kind: 'create' | 'chapter';
-  /** kind='chapter' 时的本地章号(1 起,服务端 progress 同源) */
+  /** kind='chapter' 时的本地章号(0=序章,1 起为正文章节,与账本 key 同源) */
   chapterIndex?: number;
 }
 
@@ -149,7 +150,9 @@ export function maybeEnqueueFanqieChapter(userId: string, bookId: string, chapte
   if (f.syncEnabled === false) return false;
   if (!fanqieGateOpen(userId)) return false;
   const idx = Math.floor(Number(chapterIndex));
-  if (!Number.isInteger(idx) || idx < 1 || idx > book.progress.chapterCount) return false;
+  // idx 0 = 序章(独立槽位,progress 不含它):仅当序章已落库才放行
+  if (idx === 0 && !book.prologue) return false;
+  if (!Number.isInteger(idx) || idx < 0 || idx > book.progress.chapterCount) return false;
   const rec = f.chapters?.[String(idx)];
   if (rec?.status === 'synced') return false;
   if (rec?.status === 'failed') return false; // 冷却重试是 sweeper 的事,钩子不捞
@@ -213,6 +216,12 @@ export function retryFanqieSync(userId: string, bookId: string, chapterIndex?: n
     }));
     touched = true;
   }
+  // 序章账本 key "0"(progress 不含它):显式重试绕过冷却上限,单独翻回 pending
+  if (book.prologue && book.fanqie?.chapters?.['0']?.status === 'failed') {
+    const rec0 = book.fanqie.chapters['0'];
+    updateNovelFanqie(userId, bookId, { chapters: { ['0']: { ...rec0, status: 'pending' } } });
+    touched = true;
+  }
   for (let i = 1; i <= book.progress.chapterCount; i++) {
     const rec = book.fanqie?.chapters?.[String(i)];
     if (rec?.status === 'failed') {
@@ -250,9 +259,17 @@ export function bindFanqieBook(userId: string, bookId: string, fanqieBookId: str
   return { ok: true };
 }
 
-/** 把一本书所有「未同步」章节(无记录或 pending)落意图并排队(create 成功/绑定后调用) */
+/** 把一本书所有「未同步」章节(无记录或 pending)落意图并排队(create 成功/绑定后调用)。
+ *  序章占账本 key "0"(独立槽位,progress 不含它),排在正文章节之前。 */
 function enqueuePendingChapters(userId: string, book: NovelBook): void {
   const patch: NovelFanqieState['chapters'] = {};
+  if (book.prologue) {
+    const rec0 = book.fanqie?.chapters?.['0'];
+    if (rec0?.status !== 'synced' && rec0?.status !== 'failed') {
+      if (!rec0) patch['0'] = { status: 'pending' };
+      enqueueItem({ userId, bookId: book.bookId, kind: 'chapter', chapterIndex: 0 });
+    }
+  }
   for (let i = 1; i <= book.progress.chapterCount; i++) {
     const rec = book.fanqie?.chapters?.[String(i)];
     if (rec?.status === 'synced' || rec?.status === 'failed') continue;
@@ -271,6 +288,9 @@ function enqueuePendingWork(userId: string, bookId: string): void {
     !book.fanqie?.fanqieBookId
   ) {
     enqueueItem({ userId, bookId, kind: 'create' });
+  }
+  if (book.prologue && book.fanqie?.chapters?.['0']?.status === 'pending') {
+    enqueueItem({ userId, bookId, kind: 'chapter', chapterIndex: 0 });
   }
   for (let i = 1; i <= book.progress.chapterCount; i++) {
     if (book.fanqie?.chapters?.[String(i)]?.status === 'pending') {
@@ -435,30 +455,37 @@ async function runChapter(item: SyncItem, book: NovelBook): Promise<void> {
   const key = String(idx);
   const f = book.fanqie || {};
   if (f.chapters?.[key]?.status === 'synced') return; // 幂等
+  const label = idx === 0 ? '序章' : `第${idx}章`; // idx 0 = 序章(账本 key "0",独立槽位)
 
   const fid = f.fanqieBookId;
   if (!fid) {
     // 映射未建立:create 在排队/进行中 → 保持 pending(create 成功会重排);
     // create 终态 failed / 从未排 → 同样保持 pending 等绑定(sweeper 会周期重排)
-    log(`第${idx}章暂缓(番茄书号未建立):《${book.title}》`);
+    log(`${label}暂缓(番茄书号未建立):《${book.title}》`);
     return;
   }
 
   const skill = findSkill(DRAFT_SKILL);
   const browser = skill ? await acquireBrowser() : null;
   if (!skill || !browser || !skillGateAllows(skill, userId)) {
-    log(`第${idx}章暂缓(${!skill ? '技能未部署' : !browser ? '浏览器未就绪' : '托管门关闭'}):《${book.title}》`);
+    log(`${label}暂缓(${!skill ? '技能未部署' : !browser ? '浏览器未就绪' : '托管门关闭'}):《${book.title}》`);
     return; // 保持 pending
   }
 
-  const content = getChapterContent(userId, bookId, idx);
-  // 番茄草稿标题按技能契约拼「第N章 章名」完整格式(生产实测:库里存的是裸章名
-  // 「雨夜」或兜底纯序号「第N章」,原样透传导致草稿标题缺序号或缺章名)。
-  // 章名可能已带「第N章」前缀(模型章头余文/正文首行原样入库),且自称序号可能
-  // 与书库编号漂移 —— 一律剥掉旧前缀,以书库权威序号重拼;无章名回落纯序号。
-  const rawTitle = String(book.chapters[idx - 1]?.title || '').trim();
-  const chapterName = rawTitle.replace(/^第\s*[0-9]+\s*章\s*/, '').trim();
-  const title = chapterName ? `第${idx}章 ${chapterName}` : `第${idx}章`;
+  // 序章正文走 prologue.md,标题取序章元数据(原样,不拼「第N章」);不落 chapters 索引
+  const content = idx === 0 ? getPrologueContent(userId, bookId) : getChapterContent(userId, bookId, idx);
+  let title: string;
+  if (idx === 0) {
+    title = String(book.prologue?.title || '').trim() || '序章';
+  } else {
+    // 番茄草稿标题按技能契约拼「第N章 章名」完整格式(生产实测:库里存的是裸章名
+    // 「雨夜」或兜底纯序号「第N章」,原样透传导致草稿标题缺序号或缺章名)。
+    // 章名可能已带「第N章」前缀(模型章头余文/正文首行原样入库),且自称序号可能
+    // 与书库编号漂移 —— 一律剥掉旧前缀,以书库权威序号重拼;无章名回落纯序号。
+    const rawTitle = String(book.chapters[idx - 1]?.title || '').trim();
+    const chapterName = rawTitle.replace(/^第\s*[0-9]+\s*章\s*/, '').trim();
+    title = chapterName ? `第${idx}章 ${chapterName}` : `第${idx}章`;
+  }
   if (!content || !content.trim()) {
     updateNovelFanqie(userId, bookId, {
       chapters: { [key]: { status: 'failed', error: '本地章节正文缺失,无法同步', at: Date.now() } },
@@ -479,11 +506,11 @@ async function runChapter(item: SyncItem, book: NovelBook): Promise<void> {
     updateNovelFanqie(userId, bookId, {
       chapters: { [key]: { status: 'synced', at: Date.now() } },
     });
-    log(`第${idx}章已存番茄草稿:《${book.title}》`);
+    log(`${label}已存番茄草稿:《${book.title}》`);
     return;
   }
   if (result?.rejected) {
-    log(`第${idx}章限频延后(今日额度已尽,明日自动续传):《${book.title}》`);
+    log(`${label}限频延后(今日额度已尽,明日自动续传):《${book.title}》`);
     return; // 保持 pending
   }
   if (wasNotLoggedIn(userId, DRAFT_SKILL, t0)) {
@@ -505,7 +532,7 @@ async function runChapter(item: SyncItem, book: NovelBook): Promise<void> {
       },
     },
   });
-  log(`第${idx}章同步失败:《${book.title}》 ${result?.error || ''}${chShot ? ` [${chShot}]` : ''}`);
+  log(`${label}同步失败:《${book.title}》 ${result?.error || ''}${chShot ? ` [${chShot}]` : ''}`);
 }
 
 /** 登录失效连坐:该用户剩余队列项全部落 failed 账本并出队(本轮不再碰该用户) */
@@ -547,6 +574,10 @@ function scheduleDrain(): void {
       log('drain 异常:', err?.message || err);
     } finally {
       draining = false;
+      // 收尾竞态兜底:drain 空转返回的微任务还没落地时,新入队(如显式重试)的
+      // scheduleDrain 会被上面 draining 门挡掉——这里补排,不靠 sweeper 周期兜底。
+      // rearmTimer 在飞时不抢(定时器会自己续排);kill switch 开着不热转(恢复后 sweeper 排空)。
+      if (!syncKillSwitchOn() && queue.length > 0 && !rearmTimer) scheduleDrain();
     }
   })();
 }
@@ -630,6 +661,20 @@ export function runFanqieSyncSweep(userIds?: string[]): { enqueued: number } {
       // 有幂等早退,重复项只多读一次 book.json。
       if ((f.createStatus === 'pending' || f.createStatus === 'creating') && !f.fanqieBookId) {
         if (enqueueItem({ userId, bookId: book.bookId, kind: 'create' })) enqueued++;
+      }
+      // 序章账本 key "0"(progress 不含它):pending / 冷却到点的 failed 都要捞,
+      // 排在正文章节之前保证平台目录顺序
+      if (book.prologue) {
+        const rec0 = f.chapters?.['0'];
+        if (rec0) {
+          const retryDue0 =
+            rec0.status === 'failed' &&
+            (rec0.attempts || 0) < MAX_CHAPTER_ATTEMPTS &&
+            Date.now() - (rec0.at || 0) > RETRY_COOLDOWN_MS;
+          if (rec0.status === 'pending' || retryDue0) {
+            if (enqueueItem({ userId, bookId: book.bookId, kind: 'chapter', chapterIndex: 0 })) enqueued++;
+          }
+        }
       }
       for (let i = 1; i <= book.progress.chapterCount; i++) {
         const rec = f.chapters?.[String(i)];

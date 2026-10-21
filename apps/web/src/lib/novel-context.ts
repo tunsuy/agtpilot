@@ -112,6 +112,15 @@ export function fanqieDigest(state?: NovelFanqieState | null): NovelFanqieDigest
   };
 }
 
+/** 序章元数据(独立槽位,不占 chapters 索引;正文存 prologue.md,番茄账本 key "0") */
+export interface PrologueMeta {
+  title: string;
+  wordCount: number;
+  createdAt: number;
+  /** 序章摘要(续写上下文注入用;savePrologue 必填) */
+  summary?: string;
+}
+
 export interface NovelBook {
   bookId: string;
   title: string;
@@ -122,6 +131,8 @@ export interface NovelBook {
   style: string;
   /** 作品简介(平台书页读者向简介;开书设定包交付,存量书可手动改;读容忍) */
   synopsis?: string;
+  /** 序章/楔子(可选:仅第 1 章前可落;progress 三指针不含它,读容忍) */
+  prologue?: PrologueMeta;
   status: 'active' | 'paused' | 'finished';
   createdAt: number;
   updatedAt: number;
@@ -162,6 +173,8 @@ export interface NovelBookSummary {
   reviewDue: boolean;
   /** 大纲是否已入库(卡片派生「已存大纲」用,免去拉全量 book) */
   hasOutline: boolean;
+  /** 序章是否已落库(卡片派生「已存序章」+ 入口按钮隐藏用) */
+  hasPrologue?: boolean;
   /** 番茄同步摘要(卡片 FanqieSyncRow 用) */
   fanqie?: NovelFanqieDigest;
 }

@@ -59,7 +59,7 @@ import {
   DRAFT_SKILL,
   __fanqieSyncTest,
 } from '../fanqie-sync';
-import { createNovelBook, getNovelBook, updateNovelFanqie } from '../novel-store';
+import { createNovelBook, getNovelBook, updateNovelFanqie, savePrologue, appendChapter } from '../novel-store';
 import { saveFanqieManaged, appendBrowserAudit } from '../user-store';
 
 const USER = 'u-sync';
@@ -375,6 +375,79 @@ describe('草稿标题拼装(第N章 章名)', () => {
       '第3章 漂移',
       '第4章',
     ]);
+  });
+});
+
+describe('序章同步(账本 key "0")', () => {
+  const PROLOGUE_BODY = '暴雨夜,神秘手机降临江城,一切从这里开始。'.repeat(10);
+
+  function seedPrologueBook(title = '序章之书'): string {
+    const book = createNovelBook(USER, { title, genre: '都市', premise: 'p', chapters: [] });
+    savePrologue(USER, book.bookId, { title: '楔子 · 雨夜', content: PROLOGUE_BODY, summary: '神秘手机降临江城。' });
+    return book.bookId;
+  }
+
+  it('守卫:无序章的书 idx 0 不入队;有序章才放行', () => {
+    bothSkills();
+    const plain = seedBook(); // 无序章
+    expect(maybeEnqueueFanqieChapter(USER, plain, 0)).toBe(false);
+    expect(fanqieOf(plain)?.chapters?.['0']).toBeUndefined();
+
+    const withPrologue = seedPrologueBook();
+    expect(maybeEnqueueFanqieChapter(USER, withPrologue, 0)).toBe(true);
+    expect(fanqieOf(withPrologue)?.chapters?.['0']?.status).toBe('pending');
+  });
+
+  it('runChapter idx 0:草稿参数取序章标题 + prologue.md 正文,账本 key "0" 落 synced', async () => {
+    bothSkills();
+    const bookId = seedPrologueBook();
+    updateNovelFanqie(USER, bookId, { fanqieBookId: '111', createStatus: 'created' });
+    mocks.executeImpl = async () => ({ success: true });
+
+    maybeEnqueueFanqieChapter(USER, bookId, 0);
+    await __fanqieSyncTest.waitIdle();
+    expect(fanqieOf(bookId)?.chapters?.['0']?.status).toBe('synced');
+    const draft = mocks.executeCalls.find((c) => c.skill === DRAFT_SKILL);
+    expect(draft?.args).toMatchObject({ bookId: '111', title: '楔子 · 雨夜', body: PROLOGUE_BODY });
+  });
+
+  it('建书成功 → 序章随整体翻入队列,且排在第 1 章之前(平台目录顺序)', async () => {
+    bothSkills();
+    // 手工造「先有序章、create 成功后才有第 1 章」的场景:create 翻入发生在 enqueuePendingChapters
+    const book = createNovelBook(USER, { title: '翻入书', genre: '都市', premise: 'p', chapters: [] });
+    savePrologue(USER, book.bookId, { title: '楔子', content: PROLOGUE_BODY, summary: 's' });
+    appendChapter(USER, book.bookId, { title: '第1章 开端', content: LONG_BODY, summary: '开局。' });
+    mocks.executeImpl = async (name) =>
+      name === CREATE_SKILL ? { success: true, captures: { fanqieBookId: '321' } } : { success: true };
+
+    maybeEnqueueFanqieBookCreate(USER, book.bookId);
+    await __fanqieSyncTest.waitIdle();
+
+    expect(fanqieOf(book.bookId)?.chapters?.['0']?.status).toBe('synced');
+    expect(fanqieOf(book.bookId)?.chapters?.['1']?.status).toBe('synced');
+    const drafts = mocks.executeCalls.filter((c) => c.skill === DRAFT_SKILL);
+    // 序章在前;正文章名带「第N章」前缀的按重拼口径原样(剥后重拼结果一致)
+    expect(drafts.map((d) => d.args.title)).toEqual(['楔子', '第1章 开端']);
+  });
+
+  it('序章 failed → sweeper 冷却到期捞回;book 级 retry 也翻 "0"', async () => {
+    bothSkills();
+    const bookId = seedPrologueBook();
+    updateNovelFanqie(USER, bookId, { fanqieBookId: '111', createStatus: 'created' });
+    mocks.executeImpl = async () => ({ success: false, error: '执行失败:编辑器未渲染' });
+
+    maybeEnqueueFanqieChapter(USER, bookId, 0);
+    await __fanqieSyncTest.waitIdle();
+    expect(fanqieOf(bookId)?.chapters?.['0']?.status).toBe('failed');
+
+    // 冷却未到:sweep 不捞(和正文章节同判据)
+    expect(runFanqieSyncSweep([USER]).enqueued).toBe(0);
+
+    // book 级显式重试(不等冷却):翻 "0" 并重排
+    mocks.executeImpl = async () => ({ success: true });
+    expect(retryFanqieSync(USER, bookId)).toBe(true);
+    await __fanqieSyncTest.waitIdle();
+    expect(fanqieOf(bookId)?.chapters?.['0']?.status).toBe('synced');
   });
 });
 

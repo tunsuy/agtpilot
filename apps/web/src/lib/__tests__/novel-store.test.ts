@@ -24,6 +24,8 @@ import {
   updateNovelStyle,
   updateNovelSynopsis,
   MAX_SYNOPSIS_CHARS,
+  savePrologue,
+  getPrologueContent,
   mergeNovelOutline,
   findNovelBookByTitle,
   updateNovelFanqie,
@@ -483,6 +485,54 @@ describe('synopsis · 作品简介(开书交付 + 手动改)', () => {
     expect(() => updateNovelSynopsis('u1', book.bookId, 'x'.repeat(MAX_SYNOPSIS_CHARS + 1))).toThrow(/作品简介超长/);
     expect(() => updateNovelSynopsis('u1', 'nv_nope_000000', 'x')).toThrow(/书不存在/);
     expect(getNovelBook('u1', book.bookId)!.synopsis).toBe(updated.synopsis); // 原值未被污染
+  });
+});
+
+describe('savePrologue · 序章落库(独立槽位,progress 零改动)', () => {
+  const PROLOGUE = { title: '楔子 · 雨夜', content: LONG_BODY, summary: '暴雨夜,神秘手机降临江城。' };
+
+  it('落 000.md + book.prologue 元数据;progress 三指针不动;重读可见', () => {
+    // 开书不带章(三段化:序章属于第 1 章前)
+    const book = createNovelBook('u1', { title: '序章书', premise: 'p', chapters: [] });
+    const saved = savePrologue('u1', book.bookId, PROLOGUE);
+    expect(saved.prologue).toMatchObject({ title: '楔子 · 雨夜', wordCount: countWords(LONG_BODY), summary: '暴雨夜,神秘手机降临江城。' });
+    expect(saved.progress).toEqual({ chapterCount: 0, wordCount: 0, nextChapter: 1 }); // 序章不占章数
+    expect(getPrologueContent('u1', book.bookId)).toBe(LONG_BODY);
+
+    const reread = getNovelBook('u1', book.bookId)!;
+    expect(reread.prologue?.title).toBe('楔子 · 雨夜');
+    expect(listNovelBooks('u1').find((b) => b.bookId === book.bookId)?.hasPrologue).toBe(true);
+  });
+
+  it('守卫:书不存在/空正文/缺摘要/已有章节/已有序章都抛错,不落半截状态', () => {
+    expect(() => savePrologue('u1', 'nv_nope_000000', PROLOGUE)).toThrow(/书不存在/);
+    expect(() => savePrologue('u1', 'nv_nope_000000', { ...PROLOGUE, content: '  ' })).toThrow(/书不存在/); // 先查书
+
+    const book = createNovelBook('u1', { title: '守卫书', chapters: [] });
+    expect(() => savePrologue('u1', book.bookId, { ...PROLOGUE, content: '' })).toThrow(/正文为空/);
+    expect(() => savePrologue('u1', book.bookId, { ...PROLOGUE, summary: '  ' })).toThrow(/缺少序章摘要/);
+    expect(getNovelBook('u1', book.bookId)!.prologue).toBeUndefined(); // 上面都没落
+
+    savePrologue('u1', book.bookId, PROLOGUE);
+    expect(() => savePrologue('u1', book.bookId, { ...PROLOGUE, content: '另一版序章正文'.repeat(40) })).toThrow(/序章已存在/);
+
+    const withChapters = seedBook(); // 带 1 章正文的书
+    expect(() => savePrologue('u1', withChapters.bookId, PROLOGUE)).toThrow(/已有正文章节/);
+    expect(getNovelBook('u1', withChapters.bookId)!.prologue).toBeUndefined();
+  });
+
+  it('标题缺省归「序章」;readBookJson 脏 prologue(非对象)防御性丢弃', async () => {
+    const book = createNovelBook('u1', { title: '缺省书', chapters: [] });
+    const saved = savePrologue('u1', book.bookId, { content: LONG_BODY, summary: 's' });
+    expect(saved.prologue?.title).toBe('序章');
+
+    // 脏值:手工把 prologue 写成字符串再读 → 丢弃不炸
+    const fsp = await import('node:fs/promises');
+    const file = path.join(dataDir, 'novels', 'u1', book.bookId, 'book.json');
+    const raw = JSON.parse(await fsp.readFile(file, 'utf8'));
+    raw.prologue = '脏值';
+    await fsp.writeFile(file, JSON.stringify(raw), 'utf8');
+    expect(getNovelBook('u1', book.bookId)!.prologue).toBeUndefined();
   });
 });
 

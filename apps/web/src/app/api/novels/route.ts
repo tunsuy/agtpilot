@@ -4,6 +4,7 @@ import {
   listNovelBooks,
   getNovelBook,
   getChapterContent,
+  getPrologueContent,
   createNovelBook,
   appendChapter,
   mergeNovelOutline,
@@ -93,7 +94,9 @@ export async function GET(req: NextRequest) {
     // 全书导出(P1):txt | epub 直下;非法值当没传,走 JSON 分支
     const exportFmt = req.nextUrl.searchParams.get('export');
     if (exportFmt === 'txt' || exportFmt === 'epub') {
-      const readChapter = (index: number) => getChapterContent(userId, bookId, index);
+      // 序章占 0 号位(导出在最前):getChapterContent 钳制 [1,9999],必须先特判,
+      // 否则静默把第 1 章当序章导出
+      const readChapter = (index: number) => (index === 0 ? getPrologueContent(userId, bookId) : getChapterContent(userId, bookId, index));
       if (exportFmt === 'txt') {
         const txt = buildNovelTxt(book, readChapter);
         return new NextResponse(txt, {

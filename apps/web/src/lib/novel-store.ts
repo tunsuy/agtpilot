@@ -30,6 +30,7 @@ import type {
   AppendChapterInput,
   DetailedChapter,
   NovelFanqieState,
+  PrologueMeta,
 } from './novel-context';
 import { isReviewDue, fanqieDigest } from './novel-context';
 
@@ -77,6 +78,11 @@ function chapterFile(userId: string, bookId: string, index: number): string {
   return path.join(bookDir(userId, bookId), 'chapters', `${String(n).padStart(3, '0')}.md`);
 }
 
+/** 序章正文路径:独立于章文件(chapters 钳制从 1 起,序章是 0 号位) */
+function prologueFile(userId: string, bookId: string): string {
+  return path.join(bookDir(userId, bookId), 'chapters', '000.md');
+}
+
 // ---- 原子写 ----
 
 function atomicWriteJson(file: string, data: unknown): void {
@@ -108,6 +114,12 @@ function readBookJson(userId: string, bookId: string): NovelBook | null {
     // fanqie 状态是 P2 可选字段:老书没有;脏值(非对象)防御性丢弃,不让同步账本炸书库读取
     if (parsed.fanqie !== undefined && (typeof parsed.fanqie !== 'object' || parsed.fanqie === null || Array.isArray(parsed.fanqie))) {
       delete parsed.fanqie;
+    }
+    // 序章是可选槽位:脏值(非对象)防御性丢弃;summary 非串剥掉,不让续写上下文注入 undefined
+    if (parsed.prologue !== undefined && (typeof parsed.prologue !== 'object' || parsed.prologue === null || Array.isArray(parsed.prologue))) {
+      delete parsed.prologue;
+    } else if (parsed.prologue && typeof parsed.prologue.summary !== 'undefined' && typeof parsed.prologue.summary !== 'string') {
+      delete parsed.prologue.summary;
     }
     return parsed as NovelBook;
   } catch {
@@ -145,6 +157,7 @@ function toSummary(book: NovelBook): NovelBookSummary {
     openForeshadows: book.ledger.filter((f) => f.status === 'planted').length,
     reviewDue: isReviewDue(book),
     hasOutline: Boolean(String(book.outline || '').trim()),
+    hasPrologue: Boolean(book.prologue),
     fanqie: book.fanqie ? fanqieDigest(book.fanqie) : undefined,
   };
 }
@@ -346,6 +359,55 @@ export function appendChapter(userId: string, bookId: string, input: AppendChapt
   }
 
   if (String(input.volumeSummary || '').trim()) book.volumeSummary = String(input.volumeSummary).trim();
+  book.updatedAt = Date.now();
+  atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
+  return book;
+}
+
+// ---- 序章(独立槽位:不占 chapters 索引,progress 三指针不动) ----
+
+/** 取序章正文(没有序章/文件丢失返回 null) */
+export function getPrologueContent(userId: string, bookId: string): string | null {
+  const book = readBookJson(userId, bookId);
+  if (!book || !book.prologue) return null;
+  try {
+    return fs.readFileSync(prologueFile(userId, bookId), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 落序章(第 1 章前的一次性动作)。守卫镜像 appendChapter:
+ * 书不存在 / 正文空 / 摘要空抛错;**chapterCount!==0 抛错(硬顺序闸——
+ * 序章只属于开篇,写了正文章节的书再插序章会打乱叙事与同步顺序)**;
+ * 已有 prologue 抛错(重复闸,不覆盖已同步的序章)。
+ * 正文先落(000.md)再落 book.json,崩溃最坏丢指针不丢正文;progress 零改动。
+ */
+export function savePrologue(
+  userId: string,
+  bookId: string,
+  input: { title?: string; content: string; summary?: string }
+): NovelBook {
+  const book = readBookJson(userId, bookId);
+  if (!book) throw new Error(`书不存在: ${bookId}`);
+  const content = String(input.content || '');
+  if (!content.trim()) throw new Error('序章正文为空,拒绝入库');
+  const summary = String(input.summary || '').trim();
+  if (!summary) throw new Error('缺少序章摘要(续写上下文注入用),拒绝入库——不落半截状态');
+  if (book.progress.chapterCount !== 0) {
+    throw new Error('已有正文章节,不能再插入序章(序章只在写第 1 章前落库)');
+  }
+  if (book.prologue) throw new Error('序章已存在,拒绝覆盖(重生成请先删书重建)');
+
+  const meta: PrologueMeta = {
+    title: String(input.title || '').trim() || '序章',
+    wordCount: countWords(content),
+    createdAt: Date.now(),
+    summary,
+  };
+  atomicWriteText(prologueFile(userId, bookId), content);
+  book.prologue = meta;
   book.updatedAt = Date.now();
   atomicWriteJson(path.join(bookDir(userId, bookId), 'book.json'), book);
   return book;

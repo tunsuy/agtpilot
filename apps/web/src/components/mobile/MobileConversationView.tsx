@@ -782,12 +782,15 @@ export function MobileConversationView({
         </div>
       )}
 
-      {/* 上翻阅读历史时的「回到底部」浮动按钮(智能跟随:贴底才自动滚动) */}
+      {/* 上翻阅读历史时的「回到底部」浮动按钮(智能跟随:贴底才自动滚动)。
+          抬高避让固定输入框:composer 坐在 tab bar 之上(3.5rem+safe-area),
+          按钮再叠其上留 4.5rem */}
       {showJumpToBottom && (
         <button
           type="button"
           onClick={jumpToBottom}
-          className="fixed bottom-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 px-3 py-1.5 rounded-full bg-white border border-zinc-200 text-[11px] font-medium text-zinc-600 shadow-md active:bg-zinc-50 transition animate-fadeIn"
+          className="fixed left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 px-3 py-1.5 rounded-full bg-white border border-zinc-200 text-[11px] font-medium text-zinc-600 shadow-md active:bg-zinc-50 transition animate-fadeIn"
+          style={{ bottom: 'calc(3.5rem + env(safe-area-inset-bottom, 0px) + 4.5rem)' }}
           title="回到最新消息"
         >
           <ArrowDown className="h-3 w-3" />

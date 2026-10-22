@@ -1366,6 +1366,8 @@ export default function Workspace() {
                   onOpenDeliverable={() => setMobileTab('deliverables')}
                   onRunMission={handleRun}
                   onRunNovelChain={(workshop, display) => handleRun(display.prompt, display.title, null, workshop)}
+                  isSubmitting={isSubmitting}
+                  onStopMission={handleStopMission}
                 />
               )}
 

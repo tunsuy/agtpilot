@@ -26,6 +26,7 @@ import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
 import type { NovelChainHandler } from '../workshops/NovelPackageCard';
 import { MobileConversationView } from './MobileConversationView';
+import { MobileChatComposer } from './MobileChatComposer';
 import { isCronMission } from '../../lib/mission-wire';
 import { isRunnerTaskActive, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, partitionApprovalsByMission, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { formatTokenCount } from '../../lib/mission-efficiency';
@@ -53,6 +54,10 @@ interface MobileActivityViewProps {
   onRunMission?: (prompt: string, title?: string, missionId?: string) => void;
   /** 小说包「下一步」链式出口(对话态 novel 卡;与桌面驾驶舱同款) */
   onRunNovelChain?: NovelChainHandler;
+  /** 发送防重入(page.tsx isSubmitting):composer 发送键转圈 */
+  isSubmitting?: boolean;
+  /** 停止执行中任务(composer 停止钮;与桌面同口径) */
+  onStopMission?: (missionId: string) => void;
 }
 
 const DANGER_STYLE: Record<ApprovalRequest['dangerLevel'], string> = {
@@ -102,6 +107,8 @@ export function MobileActivityView({
   onOpenDeliverable,
   onRunMission,
   onRunNovelChain,
+  isSubmitting,
+  onStopMission,
 }: MobileActivityViewProps) {
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [showAllMissions, setShowAllMissions] = useState(false);
@@ -111,6 +118,8 @@ export function MobileActivityView({
   // 默认动态态(与改造前一致);切任务芯片延续当前态,切 tab 重挂载回默认,
   // 不做 per-mission 记忆
   const [chatMode, setChatMode] = useState(false);
+  // 对话态发送 +1:对话流重置贴底跟随新一轮输出(卡片续聊/重新生成同享)
+  const [followToken, setFollowToken] = useState(0);
   const approvalTopRef = useRef<HTMLDivElement>(null);
   const prevApprovalCount = useRef(approvalRequests.length);
   const prevSuggestionCount = useRef(connectorSuggestions.length);
@@ -181,6 +190,19 @@ export function MobileActivityView({
     setChatMode(true);
     if (mission && mission.id !== activeMissionId) onSelectMission(mission.id);
   };
+
+  // 对话态回复出口:统一过一道 followToken +1(composer 发送、选题成稿、
+  // 存草稿、重新生成都会让对话流重置贴底,跟进新一轮输出)
+  const runInChat = useMemo(
+    () =>
+      onRunMission
+        ? (text: string, title?: string, missionId?: string) => {
+            setFollowToken((t) => t + 1);
+            onRunMission(text, title, missionId);
+          }
+        : undefined,
+    [onRunMission]
+  );
 
   // 后台子任务(带 parentMissionId)不占任务切换条坑位(与桌面 sidebar 同规则):
   // 子任务进展在父会话的通知卡/活动行可见;顶层只列用户发起的会话。
@@ -549,9 +571,10 @@ export function MobileActivityView({
             <div className="mt-3">
               <MobileConversationView
                 mission={mission}
-                onRunMission={onRunMission}
+                onRunMission={runInChat}
                 onSelectMission={onSelectMission}
                 onRunNovelChain={onRunNovelChain}
+                followToken={followToken}
               />
             </div>
           ) : mission ? (
@@ -703,6 +726,17 @@ export function MobileActivityView({
           <p className="mt-3 text-sm text-zinc-400">暂无动态</p>
           <p className="text-xs text-zinc-300 mt-1">任务执行进度和审批请求会出现在这里</p>
         </div>
+      )}
+
+      {/* 对话态固定输入框:对当前会话(含 DONE 历史)续聊 + 停止在飞任务。
+          只在对话态渲染 —— 动态态回复入口已由问题卡/审批/选题卡承担 */}
+      {chatMode && mission && runInChat && (
+        <MobileChatComposer
+          mission={mission}
+          isSubmitting={Boolean(isSubmitting)}
+          onRunMission={runInChat}
+          onStopMission={onStopMission}
+        />
       )}
 
       {/* 终止本地任务确认(替代原生 confirm) */}

@@ -1365,6 +1365,7 @@ export default function Workspace() {
                   terminalLogs={terminalLogs}
                   onOpenDeliverable={() => setMobileTab('deliverables')}
                   onRunMission={handleRun}
+                  onRunNovelChain={(workshop, display) => handleRun(display.prompt, display.title, null, workshop)}
                 />
               )}
 

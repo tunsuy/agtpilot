@@ -24,6 +24,8 @@ import { QuestionCard } from '../QuestionCard';
 import { RunnerPublishApprovalCard } from '../RunnerPublishApprovalCard';
 import { TopicPickList } from '../workshops/TopicPickCard';
 import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
+import type { NovelChainHandler } from '../workshops/NovelPackageCard';
+import { MobileConversationView } from './MobileConversationView';
 import { isCronMission } from '../../lib/mission-wire';
 import { isRunnerTaskActive, runnerStateMeta, runnerRetryable, RUNNER_RETRYABLE_LABEL, RUNNER_RETRYABLE_HINT, partitionApprovalsByMission, type RunnerTaskSummary } from '../../lib/runner-dispatch';
 import { formatTokenCount } from '../../lib/mission-efficiency';
@@ -49,6 +51,8 @@ interface MobileActivityViewProps {
   onOpenDeliverable?: () => void;
   /** 续聊同一 mission（勾选选题一键成稿的移动端唯一回复入口） */
   onRunMission?: (prompt: string, title?: string, missionId?: string) => void;
+  /** 小说包「下一步」链式出口(对话态 novel 卡;与桌面驾驶舱同款) */
+  onRunNovelChain?: NovelChainHandler;
 }
 
 const DANGER_STYLE: Record<ApprovalRequest['dangerLevel'], string> = {
@@ -97,11 +101,16 @@ export function MobileActivityView({
   terminalLogs,
   onOpenDeliverable,
   onRunMission,
+  onRunNovelChain,
 }: MobileActivityViewProps) {
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [showAllMissions, setShowAllMissions] = useState(false);
   const [showAllSteps, setShowAllSteps] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+  // 任务卡内容态:动态(监控:审批/时间线/看板/日志)↔ 对话(聊天流)。
+  // 默认动态态(与改造前一致);切任务芯片延续当前态,切 tab 重挂载回默认,
+  // 不做 per-mission 记忆
+  const [chatMode, setChatMode] = useState(false);
   const approvalTopRef = useRef<HTMLDivElement>(null);
   const prevApprovalCount = useRef(approvalRequests.length);
   const prevSuggestionCount = useRef(connectorSuggestions.length);
@@ -154,15 +163,24 @@ export function MobileActivityView({
       connectorSuggestions.length > prevSuggestionCount.current;
     prevApprovalCount.current = approvalRequests.length;
     prevSuggestionCount.current = connectorSuggestions.length;
-    if (grew) {
+    if (grew && !chatMode) {
       approvalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [approvalRequests.length, connectorSuggestions.length]);
+  }, [approvalRequests.length, connectorSuggestions.length, chatMode]);
 
   const mission = useMemo(
     () => missions.find((m) => m.id === activeMissionId) || missions[0] || null,
     [missions, activeMissionId]
   );
+
+  // 切到对话态:mission 回退(missions[0])在 activeMissionId 为 null 时
+  // 「展示但未选中」→ 不触发懒回水(回水 effect 只依赖 activeMissionId)。
+  // 这里补一次 onSelectMission:对齐芯片高亮 + 把终态摘要会话的全量步骤
+  // 拉下来,对话流才有历史内容可渲染
+  const enterChat = () => {
+    setChatMode(true);
+    if (mission && mission.id !== activeMissionId) onSelectMission(mission.id);
+  };
 
   // 后台子任务(带 parentMissionId)不占任务切换条坑位(与桌面 sidebar 同规则):
   // 子任务进展在父会话的通知卡/活动行可见;顶层只列用户发起的会话。
@@ -194,12 +212,17 @@ export function MobileActivityView({
   }, [mission, terminalLogs]);
 
   return (
-    <div className="px-4 pt-4 pb-28 max-w-lg mx-auto">
+    // 对话态加高底部留白:给固定输入框(composer)与键盘留出空间
+    <div className={`px-4 pt-4 max-w-lg mx-auto ${chatMode ? 'pb-48' : 'pb-28'}`}>
       <header className="mb-4 text-center">
         <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">动态</h1>
       </header>
       <div ref={approvalTopRef} className="scroll-mt-4" />
 
+      {/* 收件箱区(问题卡/审批/授权/本地任务):只属于动态态 —— 对话态把
+          屏幕让给聊天流,审批提醒由 TabBar 角标 + 动态态承担 */}
+      {!chatMode && (
+      <>
       {/* ask_user 问题卡(先问后猜):排在待审批之前 —— 回答解锁的是整个任务方向 */}
       {visibleQuestions.length > 0 && onAnswerQuestion && (
         <section className="mb-5">
@@ -461,6 +484,8 @@ export function MobileActivityView({
           </ul>
         </section>
       )}
+      </>
+      )}
 
       {/* 任务切换 */}
       {topMissions.length > 0 && (
@@ -497,8 +522,39 @@ export function MobileActivityView({
             </div>
           </div>
 
-          {/* 步骤时间线 */}
-          {mission && (
+          {/* 任务卡内容态切换(动态监控 ↔ 对话):不占 tab,轻量 pill */}
+          <div className="mt-3 flex w-fit rounded-full bg-zinc-100 p-0.5">
+            <button
+              type="button"
+              onClick={() => setChatMode(false)}
+              className={`h-7 px-3.5 rounded-full text-xs transition ${
+                !chatMode ? 'bg-white shadow-sm font-medium text-zinc-900' : 'text-zinc-500 active:text-zinc-700'
+              }`}
+            >
+              动态
+            </button>
+            <button
+              type="button"
+              onClick={enterChat}
+              className={`h-7 px-3.5 rounded-full text-xs transition ${
+                chatMode ? 'bg-white shadow-sm font-medium text-zinc-900' : 'text-zinc-500 active:text-zinc-700'
+              }`}
+            >
+              对话
+            </button>
+          </div>
+
+          {/* 对话态:聊天流(桌面驾驶舱对话流移植);动态态:既有任务卡原样 */}
+          {mission && chatMode ? (
+            <div className="mt-3">
+              <MobileConversationView
+                mission={mission}
+                onRunMission={onRunMission}
+                onSelectMission={onSelectMission}
+                onRunNovelChain={onRunNovelChain}
+              />
+            </div>
+          ) : mission ? (
             <div className="mt-3 rounded-xl border border-zinc-200 bg-white px-4 py-4 shadow-sm">
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-semibold text-zinc-900 truncate pr-2">{mission.title || '未命名任务'}</p>
@@ -636,7 +692,7 @@ export function MobileActivityView({
                 </div>
               )}
             </div>
-          )}
+          ) : null}
         </section>
       )}
 

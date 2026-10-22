@@ -373,13 +373,20 @@ export function CronJobsView({
                             .map((r) => {
                               const meta = RUN_STATUS_META[r.status] || { text: r.status, dot: 'bg-zinc-300' };
                               const failed = r.status === 'DONE' && r.hasErrorStep;
+                              // 行内标题去巡航前缀:行挂在任务卡下,任务名已知,前缀重复无信息量
+                              const runTitle = r.title?.startsWith(CRUISE_TITLE_PREFIX)
+                                ? r.title.slice(CRUISE_TITLE_PREFIX.length)
+                                : r.title;
                               return (
                                 <li key={r.id} className="flex items-center gap-2 text-[11px] text-zinc-500">
                                   <span
                                     className={`h-1.5 w-1.5 rounded-full shrink-0 ${failed ? 'bg-red-500' : meta.dot}`}
                                   />
                                   <span className="font-mono text-zinc-400 shrink-0">{formatRunTime(r.startedAt)}</span>
-                                  <span className={failed ? 'text-red-500' : r.status === 'DONE' ? 'text-emerald-600' : 'text-zinc-500'}>
+                                  <span className={`truncate min-w-0 ${failed ? 'text-red-500' : 'text-zinc-500'}`}>
+                                    {runTitle || job.name}
+                                  </span>
+                                  <span className={`shrink-0 ${failed ? 'text-red-500' : r.status === 'DONE' ? 'text-emerald-600' : 'text-zinc-500'}`}>
                                     {failed ? '已完成(有失败步骤)' : meta.text}
                                   </span>
                                   {r.hasArtifact && (

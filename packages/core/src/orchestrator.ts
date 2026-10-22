@@ -73,6 +73,16 @@ export function isCutOffToolCall(finishReason: string, text: string): boolean {
   return open > close;
 }
 
+/** 答案正文截断判定：finishReason=length 且残段里【没有】未闭合 tool_call 标签 ——
+ *  思考烧光单轮输出预算，答复正文刚开头就被截停。与 isCutOffToolCall 互补：length
+ *  下二者必居其一（标签未闭合 = 工具调用截停；无标签 = 正文截停），同样必须送强制
+ *  总结收口而不是当成功（生产实例 2026-10-22：《万棺之主》日更巡航，reasoning 约
+ *  4.5 万 token 把单轮输出预算耗尽，正文只吐出 1 个字符"【"，任务零交付却落 DONE）。 */
+export function isCutOffAnswer(finishReason: string, text: string): boolean {
+  if (finishReason !== 'length' || !text) return false;
+  return !isCutOffToolCall(finishReason, text);
+}
+
 /** 高危操作审批等待上限（毫秒），超时自动拒绝并释放任务，杜绝永久悬挂。0 = 永不超时 */
 const APPROVAL_TIMEOUT_MS = Math.max(0, Number(process.env.AGTPILOT_APPROVAL_TIMEOUT_MS) || 5 * 60_000);
 
@@ -820,9 +830,13 @@ export class OrchestratorService extends Service {
 
       const stepsCount = Math.max(1, loopResult.stepsCount || 1);
       let finalAnswer: string = loopResult.text || '';
-      // 单轮输出截顶且残段留着未闭合 tool_call = 工具调用写到一半被截停:
-      // 收口成最终答复会零工具执行零交付物却落 DONE,转强制总结如实交代
-      const cutOff = isCutOffToolCall(loopResult.finishReason || '', finalAnswer);
+      // 单轮输出截顶:工具调用残段(isCutOffToolCall)与答复正文残段(isCutOffAnswer)
+      // 两种形态都必须送强制总结收口 —— 否则任务零工具执行/零交付却落 DONE
+      // (生产实例 2026-10-16 PPT 演示稿;2026-10-22 小说日更巡航正文仅 1 字符)
+      // 二者互斥(isCutOffAnswer 显式排除标签未闭合形态),口径由各自分支交代
+      const cutOffToolCall = isCutOffToolCall(loopResult.finishReason || '', finalAnswer);
+      const cutOffAnswer = isCutOffAnswer(loopResult.finishReason || '', finalAnswer);
+      const cutOff = cutOffToolCall || cutOffAnswer;
 
       // 会话历史 = 输入消息 + SDK 产出的标准 assistant/tool 消息。
       // reasoning 剥离(闸3·装配):SDK responseMessages 保留着最后一步的 reasoning
@@ -854,7 +868,12 @@ export class OrchestratorService extends Service {
         } else if (cutOff) {
           broadcast({
             type: 'thought',
-            payload: { step: stepsCount, text: '上一轮输出被单轮上限截断（工具调用写到一半被截），正在做强制总结…' },
+            payload: {
+              step: stepsCount,
+              text: cutOffAnswer
+                ? '上一轮输出被单轮上限截断（思考耗尽输出预算，答复正文刚开头即被截），正在做强制总结…'
+                : '上一轮输出被单轮上限截断（工具调用写到一半被截），正在做强制总结…',
+            },
             timestamp: Date.now(),
           });
         }
@@ -879,18 +898,26 @@ export class OrchestratorService extends Service {
           // 压缩失败按原历史收尾（诚实失败路径不变）
         }
         try {
-          // 截断收尾与步数耗尽的交代口径不同:截断意味着工具调用根本没执行,
-          // 总结必须如实说明未交付,不得把残段当成果
+          // 截断收尾与步数耗尽的交代口径不同,且两种截断各自如实:
+          // 工具调用截停 = 调用未执行,必须说明零执行不得编造成果;
+          // 正文截停 = 前面的工具轮已真实执行,要求补写完整正文而非全盘否定
           const wrapReason = loopResult.stepsExhausted
             ? `可用步数已全部用完，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`
-            : cutOff
+            : cutOffToolCall
               ? `上一轮输出被单轮输出上限截断（工具调用写到一半被截，该调用未执行），禁止再调用任何工具。请基于以上信息如实说明：已完成什么、因截断未完成什么（含工具调用未执行的事实）、用户下一步该怎么做（重跑或拆小任务）。不得编造交付物或宣称成功。`
-              : `未产出文本结论，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`;
+              : cutOffAnswer
+                ? `上一轮答复正文被单轮输出上限截断（思考消耗了输出预算，正文刚开头即被截停），禁止再调用任何工具、不要再展开冗长思考。请基于以上已完成的工作，直接完整输出最终答复正文；此前已产出的交付物（如章节/文档/清单）按原格式完整重写，不要只写摘要。确实无法交付的部分如实说明，不得宣称成功。`
+                : `未产出文本结论，禁止再调用任何工具。请立即基于以上已收集的信息输出最终总结：已完成什么、未能完成什么、结论与交付物。`;
           const wrapResult: ModelStepResult = await model.invokeStep({
             model: options.model,
             system: `${systemPrompt}\n\n【重要】${wrapReason}若此前已按任务要求的格式(字段头/清单结构)产出过完整交付物，最终总结必须按原格式完整保留该交付物正文，状态说明只可附加在其后，不得改写或省略。`,
             messages: conversation as any,
-            configOverride: options.configOverride,
+            // 正文截停的收口轮强制压低思考深度:截停根因是思考烧光预算,收口轮
+            // 再高思考会原样复烧(重演 1 字符截停)。连接器/env 配置不动,只对
+            // 这一次调用覆盖;中转不认 reasoning_effort 时 effort-fallback 兜底剥参重试
+            configOverride: cutOffAnswer
+              ? { ...(options.configOverride || {}), reasoningEffort: 'low' }
+              : options.configOverride,
             disableTools: true,
           });
           finalAnswer = wrapResult.text || finalAnswer;
@@ -903,8 +930,10 @@ export class OrchestratorService extends Service {
         } catch {
           // 总结调用失败时，回退到已有的最后一段文本；截断残段补如实附注，
           // 防止未执行工具调用的残篇被误读成完整交付
-          if (cutOff) {
+          if (cutOffToolCall) {
             finalAnswer += '\n\n（注：本任务上一轮输出被单轮上限截断，工具调用未执行，以上内容可能不完整。请重跑或拆小任务重试。）';
+          } else if (cutOffAnswer) {
+            finalAnswer += '\n\n（注：本任务上一轮答复正文被单轮输出上限截断（思考耗尽输出预算），强制总结也未能完成，以上内容可能不完整。建议重跑任务。）';
           }
         }
       }

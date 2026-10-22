@@ -111,7 +111,7 @@ export function Navbar({
       </div>
 
       {/* Navigation Tabs (Manus / Cue minimal style - 严格基于屏幕居中轴对称) */}
-      <nav className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center gap-1 bg-zinc-100/80 p-1 rounded-xl border border-zinc-200/60 shadow-2xs">
+      <nav className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-max items-center gap-1 bg-zinc-100/80 p-1 rounded-xl border border-zinc-200/60 shadow-2xs">
         <button
           onClick={() => onViewChange('home')}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
@@ -176,8 +176,8 @@ export function Navbar({
               : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
           }`}
         >
-          <Clock className="h-3.5 w-3.5" />
-          <span>主动巡航</span>
+          <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="whitespace-nowrap">主动巡航</span>
           {patrolCount > 0 && (
             <span className="text-[10px] bg-blue-100 text-blue-700 font-mono px-1.5 rounded-full font-semibold">
               {patrolCount}

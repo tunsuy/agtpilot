@@ -170,7 +170,7 @@ export interface SandboxAuditEntry {
  */
 export interface DeletionLedgerEntry {
   id: string;
-  target: { kind: 'memory' | 'connector-auth' | 'rag-doc'; id: string; userId: string };
+  target: { kind: 'memory' | 'connector-auth' | 'rag-doc' | 'skill-card' | 'skill-pack'; id: string; userId: string };
   requestedBy: 'user' | 'auto' | 'propagated';
   reason?: string;
   at: number;

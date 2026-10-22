@@ -1,0 +1,825 @@
+'use client';
+
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Sparkles,
+  Trash2,
+  Search,
+  X,
+  RotateCw,
+  Package,
+  Store,
+  Cpu,
+  Download,
+  Eye,
+  AlertTriangle,
+  ExternalLink,
+  RefreshCw,
+  CheckCircle2,
+  FolderGit2,
+} from 'lucide-react';
+
+// ---- 类型(与 /api/skills* 响应同型) ----
+
+interface SkillCardItem {
+  id: string;
+  trigger: string;
+  steps: string;
+  avoid?: string;
+  check?: string;
+  risk?: string;
+  keywords: string[];
+  hitCount: number;
+  sourceMissionId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface InstalledPack {
+  name: string;
+  description: string;
+  dirName: string;
+  hasScripts: boolean;
+  importedAt?: number;
+  fileCount?: number;
+  source?: { repo: string; ref: string; sha: string; path: string };
+  contentHash?: string;
+}
+
+interface BuiltinInventory {
+  flows: Array<{ form: 'flow'; name: string; description: string }>;
+  packs: Array<{ form: 'pack'; name: string; description: string; hasScripts: boolean }>;
+}
+
+interface MarketSkill {
+  sourceId: string;
+  sourceLabel: string;
+  repo: string;
+  path: string;
+  name: string;
+  category?: string;
+  description?: string;
+  displayName?: string;
+}
+
+interface MarketSource {
+  id: string;
+  label: string;
+  repo: string;
+  error?: string;
+  skills: MarketSkill[];
+}
+
+interface SkillDetail {
+  name: string;
+  description: string;
+  content: string;
+}
+
+type Section = 'all' | 'cards' | 'installed' | 'market' | 'builtin';
+
+interface SkillsViewProps {
+  /** 数量上报(导航角标用;父层可选消费) */
+  onCountsChange?: (counts: { cards: number; installed: number }) => void;
+}
+
+export function SkillsView({ onCountsChange }: SkillsViewProps) {
+  const [section, setSection] = useState<Section>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [cards, setCards] = useState<SkillCardItem[]>([]);
+  const [installed, setInstalled] = useState<InstalledPack[]>([]);
+  const [builtin, setBuiltin] = useState<BuiltinInventory>({ flows: [], packs: [] });
+  const [marketEnabled, setMarketEnabled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [market, setMarket] = useState<MarketSource[] | null>(null);
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketError, setMarketError] = useState<string | null>(null);
+
+  // 弹窗状态
+  const [deleteCardTarget, setDeleteCardTarget] = useState<SkillCardItem | null>(null);
+  const [uninstallTarget, setUninstallTarget] = useState<InstalledPack | null>(null);
+  const [importTarget, setImportTarget] = useState<MarketSkill | null>(null);
+  const [detail, setDetail] = useState<{ skill: MarketSkill; data: SkillDetail } | null>(null);
+  const [detailLoading, setDetailLoading] = useState<MarketSkill | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  const showToast = (kind: 'ok' | 'err', text: string) => {
+    setToast({ kind, text });
+    window.setTimeout(() => setToast(null), 4000);
+  };
+
+  const loadSkills = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await fetch('/api/skills');
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '加载失败');
+      setCards(data.cards || []);
+      setInstalled(data.installed || []);
+      setBuiltin(data.builtin || { flows: [], packs: [] });
+      setMarketEnabled(data.marketEnabled !== false);
+      onCountsChange?.({ cards: (data.cards || []).length, installed: (data.installed || []).length });
+    } catch (e: any) {
+      setLoadError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }, [onCountsChange]);
+
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]);
+
+  const loadMarket = useCallback(async (refresh = false) => {
+    setMarketLoading(true);
+    setMarketError(null);
+    try {
+      const res = await fetch(`/api/skills/market${refresh ? '?refresh=1' : ''}`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '市场索引加载失败');
+      setMarket(data.sources || []);
+    } catch (e: any) {
+      setMarketError(String(e?.message || e));
+    } finally {
+      setMarketLoading(false);
+    }
+  }, []);
+
+  // 切到市场分区时懒加载索引
+  useEffect(() => {
+    if ((section === 'market' || section === 'all') && marketEnabled && market === null && !marketLoading) {
+      loadMarket();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, marketEnabled]);
+
+  const handleDeleteCard = async () => {
+    if (!deleteCardTarget || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete-card', id: deleteCardTarget.id }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '删除失败');
+      showToast('ok', '技能卡已删除(台账留痕)');
+      setDeleteCardTarget(null);
+      await loadSkills();
+    } catch (e: any) {
+      showToast('err', String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUninstall = async () => {
+    if (!uninstallTarget || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'uninstall-pack', name: uninstallTarget.dirName }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '解除引用失败');
+      showToast('ok', `已解除引用「${uninstallTarget.name}」`);
+      setUninstallTarget(null);
+      await loadSkills();
+    } catch (e: any) {
+      showToast('err', String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!importTarget || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/skills/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo: importTarget.repo,
+          path: importTarget.path,
+          riskAck: true,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '引用失败');
+      showToast('ok', data.message || '已引用');
+      setImportTarget(null);
+      await loadSkills();
+    } catch (e: any) {
+      showToast('err', String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openDetail = async (skill: MarketSkill) => {
+    setDetailLoading(skill);
+    try {
+      const qs = new URLSearchParams({ repo: skill.repo, path: skill.path });
+      const res = await fetch(`/api/skills/market?${qs.toString()}`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '详情加载失败');
+      setDetail({ skill, data: data.detail });
+    } catch (e: any) {
+      showToast('err', String(e?.message || e));
+    } finally {
+      setDetailLoading(null);
+    }
+  };
+
+  const q = searchQuery.trim().toLowerCase();
+  const matchQ = (...fields: Array<string | undefined>) =>
+    !q || fields.some((f) => (f || '').toLowerCase().includes(q));
+
+  const filteredCards = cards.filter((c) => matchQ(c.trigger, c.steps, c.avoid, ...(c.keywords || [])));
+  const filteredInstalled = installed.filter((p) => matchQ(p.name, p.description, p.source?.repo));
+  const filteredMarket: MarketSource[] = (market || [])
+    .map((s) => ({
+      ...s,
+      skills: s.skills.filter((k) => matchQ(k.name, k.displayName, k.description, k.path, k.category)),
+    }))
+    .filter((s) => s.error || s.skills.length > 0);
+  const filteredBuiltinFlows = builtin.flows.filter((f) => matchQ(f.name, f.description));
+  const filteredBuiltinPacks = builtin.packs.filter((p) => matchQ(p.name, p.description));
+
+  const sections: Array<{ id: Section; label: string; count?: number }> = [
+    { id: 'all', label: '全部' },
+    { id: 'cards', label: '我的技能卡', count: cards.length },
+    { id: 'installed', label: '已引用生态技能', count: installed.length },
+    { id: 'market', label: '技能市场', count: market ? market.reduce((n, s) => n + s.skills.length, 0) : undefined },
+    { id: 'builtin', label: '内置技能', count: builtin.flows.length + builtin.packs.length },
+  ];
+
+  const show = (id: Section) => section === 'all' || section === id;
+
+  return (
+    <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
+      {/* 头部 */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-xl bg-amber-50 text-amber-600 border border-amber-200/60 shadow-2xs">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">技能中心</h1>
+            {cards.length + installed.length > 0 && (
+              <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 border border-zinc-200/80 text-zinc-600">
+                {cards.length} 卡 · {installed.length} 包
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">
+            任务跑完自动蒸馏的操作程序沉淀为技能卡(可随时删除);生态技能包可一键引用到本机(第三方代码,安装前请确认风险),不再需要时解除引用即彻底移除。
+          </p>
+        </div>
+        <button
+          onClick={loadSkills}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-zinc-100 hover:bg-zinc-200/70 text-zinc-700 text-xs font-medium transition flex-shrink-0"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <span>刷新</span>
+        </button>
+      </div>
+
+      {/* 分区 + 搜索 */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+          {sections.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setSection(s.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+                section === s.id
+                  ? 'bg-zinc-900 text-white shadow-xs'
+                  : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
+              }`}
+            >
+              <span>{s.label}</span>
+              {s.count !== undefined && (
+                <span
+                  className={`text-[10px] px-1 rounded-full ${
+                    section === s.id ? 'bg-zinc-700 text-zinc-200' : 'bg-zinc-200 text-zinc-500'
+                  }`}
+                >
+                  {s.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="relative w-full sm:w-64">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索技能..."
+            className="w-full pl-9 pr-4 py-1.5 rounded-xl border border-zinc-200 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 transition"
+          />
+        </div>
+      </div>
+
+      {loadError && (
+        <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+          加载失败: {loadError}
+        </div>
+      )}
+
+      {/* 我的技能卡 */}
+      {show('cards') && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5">
+            <Sparkles className="h-4 w-4 text-amber-500" />
+            我的技能卡
+            <span className="text-[10px] font-normal text-zinc-400">任务轨迹自动蒸馏 · 执行任务时按相关性自动注入</span>
+          </h2>
+          {filteredCards.length === 0 ? (
+            <EmptyHint text="还没有沉淀技能卡 —— 完成几个任务(尤其工坊类重复任务)后会自动蒸馏出来" />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredCards.map((c) => (
+                <div
+                  key={c.id}
+                  className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between group"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="text-xs font-semibold text-zinc-900 leading-snug">{c.trigger}</h3>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700 border border-amber-200 flex-shrink-0">
+                        自动蒸馏
+                      </span>
+                    </div>
+                    <FieldRow label="Do" text={c.steps} />
+                    {c.avoid && <FieldRow label="Avoid" text={c.avoid} tone="red" />}
+                    {c.check && <FieldRow label="Check" text={c.check} tone="blue" />}
+                    {c.risk && <FieldRow label="Risk" text={c.risk} tone="amber" />}
+                    {c.keywords?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {c.keywords.slice(0, 6).map((k) => (
+                          <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500 font-mono">
+                            {k}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="pt-3 mt-3 border-t border-zinc-100 flex items-center justify-between text-[10px] text-zinc-400">
+                    <span className="font-mono">
+                      {new Date(c.updatedAt).toLocaleDateString()} · 命中 {c.hitCount} 次
+                    </span>
+                    <button
+                      onClick={() => setDeleteCardTarget(c)}
+                      className="opacity-0 group-hover:opacity-100 transition p-1 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-md"
+                      title="删除该技能卡"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 已引用生态技能 */}
+      {show('installed') && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5">
+            <Package className="h-4 w-4 text-emerald-500" />
+            已引用生态技能
+            <span className="text-[10px] font-normal text-zinc-400">安装在本机你的专属目录 · 不自动更新</span>
+          </h2>
+          {filteredInstalled.length === 0 ? (
+            <EmptyHint text="还没有引用生态技能 —— 去「技能市场」挑一个,或让 Agent 在任务里建议" />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredInstalled.map((p) => (
+                <div
+                  key={p.dirName}
+                  className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between group"
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-1.5">
+                      <h3 className="text-xs font-semibold text-zinc-900">{p.name}</h3>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {p.hasScripts && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-zinc-100 text-zinc-600 border border-zinc-200">
+                            含脚本
+                          </span>
+                        )}
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          已引用
+                        </span>
+                      </div>
+                    </div>
+                    {p.description && (
+                      <p className="text-xs text-zinc-600 leading-relaxed line-clamp-3">{p.description}</p>
+                    )}
+                    {p.source && (
+                      <p className="text-[10px] text-zinc-400 font-mono mt-2 break-all">
+                        <FolderGit2 className="inline h-3 w-3 mr-1" />
+                        {p.source.repo}@{p.source.sha.slice(0, 8)} · {p.source.path}
+                      </p>
+                    )}
+                  </div>
+                  <div className="pt-3 mt-3 border-t border-zinc-100 flex items-center justify-between text-[10px] text-zinc-400">
+                    <span className="font-mono">
+                      {p.importedAt ? new Date(p.importedAt).toLocaleDateString() : '—'}
+                      {p.fileCount !== undefined && ` · ${p.fileCount} 文件`}
+                    </span>
+                    <button
+                      onClick={() => setUninstallTarget(p)}
+                      className="opacity-0 group-hover:opacity-100 transition flex items-center gap-1 px-2 py-1 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-md"
+                      title="解除引用(删除本机安装)"
+                    >
+                      <X className="h-3 w-3" />
+                      <span>解除引用</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 技能市场 */}
+      {show('market') && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5">
+              <Store className="h-4 w-4 text-blue-500" />
+              技能市场
+              <span className="text-[10px] font-normal text-zinc-400">Agent Skills 开放标准生态 · 服务端索引</span>
+            </h2>
+            {market !== null && (
+              <button
+                onClick={() => loadMarket(true)}
+                className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 transition"
+              >
+                <RefreshCw className={`h-3 w-3 ${marketLoading ? 'animate-spin' : ''}`} />
+                重新拉取
+              </button>
+            )}
+          </div>
+          {!marketEnabled ? (
+            <EmptyHint text="技能市场已关闭(AGTPILOT_SKILL_MARKET=0)" />
+          ) : marketLoading && market === null ? (
+            <EmptyHint text="正在拉取市场索引..." />
+          ) : marketError ? (
+            <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+              市场索引失败: {marketError}
+            </div>
+          ) : (
+            (filteredMarket || []).map((src) => (
+              <div key={src.id} className="space-y-2">
+                <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+                  <span className="font-semibold text-zinc-700">{src.label}</span>
+                  <span className="font-mono">{src.repo}</span>
+                  <a
+                    href={`https://github.com/${src.repo}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-zinc-400 hover:text-zinc-700 transition"
+                    title="在 GitHub 打开(新标签)"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+                {src.error && (
+                  <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-700">
+                    该源拉取失败: {src.error}
+                  </div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {src.skills.map((s) => {
+                    const isInstalled = installed.some(
+                      (p) => p.source?.repo === s.repo && p.source?.path === s.path
+                    );
+                    return (
+                      <div
+                        key={`${s.repo}:${s.path}`}
+                        className="p-4 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <h3 className="text-xs font-semibold text-zinc-900 truncate">
+                              {s.displayName || s.name}
+                            </h3>
+                            <p className="text-[10px] text-zinc-400 font-mono truncate mt-0.5">
+                              {s.category ? `${s.category}/` : ''}
+                              {s.name}
+                            </p>
+                          </div>
+                          {isInstalled && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-0.5 flex-shrink-0">
+                              <CheckCircle2 className="h-2.5 w-2.5" />
+                              已引用
+                            </span>
+                          )}
+                        </div>
+                        {s.description && (
+                          <p className="text-[11px] text-zinc-600 leading-relaxed mt-1.5 line-clamp-2">
+                            {s.description}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-2 mt-3">
+                          <button
+                            onClick={() => openDetail(s)}
+                            disabled={detailLoading?.path === s.path}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-zinc-200/70 text-zinc-700 text-[11px] font-medium transition disabled:opacity-50"
+                          >
+                            {detailLoading?.path === s.path ? (
+                              <RotateCw className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Eye className="h-3 w-3" />
+                            )}
+                            详情
+                          </button>
+                          <button
+                            onClick={() => setImportTarget(s)}
+                            disabled={isInstalled}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-[11px] font-medium transition shadow-xs"
+                          >
+                            <Download className="h-3 w-3" />
+                            {isInstalled ? '已引用' : '引用'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          )}
+        </section>
+      )}
+
+      {/* 内置技能 */}
+      {show('builtin') && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5">
+            <Cpu className="h-4 w-4 text-zinc-500" />
+            内置技能
+            <span className="text-[10px] font-normal text-zinc-400">出厂自带 · 只读(托管开关在各工坊页)</span>
+          </h2>
+          {filteredBuiltinFlows.length + filteredBuiltinPacks.length === 0 ? (
+            <EmptyHint text="当前部署没有内置技能" />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {filteredBuiltinFlows.map((f) => (
+                <BuiltinRow key={`flow:${f.name}`} name={f.name} description={f.description} tag="浏览器流程" />
+              ))}
+              {filteredBuiltinPacks.map((p) => (
+                <BuiltinRow
+                  key={`pack:${p.name}`}
+                  name={p.name}
+                  description={p.description}
+                  tag={p.hasScripts ? '沙箱技能包 · 含脚本' : '沙箱技能包'}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 删除技能卡确认 */}
+      {deleteCardTarget && (
+        <ConfirmModal
+          title="删除技能卡"
+          icon={<Trash2 className="h-4 w-4 text-red-500" />}
+          body={
+            <>
+              将删除这张自动蒸馏的技能卡(删除进台账留痕,不可恢复;同类任务再次跑完会重新蒸馏):
+              <p className="mt-2 px-3 py-2 rounded-lg bg-zinc-50 border border-zinc-200 text-xs text-zinc-700 leading-relaxed">
+                {deleteCardTarget.trigger}
+              </p>
+            </>
+          }
+          confirmLabel="删除"
+          danger
+          busy={busy}
+          onConfirm={handleDeleteCard}
+          onCancel={() => setDeleteCardTarget(null)}
+        />
+      )}
+
+      {/* 解除引用确认 */}
+      {uninstallTarget && (
+        <ConfirmModal
+          title="解除引用生态技能"
+          icon={<X className="h-4 w-4 text-red-500" />}
+          body={
+            <>
+              将从本机彻底删除技能包「{uninstallTarget.name}」(删除进台账留痕;之后可随时重新引用):
+              {uninstallTarget.source && (
+                <p className="mt-2 px-3 py-2 rounded-lg bg-zinc-50 border border-zinc-200 text-[10px] text-zinc-500 font-mono break-all">
+                  {uninstallTarget.source.repo}@{uninstallTarget.source.sha.slice(0, 8)} · {uninstallTarget.source.path}
+                </p>
+              )}
+            </>
+          }
+          confirmLabel="解除引用"
+          danger
+          busy={busy}
+          onConfirm={handleUninstall}
+          onCancel={() => setUninstallTarget(null)}
+        />
+      )}
+
+      {/* 引用风险确认 */}
+      {importTarget && (
+        <ConfirmModal
+          title="引用生态技能包"
+          icon={<AlertTriangle className="h-4 w-4 text-amber-500" />}
+          body={
+            <>
+              即将从 <span className="font-mono text-zinc-700">{importTarget.repo}</span> 安装{' '}
+              <span className="font-mono text-zinc-700">{importTarget.path}</span> 到你的专属技能目录。请知悉:
+              <ul className="mt-2 space-y-1 text-[11px] text-zinc-600 list-disc pl-4">
+                <li>这是<b>第三方内容</b>:SKILL.md 指令会注入 Agent 上下文,请确认来源可信(建议先看详情)</li>
+                <li>包内脚本只可经沙箱工具执行,敏感操作仍走审批门</li>
+                <li>安装后<b>不自动更新</b>(防供应链投毒);升级 = 解除引用后重装</li>
+                <li>来源版本(repo/commit/文件哈希)会记录在案,可随时解除引用</li>
+              </ul>
+            </>
+          }
+          confirmLabel="已知悉风险,引用"
+          danger={false}
+          busy={busy}
+          onConfirm={handleImport}
+          onCancel={() => setImportTarget(null)}
+        />
+      )}
+
+      {/* SKILL.md 详情 */}
+      {detail && (
+        <div className="fixed top-14 inset-x-0 bottom-0 bg-black/30 backdrop-blur-xs z-40 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="w-full max-w-2xl max-h-[80vh] rounded-2xl bg-white border border-zinc-200 shadow-xl flex flex-col">
+            <div className="flex items-start justify-between p-5 border-b border-zinc-100">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-zinc-900 truncate">{detail.data.name}</h3>
+                <p className="text-[10px] text-zinc-400 font-mono mt-0.5 truncate">
+                  {detail.skill.repo} · {detail.skill.path}
+                </p>
+                {detail.data.description && (
+                  <p className="text-xs text-zinc-600 mt-1.5 leading-relaxed">{detail.data.description}</p>
+                )}
+              </div>
+              <button onClick={() => setDetail(null)} className="text-zinc-400 hover:text-zinc-700 p-1 flex-shrink-0">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto flex-1">
+              <pre className="text-[11px] text-zinc-700 leading-relaxed whitespace-pre-wrap font-mono bg-zinc-50 rounded-xl border border-zinc-200 p-4">
+                {detail.data.content}
+              </pre>
+            </div>
+            <div className="flex items-center justify-end gap-2 p-4 border-t border-zinc-100">
+              <button
+                onClick={() => setDetail(null)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+              >
+                关闭
+              </button>
+              <button
+                onClick={() => {
+                  const s = detail.skill;
+                  setDetail(null);
+                  setImportTarget(s);
+                }}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium transition shadow-xs"
+              >
+                <Download className="h-3.5 w-3.5" />
+                引用该技能
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 轻提示 */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-medium shadow-lg border ${
+            toast.kind === 'ok'
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-red-50 text-red-700 border-red-200'
+          }`}
+        >
+          {toast.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- 局部小组件 ----
+
+function FieldRow({ label, text, tone }: { label: string; text: string; tone?: 'red' | 'blue' | 'amber' }) {
+  const toneCls =
+    tone === 'red'
+      ? 'text-red-600 bg-red-50 border-red-100'
+      : tone === 'blue'
+        ? 'text-blue-600 bg-blue-50 border-blue-100'
+        : tone === 'amber'
+          ? 'text-amber-600 bg-amber-50 border-amber-100'
+          : 'text-zinc-500 bg-zinc-50 border-zinc-100';
+  return (
+    <div className="flex items-start gap-2 text-[11px] leading-relaxed">
+      <span className={`px-1.5 py-0.5 rounded border font-mono text-[10px] flex-shrink-0 ${toneCls}`}>{label}</span>
+      <span className="text-zinc-600 whitespace-pre-wrap line-clamp-4">{text}</span>
+    </div>
+  );
+}
+
+function EmptyHint({ text }: { text: string }) {
+  return (
+    <div className="py-10 text-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50">
+      <p className="text-[11px] text-zinc-400 max-w-sm mx-auto">{text}</p>
+    </div>
+  );
+}
+
+function BuiltinRow({ name, description, tag }: { name: string; description: string; tag: string }) {
+  return (
+    <div className="p-4 rounded-2xl border border-zinc-200 bg-white flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <h3 className="text-xs font-semibold text-zinc-900 truncate">{name}</h3>
+        {description && <p className="text-[11px] text-zinc-500 leading-relaxed mt-1 line-clamp-2">{description}</p>}
+      </div>
+      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-zinc-100 text-zinc-600 border border-zinc-200 flex-shrink-0">
+        {tag}
+      </span>
+    </div>
+  );
+}
+
+function ConfirmModal({
+  title,
+  icon,
+  body,
+  confirmLabel,
+  danger,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  body: React.ReactNode;
+  confirmLabel: string;
+  danger: boolean;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed top-14 inset-x-0 bottom-0 bg-black/30 backdrop-blur-xs z-40 flex items-center justify-center p-4 animate-fadeIn">
+      <div className="w-full max-w-md rounded-2xl bg-white border border-zinc-200 p-6 shadow-xl space-y-4">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            {icon}
+            <h3 className="text-sm font-semibold text-zinc-900">{title}</h3>
+          </div>
+          <button onClick={onCancel} className="text-zinc-400 hover:text-zinc-700 p-1">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="text-xs text-zinc-600 leading-relaxed">{body}</div>
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition"
+          >
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg disabled:opacity-40 text-white text-xs font-medium transition shadow-xs ${
+              danger ? 'bg-red-600 hover:bg-red-500' : 'bg-zinc-900 hover:bg-zinc-800'
+            }`}
+          >
+            {busy && <RotateCw className="h-3.5 w-3.5 animate-spin" />}
+            <span>{confirmLabel}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -11,6 +11,7 @@ import { WorkshopsView } from '../components/workshops/WorkshopsView';
 import type { WorkshopRunPayload } from '../components/workshops/run';
 import { DeliverablesView } from '../components/DeliverablesView';
 import { MemoriesView } from '../components/MemoriesView';
+import { SkillsView } from '../components/SkillsView';
 import { CronJobsView } from '../components/CronJobsView';
 import { GoalsView } from '../components/GoalsView';
 import { DevicesView } from '../components/DevicesView';
@@ -48,10 +49,10 @@ import type { CronScenario } from '../lib/cron-scenario';
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
   const { isMobile, mounted: mobileReady } = useIsMobile();
-  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices'>('home');
   // 移动端专属状态：底部 tab + 全屏覆盖层（复用桌面视图做"更多"入口）
   const [mobileTab, setMobileTab] = useState<MobileTab>('home');
-  const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'patrol' | 'workshops' | null>(null);
+  const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'workshops' | null>(null);
   const [rightTab, setRightTab] = useState<'browser' | 'terminal' | 'artifact' | 'activity'>('browser');
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
@@ -98,6 +99,8 @@ export default function Workspace() {
 
   // 长效记忆状态
   const [memories, setMemories] = useState<MemoryItem[]>([]);
+  // 技能中心角标(SkillsView 自取数后上报;导航徽标 = 技能卡 + 已引用生态技能包)
+  const [skillCounts, setSkillCounts] = useState<{ cards: number; installed: number }>({ cards: 0, installed: 0 });
 
   const loadMemories = async () => {
     try {
@@ -1189,8 +1192,8 @@ export default function Workspace() {
     };
   }, [session?.user?.id]);
 
-  const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices') => {
-    // 首页允许所有人浏览概览，其余页面（工作台、工坊、连接器、记忆库、巡航、交付库、长期目标）必须登录
+  const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices') => {
+    // 首页允许所有人浏览概览，其余页面（工作台、工坊、连接器、记忆库、技能、巡航、交付库、长期目标）必须登录
     if (view !== 'home' && sessionStatus !== 'loading' && !session?.user) {
       setAuthModalTab('login');
       setAuthModalOpen(true);
@@ -1226,6 +1229,7 @@ export default function Workspace() {
         goals: '长期目标',
         connectors: '连接器',
         memories: '记忆库',
+        skills: '技能中心',
         patrol: '定时巡航',
         workshops: '工坊',
       };
@@ -1289,6 +1293,9 @@ export default function Workspace() {
                 onAddMemory={handleAddMemory}
                 onDeleteMemory={handleDeleteMemory}
               />
+            )}
+            {mobileOverlay === 'skills' && (
+              <SkillsView onCountsChange={setSkillCounts} />
             )}
             {mobileOverlay === 'patrol' && (
               <CronJobsView
@@ -1410,6 +1417,7 @@ export default function Workspace() {
           currentMission={currentMission}
           connectedCount={connectedCount}
           memoryCount={memories.length}
+          skillCount={skillCounts.cards + skillCounts.installed}
           patrolCount={cronJobs.filter((j) => j.status === 'active').length}
           goalCount={goals.length}
           approvalRequests={approvalRequests}
@@ -1560,6 +1568,12 @@ export default function Workspace() {
                 onAddMemory={handleAddMemory}
                 onDeleteMemory={handleDeleteMemory}
               />
+            </main>
+          )}
+
+          {activeView === 'skills' && (
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
+              <SkillsView onCountsChange={setSkillCounts} />
             </main>
           )}
 

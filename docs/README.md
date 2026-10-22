@@ -17,6 +17,7 @@
 | [material-uploads.md](./material-uploads.md) | ✅ 已实施 | 工坊参考资料第二来源：本地上传文件（text/PDF/Word 三档、上传时抽取文本、upl_ 引用命名空间与 art_ 同一读取链路） |
 | [cua-integration-notes.md](./cua-integration-notes.md) | 调研笔记 | trycua/cua 计算机使用栈的调研与集成可行性（未运行其代码，集成需锁版本） |
 | [personal-ai-landscape-insights.md](./personal-ai-landscape-insights.md) | 研究结论 / 路线图 | 2026 Personal AI 浪潮对 agtpilot 的启发与路线图（以 §5.4 批判性复核修订版为准） |
+| [skill-center.md](./design/skill-center.md) | ✅ 已实施 | 技能中心：自沉淀技能卡管理（删除留台账）+ 生态 Agent Skills 引用/解除引用（GitHub 注册表索引、tar 围栏提取、来源记录、风险确认双保险） |
 
 ## 状态标记约定
 

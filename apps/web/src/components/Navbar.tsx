@@ -17,16 +17,19 @@ import {
   Download,
   MonitorSmartphone,
   Unplug,
+  Wand2,
 } from 'lucide-react';
 import { Mission, ApprovalRequest, User } from '../types/agent';
 import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
-  activeView: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices';
-  onViewChange: (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'patrol' | 'deliverables' | 'devices') => void;
+  activeView: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices';
+  onViewChange: (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices') => void;
   currentMission: Mission | null;
   connectedCount: number;
   memoryCount?: number;
+  /** 技能中心角标(技能卡 + 已引用生态技能包) */
+  skillCount?: number;
   patrolCount?: number;
   goalCount?: number;
   approvalRequests: ApprovalRequest[];
@@ -46,6 +49,7 @@ export function Navbar({
   currentMission,
   connectedCount,
   memoryCount = 0,
+  skillCount = 0,
   patrolCount = 0,
   goalCount = 0,
   approvalRequests,
@@ -209,6 +213,23 @@ export function Navbar({
           {memoryCount > 0 && (
             <span className="text-[10px] bg-purple-100 text-purple-700 font-mono px-1.5 rounded-full font-semibold">
               {memoryCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => onViewChange('skills')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            activeView === 'skills'
+              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+          }`}
+        >
+          <Wand2 className="h-3.5 w-3.5" />
+          <span>技能</span>
+          {skillCount > 0 && (
+            <span className="text-[10px] bg-amber-100 text-amber-700 font-mono px-1.5 rounded-full font-semibold">
+              {skillCount}
             </span>
           )}
         </button>

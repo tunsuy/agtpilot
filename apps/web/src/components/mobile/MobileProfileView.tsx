@@ -17,6 +17,7 @@ import {
   Smartphone,
   Sparkles,
   Unplug,
+  Wand2,
 } from 'lucide-react';
 import { ConnectorApp, CronJobItem, GoalItem } from '../../types/agent';
 import { detectPushSupport, enablePush, disablePush, getPushStatus, PushSupport, PushStatus } from '../../utils/pwaPush';
@@ -33,7 +34,7 @@ interface MobileProfileViewProps {
   onToggleCronJob: (id: string) => void;
   onTriggerCronJob: (id: string) => void;
   /** 打开桌面版功能页（移动端以全屏覆盖层呈现，带返回） */
-  onOpenFullView: (view: 'goals' | 'connectors' | 'memories' | 'patrol' | 'workshops') => void;
+  onOpenFullView: (view: 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'workshops') => void;
   onOpenAuth: (tab: 'login' | 'register') => void;
   onLogout: () => void;
 }
@@ -323,6 +324,14 @@ export function MobileProfileView({
               <Brain className="h-4 w-4 text-zinc-400" />
               <span className="flex-1 text-sm text-zinc-800">记忆库</span>
               <span className="text-xs text-zinc-400">{memoryCount} 条</span>
+              <ChevronRight className="h-4 w-4 text-zinc-300" />
+            </button>
+          </li>
+          <li>
+            <button type="button" onClick={() => onOpenFullView('skills')} className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-zinc-50 transition">
+              <Wand2 className="h-4 w-4 text-zinc-400" />
+              <span className="flex-1 text-sm text-zinc-800">技能中心</span>
+              <span className="text-xs text-zinc-400">沉淀与生态技能</span>
               <ChevronRight className="h-4 w-4 text-zinc-300" />
             </button>
           </li>

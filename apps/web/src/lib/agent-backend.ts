@@ -210,17 +210,25 @@ class AgentBackend {
       // plugin-skill 注入 web 存储适配器（flow: 托管 opt-in 记录 + 浏览器审计；
       // card: data.skillCards 卡片库 + 记忆审计）——存储不下沉，仍留在 user-store，
       // 插件只经 SkillStoreAdapter / SkillCardStore 接口读写；分词器沿用 memory-service。
+      // pack 用户安装域经 userPackDirs 注入（skill-center 管的 skill-packs/ 目录，
+      // 生态技能「引用/解除引用」的落点；插件只扫描，安装/卸载/台账归宿主）。
       // plugin-subagent 注入 transcript 落盘适配器（JSONL → getDataDir()/subagents/，
       // 只增不改；写失败静默降级，仅供审计，永不回灌主上下文）。
-      const [{ webSkillStore }, { webCardStore }, { tokenize }, { appendSubagentTranscript }] =
+      const [{ webSkillStore }, { webCardStore }, { tokenize }, { appendSubagentTranscript }, { userSkillPacksDir }] =
         await Promise.all([
           import('@/lib/script-skills'),
           import('@/lib/skill-cards'),
           import('@/lib/memory-service'),
           import('@/lib/subagent-transcript'),
+          import('@/lib/skill-center'),
         ]);
       const runtime = await createAgentRuntime({
-        skill: { store: webSkillStore(), cards: webCardStore(), tokenize },
+        skill: {
+          store: webSkillStore(),
+          cards: webCardStore(),
+          tokenize,
+          userPackDirs: (userId: string) => [userSkillPacksDir(userId)],
+        },
         subagent: {
           appendTranscript: appendSubagentTranscript,
           // 子 agent MCP 人工钥匙逐用户解析:「已连接 ∩ 目录 subagentOpen 标记」自动注入,
@@ -1777,6 +1785,20 @@ class AgentBackend {
           } catch (e) {
             // 技能卡检索失败不影响任务
           }
+          // 1.6 用户安装技能包目录块(技能中心「引用」的生态技能;渐进披露:
+          // 只注入名字+描述目录,全文经 skill_pack_read 工具按需读)。任务开始
+          // 组装一次,任务内前缀稳定;未安装任何包时为空串,零开销。
+          try {
+            const { buildUserPackCatalogBlock } = await import('@/lib/skill-center');
+            const packBlock = buildUserPackCatalogBlock(options.userId);
+            if (packBlock) {
+              userMemoryPrompt = userMemoryPrompt
+                ? `${userMemoryPrompt}\n\n${packBlock}`
+                : packBlock;
+            }
+          } catch (e) {
+            // 目录块构建失败不影响任务
+          }
         }
 
         // 2. 获取当前登录用户自定义的连接器密钥与默认模型覆盖
@@ -1903,6 +1925,18 @@ class AgentBackend {
             ];
           } catch (e: any) {
             this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`, uid);
+          }
+
+          // 2.46 用户安装技能包读取工具(skill_pack_read,技能中心「引用」的生态
+          // 技能;渐进披露的第二步:目录块在 system prompt,全文按需读)。只读、
+          // 路径围栏在用户安装域内、体积上限、二进制拒绝;未安装任何包时不挂载。
+          try {
+            const { buildUserSkillPackTools, listInstalledPacks } = await import('@/lib/skill-center');
+            if (listInstalledPacks(uid).length > 0) {
+              taskTools = [...(taskTools || []), ...buildUserSkillPackTools(uid)];
+            }
+          } catch (e: any) {
+            this.addTerminalLog('stderr', `[Skills] 技能包读取工具挂载异常: ${e?.message || e}`, uid);
           }
 
           // 2.48 后台子任务派发工具(docs/design/background-child-missions.md):

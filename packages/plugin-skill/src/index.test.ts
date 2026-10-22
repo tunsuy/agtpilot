@@ -628,6 +628,79 @@ describe('pack 注册表 · 沙箱技能包发现', () => {
   });
 });
 
+describe('pack 注册表 · 用户安装域(userPackDirs,技能中心引用/解除引用)', () => {
+  function makePack(root: string, dirName: string, fmName?: string, description = '') {
+    const dir = path.join(root, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const nameLine = fmName ? `name: ${fmName}\n` : '';
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\n${nameLine}description: ${description}\n---\nbody`);
+    return dir;
+  }
+
+  it('listPacks(userId) 并入用户域并打 scope 标;不传 userId 只见全局域(向后兼容)', () => {
+    const globalRoot = fs.mkdtempSync(path.join(tmp, 'packs-g-'));
+    const userRoot = fs.mkdtempSync(path.join(tmp, 'packs-u-'));
+    makePack(globalRoot, 'gpack', 'gpack', '全局包');
+    makePack(userRoot, 'upack', 'upack', '用户包');
+
+    const svc = createSkillService({ packDirs: [globalRoot], userPackDirs: () => [userRoot] });
+    const globalOnly = svc.listPacks();
+    expect(globalOnly.map((p) => p.name)).toEqual(['gpack']);
+    expect(globalOnly[0].scope).toBe('global');
+
+    const merged = svc.listPacks('u1');
+    expect(merged.map((p) => p.name).sort()).toEqual(['gpack', 'upack']);
+    expect(merged.find((p) => p.name === 'upack')?.scope).toBe('user');
+    expect(svc.getPack('upack', 'u1')?.dir).toBe(path.join(userRoot, 'upack'));
+    expect(svc.getPack('upack')).toBeUndefined(); // 全局域查不到用户包
+  });
+
+  it('同名冲突:用户安装域优先(只影响该用户)', () => {
+    const globalRoot = fs.mkdtempSync(path.join(tmp, 'packs-gc-'));
+    const userRoot = fs.mkdtempSync(path.join(tmp, 'packs-uc-'));
+    makePack(globalRoot, 'same', 'same', '出厂版');
+    makePack(userRoot, 'same', 'same', '用户装版');
+
+    // 解析器按 userId 分域(与生产装配一致):只有 u2 装了用户域包
+    const svc = createSkillService({
+      packDirs: [globalRoot],
+      userPackDirs: (uid: string) => (uid === 'u2' ? [userRoot] : []),
+    });
+    const merged = svc.listPacks('u2');
+    expect(merged.filter((p) => p.name === 'same')).toHaveLength(1);
+    expect(merged.find((p) => p.name === 'same')).toMatchObject({ scope: 'user', description: '用户装版' });
+    // 其他用户不受影响:仍只见全局域出厂版
+    expect(svc.listPacks('u3').find((p) => p.name === 'same')).toMatchObject({ scope: 'global', description: '出厂版' });
+  });
+
+  it('userPackDirs 解析器抛错 = 没有用户域,全局域照常(失败不扩散)', () => {
+    const globalRoot = fs.mkdtempSync(path.join(tmp, 'packs-ge-'));
+    makePack(globalRoot, 'gpack', 'gpack');
+    const svc = createSkillService({
+      packDirs: [globalRoot],
+      userPackDirs: () => {
+        throw new Error('resolver boom');
+      },
+    });
+    expect(svc.listPacks('u4').map((p) => p.name)).toEqual(['gpack']);
+  });
+
+  it('隐藏/临时目录(.tmp-*)不当技能包;listSkills(userId) 清单含用户域 pack', () => {
+    const globalRoot = fs.mkdtempSync(path.join(tmp, 'packs-gi-'));
+    const userRoot = fs.mkdtempSync(path.join(tmp, 'packs-ui-'));
+    makePack(globalRoot, 'gpack', 'gpack');
+    makePack(userRoot, '.tmp-123-abc', undefined, '安装中间态');
+    makePack(userRoot, 'real', 'real');
+
+    const svc = createSkillService({ packDirs: [globalRoot], userPackDirs: () => [userRoot] });
+    const names = svc.listPacks('u5').map((p) => p.name);
+    expect(names).toContain('real');
+    expect(names).not.toContain('.tmp-123-abc');
+    const inv = svc.listSkills('u5');
+    expect(inv.some((s) => s.form === 'pack' && s.name === 'real' && (s as any).scope === 'user')).toBe(true);
+  });
+});
+
 describe('createSkillService · 统一服务面', () => {
   beforeEach(() => {
     delete process.env.AGTPILOT_SCRIPT_SKILLS;

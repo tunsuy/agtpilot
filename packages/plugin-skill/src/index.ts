@@ -14,6 +14,9 @@
  * 形态二 pack(沙箱技能包,/opt/skills 的 SKILL.md + 脚本,PPT 工坊在用):
  *   扫描目录读 SKILL.md frontmatter 出统一元数据(名字/描述/路径/就绪面),
  *   新技能包放进目录即被发现;消费方(ppt-workshop)不再各自硬编码路径。
+ *   pack 分两域:global(出厂内置,配置目录)+ user(用户安装,宿主经
+ *   config.userPackDirs 按 userId 注入目录;安装/卸载/来源记录归宿主
+ *   skill-center,插件只扫描)。同名用户域优先,只影响该用户。
  *
  * 形态三 card(TRS 技能卡,任务轨迹蒸馏的五字段结构化经验):
  *   引擎在 cards.ts(解析归一化/trigger 去重合并/关键词检索注入/命中反馈/
@@ -1098,6 +1101,8 @@ export interface SkillPackInfo {
   hasSkillMd: boolean;
   /** 是否存在 scripts/ 子目录(可执行脚本面) */
   hasScripts: boolean;
+  /** 来源域:global = 全局配置目录(出厂内置);user = 用户安装目录(userPackDirs 注入) */
+  scope?: 'global' | 'user';
 }
 
 /** pack 目录清单:env AGTPILOT_SKILL_PACK_DIRS(path.delimiter 分隔)覆盖,缺省 /opt/skills */
@@ -1120,7 +1125,10 @@ export function parseSkillMdFrontmatter(text: string): Record<string, string> {
 }
 
 /** 扫描 pack 目录:含 SKILL.md 的一级子目录 = 一个技能包;坏目录跳过不抛 */
-export function scanSkillPacks(dirs: string[] = skillPackDirs()): SkillPackInfo[] {
+export function scanSkillPacks(
+  dirs: string[] = skillPackDirs(),
+  scope: 'global' | 'user' = 'global'
+): SkillPackInfo[] {
   const packs: SkillPackInfo[] = [];
   for (const root of dirs) {
     let entries: string[];
@@ -1130,6 +1138,7 @@ export function scanSkillPacks(dirs: string[] = skillPackDirs()): SkillPackInfo[
       continue; // 目录不存在(如 dev 机没有 /opt/skills)= 没有 pack,不是错误
     }
     for (const entry of entries.sort()) {
+      if (entry.startsWith('.')) continue; // 临时目录(.tmp-*)/隐藏文件不是技能包
       const dir = path.join(root, entry);
       const skillMd = path.join(dir, 'SKILL.md');
       let text: string;
@@ -1149,6 +1158,7 @@ export function scanSkillPacks(dirs: string[] = skillPackDirs()): SkillPackInfo[
         dir,
         hasSkillMd: true,
         hasScripts,
+        scope,
       });
     }
   }
@@ -1159,7 +1169,7 @@ export function scanSkillPacks(dirs: string[] = skillPackDirs()): SkillPackInfo[
 
 export type SkillInventoryItem =
   | { form: 'flow'; name: string; description: string }
-  | { form: 'pack'; name: string; description: string; dir: string; hasScripts: boolean };
+  | { form: 'pack'; name: string; description: string; dir: string; hasScripts: boolean; scope?: 'global' | 'user' };
 
 export interface BuildTaskToolsOptions {
   /** 覆盖技能目录(测试用;缺省 config.skillDir → scriptSkillsDir()) */
@@ -1167,8 +1177,8 @@ export interface BuildTaskToolsOptions {
 }
 
 export interface SkillService {
-  /** 统一清单:flow 技能文件 + pack 沙箱技能包 */
-  listSkills(): SkillInventoryItem[];
+  /** 统一清单:flow 技能文件 + pack 沙箱技能包(传 userId 时并入该用户安装的技能包) */
+  listSkills(userId?: string): SkillInventoryItem[];
   /** flow 形态 → 用户级任务工具(opt-in 门/限频/审计/围栏全在引擎内) */
   buildTaskTools(
     userId: string,
@@ -1177,9 +1187,9 @@ export interface SkillService {
   ): ScriptSkillToolsResult;
   /** 加载 flow 技能文件(含逐文件错误,供热加载点与调试) */
   loadSkills(dir?: string): ScriptSkillLoadResult;
-  /** pack 注册表(60s 缓存) */
-  listPacks(): SkillPackInfo[];
-  getPack(packName: string): SkillPackInfo | undefined;
+  /** pack 注册表(60s 缓存;传 userId 时并入用户安装域,同名用户域优先) */
+  listPacks(userId?: string): SkillPackInfo[];
+  getPack(packName: string, userId?: string): SkillPackInfo | undefined;
   /** card 形态 → system prompt 技能卡注入块(任务开始一次;无达标卡/无存储返回空串) */
   buildCardsBlock(userId: string, goal: string): string;
   /** card 形态 → 任务末蒸馏(旁路,失败静默;model 取 config.getModel,缺省 ctx.model) */
@@ -1207,6 +1217,12 @@ export interface SkillPluginConfig {
   skillDir?: string;
   /** pack 目录清单(缺省 skillPackDirs()) */
   packDirs?: string[];
+  /**
+   * 用户安装域 pack 目录解析(宿主注入;缺省无用户域)。
+   * 存储不下沉:插件只拿目录扫描,安装/卸载/来源记录归宿主(web 见 lib/skill-center.ts)。
+   * 解析器抛错按「无用户目录」处理,不影响全局域。
+   */
+  userPackDirs?: (userId: string) => string[];
   /** 宿主存储适配·card(缺省无 store:卡服务面空转——注入空串、蒸馏空结果) */
   cards?: SkillCardStore;
   /** 分词器注入(缺省用插件自带 defaultTokenize,与 web memory-service 同型) */
@@ -1223,11 +1239,29 @@ const PACK_CACHE_TTL_MS = 60_000;
  * 如 web 侧适配器/测试;cordis 装配走 apply → SkillServiceImpl)。
  */
 export function createSkillService(config: SkillPluginConfig = {}): SkillService {
-  let packCache: { at: number; packs: SkillPackInfo[] } | null = null;
-  const listPacks = (): SkillPackInfo[] => {
-    if (packCache && Date.now() - packCache.at < PACK_CACHE_TTL_MS) return packCache.packs;
-    const packs = scanSkillPacks(config.packDirs);
-    packCache = { at: Date.now(), packs };
+  /** pack 缓存按域分键:global 一份,每用户一份(用户域目录含安装/卸载,不能串) */
+  const packCaches = new Map<string, { at: number; packs: SkillPackInfo[] }>();
+  const PACK_CACHE_MAX_KEYS = 256;
+  const listPacks = (userId?: string): SkillPackInfo[] => {
+    const key = userId ? `user:${userId}` : 'global';
+    const cached = packCaches.get(key);
+    if (cached && Date.now() - cached.at < PACK_CACHE_TTL_MS) return cached.packs;
+    const globalPacks = scanSkillPacks(config.packDirs, 'global');
+    let packs = globalPacks;
+    if (userId && config.userPackDirs) {
+      let userDirs: string[] = [];
+      try {
+        userDirs = config.userPackDirs(userId) || [];
+      } catch {
+        userDirs = []; // 解析器坏了 = 没有用户域,全局域照常(失败不扩散)
+      }
+      const userPacks = scanSkillPacks(userDirs, 'user');
+      // 同名时用户安装域优先(用户显式装的覆盖出厂内置,只影响该用户)
+      const userNames = new Set(userPacks.map((p) => p.name));
+      packs = [...userPacks, ...globalPacks.filter((p) => !userNames.has(p.name))];
+    }
+    if (packCaches.size >= PACK_CACHE_MAX_KEYS) packCaches.clear(); // 多用户防无界增长
+    packCaches.set(key, { at: Date.now(), packs });
     return packs;
   };
 
@@ -1238,18 +1272,19 @@ export function createSkillService(config: SkillPluginConfig = {}): SkillService
   const emptyDistill: SkillDistillOutcome = { added: [], updated: [] };
 
   return {
-    listSkills() {
+    listSkills(userId?: string) {
       const flows: SkillInventoryItem[] = loadScriptSkills(config.skillDir).skills.map((s) => ({
         form: 'flow',
         name: s.name,
         description: s.description,
       }));
-      const packs: SkillInventoryItem[] = listPacks().map((p) => ({
+      const packs: SkillInventoryItem[] = listPacks(userId).map((p) => ({
         form: 'pack',
         name: p.name,
         description: p.description,
         dir: p.dir,
         hasScripts: p.hasScripts,
+        scope: p.scope,
       }));
       return [...flows, ...packs];
     },
@@ -1276,8 +1311,8 @@ export function createSkillService(config: SkillPluginConfig = {}): SkillService
       return out;
     },
     listPacks,
-    getPack(packName: string) {
-      return listPacks().find((p) => p.name === packName);
+    getPack(packName: string, userId?: string) {
+      return listPacks(userId).find((p) => p.name === packName);
     },
     buildCardsBlock(userId: string, goal: string) {
       if (!cardsEngine || !isSkillCardsEnabled()) return '';
@@ -1302,8 +1337,8 @@ class SkillServiceImpl extends Service implements SkillService {
     });
   }
 
-  listSkills(): SkillInventoryItem[] {
-    return this.inner.listSkills();
+  listSkills(userId?: string): SkillInventoryItem[] {
+    return this.inner.listSkills(userId);
   }
   buildTaskTools(
     userId: string,
@@ -1315,11 +1350,11 @@ class SkillServiceImpl extends Service implements SkillService {
   loadSkills(dir?: string): ScriptSkillLoadResult {
     return this.inner.loadSkills(dir);
   }
-  listPacks(): SkillPackInfo[] {
-    return this.inner.listPacks();
+  listPacks(userId?: string): SkillPackInfo[] {
+    return this.inner.listPacks(userId);
   }
-  getPack(packName: string): SkillPackInfo | undefined {
-    return this.inner.getPack(packName);
+  getPack(packName: string, userId?: string): SkillPackInfo | undefined {
+    return this.inner.getPack(packName, userId);
   }
   buildCardsBlock(userId: string, goal: string): string {
     return this.inner.buildCardsBlock(userId, goal);

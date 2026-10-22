@@ -22,9 +22,7 @@
  * 测试归 e2e)。
  */
 import React, { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
+import { AnswerMarkdown } from '../AnswerMarkdown';
 import {
   AlertCircle,
   ArrowDown,
@@ -542,7 +540,6 @@ export function MobileConversationView({
                         answerIndex >= 0
                           ? sourcesForAnswer(steps, answerIndex)
                           : [];
-                      const inlineSourceIndex = new Map(inlineSources.map((s, i) => [s.url, i + 1]));
 
                       // 空壳卡(模型未产出任何文字就转入工具调用/收尾):不渲染
                       if (!st.answer && !st.reasoning && !isStreaming) return null;
@@ -641,41 +638,11 @@ export function MobileConversationView({
                               />
                             ) : (
                               st.answer && (
-                                <div className="prose prose-zinc prose-chat max-w-none break-words">
-                                  <ReactMarkdown
-                                    remarkPlugins={[remarkGfm, remarkBreaks]}
-                                    components={{
-                                      /* 内联引用角标:URL 命中本轮来源集合时收成
-                                         上标角标 [n](与底部来源药丸同序);其余按外链 */
-                                      a: ({ href, children }) => {
-                                        const num = href ? inlineSourceIndex.get(href) : undefined;
-                                        if (num !== undefined) {
-                                          return (
-                                            <a
-                                              href={href}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              title={inlineSources[num - 1].title}
-                                              className="no-underline text-blue-600 hover:text-blue-700 text-[10px] align-super"
-                                            >
-                                              [{num}]
-                                            </a>
-                                          );
-                                        }
-                                        return (
-                                          <a href={href} target="_blank" rel="noopener noreferrer">
-                                            {children}
-                                          </a>
-                                        );
-                                      },
-                                    }}
-                                  >
-                                    {st.answer}
-                                  </ReactMarkdown>
-                                  {isStreaming && (
-                                    <span className="inline-block w-1.5 h-3.5 bg-zinc-800 animate-pulse ml-0.5 align-text-bottom" />
-                                  )}
-                                </div>
+                                <AnswerMarkdown
+                                  text={st.answer}
+                                  sources={inlineSources}
+                                  isStreaming={isStreaming}
+                                />
                               )
                             )
                           )}

@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { copyToClipboard } from '../utils/nativeBridge';
 import {useSession } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
+import { AnswerMarkdown } from './AnswerMarkdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import {
@@ -153,6 +154,15 @@ interface CockpitViewProps {
   /** 跳到设备页看本地任务(会话卡「本地 · …」chip 点击;不传则不显示 chip) */
   onOpenRunnerTask?: (taskId: string) => void;
 }
+
+
+/** 纯 markdown 渲染（memo 化，按文本对比）：产物预览用，避免流式重渲染反复解析。 */
+const PlainMarkdown = React.memo(
+  function PlainMarkdown({ text }: { text: string }) {
+    return <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>;
+  },
+  (a, b) => a.text === b.text
+);
 
 export function CockpitView({
   missions,
@@ -1262,7 +1272,6 @@ export function CockpitView({
                       answerIndex >= 0
                         ? sourcesForAnswer(currentMission.steps, answerIndex)
                         : [];
-                    const inlineSourceIndex = new Map(inlineSources.map((s, i) => [s.url, i + 1]));
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现
@@ -1369,43 +1378,11 @@ export function CockpitView({
                                 />
                               ) : (
                                 st.answer && (
-                                  <div className="prose prose-zinc prose-chat max-w-none break-words">
-                                    <ReactMarkdown
-                                      remarkPlugins={[remarkGfm, remarkBreaks]}
-                                      components={{
-                                        /* 内联引用角标:模型以 markdown 链接引用检索
-                                           结果(search_web 工具描述要求),URL 命中本
-                                           轮来源集合时收成上标角标 [n](n 与底部来源
-                                           药丸同序);其余链接按普通外链渲染 */
-                                        a: ({ href, children }) => {
-                                          const num = href ? inlineSourceIndex.get(href) : undefined;
-                                          if (num !== undefined) {
-                                            return (
-                                              <a
-                                                href={href}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                title={inlineSources[num - 1].title}
-                                                className="no-underline text-blue-600 hover:text-blue-700 text-[10px] align-super"
-                                              >
-                                                [{num}]
-                                              </a>
-                                            );
-                                          }
-                                          return (
-                                            <a href={href} target="_blank" rel="noopener noreferrer">
-                                              {children}
-                                            </a>
-                                          );
-                                        },
-                                      }}
-                                    >
-                                      {st.answer}
-                                    </ReactMarkdown>
-                                    {isStreaming && (
-                                      <span className="inline-block w-1.5 h-3.5 bg-zinc-800 animate-pulse ml-0.5 align-text-bottom" />
-                                    )}
-                                  </div>
+                                  <AnswerMarkdown
+                                    text={st.answer}
+                                    sources={inlineSources}
+                                    isStreaming={isStreaming}
+                                  />
                                 )
                               )
                             )}
@@ -2140,9 +2117,7 @@ export function CockpitView({
                             </a>
                           </div>
                           <div className="prose prose-zinc prose-sm max-w-none leading-relaxed px-2">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {currentArtifact.content}
-                            </ReactMarkdown>
+                            <PlainMarkdown text={currentArtifact.content} />
                           </div>
                         </div>
                       ) : currentArtifact.type === 'html' ? (
@@ -2167,9 +2142,7 @@ export function CockpitView({
                         </div>
                       ) : (
                         <div className="prose prose-zinc prose-sm max-w-none leading-relaxed animate-fadeIn p-2 md:p-4">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {currentArtifact.content}
-                          </ReactMarkdown>
+                          <PlainMarkdown text={currentArtifact.content} />
                         </div>
                       )
                     ) : (

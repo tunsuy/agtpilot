@@ -817,6 +817,32 @@ export default function Workspace() {
     }
   }, [session?.user?.id, sessionStatus]);
 
+  // 空闲预热常用视图 chunk（仅桌面端已登录）：工作台(CockpitView)含
+  // react-markdown 等重依赖，首次点进去要现场下载 + 解析，慢网下「几秒才
+  // 展示」。登录后在浏览器空闲时静默预取工作台/连接器 chunk，首次切换即秒开。
+  // 移动端不预取（省流量），失败静默。
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    if (typeof window === 'undefined') return;
+    const prefetch = () => {
+      if (isMobile) {
+        void import('../components/mobile/MobileActivityView').catch(() => {});
+      } else {
+        void import('../components/CockpitView').catch(() => {});
+        void import('../components/ConnectorsView').catch(() => {});
+      }
+    };
+    const ric = (window as any).requestIdleCallback as
+      | ((cb: () => void, opts?: { timeout?: number }) => number)
+      | undefined;
+    if (ric) {
+      const id = ric(prefetch, { timeout: 4000 });
+      return () => (window as any).cancelIdleCallback?.(id);
+    }
+    const t = setTimeout(prefetch, 1500);
+    return () => clearTimeout(t);
+  }, [session?.user?.id, isMobile]);
+
   // 深链目标 mission 已在列表中 → 正式选中并结束等待(SSE init/loadAgentState 的回写已被此 effect 纠正)
   useEffect(() => {
     if (!deepLinkMissionId) return;

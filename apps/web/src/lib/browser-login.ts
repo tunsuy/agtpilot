@@ -10,6 +10,7 @@
  */
 
 import type { XhsManagedRecord } from './user-store';
+// loginBadgeInfo 已迁至 ./login-badge(纯函数),此处仅保留服务端登录状态机。
 
 /** ⚠️ 待真实账号实测的常量:登录页 URL、登录态 cookie 名。实测后修正这里,不改逻辑。 */
 export const XHS_CREATOR_HOME = 'https://creator.xiaohongshu.com/';
@@ -537,14 +538,4 @@ export function subscribeLoginEvents(
 }
 
 /** 供路由层读取用户登录徽标数据(登录时间 + 是否可能过期) */
-export function loginBadgeInfo(record: XhsManagedRecord | undefined): {
-  loggedIn: boolean;
-  lastLoginAt?: number;
-  maybeStale: boolean;
-} {
-  const lastLoginAt = record?.lastLoginAt;
-  if (!lastLoginAt) return { loggedIn: false, maybeStale: false };
-  // ⚠️ 30 天为经验值:网页版会话有效期待实测
-  const maybeStale = Date.now() - lastLoginAt > 30 * 24 * 3600 * 1000;
-  return { loggedIn: true, lastLoginAt, maybeStale };
-}
+export { loginBadgeInfo } from './login-badge';

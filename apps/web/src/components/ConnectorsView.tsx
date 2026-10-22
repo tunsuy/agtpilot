@@ -62,7 +62,7 @@ import {
 import { ConnectorApp, McpConnectorInfo } from '../types/agent';
 import { openAppScheme, isNativePlatform, copyToClipboard } from '../utils/nativeBridge';
 import { XhsWebLoginModal } from './XhsWebLoginModal';
-import { loginBadgeInfo } from '../lib/browser-login';
+import { loginBadgeInfo } from '../lib/login-badge';
 import type { XhsManagedRecord } from '../lib/user-store';
 
 /**

@@ -10,9 +10,10 @@
  * - 表单提交/重跑 → buildWorkshopRun 生成结构化 Prompt → onRunPrompt 交给 Agent。
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Sparkles, Play, Clock, ArrowRight, UserRoundPen } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo, Mission } from '../../types/agent';
-import { loginBadgeInfo } from '../../lib/browser-login';
+import { loginBadgeInfo } from '../../lib/login-badge';
 import type { XhsManagedRecord } from '../../lib/user-store';
 import { WORKSHOPS, WORKSHOP_CATEGORIES, getWorkshop, type WorkshopDef, type WorkshopId } from './registry';
 import { buildWorkshopRun, type WorkshopRunPayload } from './run';
@@ -20,17 +21,54 @@ import { recordRun, recentRuns, relativeTime, type WorkshopRunRecord } from './h
 import type { ScenarioProfile } from '../../lib/scenario-profile';
 import { ScenarioProfileWizard } from './ScenarioProfileWizard';
 import { ACCENTS } from './forms/shared';
-import { ContentWorkshopForm } from './forms/ContentWorkshopForm';
-import { WechatMpWorkshopForm } from './forms/WechatMpWorkshopForm';
-import { ZhihuWorkshopForm } from './forms/ZhihuWorkshopForm';
-import { EmailTriageForm } from './forms/EmailTriageForm';
-import { WeeklyReportForm } from './forms/WeeklyReportForm';
-import { PptWorkshopForm } from './forms/PptWorkshopForm';
-import { FollowBuildersForm } from './forms/FollowBuildersForm';
-import { InvestWorkshopForm } from './forms/InvestWorkshopForm';
-import { EduWorkshopForm } from './forms/EduWorkshopForm';
-import { OssRadarForm } from './forms/OssRadarForm';
-import { NovelWorkshopForm } from './forms/NovelWorkshopForm';
+
+// 工坊表单按需加载：以前 14 个表单（连同各自的 skill.ts/prompt.md 提示词）
+// 全部静态打进 WorkshopsView chunk，打开工坊页即下载所有工坊的提示词。
+// 这里改为选中哪个工坊才拉哪个表单，工坊页首屏 chunk 大幅缩小。
+const ContentWorkshopForm = dynamic(
+  () => import('./forms/ContentWorkshopForm').then((m) => m.ContentWorkshopForm),
+  { ssr: false }
+);
+const WechatMpWorkshopForm = dynamic(
+  () => import('./forms/WechatMpWorkshopForm').then((m) => m.WechatMpWorkshopForm),
+  { ssr: false }
+);
+const ZhihuWorkshopForm = dynamic(
+  () => import('./forms/ZhihuWorkshopForm').then((m) => m.ZhihuWorkshopForm),
+  { ssr: false }
+);
+const EmailTriageForm = dynamic(
+  () => import('./forms/EmailTriageForm').then((m) => m.EmailTriageForm),
+  { ssr: false }
+);
+const WeeklyReportForm = dynamic(
+  () => import('./forms/WeeklyReportForm').then((m) => m.WeeklyReportForm),
+  { ssr: false }
+);
+const PptWorkshopForm = dynamic(
+  () => import('./forms/PptWorkshopForm').then((m) => m.PptWorkshopForm),
+  { ssr: false }
+);
+const FollowBuildersForm = dynamic(
+  () => import('./forms/FollowBuildersForm').then((m) => m.FollowBuildersForm),
+  { ssr: false }
+);
+const InvestWorkshopForm = dynamic(
+  () => import('./forms/InvestWorkshopForm').then((m) => m.InvestWorkshopForm),
+  { ssr: false }
+);
+const EduWorkshopForm = dynamic(
+  () => import('./forms/EduWorkshopForm').then((m) => m.EduWorkshopForm),
+  { ssr: false }
+);
+const OssRadarForm = dynamic(
+  () => import('./forms/OssRadarForm').then((m) => m.OssRadarForm),
+  { ssr: false }
+);
+const NovelWorkshopForm = dynamic(
+  () => import('./forms/NovelWorkshopForm').then((m) => m.NovelWorkshopForm),
+  { ssr: false }
+);
 
 interface WorkshopsViewProps {
   connectors: ConnectorApp[];
@@ -54,7 +92,7 @@ interface WorkshopFormProps {
 }
 
 /** id → 表单组件;新增工坊在此登记 */
-const FORMS: Record<WorkshopId, React.ComponentType<WorkshopFormProps>> = {
+const FORMS: Record<WorkshopId, React.ComponentType<any>> = {
   xhs: ContentWorkshopForm,
   wechat_mp: WechatMpWorkshopForm,
   zhihu: ZhihuWorkshopForm,
@@ -381,7 +419,9 @@ export function WorkshopsView({
         <ActiveForm
           key={activeWorkshop.id}
           workshop={activeWorkshop}
-          onRun={(prompt, title, workshop) => onRunPrompt(prompt, title, workshop)}
+          onRun={(prompt: string, title: string | undefined, workshop: WorkshopRunPayload | undefined) =>
+            onRunPrompt(prompt, title, workshop)
+          }
           onClose={() => setActiveId(null)}
           scenarioProfile={activeProfile ?? null}
           onEditProfile={activeWorkshop.profileSlot ? () => setWizardKey(activeWorkshop.profileSlot!) : undefined}

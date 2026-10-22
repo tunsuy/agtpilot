@@ -29,8 +29,9 @@ const nextConfig = {
     'mailparser',
   ],
   transpilePackages: [
-    '@copilotkit/react-core',
-    '@copilotkit/react-ui',
+    // CopilotKit 仅保留服务端 runtime（/api/copilotkit 路由）；客户端的
+    // react-core/react-ui 空壳 Provider 已移除，其 streamdown/katex 等
+    // 重依赖不再进首屏 bundle。
     '@copilotkit/runtime',
     // 协议包以 TS 源直发(main: src/index.ts);派发弹窗是 'use client' 组件,
     // 客户端 bundle 需 Next 编译它(renderHandoffPack 交接包预览与派发同源)

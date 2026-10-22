@@ -30,8 +30,6 @@
     "@capacitor/core": "^8.5.2",
     "@capacitor/ios": "^8.5.2",
     "@capacitor/share": "^8.0.3",
-    "@copilotkit/react-core": "^1.77.0",
-    "@copilotkit/react-ui": "^1.77.0",
     "@copilotkit/runtime": "^1.77.0",
     "@deepseek-ai/cordis": "^4.0.4",
     "@types/qrcode": "^1.5.6",

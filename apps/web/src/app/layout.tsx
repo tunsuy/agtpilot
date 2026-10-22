@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
-import '@copilotkit/react-ui/styles.css';
 
 export const viewport: Viewport = {
   width: 'device-width',

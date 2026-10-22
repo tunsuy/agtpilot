@@ -235,7 +235,7 @@ export interface McpAuthRecord {
   updatedAt?: number;
 }
 
-export function getDataDir(): string {
+function computeDataDir(): string {
   // 1. 优先读取显式环境变量
   if (process.env.USER_DATA_DIR) {
     const custom = path.resolve(process.env.USER_DATA_DIR);
@@ -277,6 +277,21 @@ export function getDataDir(): string {
     try { fs.mkdirSync(fallback, { recursive: true }); } catch {}
   }
   return fallback;
+}
+
+let dataDirCache: { key: string | undefined; dir: string } | null = null;
+/**
+ * 数据目录（进程内缓存）。运行期 env/目录不变，但该函数在热路径（每次
+ * getUserData / readProfileLight / 各域读写）都会被调用，原实现每次要做
+ * 多次 existsSync + readdirSync 探测 —— 缓存后热路径只剩一次字符串返回。
+ * 以 USER_DATA_DIR 为缓存键：测试用例切换临时目录时会自动重算。
+ */
+export function getDataDir(): string {
+  const key = process.env.USER_DATA_DIR;
+  if (dataDirCache && dataDirCache.key === key) return dataDirCache.dir;
+  const dir = computeDataDir();
+  dataDirCache = { key, dir };
+  return dir;
 }
 
 function getUserFilePath(userId: string): string {
@@ -364,10 +379,26 @@ export function getUserData(userId: string): UserScopedData {
  * 页面加载/切页签/周期扫描只要其中一两个字段时不该拖着 missions 全量读。
  * 返回 null = 轻读不可用(v2 关闭或目录不存在待懒迁移),调用方回退 getUserData。
  * 纪律:轻读结果是无基线、connectors 未解密的只读投影,不得交给 saveUserData。
+ *
+ * TTL 缓存:首屏聚合接口 / MCP 状态列表会对同一 profile.json 连续读十几次
+ * (每个连接器一次 getMcpAuth),同步读盘+解密叠加起来很可观。1.5s TTL +
+ * 写路径主动失效(getUserData 的写路径最终都过 saveUserData),让同一请求内
+ * 只有首次真正碰盘。只服务只读投影,返回对象不得被调用方就地修改。
  */
+const profileReadCache = new Map<string, { at: number; profile: any }>();
+const PROFILE_READ_CACHE_TTL_MS = 1500;
+
+function invalidateProfileCache(userId: string) {
+  profileReadCache.delete(userId);
+}
+
 function readProfileLight(userId: string): any | null {
   if (!isV2Enabled()) return null;
-  return readProfileV2(getDataDir(), userId);
+  const hit = profileReadCache.get(userId);
+  if (hit && Date.now() - hit.at < PROFILE_READ_CACHE_TTL_MS) return hit.profile;
+  const profile = readProfileV2(getDataDir(), userId);
+  if (profile) profileReadCache.set(userId, { at: Date.now(), profile });
+  return profile;
 }
 
 /** 数组域轻读(JSONL 域 + cronJobs);约束同 readProfileLight */
@@ -387,6 +418,7 @@ export function saveUserData(data: UserScopedData) {
     }
     toWrite.connectors = enc;
   }
+  invalidateProfileCache(data.userId);
   try {
     if (isV2Enabled()) {
       // v2:写用户上下文目录(相对读取基线的域级脏检查,只重写有变化的域)

@@ -1,30 +1,76 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { useSession, signOut } from 'next-auth/react';
-import { CopilotKit } from '@copilotkit/react-core';
 import { Navbar } from '../components/Navbar';
 import { HomeView } from '../components/HomeView';
-import { CockpitView } from '../components/CockpitView';
-import { ConnectorsView } from '../components/ConnectorsView';
-import { WorkshopsView } from '../components/workshops/WorkshopsView';
 import type { WorkshopRunPayload } from '../components/workshops/run';
-import { DeliverablesView } from '../components/DeliverablesView';
-import { MemoriesView } from '../components/MemoriesView';
-import { SkillsView } from '../components/SkillsView';
-import { CronJobsView } from '../components/CronJobsView';
-import { GoalsView } from '../components/GoalsView';
-import { DevicesView } from '../components/DevicesView';
-import { AuthModal } from '../components/AuthModal';
-import { DownloadAppModal } from '../components/DownloadAppModal';
-import { ChannelModal } from '../components/ChannelModal';
 import { useIsMobile } from '../components/mobile/useIsMobile';
 import { findLiveStep } from '../lib/live-steps';
 import { isZombieSse } from '../lib/sse-liveness';
 import { MobileTabBar, MobileTab } from '../components/mobile/MobileTabBar';
 import { MobileHomeView } from '../components/mobile/MobileHomeView';
-import { MobileActivityView } from '../components/mobile/MobileActivityView';
-import { MobileProfileView } from '../components/mobile/MobileProfileView';
+
+// 非首屏视图全部懒加载：首页只下载 HomeView，其余视图/弹窗在用户切到时才按需拉取。
+// 这是首屏瘦身的核心——此前后台代码与工坊提示词、qrcode、react-markdown 等
+// 全部静态打进 / 的首屏 bundle。改 '#662' 时请保持 named export 的 .then 取法。
+const CockpitView = dynamic(
+  () => import('../components/CockpitView').then((m) => m.CockpitView),
+  { ssr: false, loading: ViewLoading }
+);
+const ConnectorsView = dynamic(
+  () => import('../components/ConnectorsView').then((m) => m.ConnectorsView),
+  { ssr: false }
+);
+const WorkshopsView = dynamic(
+  () => import('../components/workshops/WorkshopsView').then((m) => m.WorkshopsView),
+  { ssr: false }
+);
+const DeliverablesView = dynamic(
+  () => import('../components/DeliverablesView').then((m) => m.DeliverablesView),
+  { ssr: false }
+);
+const MemoriesView = dynamic(
+  () => import('../components/MemoriesView').then((m) => m.MemoriesView),
+  { ssr: false }
+);
+const CronJobsView = dynamic(
+  () => import('../components/CronJobsView').then((m) => m.CronJobsView),
+  { ssr: false }
+);
+const SkillsView = dynamic(
+  () => import('../components/SkillsView').then((m) => m.SkillsView),
+  { ssr: false }
+);
+const GoalsView = dynamic(
+  () => import('../components/GoalsView').then((m) => m.GoalsView),
+  { ssr: false }
+);
+const DevicesView = dynamic(
+  () => import('../components/DevicesView').then((m) => m.DevicesView),
+  { ssr: false }
+);
+const AuthModal = dynamic(
+  () => import('../components/AuthModal').then((m) => m.AuthModal),
+  { ssr: false }
+);
+const DownloadAppModal = dynamic(
+  () => import('../components/DownloadAppModal').then((m) => m.DownloadAppModal),
+  { ssr: false }
+);
+const ChannelModal = dynamic(
+  () => import('../components/ChannelModal').then((m) => m.ChannelModal),
+  { ssr: false }
+);
+const MobileActivityView = dynamic(
+  () => import('../components/mobile/MobileActivityView').then((m) => m.MobileActivityView),
+  { ssr: false }
+);
+const MobileProfileView = dynamic(
+  () => import('../components/mobile/MobileProfileView').then((m) => m.MobileProfileView),
+  { ssr: false }
+);
 import {
   ChevronLeft,
 } from 'lucide-react';
@@ -350,6 +396,45 @@ export default function Workspace() {
     const prompt = `【推进长期目标里程碑】\n目标名称：${goal.title}\n所属领域：${goal.category || '综合'}\n当前阶段：${milestone.title}\n阶段要求与成果：${milestone.description || '按阶段规划推进'}\n\n请作为我的个人超级智能体，围绕此阶段目标为我制定落地行动方案并执行攻坚，产出结构化阶段交付成果。`;
     handleRun(prompt);
     setActiveView('cockpit');
+  };
+
+  // 首屏聚合拉取：一个请求拿齐首页/导航徽标所需的五类数据。
+  // 失败静默（各视图仍可单独刷新），单项缺省不影响其余渲染。
+  const loadBootstrap = async () => {
+    try {
+      const res = await fetch('/api/bootstrap');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.connectors) setConnectors(data.connectors);
+      if (typeof data.mcpConnectedCount === 'number') setMcpConnectedCount(data.mcpConnectedCount);
+      if (data.memories) setMemories(data.memories);
+      if (data.cronJobs) setCronJobs(data.cronJobs);
+      if (data.goals) setGoals(data.goals);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // 仅供 SSE 首帧兜底使用（正常路径下 agent 状态由 SSE init 全量下发）。
+  const loadAgentState = async () => {
+    try {
+      const res = await fetch('/api/agent/state');
+      const data = await res.json();
+      if (data.state) {
+        if (data.state.missions) mergeWireMissions(data.state.missions);
+        if (data.state.cronRuns) setCronRuns(data.state.cronRuns);
+        if (data.state.cronDeliverables) setCronDeliverables(data.state.cronDeliverables);
+        if (data.state.activeMissionId) setActiveMissionId(data.state.activeMissionId);
+        if (data.state.viewport) setViewport(data.state.viewport);
+        if (data.state.terminalLogs) setTerminalLogs(data.state.terminalLogs);
+        if (data.state.approvalRequests) setApprovalRequests(data.state.approvalRequests);
+        if (data.state.connectorSuggestions) setConnectorSuggestions(data.state.connectorSuggestions);
+        if (data.state.pendingQuestions) setPendingQuestions(data.state.pendingQuestions);
+        if (data.state.latestArtifact) setArtifact(data.state.latestArtifact);
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const loadConnectors = async () => {
@@ -690,12 +775,10 @@ export default function Workspace() {
     setMounted(true);
 
     if (session?.user?.id) {
-      loadConnectors();
-      loadMcpConnectedCount();
-      loadMemories();
-      loadCronJobs();
-      loadGoals();
-      loadAgentState();
+      // 首屏一次性聚合拉取（connectors/mcp/memories/cron/goals 合并为 1 个请求，
+      // 省掉 4 次 RTT 与重复的 auth 解码）；agent 状态由 SSE init 全量下发，
+      // 不再额外打 /api/agent/state —— 此前两者的 payload 完全相同，是纯重复。
+      loadBootstrap();
     } else if (sessionStatus !== 'loading') {
       setConnectors([]);
       setMcpConnectedCount(0);
@@ -837,27 +920,6 @@ export default function Workspace() {
     });
   };
 
-  const loadAgentState = async () => {
-    try {
-      const res = await fetch('/api/agent/state');
-      const data = await res.json();
-      if (data.state) {
-        if (data.state.missions) mergeWireMissions(data.state.missions);
-        if (data.state.cronRuns) setCronRuns(data.state.cronRuns);
-        if (data.state.cronDeliverables) setCronDeliverables(data.state.cronDeliverables);
-        if (data.state.activeMissionId) setActiveMissionId(data.state.activeMissionId);
-        if (data.state.viewport) setViewport(data.state.viewport);
-        if (data.state.terminalLogs) setTerminalLogs(data.state.terminalLogs);
-        if (data.state.approvalRequests) setApprovalRequests(data.state.approvalRequests);
-        if (data.state.connectorSuggestions) setConnectorSuggestions(data.state.connectorSuggestions);
-        if (data.state.pendingQuestions) setPendingQuestions(data.state.pendingQuestions);
-        if (data.state.latestArtifact) setArtifact(data.state.latestArtifact);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   useEffect(() => {
     // 会话就绪后再建 SSE:挂载时 session 还在解析,提前连一次 init 全量同步
     // 马上又因依赖变化被断开重连 —— 首屏白白多付一遍「服务端全量读盘 +
@@ -873,10 +935,85 @@ export default function Workspace() {
     // 会话状态自动追平。
     let eventSource: EventSource | null = null;
     let lastAliveAt = Date.now();
+    let gotInit = false;
+    let initFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // 流式增量聚合：后端每个 token 一帧 assistant_delta，若每帧都 setMissions
+    // 会让整棵视图随 token 频率重渲染（长回答/多步骤时明显掉帧）。这里把同一
+    // 帧内到达的增量攒进 buffer，用 requestAnimationFrame 每帧最多刷新一次，
+    // 渲染频率被钳到 ~60fps，观感不变但重渲染次数大幅下降。
+    const pendingDeltas = new Map<string, { answer: string; reasoning: string }>();
+    let deltaFrame: number | null = null;
+    const flushDeltas = () => {
+      deltaFrame = null;
+      if (pendingDeltas.size === 0) return;
+      const batch = new Map(pendingDeltas);
+      pendingDeltas.clear();
+      setMissions((prev) =>
+        prev.map((m) => {
+          const acc = batch.get(m.id);
+          if (!acc) return m;
+          const steps = [...m.steps];
+          let applied = false;
+          for (let i = steps.length - 1; i >= 0; i--) {
+            const st = steps[i];
+            if (st.id?.startsWith('step_live_') && st.status === 'RUNNING' && st.role === 'assistant') {
+              const next = { ...st };
+              if (acc.reasoning) next.reasoning = (next.reasoning || '') + acc.reasoning;
+              if (acc.answer) {
+                next.answer = (next.answer || '') + acc.answer;
+                next.title = '正在处理…';
+              }
+              steps[i] = next;
+              applied = true;
+              break;
+            }
+          }
+          if (!applied) {
+            // 兜底：后端 live step 尚未随 mission_updated 到达（如 SSE 重连初期）
+            steps.push({
+              id: `step_live_${m.id}_fe_${Date.now()}`,
+              role: 'assistant' as const,
+              messageKind: 'progress' as const,
+              title: '正在处理…',
+              status: 'RUNNING' as const,
+              answer: acc.answer || '',
+              reasoning: acc.reasoning || '',
+              startedAt: Date.now(),
+            });
+          }
+          return { ...m, steps };
+        })
+      );
+    };
+    const scheduleDeltaFlush = () => {
+      if (deltaFrame != null) return;
+      if (typeof requestAnimationFrame !== 'undefined') {
+        deltaFrame = requestAnimationFrame(flushDeltas);
+      } else {
+        deltaFrame = setTimeout(flushDeltas, 16) as unknown as number;
+      }
+    };
+    const queueDelta = (taskId: string, segments: any[]) => {
+      const cur = pendingDeltas.get(taskId) || { answer: '', reasoning: '' };
+      for (const seg of segments) {
+        if (seg.kind === 'reasoning') cur.reasoning += String(seg.delta || '');
+        else cur.answer += String(seg.delta || '');
+      }
+      pendingDeltas.set(taskId, cur);
+      scheduleDeltaFlush();
+    };
 
     const connect = () => {
       lastAliveAt = Date.now();
+      if (initFallbackTimer) clearTimeout(initFallbackTimer);
       eventSource = new EventSource('/api/agent/events');
+      // 首帧兜底：SSE 若被反向代理缓冲/长期连不上，8s 内仍未收到 init 就回退
+      // 拉一次 /api/agent/state —— 正常路径下 8s 前 init 已到，不会触发，也就
+      // 不会产生此前「state + SSE init 各拉一遍」的重复全量同步。
+      initFallbackTimer = setTimeout(() => {
+        if (!gotInit) void loadAgentState();
+      }, 8000);
 
       // 心跳(具名事件,注释行 EventSource 听不见):任何一帧都证明连接活着
       eventSource.addEventListener('ping', () => {
@@ -885,6 +1022,9 @@ export default function Workspace() {
 
       eventSource.addEventListener('init', (e: MessageEvent) => {
         try {
+          gotInit = true;
+          if (initFallbackTimer) { clearTimeout(initFallbackTimer); initFallbackTimer = null; }
+          pendingDeltas.clear();
           const state = JSON.parse(e.data);
           if (state.missions) mergeWireMissions(state.missions);
           if (state.cronRuns) setCronRuns(state.cronRuns);
@@ -959,6 +1099,8 @@ export default function Workspace() {
       eventSource.addEventListener('mission_updated', (e: MessageEvent) => {
         try {
           const updated: Mission = JSON.parse(e.data);
+          // 边界先于后续增量到达：丢弃该会话尚未 flush 的聚合增量（权威全量已覆盖）
+          pendingDeltas.delete(updated.id);
           // missions 里只有手动会话 + 从巡航中心点开注入的巡航会话;
           // 未点开的巡航会话 map 是 no-op,不会混进工作台列表
           setMissions((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
@@ -1003,56 +1145,12 @@ export default function Workspace() {
       // live step（step_live_ 前缀）按 kind 追加 answer / reasoning；边界
       // mission_updated 与 delta 在同一 SSE 连接上有序（后端先 flush 再广播
       // 边界），两种流不会交错错位。找不到 live step 时前端兜底创建。
+      // 具体应用在 flushDeltas 里按帧批量完成，这里只做聚合成帧。
       eventSource.addEventListener('assistant_delta', (e: MessageEvent) => {
         try {
           const { taskId, segments } = JSON.parse(e.data);
           if (!taskId || !Array.isArray(segments) || segments.length === 0) return;
-          setMissions((prev) =>
-            prev.map((m) => {
-              if (m.id !== taskId) return m;
-              const steps = [...m.steps];
-              let applied = false;
-              for (let i = steps.length - 1; i >= 0; i--) {
-                const st = steps[i];
-                if (st.id?.startsWith('step_live_') && st.status === 'RUNNING' && st.role === 'assistant') {
-                  const next = { ...st };
-                  for (const seg of segments) {
-                    if (seg.kind === 'reasoning') {
-                      next.reasoning = (next.reasoning || '') + String(seg.delta || '');
-                    } else {
-                      next.answer = (next.answer || '') + String(seg.delta || '');
-                      next.title = '正在处理…';
-                    }
-                  }
-                  steps[i] = next;
-                  applied = true;
-                  break;
-                }
-              }
-              if (!applied) {
-                // 兜底：后端 live step 尚未随 mission_updated 到达（如 SSE 重连初期）
-                const fallback = {
-                  id: `step_live_${taskId}_fe_${Date.now()}`,
-                  role: 'assistant' as const,
-                  messageKind: 'progress' as const,
-                  title: '正在处理…',
-                  status: 'RUNNING' as const,
-                  answer: '',
-                  reasoning: '',
-                  startedAt: Date.now(),
-                };
-                for (const seg of segments) {
-                  if (seg.kind === 'reasoning') {
-                    fallback.reasoning = (fallback.reasoning || '') + String(seg.delta || '');
-                  } else {
-                    fallback.answer = (fallback.answer || '') + String(seg.delta || '');
-                  }
-                }
-                steps.push(fallback);
-              }
-              return { ...m, steps };
-            })
-          );
+          queueDelta(taskId, segments);
         } catch (err) {
           console.error(err);
         }
@@ -1187,6 +1285,8 @@ export default function Workspace() {
 
     return () => {
       clearInterval(watchdogTimer);
+      if (initFallbackTimer) clearTimeout(initFallbackTimer);
+      if (deltaFrame != null && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(deltaFrame);
       document.removeEventListener('visibilitychange', onVisible);
       eventSource?.close();
     };
@@ -1207,7 +1307,9 @@ export default function Workspace() {
   const connectedCount =
     connectors.filter((c) => c.status === 'connected').length + mcpConnectedCount;
 
-  if (!mounted || !mobileReady) return null;
+  // 骨架屏：此前 return null 会白屏直到全部 JS 下载+水合+取状态完成，
+  // 现在首帧直接给出与真实布局同构的浅色骨架，杜绝白屏。
+  if (!mounted || !mobileReady) return <BootSkeleton />;
 
   const isLoggedIn = Boolean(session?.user);
   const userName = (session?.user?.name as string) || null;
@@ -1315,10 +1417,13 @@ export default function Workspace() {
     };
 
     return (
-      <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false}>
-        <div className="min-h-[100dvh] w-full bg-[#fbfbfd] text-zinc-900 font-sans antialiased selection:bg-zinc-200">
-          <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} initialTab={authModalTab} />
-          <DownloadAppModal isOpen={downloadModalOpen} onClose={() => setDownloadModalOpen(false)} />
+      <div className="min-h-[100dvh] w-full bg-[#fbfbfd] text-zinc-900 font-sans antialiased selection:bg-zinc-200">
+          {authModalOpen && (
+            <AuthModal isOpen onClose={() => setAuthModalOpen(false)} initialTab={authModalTab} />
+          )}
+          {downloadModalOpen && (
+            <DownloadAppModal isOpen onClose={() => setDownloadModalOpen(false)} />
+          )}
 
           {!mobileOverlay && (
             <>
@@ -1406,12 +1511,10 @@ export default function Workspace() {
 
           {renderOverlay()}
         </div>
-      </CopilotKit>
     );
   }
 
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit" showDevConsole={false}>
       <div className="min-h-screen w-full bg-[#fbfbfd] text-zinc-900 font-sans antialiased selection:bg-zinc-200">
         {/* Global Minimalist Topbar */}
         <Navbar
@@ -1443,23 +1546,19 @@ export default function Workspace() {
         />
 
         {/* NextAuth Authentication Modal */}
-        <AuthModal
-          isOpen={authModalOpen}
-          onClose={() => setAuthModalOpen(false)}
-          initialTab={authModalTab}
-        />
+        {authModalOpen && (
+          <AuthModal isOpen onClose={() => setAuthModalOpen(false)} initialTab={authModalTab} />
+        )}
 
         {/* Mobile Download Modal */}
-        <DownloadAppModal
-          isOpen={downloadModalOpen}
-          onClose={() => setDownloadModalOpen(false)}
-        />
+        {downloadModalOpen && (
+          <DownloadAppModal isOpen onClose={() => setDownloadModalOpen(false)} />
+        )}
 
         {/* IM 通道弹窗(右上角「IM 通道」唤起,与下载移动版一致形态) */}
-        <ChannelModal
-          isOpen={channelModalOpen}
-          onClose={() => setChannelModalOpen(false)}
-        />
+        {channelModalOpen && (
+          <ChannelModal isOpen onClose={() => setChannelModalOpen(false)} />
+        )}
 
         {/* Main Content Area */}
         <div className="pt-14 h-full">
@@ -1621,6 +1720,37 @@ export default function Workspace() {
           )}
         </div>
       </div>
-    </CopilotKit>
+  );
+}
+
+/** 懒加载视图的加载态：切到尚未下载完的视图时给轻量占位，避免闪白。 */
+function ViewLoading() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-700" />
+    </div>
+  );
+}
+
+/** 首帧骨架：与真实布局同构的浅色占位，避免 JS 未就绪前的白屏。 */
+function BootSkeleton() {
+  return (
+    <div className="min-h-screen w-full bg-[#fbfbfd]">
+      <div className="fixed inset-x-0 top-0 z-40 h-14 border-b border-zinc-200/70 bg-white/80 backdrop-blur">
+        <div className="flex h-full items-center gap-3 px-4">
+          <div className="h-6 w-6 rounded-md bg-zinc-200/80 animate-pulse" />
+          <div className="h-4 w-24 rounded bg-zinc-200/80 animate-pulse" />
+          <div className="ml-auto flex gap-2">
+            <div className="h-7 w-16 rounded-full bg-zinc-200/60 animate-pulse" />
+            <div className="h-7 w-16 rounded-full bg-zinc-200/60 animate-pulse" />
+          </div>
+        </div>
+      </div>
+      <div className="mx-auto flex max-w-3xl flex-col items-center gap-5 px-6 pt-40">
+        <div className="h-9 w-9 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-700" />
+        <div className="h-5 w-40 rounded bg-zinc-200/70 animate-pulse" />
+        <div className="h-12 w-full max-w-xl rounded-2xl bg-white shadow-sm ring-1 ring-zinc-200/70" />
+      </div>
+    </div>
   );
 }

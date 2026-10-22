@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useSession, signOut } from 'next-auth/react';
 import { Navbar } from '../components/Navbar';
@@ -282,23 +282,130 @@ export default function Workspace() {
   };
 
   /**
-   * 从巡航中心打开某次执行的会话详情:巡航会话不随 state/init 下发,
-   * 现场经 /api/agent/mission/[id] 懒回水全量后注入会话列表并跳工作台
-   * (列表侧按 isCronMission 过滤,仅选中期间可见,不占历史会话坑位)。
+   * 会话详情懒回水分片(mission/[id]?parts=):终态会话右栏重字段
+   * (artifact 全文 / terminalLogs / viewport 截图)不再随 core 一起拉,
+   * 切到对应 tab / 打开交付物详情时按需取回,合并进 missions 与
+   * cronDeliverables 里的会话行并置 parts 标记。in-flight 按 key 去重
+   * (共享同一 promise);返回值 = 服务端 patch,供复制/下载这类等不及
+   * state 回流的调用方现场取数。失败静默返回 null,再次触发即重试。
+   */
+  const partInflight = useRef<Map<string, Promise<any>>>(new Map());
+  const loadMissionPart = useCallback(
+    (missionId: string, part: 'artifact' | 'terminal' | 'viewport'): Promise<any> => {
+      const key = `${missionId}:${part}`;
+      const inflight = partInflight.current.get(key);
+      if (inflight) return inflight;
+      const p = (async () => {
+        try {
+          const res = await fetch(
+            `/api/agent/mission/${encodeURIComponent(missionId)}?parts=${part}`
+          );
+          if (!res.ok) return null;
+          const data = await res.json();
+          const patch = data?.mission;
+          if (!patch) return null;
+          const merge = (m: Mission): Mission => {
+            // 分片在飞期间 SSE mission_updated 已送达完整行(无 parts 标记
+            // = 重字段全在):不合并,避免旧 patch 盖新数据/挂上半截标记
+            if (!m.parts) return m;
+            const { id: _id, parts, ...fields } = patch;
+            return { ...m, ...fields, parts: { ...m.parts, ...parts } };
+          };
+          setMissions((prev) => prev.map((m) => (m.id === missionId ? merge(m) : m)));
+          setCronDeliverables((prev) =>
+            prev.map((m) => (m.id === missionId ? merge(m) : m))
+          );
+          return patch;
+        } catch {
+          return null;
+        } finally {
+          partInflight.current.delete(key);
+        }
+      })();
+      partInflight.current.set(key, p);
+      return p;
+    },
+    []
+  );
+
+  /**
+   * 体验兜底:core 回水落地后空闲预取选中会话的 artifact 全文 ——
+   * 用户点开历史会话大概率会看成果 tab,提前在空闲窗口把最常见的一片
+   * 取回,tab 切换即显全文;terminal/viewport 更重且用得少,坚持按需。
+   */
+  const prefetchArtifactWhenIdle = useCallback(
+    (missionId: string, parts?: { artifact?: boolean }) => {
+      if (!parts || parts.artifact !== false) return;
+      const run = () => {
+        void loadMissionPart(missionId, 'artifact');
+      };
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        (window as any).requestIdleCallback(run, { timeout: 5000 });
+      } else {
+        setTimeout(run, 1500);
+      }
+    },
+    [loadMissionPart]
+  );
+
+  /**
+   * 从巡航中心打开某次执行的会话详情:巡航会话不随 state/init 下发。
+   * 慢链路下「点击 → fetch 全量 → 才转场」会让用户长时间盯着巡航页无反馈,
+   * 改为即时转场:先用执行行(cronRuns)/交付摘要(cronDeliverables)就地搭一个
+   * hydrating 占位会话,立刻切到工作台(驾驶舱显示「正在加载会话…」),再后台经
+   * /api/agent/mission/[id] 回水全量、整行替换 —— 感知延迟从一个 RTT+payload 降到 0。
+   * 占位带 hydrating(非 stripped),故不触发「选中即回水」effect,避免同一会话双拉;
+   * 已有全量行则直接选中不再回水。列表侧按 isCronMission 过滤,仅选中期间可见。
    */
   const openCronRun = async (missionId: string) => {
+    const runMeta = cronRuns.find((r) => r.id === missionId);
+    const deliverable = cronDeliverables.find((m) => m.id === missionId);
+    const existing = missions.find((m) => m.id === missionId);
+    const needHydrate = !existing; // 仅新占位自行回水;已有行(全量/摘要)交给既有逻辑
+
+    if (needHydrate) {
+      const placeholder: Mission = {
+        ...(deliverable || {}),
+        id: missionId,
+        title: deliverable?.title || runMeta?.title || '巡航会话',
+        status: deliverable?.status || runMeta?.status || 'DONE',
+        progress: deliverable?.progress ?? (runMeta?.status === 'DONE' ? 100 : 0),
+        startedAt: deliverable?.startedAt || runMeta?.startedAt || Date.now(),
+        steps: deliverable?.steps || [],
+        cronJobId: deliverable?.cronJobId || runMeta?.jobId,
+        hasErrorStep: deliverable?.hasErrorStep ?? runMeta?.hasErrorStep,
+        stripped: false,
+        hydrating: true,
+      };
+      // 防重:并发点击/深链兜底同时触发时只注入一次
+      setMissions((prev) => (prev.some((m) => m.id === missionId) ? prev : [placeholder, ...prev]));
+    }
+    setActiveMissionId(missionId);
+    setActiveView('cockpit');
+    setMobileTab('activity');
+    setMobileOverlay(null);
+
+    if (!needHydrate) return; // 已有行:转场即可,回水由既有 effect/无需处理
+
     try {
       const res = await fetch(`/api/agent/mission/${encodeURIComponent(missionId)}`);
       const data = await res.json();
-      if (!data.success || !data.mission) return;
-      const full: Mission = { ...data.mission, stripped: false };
-      setMissions((prev) => [full, ...prev.filter((m) => m.id !== full.id)]);
-      setActiveMissionId(full.id);
-      setActiveView('cockpit');
-      setMobileTab('activity');
-      setMobileOverlay(null);
+      if (!data.success || !data.mission) throw new Error(data.error || '加载失败');
+      const full: Mission = { ...data.mission, stripped: false, hydrating: false };
+      setMissions((prev) =>
+        prev.map((x) => {
+          if (x.id !== full.id) return x;
+          // 竞态防护:回水在飞期间 SSE mission_updated 已送达完整行(占位已被
+          // 替换、无 hydrating 标记),不用 core 倒灌(那会丢 terminalLogs/viewport
+          // 并把 artifact 全文倒退回摘录)
+          if (!x.hydrating) return x;
+          return full;
+        })
+      );
+      prefetchArtifactWhenIdle(full.id, full.parts);
     } catch {
-      // 静默:再次点击即重试
+      // 回水失败:撤掉仍在飞的占位(避免永久「正在加载」);再次点击即重试
+      setMissions((prev) => prev.filter((m) => !(m.id === missionId && m.hydrating)));
     }
   };
 
@@ -400,18 +507,22 @@ export default function Workspace() {
 
   // 首屏聚合拉取：一个请求拿齐首页/导航徽标所需的五类数据。
   // 失败静默（各视图仍可单独刷新），单项缺省不影响其余渲染。
-  const loadBootstrap = async () => {
+  // 返回是否成功 —— 登录态对账 effect 据此决定推测拉取失败后要不要补拉。
+  const bootstrapPromiseRef = useRef<Promise<boolean> | null>(null);
+  const loadBootstrap = async (): Promise<boolean> => {
     try {
       const res = await fetch('/api/bootstrap');
-      if (!res.ok) return;
+      if (!res.ok) return false;
       const data = await res.json();
       if (data.connectors) setConnectors(data.connectors);
       if (typeof data.mcpConnectedCount === 'number') setMcpConnectedCount(data.mcpConnectedCount);
       if (data.memories) setMemories(data.memories);
       if (data.cronJobs) setCronJobs(data.cronJobs);
       if (data.goals) setGoals(data.goals);
+      return true;
     } catch (e) {
       console.error(e);
+      return false;
     }
   };
 
@@ -771,27 +882,14 @@ export default function Workspace() {
     }
   };
 
+  // 首屏启动:挂载即发推测性 /api/bootstrap —— 服务端鉴权只看 cookie,不必等
+  // useSession 解析完再发(高延迟链路上串行等会话白付一整个往返)。未登录时
+  // 该请求 401 静默;会话解析后由下方对账 effect 兜底补拉/清空。
+  // 深链参数(OAuth 回调跳转、PWA 快捷方式/推送通知)也在挂载时一次性消费。
   useEffect(() => {
     setMounted(true);
+    bootstrapPromiseRef.current = loadBootstrap();
 
-    if (session?.user?.id) {
-      // 首屏一次性聚合拉取（connectors/mcp/memories/cron/goals 合并为 1 个请求，
-      // 省掉 4 次 RTT 与重复的 auth 解码）；agent 状态由 SSE init 全量下发，
-      // 不再额外打 /api/agent/state —— 此前两者的 payload 完全相同，是纯重复。
-      loadBootstrap();
-    } else if (sessionStatus !== 'loading') {
-      setConnectors([]);
-      setMcpConnectedCount(0);
-      setMemories([]);
-      setCronJobs([]);
-      setGoals([]);
-      setMissions([]);
-      setActiveMissionId(null);
-      setTerminalLogs([]);
-      setApprovalRequests([]);
-      setConnectorSuggestions([]);
-      setArtifact(null);
-    }
     // 检查 URL 参数（如 OAuth 回调后跳转、PWA 快捷方式/推送通知深链）
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
@@ -815,6 +913,54 @@ export default function Workspace() {
         window.history.replaceState({}, '', window.location.pathname);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 登录态对账(bootstrap 侧):挂载时的推测拉取与 session 用同一份 cookie,
+  // 首次解析时数据通常已就位 —— 不重拉(这正是省 RTT 的意义);仅推测拉取
+  // 失败(弱网/5xx)而实际已登录时补一次。页面存活期间的登录/登出/换号
+  // (uid 真实变化)才重拉或清空。
+  const prevSessionUidRef = useRef<string | null | undefined>(undefined); // undefined = 尚未首次解析
+  useEffect(() => {
+    if (sessionStatus === 'loading') return;
+    const uid = session?.user?.id ?? null;
+    const prev = prevSessionUidRef.current;
+    prevSessionUidRef.current = uid;
+    if (prev === undefined) {
+      // 首次解析:等推测拉取落地,失败且登录态未再变则补拉
+      if (uid) {
+        const inflight = bootstrapPromiseRef.current;
+        if (inflight) {
+          void inflight.then((ok) => {
+            if (!ok && prevSessionUidRef.current === uid) {
+              bootstrapPromiseRef.current = loadBootstrap();
+            }
+          });
+        } else {
+          bootstrapPromiseRef.current = loadBootstrap();
+        }
+      }
+      return;
+    }
+    if (prev === uid) return;
+    if (uid === null) {
+      // 登出:推测拉取作废,清空所有用户态
+      bootstrapPromiseRef.current = null;
+      setConnectors([]);
+      setMcpConnectedCount(0);
+      setMemories([]);
+      setCronJobs([]);
+      setGoals([]);
+      setMissions([]);
+      setActiveMissionId(null);
+      setTerminalLogs([]);
+      setApprovalRequests([]);
+      setConnectorSuggestions([]);
+      setArtifact(null);
+    } else {
+      bootstrapPromiseRef.current = loadBootstrap();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?.id, sessionStatus]);
 
   // 空闲预热常用视图 chunk（仅桌面端已登录）：工作台(CockpitView)含
@@ -902,9 +1048,15 @@ export default function Workspace() {
                 if (x.status !== 'DONE' && x.status !== 'INTERRUPTED') {
                   return { ...x, stripped: false };
                 }
+                // 竞态防护:回水在飞期间 SSE mission_updated 已送达完整行
+                // (无 parts 标记 = 重字段全在),不用 core 倒灌 —— 那会丢
+                // terminalLogs/viewport 并把 artifact 全文倒退回摘录
+                if (!x.stripped) return x;
                 return full;
               })
             );
+            // 选中会话:core 落地后空闲预取 artifact 全文(成果 tab 即点即显)
+            if (m.id === activeMissionId) prefetchArtifactWhenIdle(full.id, full.parts);
           }
         } catch {
           // 静默:列表仍可浏览,再次选中该会话时重试回水
@@ -913,7 +1065,8 @@ export default function Workspace() {
         }
       })();
     }
-  }, [activeMissionId, missions]);
+    // prefetchArtifactWhenIdle 为 useCallback 稳定引用(依赖链均空)
+  }, [activeMissionId, missions, prefetchArtifactWhenIdle]);
 
   useEffect(() => {
     if (session?.user?.id && mobileOverlay === 'connectors') {
@@ -946,11 +1099,35 @@ export default function Workspace() {
     });
   };
 
+  // SSE 登录态对账机制(挂载即连的配套纪律):连接不再等 useSession 解析 ——
+  // cookie 浏览器自动带,服务端按登录态下发 init(未登录是空帧,零泄露)。
+  // init 帧回显服务端实际认证到的 userId(state-scoping.ts),与客户端 session
+  // 不一致(页面存活期间登录/登出/换号)才拆线重建。旧做法以 session?.user?.id
+  // 为 effect 依赖:高延迟链路上白等一个串行 RTT 才开始连;若单纯改成挂载即连
+  // 又会在 session 首次解析时因依赖变化必重连一次,全量 init 白下载两遍。
+  // 对账式:首载恰好一条连接,登录态真变了才重建。
+  const [sseEpoch, setSseEpoch] = useState(0);
+  const sseUidRef = useRef<string | null | undefined>(undefined); // undefined = 当前连接 init 未到
+  const sessionUidRef = useRef<string | null | undefined>(undefined); // undefined = session 尚未解析
+  const sessionStatusRef = useRef(sessionStatus);
+  sessionStatusRef.current = sessionStatus; // 渲染期刷新,effect/监听器闭包读到最新值
+
+  const reconcileSse = useCallback(() => {
+    if (sessionStatusRef.current === 'loading') return; // 登录态未解析,先不判
+    if (sseUidRef.current === undefined) return; // init 未到,到了再对账
+    if (sseUidRef.current === sessionUidRef.current) return; // 归属一致,连接健康
+    // 不一致:拆旧线重建(下方连接 effect 随 sseEpoch 变化重跑),init 按新登录态重同步
+    sseUidRef.current = undefined;
+    setSseEpoch((e) => e + 1);
+  }, []);
+
+  // session 解析/变化:写入 ref 并触发对账
   useEffect(() => {
-    // 会话就绪后再建 SSE:挂载时 session 还在解析,提前连一次 init 全量同步
-    // 马上又因依赖变化被断开重连 —— 首屏白白多付一遍「服务端全量读盘 +
-    // 巨帧下载」。未登录时事件路由本来就会滤掉所有载荷,不连零损失。
-    if (!session?.user?.id) return;
+    sessionUidRef.current = session?.user?.id ?? null;
+    reconcileSse();
+  }, [session?.user?.id, sessionStatus, reconcileSse]);
+
+  useEffect(() => {
     // SSE 假死自愈:TCP 连接可以「断了一半」——客户端侧仍 ESTABLISHED,
     // EventSource 不触发 onerror,自动重连永远不发生;期间服务端广播的
     // 工具卡/流式答复/完成态全部落空,页面冻在最后一帧,顶部的本地耗时
@@ -1052,6 +1229,14 @@ export default function Workspace() {
           if (initFallbackTimer) { clearTimeout(initFallbackTimer); initFallbackTimer = null; }
           pendingDeltas.clear();
           const state = JSON.parse(e.data);
+          // 对账:init 回显服务端认证到的登录身份。与客户端 session 不一致
+          // (页面存活期间登录/登出/换号)时 reconcileSse 拆线重建,本帧属于
+          // 旧身份,整帧跳过不应用 —— 新连接的 init 随后到达
+          sseUidRef.current = state.userId ?? null;
+          const staleIdentity =
+            sessionStatusRef.current !== 'loading' && sseUidRef.current !== sessionUidRef.current;
+          reconcileSse();
+          if (staleIdentity) return;
           if (state.missions) mergeWireMissions(state.missions);
           if (state.cronRuns) setCronRuns(state.cronRuns);
           if (state.cronDeliverables) setCronDeliverables(state.cronDeliverables);
@@ -1269,7 +1454,10 @@ export default function Workspace() {
       eventSource.addEventListener('memories_updated', (e: MessageEvent) => {
         try {
           const data = JSON.parse(e.data);
-          if (session?.user?.id && data?.userId === session.user.id) {
+          // 连接归属以 init 回显的 userId 为准(服务端推送前已按归属过滤,
+          // 这里双保险);effect 不再依赖 session,闭包里拿不到最新会话
+          const owner = sseUidRef.current ?? sessionUidRef.current;
+          if (owner && data?.userId === owner) {
             loadMemories();
           }
         } catch (err) {
@@ -1316,7 +1504,10 @@ export default function Workspace() {
       document.removeEventListener('visibilitychange', onVisible);
       eventSource?.close();
     };
-  }, [session?.user?.id]);
+    // 依赖只有 sseEpoch(登录态对账不一致时 +1 触发重建)与稳定的 reconcileSse;
+    // 不再依赖 session —— 挂载即连,首载恰好一条连接(见上方对账机制注释)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sseEpoch, reconcileSse]);
 
   const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices') => {
     // 首页允许所有人浏览概览，其余页面（工作台、工坊、连接器、记忆库、技能、巡航、交付库、长期目标）必须登录
@@ -1478,6 +1669,7 @@ export default function Workspace() {
                   variant="mobile"
                   onOpenCockpit={() => setMobileTab('activity')}
                   onRunMission={handleRun}
+                  onLoadMissionPart={loadMissionPart}
                 />
               )}
 
@@ -1499,6 +1691,7 @@ export default function Workspace() {
                   onRunNovelChain={(workshop, display) => handleRun(display.prompt, display.title, null, workshop)}
                   isSubmitting={isSubmitting}
                   onStopMission={handleStopMission}
+                  onLoadMissionPart={loadMissionPart}
                 />
               )}
 
@@ -1633,6 +1826,7 @@ export default function Workspace() {
               artifact={artifact}
               rightTab={rightTab}
               onRightTabChange={setRightTab}
+              onLoadMissionPart={loadMissionPart}
               onRunMission={handleRun}
               onRunNovelChain={(workshop, display) => handleRun(display.prompt, display.title, null, workshop)}
               onStopMission={handleStopMission}
@@ -1727,6 +1921,7 @@ export default function Workspace() {
                 missions={deliverableMissions}
                 onOpenCockpit={() => setActiveView('cockpit')}
                 onRunMission={handleRun}
+                onLoadMissionPart={loadMissionPart}
               />
             </main>
           )}

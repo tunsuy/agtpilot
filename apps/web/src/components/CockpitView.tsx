@@ -136,6 +136,15 @@ interface CockpitViewProps {
   artifact: ArtifactState | null;
   rightTab: 'browser' | 'terminal' | 'artifact' | 'activity';
   onRightTabChange: (tab: 'browser' | 'terminal' | 'artifact' | 'activity') => void;
+  /**
+   * 懒回水分片(mission/[id]?parts=):终态会话的右栏重字段(artifact 全文/
+   * 终端日志/视口截图)不随 core 回水,切到对应 tab 时经它按需取回。
+   * 返回服务端 patch(复制/下载全文时现场取数,不等 state 回流)。
+   */
+  onLoadMissionPart?: (
+    missionId: string,
+    part: 'artifact' | 'terminal' | 'viewport'
+  ) => Promise<any> | void;
   onRunMission: (prompt: string, title?: string, missionId?: string) => void;
   /** 小说包「下一步」出口(开书三段化串联):工坊载荷走服务端权威渲染,
    *  prompt 只作乐观气泡展示。续写包/大纲包之外的历史任务不触发。 */
@@ -176,6 +185,7 @@ export function CockpitView({
   artifact,
   rightTab,
   onRightTabChange,
+  onLoadMissionPart,
   onRunMission,
   onRunNovelChain,
   onStopMission,
@@ -355,6 +365,24 @@ export function CockpitView({
     currentMission?.artifact ||
     (artifact && artifact.taskId === currentMission?.id ? artifact : null);
 
+  /**
+   * 右栏重字段懒回水分片(mission/[id]?parts=):core 回水只带会话流,
+   * 终端日志/浏览器截图/成果全文在切到对应 tab 时才现取 —— 高延迟链路下
+   * 打开历史会话不再为用不到的重字段买单。合并后 parts 置位不再触发;
+   * 活跃会话经 SSE 拿全量(无 parts 标记),天然跳过。
+   */
+  useEffect(() => {
+    const m = currentMission;
+    if (!m?.parts || !onLoadMissionPart) return;
+    if (rightTab === 'terminal' && !m.parts.terminal) {
+      void onLoadMissionPart(m.id, 'terminal');
+    } else if (rightTab === 'browser' && !m.parts.viewport) {
+      void onLoadMissionPart(m.id, 'viewport');
+    } else if (rightTab === 'artifact' && !m.parts.artifact) {
+      void onLoadMissionPart(m.id, 'artifact');
+    }
+  }, [rightTab, currentMission, onLoadMissionPart]);
+
   // 智能滚动跟随:只有用户本来就贴在底部时新内容才自动滚动,
   // 上翻阅读历史不再被强行拽回;切换会话时重置为贴底态
   useEffect(() => {
@@ -386,8 +414,14 @@ export function CockpitView({
 
   const handleCopyArtifact = async () => {
     if (!activeArtifact?.content) return;
+    // 摘要投影(contentTruncated)先取回全文分片,不能把开头摘录当完整交付物
+    let content = activeArtifact.content;
+    if (activeArtifact.contentTruncated && currentMission?.id && onLoadMissionPart) {
+      const patch: any = await onLoadMissionPart(currentMission.id, 'artifact');
+      if (typeof patch?.artifact?.content === 'string') content = patch.artifact.content;
+    }
     // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
-    if (!(await copyToClipboard(activeArtifact.content))) return;
+    if (!(await copyToClipboard(content))) return;
     setCopiedArtifact(true);
     setTimeout(() => setCopiedArtifact(false), 2000);
   };
@@ -1497,6 +1531,20 @@ export function CockpitView({
                 )}
               <div ref={stepsEndRef} />
             </div>
+          ) : currentMission?.hydrating ||
+            currentMission?.stripped ||
+            (currentMission && currentMission.status === 'ACTIVE' && currentMission.steps.length === 0) ? (
+            /* 回水中占位:巡航会话即时转场(hydrating)/ 历史摘要选中即回水(stripped)/
+               活跃会话首步未达 —— 显示加载态而非「待命就绪」空态(那是无选中/真idle用) */
+            <div className="py-24 text-center text-zinc-400 space-y-4 max-w-sm mx-auto">
+              <div className="mx-auto w-12 h-12 rounded-2xl bg-zinc-100 border border-zinc-200/60 flex items-center justify-center shadow-2xs">
+                <Loader2 className="h-6 w-6 text-zinc-500 animate-spin" />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-sm font-semibold text-zinc-800">正在加载会话…</p>
+                <p className="text-xs text-zinc-400 leading-relaxed">正在拉取这次执行的过程与交付物。</p>
+              </div>
+            </div>
           ) : (
             <div className="py-24 text-center text-zinc-400 space-y-4 max-w-sm mx-auto">
               <div className="mx-auto w-12 h-12 rounded-2xl bg-zinc-100 border border-zinc-200/60 flex items-center justify-center text-zinc-500 shadow-2xs">
@@ -1872,7 +1920,7 @@ export function CockpitView({
           {rightTab === 'artifact' && (() => {
             // 提取当前任务中所有生成过的产物（支持多轮输出的多文档产物列表）
             type FileMeta = { fileId: string; fileName: string; mime: string; sizeBytes: number };
-            const missionArtifacts: Array<{ title: string; type: string; content: string; id: string; fileMeta?: FileMeta }> = [];
+            const missionArtifacts: Array<{ title: string; type: string; content: string; id: string; fileMeta?: FileMeta; contentTruncated?: boolean }> = [];
             const seen = new Set<string>();
 
             // 从 steps 中扫描是否有通过 artifact_render 输出的产物
@@ -1888,15 +1936,35 @@ export function CockpitView({
               }
             });
 
-            // 补充绑定的最新主产物
-            if (activeArtifact?.content && !seen.has(activeArtifact.content)) {
-              missionArtifacts.unshift({
-                id: 'active_main',
-                title: activeArtifact.title || '交付产物',
-                type: activeArtifact.type || 'markdown',
-                content: activeArtifact.content,
-                fileMeta: activeArtifact.fileMeta as FileMeta | undefined,
-              });
+            // 补充绑定的最新主产物。摘要投影(contentTruncated)下全文多半就在
+            // steps 里(artifact_render 输出即主产物来源)—— 按前缀匹配找回,
+            // 避免摘录卡与全文卡并存;找不回时先带摘录占位(parts=artifact
+            // 分片已在上方 effect 触发,到达后整卡刷新为全文)
+            if (activeArtifact?.content) {
+              let mainContent = activeArtifact.content;
+              let mainTruncated = Boolean(activeArtifact.contentTruncated);
+              if (mainTruncated) {
+                const hit = (currentMission?.steps || []).find(
+                  (st) =>
+                    st.tool === 'artifact_render' &&
+                    typeof st.args?.content === 'string' &&
+                    st.args.content.startsWith(mainContent)
+                );
+                if (hit) {
+                  mainContent = hit.args.content;
+                  mainTruncated = false;
+                }
+              }
+              if (!seen.has(mainContent)) {
+                missionArtifacts.unshift({
+                  id: 'active_main',
+                  title: activeArtifact.title || '交付产物',
+                  type: activeArtifact.type || 'markdown',
+                  content: mainContent,
+                  contentTruncated: mainTruncated,
+                  fileMeta: activeArtifact.fileMeta as FileMeta | undefined,
+                });
+              }
             }
 
             const currentArtifact = missionArtifacts[selectedArtifactIndex] || missionArtifacts[0] || null;
@@ -1907,7 +1975,24 @@ export function CockpitView({
                 ? parseOssDeliverable(currentArtifact.content)
                 : null;
 
-            const handleDownloadCurrent = () => {
+            // 摘要占位卡(contentTruncated)复制/下载前先取回全文分片,
+            // 不能把开头摘录当完整交付物给用户
+            const resolveCurrentFullContent = async (): Promise<string> => {
+              if (!currentArtifact) return '';
+              if (
+                !currentArtifact.contentTruncated ||
+                !currentMission?.id ||
+                !onLoadMissionPart
+              ) {
+                return currentArtifact.content;
+              }
+              const patch: any = await onLoadMissionPart(currentMission.id, 'artifact');
+              return typeof patch?.artifact?.content === 'string'
+                ? patch.artifact.content
+                : currentArtifact.content;
+            };
+
+            const handleDownloadCurrent = async () => {
               if (!currentArtifact?.content) return;
               // file 产物(如 .pptx):本体在服务端文件库,走下载路由(cookie 鉴权)
               if (currentArtifact.type === 'file' && currentArtifact.fileMeta?.fileId) {
@@ -1919,9 +2004,10 @@ export function CockpitView({
                 document.body.removeChild(link);
                 return;
               }
+              const fullContent = await resolveCurrentFullContent();
               // html 产物(如 bento 演示页)按网页下载,其余仍为 Markdown 文档
               const isHtml = currentArtifact.type === 'html';
-              const blob = new Blob([currentArtifact.content], {
+              const blob = new Blob([fullContent], {
                 type: isHtml ? 'text/html;charset=utf-8;' : 'text/markdown;charset=utf-8;',
               });
               const url = URL.createObjectURL(blob);
@@ -1943,7 +2029,8 @@ export function CockpitView({
 
             const handleCopyCurrent = async () => {
               if (!currentArtifact?.content) return;
-              if (!(await copyToClipboard(currentArtifact.content))) return;
+              const fullContent = await resolveCurrentFullContent();
+              if (!(await copyToClipboard(fullContent))) return;
               setCopiedArtifact(true);
               setTimeout(() => setCopiedArtifact(false), 2000);
             };
@@ -2055,6 +2142,12 @@ export function CockpitView({
 
                 {/* 主画布内容区 */}
                 <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                  {currentArtifact?.contentTruncated && (
+                    <div className="mb-3 flex items-center gap-1.5 rounded-xl border border-amber-200/80 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-700">
+                      <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                      <span>全文取回中,当前为开头摘录…</span>
+                    </div>
+                  )}
                   {currentArtifact ? (
                     artifactViewMode === 'social' ? (
                       <div className="animate-fadeIn">

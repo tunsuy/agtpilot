@@ -10,9 +10,11 @@
  * 投影规则:
  * - conversationMessages 任何情况都不下发:前端零消费(全仓 grep 实证),
  *   续聊回水在服务端直接读持久化库(agent-backend restoreSession);
- * - 终态会话(DONE/INTERRUPTED)只发摘要:元信息 + artifact(交付库页
- *   跨会话消费)+ stepCount/hasErrorStep(列表 chip 判定),steps/
- *   terminalLogs/viewport 置空,选中时经 /api/agent/mission/[id] 懒回水;
+ * - 终态会话(DONE/INTERRUPTED)只发摘要:元信息 + artifact 摘要投影
+ *   (toArtifactSummary,长正文截为开头摘录 —— 全文经懒回水分片接口
+ *   parts=artifact 按需取)+ stepCount/hasErrorStep(列表 chip 判定),
+ *   steps/terminalLogs/viewport 置空,选中时经 /api/agent/mission/[id]
+ *   懒回水(core 只带元信息+steps+plan,右栏重字段按 tab 分片取回);
  * - 活跃会话(ACTIVE/QUEUED/WAITING_APPROVAL)保留 steps/terminalLogs/
  *   viewport(实时渲染需要),仅剥 conversationMessages。
  *
@@ -22,6 +24,36 @@
 
 /** 终态状态集:与 Mission['status'] 枚举对齐(DONE/INTERRUPTED 不再变化) */
 const TERMINAL_STATUSES = new Set(['DONE', 'INTERRUPTED']);
+
+/** 终态判定(懒回水路由 parts 分片与下行投影共用同一口径) */
+export function isTerminalMission(m: any): boolean {
+  return Boolean(m && typeof m === 'object' && TERMINAL_STATUSES.has(m.status));
+}
+
+/**
+ * 交付物摘要投影的正文摘录长度(字符)。终态会话的 artifact 全文可达
+ * 数十 KB(小说章节/长报告),而 state/init 一次最多带 50 条巡航交付物 +
+ * 全部终态手动会话 —— 全文是 init 巨帧的最大单体来源。列表/搜索/占位
+ * 只需要开头一段,全文经 /api/agent/mission/[id]?parts=artifact 按需取。
+ */
+export const ARTIFACT_EXCERPT_CHARS = 400;
+
+/**
+ * artifact → 摘要投影:长正文截为开头摘录并打 contentTruncated 标记
+ * (附原始字符数 contentChars 供 UI 展示);短正文原样放行(不打标,
+ * 客户端无需二次取回)。只读投影:返回新对象,绝不改传入引用(可能是
+ * backend.state 内存活引用,改了会把持久化/后续广播的全文一起截掉)。
+ */
+export function toArtifactSummary(a: any): any {
+  if (!a || typeof a !== 'object' || typeof a.content !== 'string') return a;
+  if (a.content.length <= ARTIFACT_EXCERPT_CHARS) return a;
+  return {
+    ...a,
+    content: a.content.slice(0, ARTIFACT_EXCERPT_CHARS),
+    contentTruncated: true,
+    contentChars: a.content.length,
+  };
+}
 
 /** 剥掉会话历史(前端零消费;SSE live 帧与懒加载接口共用) */
 export function stripConversation<T>(m: T): T {
@@ -45,8 +77,12 @@ export function toWireMission(m: any): any {
     viewport: _v,
     ...rest
   } = m;
+  // 交付物降级为摘要投影(长正文只带开头摘录):交付库列表/工坊素材选择器
+  // 靠 title/type/摘录够用,全文打开详情时经 parts=artifact 按需取回
+  const artifact = rest.artifact ? toArtifactSummary(rest.artifact) : rest.artifact;
   return {
     ...rest,
+    ...(artifact !== undefined && artifact !== null ? { artifact } : {}),
     steps: [],
     /** 原始步骤数(占位展示/调试可观测) */
     stepCount: Array.isArray(steps) ? steps.length : 0,
@@ -58,6 +94,15 @@ export function toWireMission(m: any): any {
       ? steps.some((s: any) => typeof s?.id === 'string' && s.id.startsWith('step_err_'))
       : false,
     stripped: true,
+    /**
+     * 分片就位标记(与懒回水 core 响应同构):摘要行天然缺 terminal/viewport,
+     * artifact 取决于正文是否被截。客户端按需取回后合并置 true。
+     */
+    parts: {
+      artifact: !artifact?.contentTruncated,
+      terminal: false,
+      viewport: false,
+    },
   };
 }
 

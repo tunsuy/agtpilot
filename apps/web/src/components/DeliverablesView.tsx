@@ -24,6 +24,7 @@ import {
   FileDown,
   Paperclip,
   FileUp,
+  Loader2,
 } from 'lucide-react';
 import { ArtifactState, Mission } from '../types/agent';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
@@ -37,6 +38,15 @@ interface DeliverablesViewProps {
   onRunMission: (prompt: string, title?: string) => void;
   /** mobile：移动端 tab 内嵌时用居中简版标题（无图标/描述），desktop 为完整标题栏 */
   variant?: 'desktop' | 'mobile';
+  /**
+   * 懒回水分片(mission/[id]?parts=):终态会话的交付物在列表里只带开头
+   * 摘录(contentTruncated),打开详情/复制/下载时经它取回全文。返回服务端
+   * patch(复制/下载现场取数,不等 state 回流);合并后列表行自动刷新为全文。
+   */
+  onLoadMissionPart?: (
+    missionId: string,
+    part: 'artifact' | 'terminal' | 'viewport'
+  ) => Promise<any> | void;
 }
 
 /** 标题栏操作按钮（分享/复制/下载），桌面标题栏与移动端简版标题共用 */
@@ -98,6 +108,7 @@ export function DeliverablesView({
   onOpenCockpit,
   onRunMission,
   variant = 'desktop',
+  onLoadMissionPart,
 }: DeliverablesViewProps) {
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -118,25 +129,44 @@ export function DeliverablesView({
       fileMeta?: { fileId: string; fileName: string; mime: string; sizeBytes: number };
       /** 工坊参考资料引用(mission.materialRefs 透传;输入↔产出闭环展示) */
       materialRefs?: Array<{ id: string; title: string }>;
+      /** 摘要投影(lib/mission-wire.ts):content 只是开头摘录,全文按需取回 */
+      contentTruncated?: boolean;
+      /** 截断前原始正文字符数(「全文 x 字」展示) */
+      contentChars?: number;
     }> = [];
 
     const seenContents = new Set<string>();
 
     missions.forEach((m) => {
-      if (m.artifact?.content && !seenContents.has(m.artifact.content)) {
-        seenContents.add(m.artifact.content);
-        list.push({
-          id: `art_${m.id}`,
-          title: m.artifact.title || m.title || '交付成果',
-          type: m.artifact.type || 'markdown',
-          content: m.artifact.content,
-          missionId: m.id,
-          missionTitle: m.title,
-          timestamp: m.startedAt,
-          fileMeta: m.artifact.fileMeta,
-          materialRefs: m.materialRefs,
-        });
+      if (!m.artifact?.content) return;
+      let content = m.artifact.content;
+      let contentTruncated = Boolean(m.artifact.contentTruncated);
+      // 全局最新成果(SSE live 帧,全文)恰是本条摘要投影的来源会话 →
+      // 就地升级为全文,不再另出 art_active 重复行
+      if (
+        contentTruncated &&
+        artifact?.taskId === m.id &&
+        typeof artifact.content === 'string' &&
+        artifact.content.startsWith(content)
+      ) {
+        content = artifact.content;
+        contentTruncated = false;
       }
+      if (seenContents.has(content)) return;
+      seenContents.add(content);
+      list.push({
+        id: `art_${m.id}`,
+        title: m.artifact.title || m.title || '交付成果',
+        type: m.artifact.type || 'markdown',
+        content,
+        missionId: m.id,
+        missionTitle: m.title,
+        timestamp: m.startedAt,
+        fileMeta: m.artifact.fileMeta,
+        materialRefs: m.materialRefs,
+        contentTruncated,
+        contentChars: m.artifact.contentChars,
+      });
     });
 
     if (artifact?.content && !seenContents.has(artifact.content)) {
@@ -153,7 +183,8 @@ export function DeliverablesView({
     return list;
   }, [missions, artifact]);
 
-  // 2. 根据搜索词与类型筛选
+  // 2. 根据搜索词与类型筛选。摘要投影行(contentTruncated)的正文搜索只覆盖
+  // 开头摘录 —— 全文搜索需拉回全部分片,违背按需加载初衷;标题搜索不受影响
   const filteredArtifacts = useMemo(() => {
     return allArtifacts.filter((item) => {
       const matchSearch =
@@ -177,6 +208,29 @@ export function DeliverablesView({
   // 机会清单交付物分支:正文能解析出有效清单则渲可派发卡片(与会话流/画布同分支),
   // 否则按原类型渲染(markdown / html / file)
   const activeOss = activeItem ? parseOssDeliverable(activeItem.content) : null;
+
+  // 摘要投影行(contentTruncated):点开详情即触发全文分片取回。合并进
+  // missions/cronDeliverables 后列表行刷新、标记消失,不会重复触发;
+  // 失败静默(标记仍在,重选/再点开即重试)
+  useEffect(() => {
+    if (!activeItem?.contentTruncated || !activeItem.missionId || !onLoadMissionPart) return;
+    void onLoadMissionPart(activeItem.missionId, 'artifact');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeItem?.id, activeItem?.contentTruncated, activeItem?.missionId, onLoadMissionPart]);
+
+  /**
+   * 复制/下载/分享前的全文兜底:摘要行先取回 parts=artifact 分片,
+   * 不能把开头摘录当完整交付物给用户。取回失败时退回摘录(有胜于无,
+   * 且正常情况下分片接口与详情打开是同一条链路,不会单独失败)。
+   */
+  const resolveFullContent = async (
+    item: { content: string; contentTruncated?: boolean; missionId?: string } | null
+  ): Promise<string> => {
+    if (!item) return '';
+    if (!item.contentTruncated || !item.missionId || !onLoadMissionPart) return item.content;
+    const patch: any = await onLoadMissionPart(item.missionId, 'artifact');
+    return typeof patch?.artifact?.content === 'string' ? patch.artifact.content : item.content;
+  };
 
   // 上传资料现存清单(upl_ 引用徽章:kind 标注 + 已删除判定)。null = 未加载
   // 或加载失败(此时不判「已删除」,链接照给 —— 下载口自会 404 给人话)。
@@ -209,13 +263,14 @@ export function DeliverablesView({
 
   const handleCopy = async () => {
     if (!activeItem?.content) return;
+    const fullContent = await resolveFullContent(activeItem);
     // http 部署无 navigator.clipboard,copyToClipboard 内含 execCommand 降级
-    if (!(await copyToClipboard(activeItem.content))) return;
+    if (!(await copyToClipboard(fullContent))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!activeItem?.content) return;
     // file 产物(如 .pptx):本体在服务端文件库,走下载路由(cookie 鉴权)
     if (activeItem.type === 'file' && activeItem.fileMeta?.fileId) {
@@ -227,9 +282,10 @@ export function DeliverablesView({
       document.body.removeChild(link);
       return;
     }
+    const fullContent = await resolveFullContent(activeItem);
     // html 产物(如 bento 演示页)按网页下载,其余仍为 Markdown 文档
     const isHtml = activeItem.type === 'html';
-    const blob = new Blob([activeItem.content], {
+    const blob = new Blob([fullContent], {
       type: isHtml ? 'text/html;charset=utf-8;' : 'text/markdown;charset=utf-8;',
     });
     const url = URL.createObjectURL(blob);
@@ -253,9 +309,10 @@ export function DeliverablesView({
   const [shared, setShared] = useState(false);
   const handleShare = async () => {
     if (!activeItem?.content) return;
+    const fullContent = await resolveFullContent(activeItem);
     const ok = await shareToApp({
       title: activeItem.title || 'AgtPilot 交付物',
-      text: `${activeItem.title ? activeItem.title + '\n\n' : ''}${activeItem.content}`.slice(0, 4000),
+      text: `${activeItem.title ? activeItem.title + '\n\n' : ''}${fullContent}`.slice(0, 4000),
       dialogTitle: '分享交付物到',
     });
     if (ok) {
@@ -592,6 +649,20 @@ export function DeliverablesView({
                         </span>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* 摘要投影分片取回占位:先渲染开头摘录,全文到达后自动刷新 */}
+                {activeItem.contentTruncated && (
+                  <div className="mx-4 md:mx-5 mt-4 flex items-center gap-1.5 rounded-xl border border-amber-200/80 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
+                    <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                    <span>
+                      全文取回中
+                      {activeItem.contentChars
+                        ? `(约 ${(activeItem.contentChars / 1000).toFixed(1)}k 字)`
+                        : ''}
+                      ,当前为开头摘录…
+                    </span>
                   </div>
                 )}
 

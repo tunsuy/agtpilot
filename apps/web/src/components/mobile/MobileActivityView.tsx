@@ -58,6 +58,15 @@ interface MobileActivityViewProps {
   isSubmitting?: boolean;
   /** 停止执行中任务(composer 停止钮;与桌面同口径) */
   onStopMission?: (missionId: string) => void;
+  /**
+   * 懒回水分片(mission/[id]?parts=):移动端动态页内联渲染「执行日志」条
+   * (无桌面右栏 tab 概念),终态会话打开时经它取回 terminalLogs 分片;
+   * 未取回前不借用全局 live 日志(那是别的任务的,串台)
+   */
+  onLoadMissionPart?: (
+    missionId: string,
+    part: 'artifact' | 'terminal' | 'viewport'
+  ) => Promise<any> | void;
 }
 
 const DANGER_STYLE: Record<ApprovalRequest['dangerLevel'], string> = {
@@ -109,6 +118,7 @@ export function MobileActivityView({
   onRunNovelChain,
   isSubmitting,
   onStopMission,
+  onLoadMissionPart,
 }: MobileActivityViewProps) {
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [showAllMissions, setShowAllMissions] = useState(false);
@@ -228,8 +238,22 @@ export function MobileActivityView({
     mission?.id ?? null
   );
 
+  // 终态会话日志分片(mission/[id]?parts=terminal):移动端动态页内联渲染
+  // 日志条(无桌面右栏 tab 概念),打开会话即按需取回;parts 合并置位后不再触发
+  useEffect(() => {
+    if (mission?.parts && mission.parts.terminal === false && onLoadMissionPart) {
+      void onLoadMissionPart(mission.id, 'terminal');
+    }
+  }, [mission?.id, mission?.parts, onLoadMissionPart]);
+
   const recentLogs = useMemo(() => {
-    const scope = mission?.terminalLogs?.length ? mission.terminalLogs : terminalLogs;
+    // 分片未取回前不借用全局 live 日志 —— 那是当前执行中任务的,串进历史会话是串台
+    const ownMissing = Boolean(mission?.parts && !mission.parts.terminal);
+    const scope = mission?.terminalLogs?.length
+      ? mission.terminalLogs
+      : ownMissing
+        ? []
+        : terminalLogs;
     return (scope || []).slice(-40).reverse();
   }, [mission, terminalLogs]);
 
@@ -680,6 +704,10 @@ export function MobileActivityView({
                     );
                   })}
                 </ol>
+              ) : mission.hydrating || mission.stripped || mission.status === 'ACTIVE' ? (
+                <p className="text-xs text-zinc-400 py-2 flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在加载会话…
+                </p>
               ) : (
                 <p className="text-xs text-zinc-400 py-2">暂无执行步骤</p>
               )}

@@ -182,6 +182,22 @@ export interface Mission {
   stepCount?: number;
   /** stripped 摘要携带:失败尾步(step_err_)判定前置计算,子任务 chip「失败」态用 */
   hasErrorStep?: boolean;
+  /**
+   * 懒回水分片标记(/api/agent/mission/[id]?parts=):终态会话的重字段
+   * (artifact 全文 / terminalLogs / viewport 截图)不再随 core 一起下发,
+   * 各键 = 该分片是否已在客户端就位。右栏切到对应 tab 时按需取回并合并
+   * 置 true;活跃会话经 SSE mission_updated 拿全量,无本标记(= 全在)。
+   */
+  parts?: { artifact?: boolean; terminal?: boolean; viewport?: boolean };
+  /**
+   * 巡航会话即时转场占位标记(app/page.tsx openCronRun):从巡航中心点开会话时,
+   * 先用执行行(cronRuns)/交付摘要(cronDeliverables)就地搭一个占位并立刻切到
+   * 工作台(驾驶舱显示「正在加载会话…」),再后台经 /api/agent/mission/[id] 回水
+   * 全量、整行替换并清除本标记。与 stripped 刻意区分:stripped 是 state/init 下行
+   * 的历史摘要(由「选中即回水」effect 处理),hydrating 是现场点开的在飞占位
+   * (由 openCronRun 自身回水,不走那个 effect,避免同一会话双拉)。
+   */
+  hydrating?: boolean;
 }
 
 /**
@@ -318,6 +334,15 @@ export interface ArtifactState {
   };
   /** 产物归属的任务 id（核心层盖章）——历史会话切换时按它防串台 */
   taskId?: string;
+  /**
+   * 摘要投影标记(lib/mission-wire.ts toArtifactSummary):state/init 与懒回水
+   * core 对终态会话的长正文只带开头摘录 —— 交付库列表/搜索占位够用,全文在
+   * 打开详情/复制/下载时经 /api/agent/mission/[id]?parts=artifact 按需取回。
+   * 短正文(≤ 摘录阈值)原样下发,不带本标记。
+   */
+  contentTruncated?: boolean;
+  /** 截断前原始正文字符数(contentTruncated 时携带;UI 展示「全文 x 字」) */
+  contentChars?: number;
 }
 
 export interface User {

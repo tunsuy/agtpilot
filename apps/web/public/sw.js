@@ -1,8 +1,8 @@
 /* AgtPilot PWA Service Worker
  *
  * 缓存策略（为服务端渲染 + SSE 实时流应用量身定制）：
- * - 导航请求：网络优先；失败回落缓存的最近页面；再无则内联离线页。
- *   绝不缓存登录态/动态 HTML 为"新鲜"，只在断网时兜底，避免展示过期数据。
+ * - 导航请求：缓存优先 + 后台静默更新（HTML 是静态预渲染壳，不含用户数据；
+ *   高延迟链路下回访省掉一整个 HTML 往返）。断网时回落缓存/内联离线页。
  * - 静态资源（/_next/static/、/icons/、favicon）：缓存优先 + 后台更新。
  * - /api/* 与 EventSource(SSE)：完全透传，绝不拦截，保证实时流不被 SW 破坏。
  * - push 事件：展示系统通知；notificationclick：聚焦/打开对应页面。
@@ -68,25 +68,30 @@ self.addEventListener('fetch', (event) => {
   // API / SSE 实时流：完全透传
   if (url.pathname.startsWith('/api/')) return;
 
-  // 导航请求：网络优先 → 缓存兜底 → 离线页
+  // 导航请求：缓存优先 + 后台静默更新（stale-while-revalidate）。
+  // 页面 HTML 是构建期静态预渲染（不含任何用户数据，数据全走 API/SSE），
+  // 回访直接秒出缓存、省掉高延迟链路上的一整个 HTML 往返；新版本 HTML
+  // 后台取回存缓存，下次访问生效（JS/CSS 文件名带 hash，新旧不串）。
+  // 首访无缓存走网络；网络失败依次回落：同 URL 缓存 → 任意导航缓存 → 内联离线页。
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
-          // 缓存成功的导航响应，供断网兜底
-          if (res && res.ok) {
-            const clone = res.clone();
-            caches.open(NAV_CACHE).then((c) => c.put(req, clone));
-          }
-          return res;
-        })
-        .catch(async () => {
-          const cached = await caches.match(req).catch(() => null);
-          if (cached) return cached;
-          const anyNav = await caches.open(NAV_CACHE).then((c) => c.match(req)).catch(() => null);
-          if (anyNav) return anyNav;
-          return offlineResponse();
-        })
+      (async () => {
+        const revalidate = fetch(req)
+          .then((res) => {
+            if (res && res.ok) {
+              const clone = res.clone();
+              caches.open(NAV_CACHE).then((c) => c.put(req, clone)).catch(() => {});
+            }
+            return res;
+          })
+          .catch(() => null);
+        const cached = await caches.match(req).catch(() => null);
+        if (cached) return cached; // 后台更新已在飞，不 await
+        const fresh = await revalidate;
+        if (fresh) return fresh;
+        const anyNav = await caches.open(NAV_CACHE).then((c) => c.match(req)).catch(() => null);
+        return anyNav || offlineResponse();
+      })()
     );
     return;
   }

@@ -1,7 +1,7 @@
 import { getAgentBackend } from '@/lib/agent-backend';
 import { auth } from '@/auth';
-import { getUserMissions } from '@/lib/user-store';
-import { splitMissionsForWire, stripConversation } from '@/lib/mission-wire';
+import { stripConversation } from '@/lib/mission-wire';
+import { buildUserScopedState } from '@/lib/state-scoping';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,62 +31,11 @@ export async function GET() {
         }
       }, 25_000);
 
-      // 1. 发送初始化状态（如果未登录，则不发送任何历史任务；如果已登录，合并用户专属任务与内存中的进行中任务）
-      let scopedMissions: any[] = [];
-      let cronRuns: any[] = [];
-      let cronDeliverables: any[] = [];
-      if (userId) {
-        const persistedMissions = getUserMissions(userId);
-        const activeMemoryMissions = backend.state.missions.filter((m) => m.userId === userId);
-
-        // 合并：优先取 active 内存中的任务（包含最新进度），其余取持久化历史
-        const activeIds = new Set(activeMemoryMissions.map((m) => m.id));
-        // 首屏瘦身(lib/mission-wire.ts):终态历史会话只发摘要,前端选中时经
-        // /api/agent/mission/[id] 懒回水;conversationMessages 一律不下发。
-        // 巡航会话分流(docs/design/cruise-session-split.md):工作台 missions
-        // 只装手动会话,巡航拆成执行历史行 + 交付物摘要两路轻量投影
-        const split = splitMissionsForWire([
-          ...activeMemoryMissions,
-          ...persistedMissions.filter((m) => !activeIds.has(m.id)),
-        ]);
-        scopedMissions = split.missions;
-        cronRuns = split.cronRuns;
-        cronDeliverables = split.cronDeliverables;
-      }
-
-      const activeMissionId = userId
-        ? (scopedMissions.find((m) => m.id === backend.state.activeMissionId) ? backend.state.activeMissionId : (scopedMissions[0]?.id || null))
-        : null;
-
-      const userScopedState = {
-        ...backend.state,
-        missions: scopedMissions,
-        activeMissionId,
-        // 巡航会话分流下行(docs/design/cruise-session-split.md),与 state 路由同构
-        cronRuns,
-        cronDeliverables,
-        // 终端日志按归属过滤（未标记 userId 的全局系统日志保留）
-        terminalLogs: userId
-          ? backend.state.terminalLogs.filter((l) => !l.userId || l.userId === userId)
-          : [],
-        // 挂起审批按归属过滤，避免串台/泄露
-        approvalRequests: userId
-          ? backend.state.approvalRequests.filter((r) => !r.userId || r.userId === userId)
-          : [],
-        // 视口（浏览器/终端画面）只在无人占用或归属本人时下发，否则给空白默认
-        viewport:
-          !userId || (backend.state.viewportUserId && backend.state.viewportUserId !== userId)
-            ? { activeTab: 'browser', url: 'about:blank', title: 'Ready', status: 'idle' as const }
-            : backend.state.viewport,
-        // 授权建议卡片按用户过滤（id 形如 `${userId}::${connectorId}`）
-        connectorSuggestions: userId
-          ? backend.state.connectorSuggestions.filter((s) => s.id.startsWith(`${userId}::`))
-          : [],
-        // ask_user 问题卡按归属过滤(init 重放,刷新页面卡片不丢)
-        pendingQuestions: userId
-          ? backend.state.pendingQuestions.filter((q) => !q.userId || q.userId === userId)
-          : [],
-      };
+      // 1. 发送初始化状态:未登录不给任何历史数据;登录则按归属投影
+      // (规则细节与 state 兜底接口同源,见 lib/state-scoping.ts)。
+      // 帧内回显 userId(本连接实际认证到的身份):客户端 SSE 已改为挂载即连
+      // (不等 useSession,省一个 RTT),靠它对账决定登录/登出后是否重建连接
+      const userScopedState = buildUserScopedState(backend.state, userId);
 
       const initialPayload = `event: init\ndata: ${JSON.stringify(userScopedState)}\n\n`;
       controller.enqueue(encoder.encode(initialPayload));
@@ -114,6 +63,19 @@ export async function GET() {
           // 记忆库更新（会话结束自动沉淀）按用户过滤
           if (event.type === 'memories_updated') {
             if (!userId || event.data?.userId !== userId) {
+              return;
+            }
+          }
+          // 产物事件按归属 mission 过滤:latestArtifact 是全局单例槽(最后一个
+          // 产物,不分用户),不过滤会把 A 用户的产物弹进 B 用户的成果面板
+          // (匿名连接同样收不到)。归属不明的孤儿帧(无 taskId / mission 不在
+          // 内存)直接丢弃 —— 归属者仍经 mission_updated(mission.artifact)拿到
+          if (event.type === 'artifact_updated') {
+            const tid = event.data?.taskId;
+            const owner = tid
+              ? backend.state.missions.find((m) => m.id === tid)?.userId
+              : undefined;
+            if (!userId || !owner || owner !== userId) {
               return;
             }
           }

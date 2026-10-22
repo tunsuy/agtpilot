@@ -3,10 +3,13 @@ import {
   toWireMission,
   stripConversation,
   isCronMission,
+  isTerminalMission,
   toCronRunMeta,
+  toArtifactSummary,
   splitMissionsForWire,
   CRUISE_TITLE_PREFIX,
   CRON_RUNS_WIRE_CAP,
+  ARTIFACT_EXCERPT_CHARS,
 } from '../mission-wire';
 
 /** 构造一条终态历史会话(全量形态:会话历史 + 步骤 + 终端日志 + 视口截图) */
@@ -78,6 +81,90 @@ describe('toWireMission 终态会话 → 摘要', () => {
     expect(m.conversationMessages).toHaveLength(1);
     expect(m.terminalLogs).toHaveLength(1);
     expect((m as any).stripped).toBeUndefined();
+  });
+});
+
+describe('toArtifactSummary 交付物摘要投影(init 巨帧瘦身主战场)', () => {
+  it('短正文原样放行(同一引用,不打截断标 —— 客户端无需二次取回)', () => {
+    const a = { title: '短交付', content: '# 正文', taskId: 'm1' };
+    expect(toArtifactSummary(a)).toBe(a);
+  });
+
+  it('长正文截为开头摘录 + contentTruncated/contentChars 标记', () => {
+    const long = '章'.repeat(ARTIFACT_EXCERPT_CHARS + 5000);
+    const a = { title: '小说章节', type: 'markdown', content: long, taskId: 'm9' };
+    const sum = toArtifactSummary(a);
+    expect(sum.content).toBe(long.slice(0, ARTIFACT_EXCERPT_CHARS));
+    expect(sum.contentTruncated).toBe(true);
+    expect(sum.contentChars).toBe(long.length);
+    // 元信息保留(列表/下载路由要用)
+    expect(sum.title).toBe('小说章节');
+    expect(sum.type).toBe('markdown');
+    expect(sum.taskId).toBe('m9');
+  });
+
+  it('只读投影:不改传入的 artifact 原对象(内存活引用,改了会连盘一起截)', () => {
+    const long = 'x'.repeat(ARTIFACT_EXCERPT_CHARS + 10);
+    const a = { content: long };
+    toArtifactSummary(a);
+    expect(a.content).toBe(long);
+    expect((a as any).contentTruncated).toBeUndefined();
+  });
+
+  it('fileMeta/postMeta 随行保留(file 产物下载不依赖正文分片)', () => {
+    const a = {
+      content: 'y'.repeat(ARTIFACT_EXCERPT_CHARS + 1),
+      fileMeta: { fileId: 'f1', fileName: 'a.pptx', mime: 'a/b', sizeBytes: 9 },
+      postMeta: { platform: 'xiaohongshu' },
+    };
+    const sum = toArtifactSummary(a);
+    expect(sum.fileMeta).toEqual(a.fileMeta);
+    expect(sum.postMeta).toEqual(a.postMeta);
+  });
+
+  it('空值/无 content 原样返回(不 throw)', () => {
+    expect(toArtifactSummary(null)).toBeNull();
+    expect(toArtifactSummary(undefined)).toBeUndefined();
+    const noContent = { title: 't' };
+    expect(toArtifactSummary(noContent)).toBe(noContent);
+  });
+});
+
+describe('toWireMission 分片标记(parts)与长交付物截断', () => {
+  const longArtifact = () => ({ title: '长报告', content: '报'.repeat(ARTIFACT_EXCERPT_CHARS + 100) });
+
+  it('终态 + 长交付物:artifact 降级摘要,parts.artifact=false 待取回', () => {
+    const wire = toWireMission({ ...doneMission(), artifact: longArtifact() });
+    expect(wire.artifact.contentTruncated).toBe(true);
+    expect(wire.artifact.content).toHaveLength(ARTIFACT_EXCERPT_CHARS);
+    expect(wire.parts).toEqual({ artifact: false, terminal: false, viewport: false });
+  });
+
+  it('终态 + 短交付物:全文随行,parts.artifact=true(无需二次取回)', () => {
+    const wire = toWireMission(doneMission()); // artifact.content = '# 正文'
+    expect(wire.artifact).toEqual({ title: '交付', content: '# 正文' });
+    expect(wire.parts.artifact).toBe(true);
+  });
+
+  it('终态 + 无交付物:parts.artifact=true(没东西可取,不让客户端空转)', () => {
+    const m: any = doneMission();
+    delete m.artifact;
+    const wire = toWireMission(m);
+    expect(wire.parts.artifact).toBe(true);
+  });
+
+  it('活跃会话不打 parts 标记、交付物不截断(SSE 实时帧本来就带全量)', () => {
+    const wire = toWireMission({ ...doneMission(), status: 'ACTIVE', artifact: longArtifact() });
+    expect(wire.parts).toBeUndefined();
+    expect(wire.artifact.contentTruncated).toBeUndefined();
+    expect(wire.artifact.content).toHaveLength(ARTIFACT_EXCERPT_CHARS + 100);
+  });
+
+  it('isTerminalMission 与投影同口径(DONE/INTERRUPTED)', () => {
+    expect(isTerminalMission({ status: 'DONE' })).toBe(true);
+    expect(isTerminalMission({ status: 'INTERRUPTED' })).toBe(true);
+    expect(isTerminalMission({ status: 'ACTIVE' })).toBe(false);
+    expect(isTerminalMission(null)).toBe(false);
   });
 });
 
@@ -202,6 +289,19 @@ describe('splitMissionsForWire 下行分流', () => {
     const out = splitMissionsForWire(many);
     expect(out.cronRuns).toHaveLength(CRON_RUNS_WIRE_CAP);
     expect(out.cronRuns[0].id).toBe(`x${CRON_RUNS_WIRE_CAP + 29}`); // 最新的留下
+  });
+
+  it('cronDeliverables 长正文同样降级摘要投影(init 巨帧主源:50 条日更章节全文)', () => {
+    const long = {
+      ...cronDone,
+      id: 'c9',
+      artifact: { title: '日更', content: '章'.repeat(ARTIFACT_EXCERPT_CHARS + 100) },
+    };
+    const out = splitMissionsForWire([long]);
+    const row: any = out.cronDeliverables[0];
+    expect(row.artifact.contentTruncated).toBe(true);
+    expect(row.artifact.content).toHaveLength(ARTIFACT_EXCERPT_CHARS);
+    expect(row.parts.artifact).toBe(false);
   });
 
   it('空输入 → 三路全空(不 throw)', () => {

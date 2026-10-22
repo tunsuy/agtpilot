@@ -21,7 +21,7 @@
  * 管线全共享。可测逻辑在 lib/mobile-chat.ts(vitest node 环境,组件渲染
  * 测试归 e2e)。
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnswerMarkdown } from '../AnswerMarkdown';
 import {
   AlertCircle,
@@ -41,16 +41,12 @@ import {
   Wrench,
 } from 'lucide-react';
 import { NotePackageList } from '../workshops/NotePackageCard';
-import { parseNotePackages } from '../../workshops/xhs/note-package';
 import { ArticlePackageList } from '../workshops/ArticlePackageCard';
-import { parseArticlePackages } from '../../workshops/shared/article-package';
 import { buildDraftDeliveryIndex } from '../../lib/draft-delivery';
 import { TopicPickList } from '../workshops/TopicPickCard';
-import { parseTopicPicks } from '../../workshops/xhs/topic-picks';
 import { OssOpportunityList } from '../workshops/OssOpportunityCard';
-import { parseOssOpportunities } from '../../workshops/oss_radar/opportunities';
 import { NovelPackageCard, type NovelChainHandler } from '../workshops/NovelPackageCard';
-import { parseNovelPackage, assembleNovelDelivery } from '../../workshops/novel/novel-package';
+import { assembleNovelDelivery } from '../../workshops/novel/novel-package';
 import { resolveDeliveryContract } from '../../workshops/novel/delivery';
 import { collectWorkshopDeliveries } from '../../lib/workshop-delivery-view';
 import { deliveredFieldsFromSteps, DELIVER_FIELD_TOOL } from '../../lib/workshop-delivery';
@@ -64,6 +60,7 @@ import {
   type CockpitBlock,
 } from '../../lib/cockpit-blocks';
 import { sourcesForAnswer } from '../../lib/search-sources';
+import { deriveAssistantStep, deriveStepSources } from '../../lib/step-derived';
 import { narrateStep, formatActivityDuration } from '../../lib/activity-narration';
 import { chatAvailability, summarizeProcessBlocks } from '../../lib/mobile-chat';
 import type { Mission } from '../../types/agent';
@@ -164,7 +161,10 @@ export function MobileConversationView({
   // 贴底才自动滚动跟随新内容(与桌面智能跟随同语义,滚动容器换成文档)
   useEffect(() => {
     if (mission.steps?.length && atBottomRef.current) {
-      stepsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      // 流式期间每帧都在追加文本,若每帧都发起 smooth 滚动会不断重启动画、
+      // 移动端明显抖动/掉帧 —— 流式中用 'auto' 直接贴底,收尾后才 smooth。
+      const streaming = mission.steps.some((s) => s.status === 'RUNNING');
+      stepsEndRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth' });
     }
   }, [mission.steps]);
 
@@ -188,38 +188,63 @@ export function MobileConversationView({
   };
 
   // ===== 数据管线(与桌面驾驶舱同源,纯函数复用,不另写映射) =====
+  // 整条管线对 steps 做 O(n)~O(n²) 解析,流式期间 steps 每帧变化。用 useMemo
+  // 只在 steps 真正变化时重算：滚动/展开/贴底切换等重渲染不再全量重跑管线。
   const steps = mission.steps ?? [];
-  const { blocks } = splitStepsIntoBlocks(steps);
-  // 投递目标按任务来源工坊路由(工坊包声明驱动):知乎工坊的文章包走知乎
-  // 托管存草稿,其余文章包走公众号草稿箱;笔记包格式仅 xhs 产出。已落稿
-  // 索引(防重复投递):落稿工具 DONE 且标题/正文命中本篇 → 按钮转「已存
-  // 入草稿箱」
-  const articleDraft = resolveArtifactDraft(mission.workshopId, 'article-package');
-  const noteDraft = resolveArtifactDraft(mission.workshopId, 'note-package');
-  const articleDelivered = buildDraftDeliveryIndex(steps, articleDraft?.deliverTool);
-  const noteDelivered = buildDraftDeliveryIndex(steps, noteDraft?.deliverTool);
-  // 逐字段交付(novel 设定包/大纲包)· mission 级渐进卡:契约经
-  // mission.deliveryContract.id 现场重建,字段跨轮累积(steps 是持久事实源,
-  // 注册表只是轮内缓存),卡只钉在最后一个含交付步的轮之后(一张、最新位置)
-  const deliveryContract = mission.deliveryContract
-    ? resolveDeliveryContract(mission.deliveryContract.id)
-    : undefined;
-  const deliveryProgress = collectWorkshopDeliveries(steps, deliveryContract);
-  const deliveryPkg =
-    deliveryProgress && deliveryContract
-      ? assembleNovelDelivery(deliveryContract.id, deliveredFieldsFromSteps(steps))
-      : null;
-  const groupedTurns = groupBlocksIntoTurns(blocks);
-  let lastDeliveryTurnKey: string | null = null;
-  if (deliveryProgress) {
-    for (const t of groupedTurns) {
-      if (t.type !== 'agent') continue;
-      const has = t.items.some(
-        (b) => b.type === 'tools' && b.steps.some((s) => s.tool === DELIVER_FIELD_TOOL)
-      );
-      if (has) lastDeliveryTurnKey = t.key;
+  const pipeline = useMemo(() => {
+    const { blocks } = splitStepsIntoBlocks(steps);
+    const indexById = new Map(steps.map((s, i) => [s.id, i] as const));
+    const articleDraft = resolveArtifactDraft(mission.workshopId, 'article-package');
+    const noteDraft = resolveArtifactDraft(mission.workshopId, 'note-package');
+    const articleDelivered = buildDraftDeliveryIndex(steps, articleDraft?.deliverTool);
+    const noteDelivered = buildDraftDeliveryIndex(steps, noteDraft?.deliverTool);
+    const deliveryContract = mission.deliveryContract
+      ? resolveDeliveryContract(mission.deliveryContract.id)
+      : undefined;
+    const deliveryProgress = collectWorkshopDeliveries(steps, deliveryContract);
+    const deliveryPkg =
+      deliveryProgress && deliveryContract
+        ? assembleNovelDelivery(deliveryContract.id, deliveredFieldsFromSteps(steps))
+        : null;
+    const groupedTurns = groupBlocksIntoTurns(blocks);
+    let lastDeliveryTurnKey: string | null = null;
+    if (deliveryProgress) {
+      for (const t of groupedTurns) {
+        if (t.type !== 'agent') continue;
+        const has = t.items.some(
+          (b) => b.type === 'tools' && b.steps.some((s) => s.tool === DELIVER_FIELD_TOOL)
+        );
+        if (has) lastDeliveryTurnKey = t.key;
+      }
     }
-  }
+    return {
+      blocks,
+      indexById,
+      articleDraft,
+      noteDraft,
+      articleDelivered,
+      noteDelivered,
+      deliveryContract,
+      deliveryProgress,
+      deliveryPkg,
+      groupedTurns,
+      lastDeliveryTurnKey,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steps, mission.workshopId, mission.deliveryContract]);
+  const {
+    blocks,
+    indexById,
+    articleDraft,
+    noteDraft,
+    articleDelivered,
+    noteDelivered,
+    deliveryContract,
+    deliveryProgress,
+    deliveryPkg,
+    groupedTurns,
+    lastDeliveryTurnKey,
+  } = pipeline;
 
   const availability = chatAvailability(mission);
 
@@ -501,45 +526,25 @@ export function MobileConversationView({
                       // 卡片续聊出口(勾选成稿/存草稿/重新生成);未提供时
                       // 选题/文章分支跳过、落 markdown
                       const reply = onRunMission;
-                      // 流式期间不解析(文本不完整),流结束一次性切换,避免
-                      // 原始 markdown → 卡片的闪烁;解析失败保持 markdown
-                      const parsedNote = st.answer && !isStreaming ? parseNotePackages(st.answer) : null;
-                      const noteResult = parsedNote && parsedNote.packages.length > 0 ? parsedNote : null;
-                      // 每周选题勾选卡:onRunMission 缺席时跳过(勾选后
-                      // 「成稿选中」续聊本 mission 是卡片的核心交互)
-                      const parsedPicks = st.answer && !isStreaming && reply ? parseTopicPicks(st.answer) : null;
-                      const pickResult = parsedPicks && parsedPicks.picks.length > 0 ? parsedPicks : null;
-                      // 公众号文章包(草稿箱直投):【摘要】是互斥锚 —— article
-                      // 必须先于 note 判定(渲染顺序固化);存草稿续聊走 reply
-                      const parsedArticle = st.answer && !isStreaming && reply ? parseArticlePackages(st.answer) : null;
-                      const articleResult =
-                        parsedArticle && parsedArticle.packages.length > 0 ? parsedArticle : null;
-                      // 开源贡献机会:字段头与其他四种格式互不相交,顺序不敏感
-                      const parsedOss = st.answer && !isStreaming ? parseOssOpportunities(st.answer) : null;
-                      const ossResult =
-                        parsedOss && parsedOss.opportunities.length > 0 ? parsedOss : null;
-                      // 小说包(novel 工坊):开书包锚【设定集】+【粗纲】,
-                      // 续写包锚【书号】(nv_ 前缀)+【本章摘要】
-                      const parsedNovelRaw = st.answer && !isStreaming ? parseNovelPackage(st.answer) : null;
+                      // 解析结果按 step 引用缓存(WeakMap):流式期间历史 step 引用
+                      // 不变 → 命中缓存跳过重复解析,O(n²) 逐卡解析不再每帧重跑
+                      const derived = deriveAssistantStep(st, Boolean(reply));
+                      const noteResult = derived.noteResult;
+                      const pickResult = derived.pickResult;
+                      const articleResult = derived.articleResult;
+                      const ossResult = derived.ossResult;
+                      const parsedNovelRaw = derived.novelRaw;
                       // 去重护栏:逐字段交付已齐全且文本 fallback 又解析出同
                       // kind 包时跳过文本卡(防 wrap-up 复述渲染出双卡)
                       const parsedNovel =
                         parsedNovelRaw && deliveryProgress?.complete && deliveryPkg && deliveryPkg.kind === parsedNovelRaw.kind
                           ? null
                           : parsedNovelRaw;
-                      // 搜索来源引用:最终答复收尾后的来源药丸 + 流式期间的
-                      // 内联角标(序数同一顺序,药丸即图例)
-                      const answerIndex = steps.findIndex((s) => s.id === st.id);
-                      const searchSources =
-                        st.messageKind === 'final' && st.answer && !isStreaming && answerIndex >= 0
-                          ? sourcesForAnswer(steps, answerIndex)
-                          : [];
-                      const inlineSources =
-                        (st.messageKind === 'final' || (isStreaming && st.role === 'assistant')) &&
-                        st.answer &&
-                        answerIndex >= 0
-                          ? sourcesForAnswer(steps, answerIndex)
-                          : [];
+                      // 搜索来源:按 step 引用缓存(前缀稳定,只需算一次)
+                      const answerIndex = indexById.get(st.id) ?? -1;
+                      const _src = deriveStepSources(st, steps, answerIndex);
+                      const searchSources = _src.search;
+                      const inlineSources = _src.inline;
 
                       // 空壳卡(模型未产出任何文字就转入工具调用/收尾):不渲染
                       if (!st.answer && !st.reasoning && !isStreaming) return null;

@@ -58,27 +58,23 @@ import { ActivityFeedView } from './ActivityFeedView';
 import { BackgroundChildPanel, extractChildMissionId, childStatusMeta } from './BackgroundChildPanel';
 import { isCronMission } from '../lib/mission-wire';
 import { NotePackageList } from './workshops/NotePackageCard';
-import { parseNotePackages } from '../workshops/xhs/note-package';
 import { ArticlePackageList } from './workshops/ArticlePackageCard';
-import { parseArticlePackages } from '../workshops/shared/article-package';
 import { buildDraftDeliveryIndex } from '../lib/draft-delivery';
 import { isRunnerTaskActive, runnerStateMeta, partitionApprovalsByMission, type RunnerTaskSummary } from '../lib/runner-dispatch';
 import { TopicPickList } from './workshops/TopicPickCard';
-import { parseTopicPicks } from '../workshops/xhs/topic-picks';
 import { OssOpportunityList, parseOssDeliverable } from './workshops/OssOpportunityCard';
 import { NovelPackageCard, type NovelChainHandler } from './workshops/NovelPackageCard';
 import type { WorkshopRunPayload } from './workshops/run';
-import { parseNovelPackage, assembleNovelDelivery } from '../workshops/novel/novel-package';
+import { assembleNovelDelivery } from '../workshops/novel/novel-package';
 import { resolveDeliveryContract } from '../workshops/novel/delivery';
 import { collectWorkshopDeliveries } from '../lib/workshop-delivery-view';
 import { deliveredFieldsFromSteps, DELIVER_FIELD_TOOL } from '../lib/workshop-delivery';
 import { RunnerPublishApprovalCard } from './RunnerPublishApprovalCard';
-import { parseOssOpportunities } from '../workshops/oss_radar/opportunities';
 import { hasWorkshopDeliverable } from '../workshops/deliverable';
 import { resolveArtifactDraft } from '../workshops/registry';
 import { splitStepsIntoBlocks, groupBlocksIntoTurns, findRetryPrompt, processElapsedMs, findFinalAnswerIndex, turnCreatesPlan, type CockpitBlock } from '../lib/cockpit-blocks';
 import { KanbanPlanCard } from './KanbanPlanCard';
-import { sourcesForAnswer } from '../lib/search-sources';
+import { deriveAssistantStep, deriveStepSources } from '../lib/step-derived';
 import { narrateStep, formatActivityDuration } from '../lib/activity-narration';
 import { formatTokenCount } from '../lib/mission-efficiency';
 import {
@@ -297,6 +293,14 @@ export function CockpitView({
   const currentMission = activeMissionId
     ? (missions.find((m) => m.id === activeMissionId) || null)
     : null;
+
+  // 步骤 id → 下标(一次构建,避免每个步骤 findIndex 造成 O(n²))
+  const stepIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    const arr = currentMission?.steps;
+    if (arr) for (let i = 0; i < arr.length; i++) map.set(arr[i].id, i);
+    return map;
+  }, [currentMission?.steps]);
 
   // runner 发布审批归回来源会话:切会话不再全局跟随卡片(旧行为把无关审批
   // 糊在每个会话顶上);hidden 走下方细条提示 + 跳转,Navbar 角标仍全量计数。
@@ -1228,50 +1232,25 @@ export function CockpitView({
                     const reasoningKey = `${st.id}_reasoning`;
                     const reasoningOpen = expandedTools[reasoningKey] ?? (isStreaming && !st.answer);
                     const reasoningInSection = turnOpen || finalIdx <= 0;
-                    // 笔记包(scenario-loop §3):流式期间不解析(文本不完整),流结束一次性切换,
-                    // 避免原始 markdown → 卡片的闪烁;解析失败则保持普通 markdown 渲染
-                    const parsedNote = st.answer && !isStreaming ? parseNotePackages(st.answer) : null;
-                    const noteResult = parsedNote && parsedNote.packages.length > 0 ? parsedNote : null;
-                    // 每周选题勾选卡(scenario-loop P1):选题头与笔记包头不相交,先试选题;
-                    // 勾选后「成稿选中」续聊本 mission —— 选题→成稿多步工作流的人工确认点
-                    const parsedPicks = st.answer && !isStreaming ? parseTopicPicks(st.answer) : null;
-                    const pickResult = parsedPicks && parsedPicks.picks.length > 0 ? parsedPicks : null;
-                    // 公众号文章包(草稿箱直投):文章包四头全命中 parseNotePackages(会误判),
-                    // 【摘要】是互斥锚 —— article 必须先于 note 判定(渲染顺序固化,测试反证锚定)
-                    const parsedArticle = st.answer && !isStreaming ? parseArticlePackages(st.answer) : null;
-                    const articleResult =
-                      parsedArticle && parsedArticle.packages.length > 0 ? parsedArticle : null;
-                    // 开源贡献机会(开源贡献雷达):有效性要求【项目】+ 至少一条链接,
-                    // 与选题/文章包/笔记包三种格式的字段头互不相交(解析器测试双向锚定),顺序不敏感
-                    const parsedOss = st.answer && !isStreaming ? parseOssOpportunities(st.answer) : null;
-                    const ossResult =
-                      parsedOss && parsedOss.opportunities.length > 0 ? parsedOss : null;
-                    // 小说包(novel 工坊):开书包锚【设定集】+【粗纲】,续写包锚【书号】(nv_ 前缀)
-                    // +【本章摘要】——【本章摘要】不命中文章包的【摘要】锚(其正则要求「摘要」顶格),
-                    // 与选题/笔记/文章/开源四种格式字段头互不相交(解析器测试双向锚定),顺序不敏感
-                    const parsedNovelRaw = st.answer && !isStreaming ? parseNovelPackage(st.answer) : null;
+                    // 卡片解析按 step 引用缓存(WeakMap):流式期间历史步骤引用
+                    // 不变 → 命中缓存跳过重复解析,O(n²) 逐卡解析不再每帧重跑
+                    const derived = deriveAssistantStep(st, true);
+                    const noteResult = derived.noteResult;
+                    const pickResult = derived.pickResult;
+                    const articleResult = derived.articleResult;
+                    const ossResult = derived.ossResult;
+                    const parsedNovelRaw = derived.novelRaw;
                     // 去重护栏:逐字段交付已齐全且文本 fallback 又解析出同 kind 包时,
                     // 跳过文本卡(防 wrap-up 复述已交付内容渲染出双卡)——渐进卡已是权威
                     const parsedNovel =
                       parsedNovelRaw && deliveryProgress?.complete && deliveryPkg && deliveryPkg.kind === parsedNovelRaw.kind
                         ? null
                         : parsedNovelRaw;
-                    // 搜索来源引用(ChatGPT 式):最终答复收尾后,取本轮(上一条
-                    // 最终答复之后)检索步骤的结构化结果,渲染可跳转的来源卡
-                    const answerIndex = currentMission.steps.findIndex((s) => s.id === st.id);
-                    const searchSources =
-                      st.messageKind === 'final' && st.answer && !isStreaming && answerIndex >= 0
-                        ? sourcesForAnswer(currentMission.steps, answerIndex)
-                        : [];
-                    // 内联角标来源:流式期间即取(来源来自答复之前的步骤,已稳定;
-                    // 模型被要求以 markdown 链接引用检索结果,按 URL 匹配渲染成
-                    // 角标)。序号与收尾后的来源卡同一顺序,药丸即图例
-                    const inlineSources =
-                      (st.messageKind === 'final' || (isStreaming && st.role === 'assistant')) &&
-                      st.answer &&
-                      answerIndex >= 0
-                        ? sourcesForAnswer(currentMission.steps, answerIndex)
-                        : [];
+                    // 搜索来源 + 内联角标:按 step 引用缓存(前缀稳定,只需算一次)
+                    const answerIndex = stepIndexById.get(st.id) ?? -1;
+                    const _src = deriveStepSources(st, currentMission.steps, answerIndex);
+                    const searchSources = _src.search;
+                    const inlineSources = _src.inline;
 
                     // 空壳卡（模型未产出任何文字就转入工具调用/收尾）：不渲染大卡片，
                     // 避免"已完成一轮推理"式空白卡污染时间线 —— 行动细节由工具链块呈现

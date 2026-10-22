@@ -1558,7 +1558,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string; cronJobId?: string } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; materialRefs?: Array<{ id: string; title: string }>; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string; cronJobId?: string } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1701,6 +1701,9 @@ class AgentBackend {
         ],
         conversationMessages: [],
         workshopId: options.workshopId,
+        // 工坊参考资料引用(docs/design/material-uploads.md):交付物页「参考
+        // 资料」区的数据源;只在新建任务时落,续聊不覆盖首轮的资料清单
+        ...(options.materialRefs?.length ? { materialRefs: options.materialRefs } : {}),
         // 巡航会话身份标记(docs/design/cruise-session-split.md):工作台列表
         // 过滤、state/init 下行分流、持久化分窗保留全读它
         ...(options.cronJobId ? { cronJobId: options.cronJobId } : {}),

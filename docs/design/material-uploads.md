@@ -51,6 +51,18 @@
 - `workshops/shared/__tests__/materials.test.ts`:11 例(原 6 例不动 + uploadMaterialOptions 映射/过滤/回退/混排限额 + accept 同源 + 措辞泛化);
 - 门禁:apps/web `npx tsc --noEmit` rc=0;全量 web vitest 通过。路由层本仓不做单测(与既有约定一致),库层全覆盖。
 
+## 6.5 交付物页「参考资料」区(2026-10-22 增补,✅ 已实施)
+
+负责人 2026-10-22 拍板「全部都做」:工坊任务的交付物要能看到它用了哪些输入资料(输入↔产出闭环)。
+
+- **任务落引用**:`Mission.materialRefs?: {id,title}[]`(types/agent.ts)。/api/agent/run 在工坊分支用 `parseMaterials(workshop.params.materials)` 收敛(与 skill.run 拼 prompt 同一纯函数,至多 5 条)透传给 runMission;**只在新建任务时落,续聊不覆盖首轮清单**。老任务无字段零迁移(不显示该区)。此前资料勾选只进 prompt 与浏览器 localStorage 历史,任务本身不存,跨设备即丢 —— 这是本增补修的断点。
+- **交付物详情展示**(DeliverablesView,桌面/移动同组件):元信息栏下加「参考资料」芯片行,按 id 前缀分两路:
+  - `upl_*` 上传件:sky 芯片,徽章标注类型(上传/PDF/Word,kind 从 GET /api/workshops/materials 现拉清单比对),点击**下载原件**;清单已加载而 id 不在 → 灰芯片「已删除」,不留死链(清单拉取失败则不判删,链接照给,下载口自会 404 给人话);
+  - `art_<missionId>` 交付物引用:目标在当前列表 → emerald 芯片内链跳转选中那条资产;不在(旧任务/已清理)→ 灰芯片只展示标题。
+- **原件下载口**:`GET /api/workshops/materials/file?id=upl_*`(与 /api/artifacts/file 同款约定)—— session 鉴权、userId 即分区键、`resolveMaterialUploadPath` 白名单正则+路径围栏、manifest 定 fileName/mime(原始文件名只进 Content-Disposition,绝不进路径)、RFC 5987 中文文件名 + ASCII fallback、`Cache-Control: private, no-store`;manifest 在而原件不在(半残)同样 404。
+- 测试:无新增纯函数(parseMaterials/上传库围栏既有 41 例覆盖);门禁 tsc rc=0 + 全量 web vitest 1589/1589。
+
 ## 7. 进度
 
 - 2026-10-20(负责人「都做吧」「好」):全链路落地 —— 存储库 + API 路由 + upl_ 解析分支 + 选择器/三表单接线 + 41 例测试;新依赖 mammoth ^1.13.0、unpdf ^1.9.1;分支 `feat/material-uploads`,PR base=main。
+- 2026-10-22(负责人「全部都做」):交付物页参考资料区三点全做 —— mission.materialRefs 持久化 + 详情芯片行(upl_ 下载/art_ 内链/已删除灰显)+ 原件下载路由(见 §6.5)。

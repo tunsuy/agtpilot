@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getAgentBackend } from '@/lib/agent-backend';
 import { renderWorkshopRunServer } from '@/workshops/server-render';
+import { parseMaterials } from '@/workshops/shared/materials';
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,6 +21,9 @@ export async function POST(req: NextRequest) {
     let finalPrompt = typeof prompt === 'string' ? prompt.trim() : '';
     let finalTitle = title;
     let finalDelivery: import('@/workshops/types').DeliveryContract | undefined;
+    // 参考资料引用随任务持久化(交付物页「参考资料」区数据源);服务端用
+    // parseMaterials 收敛(与 skill.run 拼 prompt 同一纯函数,至多 5 条)
+    let finalMaterialRefs: Array<{ id: string; title: string }> | undefined;
     if (workshop && typeof workshop.id === 'string') {
       const run = renderWorkshopRunServer(session.user.id, workshop.id, workshop.params);
       if (!run) {
@@ -32,6 +36,8 @@ export async function POST(req: NextRequest) {
       finalTitle = run.title;
       // 逐字段交付契约:随权威渲染透传(override 分支已在 server-render 显式丢弃)
       finalDelivery = run.delivery;
+      const refs = parseMaterials(workshop.params?.materials);
+      if (refs.length > 0) finalMaterialRefs = refs;
     }
 
     if (!finalPrompt) {
@@ -46,6 +52,8 @@ export async function POST(req: NextRequest) {
       // 工坊标识贯穿到任务记录:记忆蒸馏层据此把首条消息识别为表单参数,
       // 不把单次选择(文章类型/风格等)沉淀为用户的长期定位
       workshopId: typeof workshop?.id === 'string' ? workshop.id : undefined,
+      // 参考资料引用:交付物页展示输入↔产出闭环(见 Mission.materialRefs 注)
+      materialRefs: finalMaterialRefs,
       // 逐字段交付契约:声明后挂载 workshop_deliver_field 工具并写投影
       delivery: finalDelivery,
     });

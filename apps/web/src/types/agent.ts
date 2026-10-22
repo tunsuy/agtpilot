@@ -134,6 +134,13 @@ export interface Mission {
    *  记忆蒸馏层据此识别「首条消息是工坊表单参数拼装」,不把单次选择沉淀为长期定位 */
   workshopId?: string;
   /**
+   * 工坊参考资料引用(docs/design/material-uploads.md):派发时从表单
+   * params.materials 收敛透传({id,title}[],id 为 art_<missionId> 或 upl_*)。
+   * 交付物页「参考资料」区据此展示输入↔产出闭环:上传件可下载原件,
+   * 交付物引用可跳转对应资产。旧任务无此字段(零迁移,不显示该区)。
+   */
+  materialRefs?: Array<{ id: string; title: string }>;
+  /**
    * 巡航任务 id(docs/design/cruise-session-split.md):定时触发与巡航页「立即
    * 执行」派生的会话携带,是「巡航会话 vs 手动会话」分流的身份事实源 ——
    * 工作台列表过滤、state/init 下行分流、持久化分窗保留(手动 50 / 每任务 20)

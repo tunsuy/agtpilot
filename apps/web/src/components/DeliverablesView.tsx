@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { copyToClipboard } from '../utils/nativeBridge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,6 +22,8 @@ import {
   Eye,
   Share2,
   FileDown,
+  Paperclip,
+  FileUp,
 } from 'lucide-react';
 import { ArtifactState, Mission } from '../types/agent';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
@@ -114,6 +116,8 @@ export function DeliverablesView({
       missionTitle?: string;
       timestamp: number;
       fileMeta?: { fileId: string; fileName: string; mime: string; sizeBytes: number };
+      /** 工坊参考资料引用(mission.materialRefs 透传;输入↔产出闭环展示) */
+      materialRefs?: Array<{ id: string; title: string }>;
     }> = [];
 
     const seenContents = new Set<string>();
@@ -130,6 +134,7 @@ export function DeliverablesView({
           missionTitle: m.title,
           timestamp: m.startedAt,
           fileMeta: m.artifact.fileMeta,
+          materialRefs: m.materialRefs,
         });
       }
     });
@@ -172,6 +177,35 @@ export function DeliverablesView({
   // 机会清单交付物分支:正文能解析出有效清单则渲可派发卡片(与会话流/画布同分支),
   // 否则按原类型渲染(markdown / html / file)
   const activeOss = activeItem ? parseOssDeliverable(activeItem.content) : null;
+
+  // 上传资料现存清单(upl_ 引用徽章:kind 标注 + 已删除判定)。null = 未加载
+  // 或加载失败(此时不判「已删除」,链接照给 —— 下载口自会 404 给人话)。
+  const hasUploadRefs = useMemo(
+    () => missions.some((m) => m.materialRefs?.some((r) => r.id.startsWith('upl_'))),
+    [missions]
+  );
+  const [uploadMeta, setUploadMeta] = useState<Map<string, { kind?: string; fileName?: string }> | null>(null);
+  useEffect(() => {
+    if (!hasUploadRefs) return;
+    let cancelled = false;
+    fetch('/api/workshops/materials')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !Array.isArray(d?.items)) return;
+        setUploadMeta(
+          new Map(
+            (d.items as Array<{ id: string; kind?: string; fileName?: string }>).map((it) => [
+              it.id,
+              { kind: it.kind, fileName: it.fileName },
+            ])
+          )
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hasUploadRefs]);
 
   const handleCopy = async () => {
     if (!activeItem?.content) return;
@@ -491,6 +525,75 @@ export function DeliverablesView({
                     )}
                   </div>
                 </div>
+
+                {/* 参考资料区(工坊任务):输入↔产出闭环。upl_ = 上传件(可下载
+                    原件,已删的灰显不留死链);art_ = 其他会话交付物(内链跳转) */}
+                {activeItem.materialRefs && activeItem.materialRefs.length > 0 && (
+                  <div className="px-4 md:px-5 py-2.5 border-b border-zinc-100 bg-white flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] text-zinc-400 flex items-center gap-1 mr-1">
+                      <Paperclip className="h-3 w-3" />
+                      参考资料
+                    </span>
+                    {activeItem.materialRefs.map((ref) => {
+                      if (ref.id.startsWith('upl_')) {
+                        const meta = uploadMeta?.get(ref.id);
+                        const gone = uploadMeta !== null && !meta;
+                        const kindLabel = meta?.kind === 'pdf' ? 'PDF' : meta?.kind === 'docx' ? 'Word' : '上传';
+                        return gone ? (
+                          <span
+                            key={ref.id}
+                            title="上传文件已被删除,原件不可下载"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-200 bg-zinc-50 text-[11px] text-zinc-400 max-w-[220px]"
+                          >
+                            <FileUp className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{ref.title}</span>
+                            <span className="text-[9px] px-1 py-px rounded bg-zinc-200/70 text-zinc-500 shrink-0">已删除</span>
+                          </span>
+                        ) : (
+                          <a
+                            key={ref.id}
+                            href={`/api/workshops/materials/file?id=${encodeURIComponent(ref.id)}`}
+                            title="下载上传原件"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-sky-200 bg-sky-50/70 text-[11px] text-sky-800 hover:bg-sky-100 hover:border-sky-300 transition max-w-[240px]"
+                          >
+                            <FileUp className="h-3 w-3 shrink-0 text-sky-500" />
+                            <span className="truncate">{meta?.fileName || ref.title}</span>
+                            <span className="text-[9px] px-1 py-px rounded bg-sky-100 text-sky-600 border border-sky-200/70 shrink-0">{kindLabel}</span>
+                            <Download className="h-3 w-3 shrink-0 text-sky-500" />
+                          </a>
+                        );
+                      }
+                      // art_<missionId>:目标交付物在当前列表里 → 内链跳转;
+                      // 不在(旧任务/未产出/超出保留窗口)→ 灰芯片不留死链
+                      const refMissionId = ref.id.startsWith('art_') ? ref.id.slice(4) : '';
+                      const target = refMissionId
+                        ? allArtifacts.find((a) => a.missionId === refMissionId)
+                        : undefined;
+                      return target ? (
+                        <button
+                          key={ref.id}
+                          type="button"
+                          onClick={() => setSelectedArtifactId(target.id)}
+                          title="跳转到该交付物"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-200 bg-emerald-50/70 text-[11px] text-emerald-800 hover:bg-emerald-100 hover:border-emerald-300 transition max-w-[240px]"
+                        >
+                          <FileText className="h-3 w-3 shrink-0 text-emerald-600" />
+                          <span className="truncate">{ref.title}</span>
+                          <ArrowRight className="h-3 w-3 shrink-0 text-emerald-600" />
+                        </button>
+                      ) : (
+                        <span
+                          key={ref.id}
+                          title="来源会话交付物不在当前列表(旧任务或已清理)"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-200 bg-zinc-50 text-[11px] text-zinc-400 max-w-[220px]"
+                        >
+                          <FileText className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{ref.title}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {/* 正文呈现区 */}
                 {deliverableViewMode === 'social' ? (

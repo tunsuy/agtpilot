@@ -32,6 +32,7 @@ afterEach(() => {
 
 import {
   isSafeRepoSlug,
+  isSafeModelScopeId,
   isSafeRelPath,
   sanitizePackName,
   extractTarSubdir,
@@ -40,9 +41,13 @@ import {
   uninstallSkillPack,
   deleteSkillCard,
   importSkillPack,
+  marketSources,
+  fetchMarketIndex,
+  fetchMarketSkillDetail,
   buildUserPackCatalogBlock,
   buildUserSkillPackTools,
   IMPORT_MAX_FILES,
+  IMPORT_MAX_FILE_BYTES,
 } from '../skill-center';
 import { webCardStore } from '../skill-cards';
 import { getDeletionLedger } from '../user-store';
@@ -102,6 +107,18 @@ describe('校验纯函数', () => {
     expect(isSafeRepoSlug('anthropics')).toBe(false);
     expect(isSafeRepoSlug('')).toBe(false);
     expect(isSafeRepoSlug(null as any)).toBe(false);
+  });
+
+  it('isSafeModelScopeId:owner/name 与 @owner/name 合法;穿越/多段/空/非字符串拒绝', () => {
+    expect(isSafeModelScopeId('iic/fun-denoise')).toBe(true);
+    expect(isSafeModelScopeId('@anthropics/pdf')).toBe(true);
+    expect(isSafeModelScopeId('a.b_c/d-e')).toBe(true);
+    expect(isSafeModelScopeId('../etc/passwd')).toBe(false);
+    expect(isSafeModelScopeId('owner/../escape')).toBe(false);
+    expect(isSafeModelScopeId('a/b/c')).toBe(false);
+    expect(isSafeModelScopeId('single')).toBe(false);
+    expect(isSafeModelScopeId('')).toBe(false);
+    expect(isSafeModelScopeId(123 as any)).toBe(false);
   });
 
   it('isSafeRelPath:相对路径合法;绝对/..段/首尾斜杠/空拒绝', () => {
@@ -378,6 +395,287 @@ describe('importSkillPack', () => {
     const res = await importSkillPack('u10', { repo: 'anthropics/skills', path: 'demo', riskAck: true });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain('403');
+  });
+});
+
+// ---- 魔搭(ModelScope)源:注册表 / 索引 / 详情 / 导入 ----
+
+/** 注册表源 env 接管(只留一个魔搭源,隔离 GitHub 网络面) */
+function useModelScopeRegistry() {
+  process.env.AGTPILOT_SKILL_REGISTRY_SOURCES = JSON.stringify([
+    { id: 'ms', label: '魔搭技能库(国内)', repo: '', type: 'modelscope' },
+  ]);
+}
+
+/**
+ * 魔搭 mock fetch:
+ * - openapi/v1/skills → 索引列表
+ * - api/v1/skills/<id>/repo/files?Root= → 分层文件列表(listing 以 Root 为键,根目录 '')
+ * - www.modelscope.cn/skills/<id>/resolve/master/<path> → 文件原文(files 以 path 为键)
+ */
+function mockModelScopeFetch(opts: {
+  index?: any[];
+  listing?: Record<string, any[]>;
+  files?: Record<string, string | Buffer>;
+}) {
+  const fn = vi.fn(async (url: any) => {
+    const u = String(url);
+    if (u.includes('/openapi/v1/skills')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: { skills: opts.index ?? [], total: (opts.index ?? []).length } }),
+      } as any;
+    }
+    if (u.includes('/repo/files')) {
+      const root = new URL(u).searchParams.get('Root') || '';
+      const files = opts.listing?.[root];
+      if (!files) return { ok: false, status: 404, json: async () => ({}) } as any;
+      return { ok: true, status: 200, json: async () => ({ Code: 200, Data: { Files: files } }) } as any;
+    }
+    if (u.includes('/resolve/master/')) {
+      const p = decodeURIComponent(u.split('/resolve/master/')[1]);
+      const content = opts.files?.[p];
+      if (content === undefined) return { ok: false, status: 404, text: async () => '' } as any;
+      const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf-8');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => buf.toString('utf-8'),
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      } as any;
+    }
+    return { ok: false, status: 404, json: async () => ({}) } as any;
+  });
+  vi.stubGlobal('fetch', fn);
+  return fn;
+}
+
+const MS_SKILL_MD = '---\nname: fun-denoise\ndescription: 音频降噪\n---\n\n# 用法\n照做。';
+
+function blob(name: string, p: string, size: number, committed = 1_700_000_000) {
+  return { Name: name, Path: p, Type: 'blob', Size: size, Sha256: 'x'.repeat(64), CommittedDate: committed };
+}
+function tree(name: string, p: string) {
+  return { Name: name, Path: p, Type: 'tree', Size: 0, CommittedDate: 0 };
+}
+
+describe('marketSources · 魔搭注册表', () => {
+  afterEach(() => {
+    delete process.env.AGTPILOT_SKILL_REGISTRY_SOURCES;
+  });
+
+  it('缺省源含魔搭;env 配置 type=modelscope 时 repo 可空', () => {
+    const defaults = marketSources();
+    expect(defaults.some((s) => s.type === 'modelscope')).toBe(true);
+    useModelScopeRegistry();
+    const custom = marketSources();
+    expect(custom).toHaveLength(1);
+    expect(custom[0]).toMatchObject({ id: 'ms', type: 'modelscope', repo: '' });
+  });
+
+  it('env 配置里 github 源仍须过 repo 校验(坏条目整批回落缺省)', () => {
+    process.env.AGTPILOT_SKILL_REGISTRY_SOURCES = JSON.stringify([{ id: 'bad', label: 'x', repo: '../evil' }]);
+    const srcs = marketSources();
+    expect(srcs.some((s) => s.id === 'bad')).toBe(false);
+    expect(srcs.length).toBeGreaterThan(0);
+  });
+});
+
+describe('fetchMarketIndex · 魔搭索引', () => {
+  afterEach(() => {
+    delete process.env.AGTPILOT_SKILL_REGISTRY_SOURCES;
+  });
+
+  it('openapi 列表映射:platform/repo=id/path 空/中文名/外链/下载量;非法 id 跳过', async () => {
+    useModelScopeRegistry();
+    mockModelScopeFetch({
+      index: [
+        {
+          id: 'iic/fun-denoise',
+          display_name: '音频降噪',
+          description: '中文描述自带',
+          category: 'audio',
+          downloads: 12345,
+        },
+        { id: 'bad id/../../evil', display_name: '脏数据' },
+      ],
+    });
+    const idx = await fetchMarketIndex(true);
+    expect(idx.sources).toHaveLength(1);
+    const skills = idx.sources[0].skills;
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({
+      platform: 'modelscope',
+      repo: 'iic/fun-denoise',
+      path: '',
+      name: '音频降噪',
+      category: 'audio',
+      description: '中文描述自带',
+      downloads: 12345,
+      externalUrl: 'https://www.modelscope.cn/skills/iic/fun-denoise',
+    });
+  });
+
+  it('search 透传到服务端(魔搭 8 万+ 条目必须服务端搜索)', async () => {
+    useModelScopeRegistry();
+    const fn = mockModelScopeFetch({ index: [] });
+    await fetchMarketIndex(true, 'pdf');
+    const url = String(fn.mock.calls[0][0]);
+    expect(url).toContain('/openapi/v1/skills');
+    expect(url).toContain('search=pdf');
+  });
+
+  it('单源失败带 error 返回(不静默)', async () => {
+    useModelScopeRegistry();
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }) as any));
+    const idx = await fetchMarketIndex(true);
+    expect(idx.sources[0].error).toContain('500');
+    expect(idx.sources[0].skills).toEqual([]);
+  });
+});
+
+describe('fetchMarketSkillDetail · 魔搭详情', () => {
+  it('resolve/master/SKILL.md → frontmatter + 全文', async () => {
+    mockModelScopeFetch({ files: { 'SKILL.md': MS_SKILL_MD } });
+    const res = await fetchMarketSkillDetail('iic/fun-denoise', '', 'HEAD', 'modelscope');
+    expect(res).toMatchObject({ ok: true, name: 'fun-denoise', description: '音频降噪' });
+    if (res.ok) expect(res.content).toContain('# 用法');
+  });
+
+  it('非法 id 拒绝;404 真实报错', async () => {
+    mockModelScopeFetch({ files: {} });
+    const bad = await fetchMarketSkillDetail('../evil', '', 'HEAD', 'modelscope');
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toContain('不合法');
+    const miss = await fetchMarketSkillDetail('iic/nope', '', 'HEAD', 'modelscope');
+    expect(miss.ok).toBe(false);
+    if (!miss.ok) expect(miss.error).toContain('SKILL.md');
+  });
+});
+
+describe('importSkillPack · 魔搭链路', () => {
+  const MS_OPTS = { platform: 'modelscope', repo: 'iic/fun-denoise', path: '', riskAck: true } as const;
+
+  function msDemoMocks() {
+    return mockModelScopeFetch({
+      listing: {
+        '': [blob('SKILL.md', 'SKILL.md', Buffer.byteLength(MS_SKILL_MD), 1_700_000_001), tree('scripts', 'scripts')],
+        scripts: [blob('run.sh', 'scripts/run.sh', 12, 1_700_000_002)],
+      },
+      files: { 'SKILL.md': MS_SKILL_MD, 'scripts/run.sh': '#!/bin/sh\nhi\n' },
+    });
+  }
+
+  it('成功引用:递归列表 → 逐文件拉取 → provenance 记 platform/sha=ms-<时间戳>', async () => {
+    msDemoMocks();
+    const res = await importSkillPack('m1', { ...MS_OPTS });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.pack.name).toBe('fun-denoise'); // frontmatter name 优先
+    expect(res.pack.dirName).toBe('fun-denoise');
+    expect(res.pack.hasScripts).toBe(true);
+    expect(res.pack.provenance?.source).toMatchObject({
+      platform: 'modelscope',
+      repo: 'iic/fun-denoise',
+      ref: 'master',
+      sha: 'ms-1700000002', // 列表里最新 CommittedDate
+      path: '',
+    });
+    const dir = path.join(userSkillPacksDir('m1'), 'fun-denoise');
+    expect(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf-8')).toContain('音频降噪');
+    expect(fs.readFileSync(path.join(dir, 'scripts/run.sh'), 'utf-8')).toBe('#!/bin/sh\nhi\n');
+    expect(fs.readdirSync(userSkillPacksDir('m1')).some((n) => n.startsWith('.tmp-'))).toBe(false);
+    expect(listInstalledPacks('m1').map((p) => p.dirName)).toEqual(['fun-denoise']);
+  });
+
+  it('riskAck 未确认 / id 不合法 → 拒绝且不发请求', async () => {
+    const fn = msDemoMocks();
+    const noAck = await importSkillPack('m2', { platform: 'modelscope', repo: 'iic/fun-denoise', path: '' });
+    expect(noAck.ok).toBe(false);
+    if (!noAck.ok) expect(noAck.error).toContain('risk-ack-required');
+    const badId = await importSkillPack('m2', { ...MS_OPTS, repo: '../../etc' });
+    expect(badId.ok).toBe(false);
+    if (!badId.ok) expect(badId.error).toContain('不合法');
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('列表含穿越路径 → 下载前整包拒绝,不落盘', async () => {
+    mockModelScopeFetch({
+      listing: { '': [blob('SKILL.md', 'SKILL.md', 10), blob('evil.md', '../../escaped.md', 5)] },
+      files: { 'SKILL.md': MS_SKILL_MD },
+    });
+    const res = await importSkillPack('m3', { ...MS_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('非法路径');
+    const root = userSkillPacksDir('m3');
+    expect(fs.existsSync(root) ? fs.readdirSync(root) : []).toEqual([]);
+    expect(fs.existsSync(path.join(tmpRoot, 'escaped.md'))).toBe(false);
+  });
+
+  it('列表 Size 超单文件上限 → 下载前整包拒绝(resolve 一次不打)', async () => {
+    const fn = mockModelScopeFetch({
+      listing: { '': [blob('SKILL.md', 'SKILL.md', 10), blob('big.bin', 'big.bin', IMPORT_MAX_FILE_BYTES + 1)] },
+      files: { 'SKILL.md': MS_SKILL_MD },
+    });
+    const res = await importSkillPack('m4', { ...MS_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('单文件超过上限');
+    expect(fn.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/resolve/'))).toBe(false);
+  });
+
+  it('列表 Size 撒谎(实际字节超限)→ 拉取时复核拒绝', async () => {
+    mockModelScopeFetch({
+      listing: { '': [blob('SKILL.md', 'SKILL.md', 10), blob('big.bin', 'big.bin', 10)] },
+      files: { 'SKILL.md': MS_SKILL_MD, 'big.bin': Buffer.alloc(IMPORT_MAX_FILE_BYTES + 1, 7) },
+    });
+    const res = await importSkillPack('m5', { ...MS_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('单文件超过上限');
+    const root = userSkillPacksDir('m5');
+    expect(fs.existsSync(root) ? fs.readdirSync(root) : []).toEqual([]);
+  });
+
+  it('文件数超上限 → 整包拒绝', async () => {
+    const files: any[] = [blob('SKILL.md', 'SKILL.md', 10)];
+    const contents: Record<string, string> = { 'SKILL.md': MS_SKILL_MD };
+    for (let i = 0; i < IMPORT_MAX_FILES + 1; i++) {
+      files.push(blob(`f${i}.txt`, `f${i}.txt`, 1));
+      contents[`f${i}.txt`] = 'x';
+    }
+    mockModelScopeFetch({ listing: { '': files }, files: contents });
+    const res = await importSkillPack('m6', { ...MS_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('文件数超过上限');
+  });
+
+  it('缺 SKILL.md → 拒绝且不留残余;同名冲突 → already-installed,overwrite 可替换', async () => {
+    mockModelScopeFetch({
+      listing: { '': [blob('readme.md', 'readme.md', 5)] },
+      files: { 'readme.md': 'hello' },
+    });
+    const noMd = await importSkillPack('m7', { ...MS_OPTS });
+    expect(noMd.ok).toBe(false);
+    if (!noMd.ok) expect(noMd.error).toContain('SKILL.md');
+    const root = userSkillPacksDir('m7');
+    expect(fs.existsSync(root) ? fs.readdirSync(root) : []).toEqual([]);
+
+    msDemoMocks();
+    const first = await importSkillPack('m7', { ...MS_OPTS });
+    expect(first.ok).toBe(true);
+    const dup = await importSkillPack('m7', { ...MS_OPTS });
+    expect(dup.ok).toBe(false);
+    if (!dup.ok) expect(dup.error).toContain('already-installed');
+    const over = await importSkillPack('m7', { ...MS_OPTS, overwrite: true });
+    expect(over.ok).toBe(true);
+    expect(listInstalledPacks('m7')).toHaveLength(1);
+  });
+
+  it('技能不存在(repo/files 404)→ 真实原因透传', async () => {
+    mockModelScopeFetch({ listing: {} });
+    const res = await importSkillPack('m8', { ...MS_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('不存在');
   });
 });
 

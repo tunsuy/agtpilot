@@ -5,9 +5,10 @@ import { importSkillPack } from '@/lib/skill-center';
 /**
  * POST /api/skills/import
  * 引用(导入)生态技能包到当前用户安装域。
- * body: { repo, path, ref?, riskAck: true, overwrite? }
- * riskAck 必须显式为 true(第三方代码风险明示已在 UI 弹出确认)——
- * 服务端双重强制,缺省/伪造 false 一律拒绝。
+ * body: { repo, path, ref?, platform?, riskAck: true, overwrite? }
+ * platform='modelscope' 时 repo=魔搭技能 id、path 忽略(恒为仓库根目录);
+ * 缺省 github。riskAck 必须显式为 true(第三方代码风险明示已在 UI 弹出
+ * 确认)—— 服务端双重强制,缺省/伪造 false 一律拒绝。
  */
 export async function POST(req: NextRequest) {
   try {
@@ -22,6 +23,7 @@ export async function POST(req: NextRequest) {
       repo: String(body.repo || ''),
       path: String(body.path || ''),
       ref: typeof body.ref === 'string' && body.ref ? body.ref : undefined,
+      platform: body.platform === 'modelscope' ? 'modelscope' : 'github',
       riskAck: body.riskAck === true,
       overwrite: body.overwrite === true,
     });

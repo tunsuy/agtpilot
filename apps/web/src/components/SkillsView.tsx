@@ -42,7 +42,7 @@ interface InstalledPack {
   hasScripts: boolean;
   importedAt?: number;
   fileCount?: number;
-  source?: { repo: string; ref: string; sha: string; path: string };
+  source?: { platform?: 'github' | 'modelscope'; repo: string; ref: string; sha: string; path: string };
   contentHash?: string;
 }
 
@@ -54,18 +54,22 @@ interface BuiltinInventory {
 interface MarketSkill {
   sourceId: string;
   sourceLabel: string;
+  platform?: 'github' | 'modelscope';
   repo: string;
   path: string;
   name: string;
   category?: string;
   description?: string;
   displayName?: string;
+  externalUrl?: string;
+  downloads?: number;
 }
 
 interface MarketSource {
   id: string;
   label: string;
   repo: string;
+  type?: 'github' | 'modelscope';
   error?: string;
   skills: MarketSkill[];
 }
@@ -97,6 +101,8 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
   const [market, setMarket] = useState<MarketSource[] | null>(null);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketError, setMarketError] = useState<string | null>(null);
+  // 已发给服务端的搜索词(魔搭 8 万+ 条目必须走服务端搜索;防抖 600ms)
+  const [marketSearch, setMarketSearch] = useState('');
 
   // 弹窗状态
   const [deleteCardTarget, setDeleteCardTarget] = useState<SkillCardItem | null>(null);
@@ -135,11 +141,15 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
     loadSkills();
   }, [loadSkills]);
 
-  const loadMarket = useCallback(async (refresh = false) => {
+  const loadMarket = useCallback(async (refresh = false, search?: string) => {
     setMarketLoading(true);
     setMarketError(null);
     try {
-      const res = await fetch(`/api/skills/market${refresh ? '?refresh=1' : ''}`);
+      const qs = new URLSearchParams();
+      if (refresh) qs.set('refresh', '1');
+      if (search && search.trim()) qs.set('search', search.trim());
+      const suffix = qs.toString();
+      const res = await fetch(`/api/skills/market${suffix ? `?${suffix}` : ''}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '市场索引加载失败');
       setMarket(data.sources || []);
@@ -157,6 +167,20 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section, marketEnabled]);
+
+  // 市场搜索防抖:输入停顿 500ms 后带 search 重新拉取(魔搭走服务端搜索)
+  useEffect(() => {
+    if (section !== 'market' && section !== 'all') return;
+    if (!marketEnabled || market === null) return;
+    const trimmed = searchQuery.trim();
+    if (trimmed === marketSearch) return;
+    const t = window.setTimeout(() => {
+      setMarketSearch(trimmed);
+      loadMarket(false, trimmed || undefined);
+    }, 500);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, section, marketEnabled, market]);
 
   const handleDeleteCard = async () => {
     if (!deleteCardTarget || busy) return;
@@ -210,6 +234,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
         body: JSON.stringify({
           repo: importTarget.repo,
           path: importTarget.path,
+          ...(importTarget.platform === 'modelscope' ? { platform: 'modelscope' } : {}),
           riskAck: true,
         }),
       });
@@ -229,6 +254,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
     setDetailLoading(skill);
     try {
       const qs = new URLSearchParams({ repo: skill.repo, path: skill.path });
+      if (skill.platform === 'modelscope') qs.set('platform', 'modelscope');
       const res = await fetch(`/api/skills/market?${qs.toString()}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '详情加载失败');
@@ -246,10 +272,17 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
 
   const filteredCards = cards.filter((c) => matchQ(c.trigger, c.steps, c.avoid, ...(c.keywords || [])));
   const filteredInstalled = installed.filter((p) => matchQ(p.name, p.description, p.source?.repo));
+  // 搜索态且服务端结果已同步时,魔搭条目以服务端搜索为准(服务端匹配字段更全,
+  // 本地不再二次过滤,避免误杀);github 条目服务端也已过滤,本地过滤仅作输入中的即时反馈
+  const msServerFresh = marketSearch !== '' && marketSearch === searchQuery.trim();
   const filteredMarket: MarketSource[] = (market || [])
     .map((s) => ({
       ...s,
-      skills: s.skills.filter((k) => matchQ(k.name, k.displayName, k.description, k.path, k.category)),
+      skills: s.skills.filter(
+        (k) =>
+          (msServerFresh && k.platform === 'modelscope') ||
+          matchQ(k.name, k.displayName, k.description, k.path, k.category, k.repo)
+      ),
     }))
     .filter((s) => s.error || s.skills.length > 0);
   const filteredBuiltinFlows = builtin.flows.filter((f) => matchQ(f.name, f.description));
@@ -432,7 +465,13 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                     {p.source && (
                       <p className="text-[10px] text-zinc-400 font-mono mt-2 break-all">
                         <FolderGit2 className="inline h-3 w-3 mr-1" />
-                        {p.source.repo}@{p.source.sha.slice(0, 8)} · {p.source.path}
+                        {p.source.platform === 'modelscope' ? (
+                          <>魔搭 · {p.source.repo}</>
+                        ) : (
+                          <>
+                            {p.source.repo}@{p.source.sha.slice(0, 8)} · {p.source.path}
+                          </>
+                        )}
                       </p>
                     )}
                   </div>
@@ -468,7 +507,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
             </h2>
             {market !== null && (
               <button
-                onClick={() => loadMarket(true)}
+                onClick={() => loadMarket(true, marketSearch || undefined)}
                 className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 transition"
               >
                 <RefreshCw className={`h-3 w-3 ${marketLoading ? 'animate-spin' : ''}`} />
@@ -489,16 +528,25 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               <div key={src.id} className="space-y-2">
                 <div className="flex items-center gap-2 text-[11px] text-zinc-500">
                   <span className="font-semibold text-zinc-700">{src.label}</span>
-                  <span className="font-mono">{src.repo}</span>
+                  {src.type === 'modelscope' ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-200">
+                      国内
+                    </span>
+                  ) : (
+                    <span className="font-mono">{src.repo}</span>
+                  )}
                   <a
-                    href={`https://github.com/${src.repo}`}
+                    href={src.type === 'modelscope' ? 'https://modelscope.cn/skills' : `https://github.com/${src.repo}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-zinc-400 hover:text-zinc-700 transition"
-                    title="在 GitHub 打开(新标签)"
+                    title={src.type === 'modelscope' ? '在魔搭打开(新标签)' : '在 GitHub 打开(新标签)'}
                   >
                     <ExternalLink className="h-3 w-3" />
                   </a>
+                  {src.type === 'modelscope' && marketSearch && (
+                    <span className="text-zinc-400">搜索「{marketSearch}」的服务端结果</span>
+                  )}
                 </div>
                 {src.error && (
                   <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-700">
@@ -508,21 +556,29 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {src.skills.map((s) => {
                     const isInstalled = installed.some(
-                      (p) => p.source?.repo === s.repo && p.source?.path === s.path
+                      (p) =>
+                        (p.source?.platform || 'github') === (s.platform || 'github') &&
+                        p.source?.repo === s.repo &&
+                        p.source?.path === s.path
                     );
+                    const isMs = s.platform === 'modelscope';
                     return (
                       <div
-                        key={`${s.repo}:${s.path}`}
+                        key={`${s.sourceId}:${s.repo}:${s.path}`}
                         className="p-4 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <h3 className="text-xs font-semibold text-zinc-900 truncate">
-                              {s.displayName || s.name}
+                            <h3 className="text-xs font-semibold text-zinc-900 truncate flex items-center gap-1.5">
+                              <span className="truncate">{s.displayName || s.name}</span>
+                              {isMs && (
+                                <span className="text-[9px] px-1 py-px rounded bg-blue-50 text-blue-600 border border-blue-200 flex-shrink-0">
+                                  魔搭
+                                </span>
+                              )}
                             </h3>
                             <p className="text-[10px] text-zinc-400 font-mono truncate mt-0.5">
-                              {s.category ? `${s.category}/` : ''}
-                              {s.name}
+                              {isMs ? s.repo : `${s.category ? `${s.category}/` : ''}${s.name}`}
                             </p>
                           </div>
                           {isInstalled && (
@@ -540,10 +596,10 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                         <div className="flex items-center gap-2 mt-3">
                           <button
                             onClick={() => openDetail(s)}
-                            disabled={detailLoading?.path === s.path}
+                            disabled={detailLoading?.repo === s.repo && detailLoading?.path === s.path}
                             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-zinc-200/70 text-zinc-700 text-[11px] font-medium transition disabled:opacity-50"
                           >
-                            {detailLoading?.path === s.path ? (
+                            {detailLoading?.repo === s.repo && detailLoading?.path === s.path ? (
                               <RotateCw className="h-3 w-3 animate-spin" />
                             ) : (
                               <Eye className="h-3 w-3" />
@@ -558,6 +614,24 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                             <Download className="h-3 w-3" />
                             {isInstalled ? '已引用' : '引用'}
                           </button>
+                          <span className="flex-1" />
+                          {typeof s.downloads === 'number' && s.downloads > 0 && (
+                            <span className="text-[10px] text-zinc-400 flex items-center gap-0.5" title="魔搭下载量">
+                              <Download className="h-2.5 w-2.5" />
+                              {s.downloads >= 10000 ? `${(s.downloads / 10000).toFixed(1)}万` : s.downloads}
+                            </span>
+                          )}
+                          {s.externalUrl && (
+                            <a
+                              href={s.externalUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-zinc-400 hover:text-zinc-700 transition"
+                              title="在魔搭打开(新标签)"
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )}
                         </div>
                       </div>
                     );
@@ -628,7 +702,9 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               将从本机彻底删除技能包「{uninstallTarget.name}」(删除进台账留痕;之后可随时重新引用):
               {uninstallTarget.source && (
                 <p className="mt-2 px-3 py-2 rounded-lg bg-zinc-50 border border-zinc-200 text-[10px] text-zinc-500 font-mono break-all">
-                  {uninstallTarget.source.repo}@{uninstallTarget.source.sha.slice(0, 8)} · {uninstallTarget.source.path}
+                  {uninstallTarget.source.platform === 'modelscope'
+                    ? `魔搭 · ${uninstallTarget.source.repo}`
+                    : `${uninstallTarget.source.repo}@${uninstallTarget.source.sha.slice(0, 8)} · ${uninstallTarget.source.path}`}
                 </p>
               )}
             </>
@@ -648,8 +724,15 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
           icon={<AlertTriangle className="h-4 w-4 text-amber-500" />}
           body={
             <>
-              即将从 <span className="font-mono text-zinc-700">{importTarget.repo}</span> 安装{' '}
-              <span className="font-mono text-zinc-700">{importTarget.path}</span> 到你的专属技能目录。请知悉:
+              即将从 <span className="font-mono text-zinc-700">{importTarget.repo}</span>
+              {importTarget.platform === 'modelscope' ? '(魔搭)' : ''} 安装
+              {importTarget.path ? (
+                <>
+                  {' '}
+                  <span className="font-mono text-zinc-700">{importTarget.path}</span>
+                </>
+              ) : null}{' '}
+              到你的专属技能目录。请知悉:
               <ul className="mt-2 space-y-1 text-[11px] text-zinc-600 list-disc pl-4">
                 <li>这是<b>第三方内容</b>:SKILL.md 指令会注入 Agent 上下文,请确认来源可信(建议先看详情)</li>
                 <li>包内脚本只可经沙箱工具执行,敏感操作仍走审批门</li>
@@ -674,7 +757,9 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-zinc-900 truncate">{detail.data.name}</h3>
                 <p className="text-[10px] text-zinc-400 font-mono mt-0.5 truncate">
-                  {detail.skill.repo} · {detail.skill.path}
+                  {detail.skill.platform === 'modelscope' ? '魔搭 · ' : ''}
+                  {detail.skill.repo}
+                  {detail.skill.path ? ` · ${detail.skill.path}` : ''}
                 </p>
                 {detail.data.description && (
                   <p className="text-xs text-zinc-600 mt-1.5 leading-relaxed">{detail.data.description}</p>

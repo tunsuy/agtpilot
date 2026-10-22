@@ -53,7 +53,7 @@ const MODELSCOPE_OPENAPI = 'https://modelscope.cn/openapi/v1';
 const MODELSCOPE_API = 'https://modelscope.cn/api/v1';
 const MODELSCOPE_WWW = 'https://www.modelscope.cn';
 /** 魔搭索引单页条数与文件清单递归深度上限(防御性) */
-const MODELSCOPE_PAGE_SIZE = 100;
+const MODELSCOPE_PAGE_SIZE = 50;
 const MODELSCOPE_TREE_MAX_DEPTH = 8;
 
 /** 引用限额:第三方技能包按不可信输入设硬上限 */
@@ -703,7 +703,8 @@ export function marketSources(): MarketRegistrySource[] {
     }
   }
   return [
-    { id: 'anthropics', label: 'Anthropic 官方技能库', repo: 'anthropics/skills' },
+    // 缺省只挂魔搭:国内网络路径快、条目全(8万+),是主力浏览源。
+    // Anthropic 官方库暂下线(直连不稳);需要时用 AGTPILOT_SKILL_REGISTRY_SOURCES 配回。
     { id: 'modelscope', label: '魔搭技能库(国内)', repo: '', type: 'modelscope' },
   ];
 }
@@ -786,7 +787,7 @@ async function msFetch(url: string, timeoutMs: number): Promise<Response> {
 }
 
 /**
- * 魔搭索引:openapi/v1/skills(总量 8 万+,只取第一页 100 条;search 走
+ * 魔搭索引:openapi/v1/skills(总量 8 万+,只取第一页 50 条;search 走
  * 服务端搜索)。列表自带中文描述,无需再富化。id 形如 owner/name 或
  * @owner/name,直接作 repo 字段承载(导入寻址用)。
  */

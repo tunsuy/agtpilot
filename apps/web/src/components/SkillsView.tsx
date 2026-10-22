@@ -88,7 +88,9 @@ interface SkillsViewProps {
 }
 
 export function SkillsView({ onCountsChange }: SkillsViewProps) {
-  const [section, setSection] = useState<Section>('all');
+  // 默认落「技能市场」且只看魔搭:魔搭是主力浏览路径(8万+条目、服务端搜索、国内快),
+  // GitHub 源小且网络不稳;「全部」分区仍保留(四块堆叠),只是不再作为落地态
+  const [section, setSection] = useState<Section>('market');
   const [searchQuery, setSearchQuery] = useState('');
 
   const [cards, setCards] = useState<SkillCardItem[]>([]);
@@ -524,7 +526,8 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               市场索引失败: {marketError}
             </div>
           ) : (
-            (filteredMarket || []).map((src) => (
+            <>
+              {filteredMarket.map((src) => (
               <div key={src.id} className="space-y-2">
                 <div className="flex items-center gap-2 text-[11px] text-zinc-500">
                   <span className="font-semibold text-zinc-700">{src.label}</span>
@@ -553,7 +556,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                     该源拉取失败: {src.error}
                   </div>
                 )}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {src.skills.map((s) => {
                     const isInstalled = installed.some(
                       (p) =>
@@ -638,7 +641,11 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                   })}
                 </div>
               </div>
-            ))
+            ))}
+              {filteredMarket.length === 0 && (
+                <EmptyHint text="没有匹配的技能 —— 换个搜索词试试(魔搭 8 万+ 条目走服务端搜索)" />
+              )}
+            </>
           )}
         </section>
       )}

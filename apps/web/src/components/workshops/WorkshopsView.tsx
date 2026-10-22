@@ -11,7 +11,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Sparkles, Play, Clock, ArrowRight, UserRoundPen } from 'lucide-react';
+import { Sparkles, Play, Clock, ArrowRight, UserRoundPen, Gauge } from 'lucide-react';
 import { ConnectorApp, McpConnectorInfo, Mission } from '../../types/agent';
 import { loginBadgeInfo } from '../../lib/login-badge';
 import type { XhsManagedRecord } from '../../lib/user-store';
@@ -20,6 +20,7 @@ import { buildWorkshopRun, type WorkshopRunPayload } from './run';
 import { recordRun, recentRuns, relativeTime, type WorkshopRunRecord } from './history';
 import type { ScenarioProfile } from '../../lib/scenario-profile';
 import { ScenarioProfileWizard } from './ScenarioProfileWizard';
+import { WorkshopModelSettingPopover } from './WorkshopModelSettingPopover';
 import { ACCENTS } from './forms/shared';
 
 // 工坊表单按需加载：以前 14 个表单（连同各自的 skill.ts/prompt.md 提示词）
@@ -125,6 +126,46 @@ export function WorkshopsView({
   const [wizardKey, setWizardKey] = useState<string | null>(null);
   // 本会话内跳过过向导的槽位(不落盘,刷新后再给一次机会)
   const [wizardDismissed, setWizardDismissed] = useState<string[]>([]);
+
+  // 工坊模型设置(workshopId → {reasoningEffort}):卡片右上角思考深度入口的
+  // 数据源;null = 加载中(不阻塞,当未设置)。改档即时落 user-store,
+  // 巡航触发/续聊下一轮现读生效
+  const [modelSettings, setModelSettings] = useState<Record<string, { reasoningEffort?: 'low' | 'medium' | 'high'; updatedAt: number }> | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/workshops/model-settings');
+        const data = await res.json();
+        if (data.success) setModelSettings(data.settings || {});
+        else setModelSettings({});
+      } catch {
+        setModelSettings({});
+      }
+    })();
+  }, []);
+
+  /** 工坊思考深度改档:乐观更新本地,失败回滚并提示(不动连接器全局) */
+  const setWorkshopEffort = async (workshopId: string, effort: string) => {
+    const prev = modelSettings || {};
+    const next: typeof prev = effort
+      ? { ...prev, [workshopId]: { reasoningEffort: effort as 'low' | 'medium' | 'high', updatedAt: Date.now() } }
+      : Object.fromEntries(Object.entries(prev).filter(([k]) => k !== workshopId));
+    setModelSettings(next);
+    try {
+      const res = await fetch('/api/workshops/model-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'upsert', workshopId, reasoningEffort: effort }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '保存失败');
+      if (data.settings) setModelSettings(data.settings);
+    } catch (e: any) {
+      setModelSettings(prev);
+      alert(`思考深度保存失败: ${e?.message || e}`);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -338,6 +379,12 @@ export function WorkshopsView({
                       </div>
                       <h3 className="text-xs font-semibold text-zinc-900">{w.name}</h3>
                     </div>
+                    {/* 思考深度:任务级(本工坊)> 连接器全局;巡航触发同源生效 */}
+                    <WorkshopModelSettingPopover
+                      workshop={w}
+                      value={modelSettings?.[w.id]?.reasoningEffort}
+                      onChange={(effort) => void setWorkshopEffort(w.id, effort)}
+                    />
                   </div>
                   <p className="text-xs text-zinc-500 leading-relaxed">{w.desc}</p>
 

@@ -43,6 +43,17 @@ export interface PushSubscriptionRecord {
   createdAt: number;
 }
 
+/**
+ * 工坊模型设置(每用户 × 每工坊一份,工坊卡片上持久生效):
+ * 思考深度是首个成员。任务级优先级 = 工坊设置 > 连接器全局 > env > 分支缺省
+ * —— 重产出轻推理的工坊(小说日更等)可单独压档,不用动全局;巡航触发时同样现读生效。
+ */
+export interface WorkshopModelSetting {
+  /** 思考深度;未存 = 跟随连接器全局 */
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  updatedAt: number;
+}
+
 export interface UserScopedData {
   userId: string;
   connectors: Record<string, string>; // envVar -> value（密文 `enc:v1:...`，历史明文读取时自动迁移）
@@ -64,6 +75,8 @@ export interface UserScopedData {
   policyProposals?: PolicyProposalRecord[];
   /** 工坊场景档案(scenarioKey -> 档案;旧文件未知字段透传,零迁移) */
   scenarioProfiles?: Record<string, ScenarioProfile>;
+  /** 工坊模型设置(workshopId -> 设置;思考深度任务级档,旧文件未知字段透传,零迁移) */
+  workshopModelSettings?: Record<string, WorkshopModelSetting>;
   /** 小红书托管模式开关与登录状态(scenario-loop P2;opt-in 默认关闭,零迁移) */
   xhsManaged?: XhsManagedRecord;
   /** 知乎托管模式开关与登录状态(与 xhsManaged 同构;opt-in 默认关闭,零迁移) */
@@ -676,6 +689,35 @@ export function deleteUserScenarioProfile(userId: string, scenarioKey: string): 
   }
   saveUserData(data);
   return data.scenarioProfiles || {};
+}
+
+// 辅助方法：工坊模型设置 (每用户 × 每工坊一份;思考深度任务级档)
+// 语义与场景档案同款:readProfileLight 轻读,upsert/删除走全量 getUserData。
+export function getWorkshopModelSettings(userId: string): Record<string, WorkshopModelSetting> {
+  const profile = readProfileLight(userId);
+  if (profile) return profile.workshopModelSettings || {};
+  return getUserData(userId).workshopModelSettings || {};
+}
+
+export function saveWorkshopModelSetting(
+  userId: string,
+  workshopId: string,
+  setting: WorkshopModelSetting
+): Record<string, WorkshopModelSetting> {
+  const data = getUserData(userId);
+  data.workshopModelSettings = data.workshopModelSettings || {};
+  data.workshopModelSettings[workshopId] = { ...setting, updatedAt: Date.now() };
+  saveUserData(data);
+  return data.workshopModelSettings;
+}
+
+export function deleteWorkshopModelSetting(userId: string, workshopId: string): Record<string, WorkshopModelSetting> {
+  const data = getUserData(userId);
+  if (data.workshopModelSettings) {
+    delete data.workshopModelSettings[workshopId];
+  }
+  saveUserData(data);
+  return data.workshopModelSettings || {};
 }
 
 // 辅助方法：小红书托管模式与浏览器审计 (scenario-loop P2 —— docs/design/workshop-scenario-loop.md §5)

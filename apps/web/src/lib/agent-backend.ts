@@ -46,7 +46,9 @@ export interface AgentBackendState {
  *
  * 三分支(custom_llm/openai/deepseek)字段语义:user-store 连接器配置 >
  * 部署级 env > 分支缺省模型名;hasLlm = 任一来源有 Key(主循环用它判定
- * 任务能否起跑)。reasoningEffort 走连接器级配置 > env > undefined(分支缺省)。
+ * 任务能否起跑)。reasoningEffort 走 连接器级配置 > env > undefined(分支缺省);
+ * 工坊任务还有更高一层的任务级档(runMission 按 workshopId 现读工坊设置合并,
+ * 压过连接器级 —— 见 runMission 的「工坊级思考深度」段)。
  *
  * 返回值含 apiKey —— 只准进模型调用链,严禁落日志/事件/错误消息。
  */
@@ -1816,6 +1818,27 @@ class AgentBackend {
             userHasLlm = r.hasLlm;
           } catch (e) {
             // fallback
+          }
+        }
+
+        // 工坊级思考深度(user-store 持久设置)> 连接器全局:重产出轻推理的工坊
+        // (小说日更等)可单独压档,不用动全局。每轮现读 —— 改档位对续聊的下一轮
+        // 生效;巡航触发同样经此解析,存量巡航任务自动跟随,无需重建。
+        const workshopIdForModel = options.workshopId || targetMission.workshopId;
+        if (workshopIdForModel && options.userId && userConfigOverride) {
+          try {
+            const { getWorkshopModelSettings } = await import('@/lib/user-store');
+            const effort = getWorkshopModelSettings(options.userId)[workshopIdForModel]?.reasoningEffort;
+            if (effort) {
+              userConfigOverride = { ...userConfigOverride, reasoningEffort: effort };
+              this.addTerminalLog(
+                'system',
+                `[Model] 工坊思考深度生效(${workshopIdForModel}: ${effort},压过连接器全局)`,
+                options.userId
+              );
+            }
+          } catch {
+            // 设置读取失败按连接器全局跑,不挡任务
           }
         }
 

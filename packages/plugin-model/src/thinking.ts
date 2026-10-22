@@ -14,7 +14,8 @@
  * SDK 会同时解析它;驼峰 openaiCompatible 不是合法 key,发了也会被静默丢弃)。
  * 返回 undefined = 不下发任何思考参数。
  *
- * 优先级(三层,resolveThinkingEffort 收口前两层):
+ * 优先级(四层,resolveThinkingEffort 收口前两层):
+ * 任务级(app 层合并进 configOverride.reasoningEffort,如 web 工坊思考深度)>
  * 连接器级配置(configOverride.reasoningEffort,用户在模型连接器卡片上选的
  * 低/中/高)> 全局 env AGTPILOT_REASONING_EFFORT(部署方兜底旋钮)> 上面的
  * 分支缺省。连接器「默认」= 不存键 = 回落全局配置,与未配置无区别

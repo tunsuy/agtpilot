@@ -1921,6 +1921,7 @@ export function ConnectorsView({
                       <option value="low">低 — 反应快、省 token,适合简单任务</option>
                       <option value="medium">中 — 均衡</option>
                       <option value="high">高 — 深度推理,更慢更贵</option>
+                      <option value="none">关闭 — 显式关思考,输出预算全留给正文(gpt-5 系口径,DeepSeek 无此档)</option>
                     </select>
                     <p className="text-[10px] text-zinc-400">
                       仅对推理型模型有意义(如 deepseek-reasoner、o 系列、QwQ);非推理模型会忽略该参数,严格中转站可能拒绝未知参数——拿不准就留默认。

@@ -34,7 +34,7 @@ describe('工坊思考深度 · 任务级合并(工坊档 > 连接器档)', () =
   // runMission 的合并语义(镜像自 agent-backend「工坊级思考深度」段):
   // const effort = getWorkshopModelSettings(uid)[workshopId]?.reasoningEffort;
   // if (effort) userConfigOverride = { ...userConfigOverride, reasoningEffort: effort };
-  const merge = (override: any, workshopEffort?: 'low' | 'medium' | 'high') =>
+  const merge = (override: any, workshopEffort?: 'low' | 'medium' | 'high' | 'none') =>
     workshopEffort ? { ...override, reasoningEffort: workshopEffort } : override;
 
   it('工坊档压过连接器档(日更场景:全局 high,工坊 low)', () => {
@@ -43,6 +43,14 @@ describe('工坊思考深度 · 任务级合并(工坊档 > 连接器档)', () =
       configs: { CUSTOM_LLM_API_KEY: 'k', CUSTOM_LLM_REASONING_EFFORT: 'high' },
     });
     expect(merge(override, 'low').reasoningEffort).toBe('low');
+  });
+
+  it('工坊关思考(none)压过连接器档 —— 全局 medium 也拦不住,输出预算全留给正文', () => {
+    const { override } = buildUserModelOverride({
+      activeModelId: 'custom_llm',
+      configs: { CUSTOM_LLM_API_KEY: 'k', CUSTOM_LLM_REASONING_EFFORT: 'medium' },
+    });
+    expect(merge(override, 'none').reasoningEffort).toBe('none');
   });
 
   it('工坊档填补连接器未设(未设 custom_llm 缺省不下发 → 工坊档是唯一下发源)', () => {

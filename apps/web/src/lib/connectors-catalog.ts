@@ -248,7 +248,8 @@ export const ALLOWED_ENV_VARS = new Set<string>(
   )
 );
 
-export const VALID_REASONING_EFFORTS = new Set(['', 'low', 'medium', 'high']);
+/** '' = 默认(跟随全局/厂商缺省);none = 显式关闭思考(gpt-5 系口径,deepseek 分支无此档自动不下发) */
+export const VALID_REASONING_EFFORTS = new Set(['', 'low', 'medium', 'high', 'none']);
 
 /** 合法的默认模型 ID */
 export const VALID_MODEL_IDS = new Set<string>(

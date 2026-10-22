@@ -49,8 +49,8 @@ export interface PushSubscriptionRecord {
  * —— 重产出轻推理的工坊(小说日更等)可单独压档,不用动全局;巡航触发时同样现读生效。
  */
 export interface WorkshopModelSetting {
-  /** 思考深度;未存 = 跟随连接器全局 */
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  /** 思考深度;未存 = 跟随连接器全局;none = 显式关闭(推理型模型的省 token 档) */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'none';
   updatedAt: number;
 }
 

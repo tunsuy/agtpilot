@@ -130,7 +130,7 @@ export function WorkshopsView({
   // 工坊模型设置(workshopId → {reasoningEffort}):卡片右上角思考深度入口的
   // 数据源;null = 加载中(不阻塞,当未设置)。改档即时落 user-store,
   // 巡航触发/续聊下一轮现读生效
-  const [modelSettings, setModelSettings] = useState<Record<string, { reasoningEffort?: 'low' | 'medium' | 'high'; updatedAt: number }> | null>(null);
+  const [modelSettings, setModelSettings] = useState<Record<string, { reasoningEffort?: 'low' | 'medium' | 'high' | 'none'; updatedAt: number }> | null>(null);
   useEffect(() => {
     (async () => {
       try {
@@ -148,7 +148,7 @@ export function WorkshopsView({
   const setWorkshopEffort = async (workshopId: string, effort: string) => {
     const prev = modelSettings || {};
     const next: typeof prev = effort
-      ? { ...prev, [workshopId]: { reasoningEffort: effort as 'low' | 'medium' | 'high', updatedAt: Date.now() } }
+      ? { ...prev, [workshopId]: { reasoningEffort: effort as 'low' | 'medium' | 'high' | 'none', updatedAt: Date.now() } }
       : Object.fromEntries(Object.entries(prev).filter(([k]) => k !== workshopId));
     setModelSettings(next);
     try {

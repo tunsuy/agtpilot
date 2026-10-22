@@ -29,6 +29,13 @@ describe('thinkingProviderOptions(思考深度旋钮 → providerOptions)', () =
     expect(thinkingProviderOptions('deepseek', '')).toBeUndefined();
   });
 
+  it('关闭档 none:openai/custom_llm/local_llm 显式下发 reasoning_effort=none;deepseek 无此档不下发(模型自决)', () => {
+    expect(thinkingProviderOptions('openai', 'none')).toEqual({ openai: { reasoningEffort: 'none' } });
+    expect(thinkingProviderOptions('custom_llm', 'none')).toEqual({ 'openai-compatible': { reasoningEffort: 'none' } });
+    expect(thinkingProviderOptions('local_llm', 'none')).toEqual({ 'openai-compatible': { reasoningEffort: 'none' } });
+    expect(thinkingProviderOptions('deepseek', 'none')).toBeUndefined();
+  });
+
   it('env 非法值不下发(不猜测、不回落缺省;deepseek 只认 low/high,medium 走上面的显式映射)', () => {
     expect(thinkingProviderOptions('openai', 'MEDIUM')).toBeUndefined();
     expect(thinkingProviderOptions('openai', 'minimal')).toBeUndefined();
@@ -45,10 +52,12 @@ describe('thinkingProviderOptions(思考深度旋钮 → providerOptions)', () =
 });
 
 describe('resolveThinkingEffort(连接器级配置 > 全局 env > 分支缺省)', () => {
-  it('连接器档位合法(low/medium/high)→ 压过全局 env', () => {
+  it('连接器/工坊档位合法(low/medium/high/none)→ 压过全局 env', () => {
     expect(resolveThinkingEffort('high', 'low')).toBe('high');
     expect(resolveThinkingEffort('low', 'high')).toBe('low');
     expect(resolveThinkingEffort('medium', undefined)).toBe('medium');
+    // none(关闭档)同样压过 env:连接器/工坊显式关思考,全局低档不抢回
+    expect(resolveThinkingEffort('none', 'low')).toBe('none');
   });
 
   it('连接器未设置/空串/非法值 → 回落全局 env(含 env 未设置的 undefined)', () => {
@@ -73,5 +82,12 @@ describe('resolveThinkingEffort(连接器级配置 > 全局 env > 分支缺省)'
     expect(thinkingProviderOptions('custom_llm', resolveThinkingEffort('high', undefined))).toEqual({
       'openai-compatible': { reasoningEffort: 'high' },
     });
+  });
+
+  it('端到端:工坊/连接器关思考(none)→ openai 口径显式下发 none,deepseek 分支不下发', () => {
+    expect(thinkingProviderOptions('openai', resolveThinkingEffort('none', 'medium'))).toEqual({
+      openai: { reasoningEffort: 'none' },
+    });
+    expect(thinkingProviderOptions('deepseek', resolveThinkingEffort('none', undefined))).toBeUndefined();
   });
 });

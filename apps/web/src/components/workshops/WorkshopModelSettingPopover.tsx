@@ -14,6 +14,7 @@ import type { WorkshopDef } from './registry';
 
 const EFFORT_OPTIONS: Array<{ value: string; label: string; desc: string }> = [
   { value: '', label: '跟随连接器', desc: '用连接器卡片上的全局设置(默认)' },
+  { value: 'none', label: '关闭', desc: '不下发思考参数外,还显式要求模型关思考 —— 输出预算全留给正文' },
   { value: 'low', label: '低', desc: '反应快、省 token,适合重产出轻推理(日更、模板化写作)' },
   { value: 'medium', label: '中', desc: '均衡档' },
   { value: 'high', label: '高', desc: '深度推理,更慢更贵,适合复杂调研与决策' },
@@ -22,7 +23,7 @@ const EFFORT_OPTIONS: Array<{ value: string; label: string; desc: string }> = [
 interface WorkshopModelSettingPopoverProps {
   workshop: WorkshopDef;
   /** 当前档位;undefined = 跟随连接器 */
-  value?: 'low' | 'medium' | 'high';
+  value?: 'low' | 'medium' | 'high' | 'none';
   onChange: (effort: string) => void;
 }
 

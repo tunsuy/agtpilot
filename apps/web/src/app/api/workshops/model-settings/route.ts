@@ -15,7 +15,7 @@ import { getWorkshop } from '@/workshops/registry';
  *   upsert: { action, workshopId, reasoningEffort?: 'low'|'medium'|'high' }
  *           reasoningEffort 空/缺省 = 清档跟随连接器(与 delete 等价,语义更直观)
  */
-const VALID_EFFORTS = new Set(['low', 'medium', 'high']);
+const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'none']);
 
 export async function GET() {
   try {
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: `非法思考深度: ${effort}` }, { status: 400 });
       }
       const settings = saveWorkshopModelSetting(userId, workshopId, {
-        reasoningEffort: effort as 'low' | 'medium' | 'high',
+        reasoningEffort: effort as 'low' | 'medium' | 'high' | 'none',
         updatedAt: Date.now(), // 函数内会再刷一次,这里满足类型必填
       });
       return NextResponse.json({ success: true, settings });

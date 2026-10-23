@@ -17,6 +17,8 @@ import {
   RefreshCw,
   CheckCircle2,
   FolderGit2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 // ---- 类型(与 /api/skills* 响应同型) ----
@@ -302,6 +304,17 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
 
   const show = (id: Section) => section === 'all' || section === id;
 
+  // 渐进披露(纯客户端切片,零后台请求 —— 列表数据已全量在内存):
+  // 技能卡/已引用首屏 LIST_PAGE 张,市场按源分桶每源 MARKET_PAGE 张。
+  // 卡片/已引用随搜索词或分区切换复位;市场只认防抖落定的 marketSearch 与
+  // 数据重载,不随键击复位 —— 否则与「防抖等待期稳定展示」的防跳动语义打架
+  const cardsPaging = useShowMore(filteredCards.length, LIST_PAGE, `${section}|${q}`);
+  const installedPaging = useShowMore(filteredInstalled.length, LIST_PAGE, `${section}|${q}`);
+  const [marketVisible, setMarketVisible] = useState<Record<string, number>>({});
+  useEffect(() => {
+    setMarketVisible({});
+  }, [marketSearch, section, market]);
+
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
       {/* 头部 */}
@@ -387,7 +400,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
             <EmptyHint text="还没有沉淀技能卡 —— 完成几个任务(尤其工坊类重复任务)后会自动蒸馏出来" />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredCards.map((c) => (
+              {filteredCards.slice(0, cardsPaging.shown).map((c) => (
                 <div
                   key={c.id}
                   className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between group"
@@ -429,6 +442,12 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               ))}
             </div>
           )}
+          <ShowMoreBar
+            remaining={cardsPaging.remaining}
+            expanded={cardsPaging.expanded}
+            onMore={cardsPaging.more}
+            onCollapse={cardsPaging.collapse}
+          />
         </section>
       )}
 
@@ -444,7 +463,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
             <EmptyHint text="还没有引用生态技能 —— 去「技能市场」挑一个,或让 Agent 在任务里建议" />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredInstalled.map((p) => (
+              {filteredInstalled.slice(0, installedPaging.shown).map((p) => (
                 <div
                   key={p.dirName}
                   className="p-5 rounded-2xl border border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-xs transition flex flex-col justify-between group"
@@ -497,6 +516,12 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               ))}
             </div>
           )}
+          <ShowMoreBar
+            remaining={installedPaging.remaining}
+            expanded={installedPaging.expanded}
+            onMore={installedPaging.more}
+            onCollapse={installedPaging.collapse}
+          />
         </section>
       )}
 
@@ -529,7 +554,11 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
             </div>
           ) : (
             <>
-              {filteredMarket.map((src) => (
+              {filteredMarket.map((src) => {
+              // 每源独立的渐进披露:marketVisible 记录该源已展开到的张数(缺省 = 首屏)
+              const shown = Math.min(marketVisible[src.id] ?? MARKET_PAGE, src.skills.length);
+              const remaining = src.skills.length - shown;
+              return (
               <div key={src.id} className="space-y-2">
                 <div className="flex items-center gap-2 text-[11px] text-zinc-500">
                   <span className="font-semibold text-zinc-700">{src.label}</span>
@@ -559,7 +588,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                   </div>
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {src.skills.map((s) => {
+                  {src.skills.slice(0, shown).map((s) => {
                     const isInstalled = installed.some(
                       (p) =>
                         (p.source?.platform || 'github') === (s.platform || 'github') &&
@@ -642,8 +671,15 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                     );
                   })}
                 </div>
+                <ShowMoreBar
+                  remaining={remaining}
+                  expanded={shown > MARKET_PAGE}
+                  onMore={() => setMarketVisible((v) => ({ ...v, [src.id]: shown + MARKET_PAGE }))}
+                  onCollapse={() => setMarketVisible((v) => ({ ...v, [src.id]: MARKET_PAGE }))}
+                />
               </div>
-            ))}
+              );
+            })}
               {filteredMarket.length === 0 && (
                 <EmptyHint text="没有匹配的技能 —— 换个搜索词试试(魔搭 8 万+ 条目走服务端搜索)" />
               )}
@@ -845,6 +881,69 @@ function EmptyHint({ text }: { text: string }) {
   return (
     <div className="py-10 text-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50">
       <p className="text-[11px] text-zinc-400 max-w-sm mx-auto">{text}</p>
+    </div>
+  );
+}
+
+// ---- 渐进披露(加载更多) ----
+
+/** 首屏张数:市场每源(桌面 3 列 = 4 行)/ 技能卡与已引用(2 列 = 4 行) */
+const MARKET_PAGE = 12;
+const LIST_PAGE = 8;
+
+/**
+ * 纯客户端渐进披露:首屏只展示 initial 张,「加载更多」按 initial 增量展开,
+ * 展开过可「收起」。resetKey 变化(搜索落定/切分区/数据重载)时复位首屏。
+ * 列表数据已全量在内存,零后台请求。
+ */
+function useShowMore(total: number, initial: number, resetKey: unknown) {
+  const [visible, setVisible] = useState(initial);
+  useEffect(() => {
+    setVisible(initial);
+  }, [resetKey, initial]);
+  const shown = Math.min(visible, total);
+  return {
+    shown,
+    remaining: total - shown,
+    expanded: shown > initial,
+    more: () => setVisible((v) => v + initial),
+    collapse: () => setVisible(initial),
+  };
+}
+
+/** 网格底部「加载更多 / 收起」条(技能卡/已引用/市场源块共用;不足一屏不渲染) */
+function ShowMoreBar({
+  remaining,
+  expanded,
+  onMore,
+  onCollapse,
+}: {
+  remaining: number;
+  expanded: boolean;
+  onMore: () => void;
+  onCollapse: () => void;
+}) {
+  if (remaining <= 0 && !expanded) return null;
+  return (
+    <div className="flex items-center justify-center gap-2.5 pt-0.5">
+      {remaining > 0 && (
+        <button
+          onClick={onMore}
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 hover:border-zinc-300 text-xs font-medium text-zinc-600 transition shadow-2xs"
+        >
+          加载更多(还有 {remaining} 个)
+          <ChevronDown className="h-3.5 w-3.5" />
+        </button>
+      )}
+      {expanded && (
+        <button
+          onClick={onCollapse}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition"
+        >
+          收起
+          <ChevronUp className="h-3.5 w-3.5" />
+        </button>
+      )}
     </div>
   );
 }

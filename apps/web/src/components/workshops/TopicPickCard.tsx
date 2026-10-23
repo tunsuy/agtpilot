@@ -8,7 +8,7 @@
  * 续答可被 NotePackageList 渲染)。这是选题→成稿多步工作流的人工确认点,
  * 也是移动端对 DONE 任务的唯一回复入口。compact 模式适配移动端小屏。
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Check, ChevronDown, Lightbulb, Send } from 'lucide-react';
 import {
   MAX_TOPIC_PICKS,
@@ -16,6 +16,7 @@ import {
   type TopicPick,
   type TopicPickParseResult,
 } from '../../workshops/xhs/topic-picks';
+import type { Mission } from '../../types/agent';
 
 function TopicPickCard({
   pick,
@@ -97,17 +98,28 @@ function TopicPickCard({
 export function TopicPickList({
   result,
   missionId,
+  missionStatus,
   onRunMission,
   compact,
 }: {
   result: TopicPickParseResult;
   missionId?: string | null;
-  onRunMission: (prompt: string, title?: string, missionId?: string) => void;
+  /** 所属任务状态(续聊入口传):任务在跑时锁「成稿选中」,防并发续聊轮 */
+  missionStatus?: Mission['status'];
+  /** picks(第 4 参)= 勾选原文的结构化形态,工坊弹窗新开成稿任务时进 payload 走服务端权威渲染 */
+  onRunMission: (prompt: string, title?: string, missionId?: string, picks?: TopicPick[]) => void;
   compact?: boolean;
 }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [overLimitHint, setOverLimitHint] = useState(false);
   const [showFallback, setShowFallback] = useState(false);
+  // 防重入(ArticlePackageCard 同款):点过「成稿选中」即锁按钮,直到任务态回落。
+  // 调用方没传 missionStatus(弹窗新开任务,无从观测任务态)时一次性锁到卸载为止
+  const [draftStarted, setDraftStarted] = useState(false);
+  const missionInFlight = missionStatus === 'ACTIVE' || missionStatus === 'QUEUED';
+  useEffect(() => {
+    if (missionStatus !== undefined && !missionInFlight) setDraftStarted(false);
+  }, [missionStatus, missionInFlight]);
 
   const toggle = (number: number) => {
     setSelected((prev) => {
@@ -129,8 +141,9 @@ export function TopicPickList({
   const selectedPicks = result.picks.filter((p) => selected.has(p.number));
 
   const handleDraft = () => {
-    if (selectedPicks.length === 0) return;
-    onRunMission(buildTopicPickReplyText(selectedPicks), undefined, missionId || undefined);
+    if (selectedPicks.length === 0 || draftStarted || missionInFlight) return;
+    setDraftStarted(true);
+    onRunMission(buildTopicPickReplyText(selectedPicks), undefined, missionId || undefined, selectedPicks);
   };
 
   if (result.picks.length === 0) return null;
@@ -164,11 +177,20 @@ export function TopicPickList({
       <button
         type="button"
         onClick={handleDraft}
-        disabled={selectedPicks.length === 0}
+        disabled={selectedPicks.length === 0 || draftStarted || missionInFlight}
+        title={
+          missionInFlight && !draftStarted
+            ? '本任务进行中,完成后可再发起成稿'
+            : draftStarted
+            ? '成稿轮已发起,进行中'
+            : undefined
+        }
         className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:bg-zinc-200 disabled:text-zinc-400 text-white text-xs font-medium transition shadow-xs"
       >
         <Send className="h-3.5 w-3.5" />
-        成稿选中{selectedPicks.length > 0 ? `(${selectedPicks.length})` : ''}
+        {draftStarted || missionInFlight
+          ? '成稿进行中…'
+          : `成稿选中${selectedPicks.length > 0 ? `(${selectedPicks.length})` : ''}`}
       </button>
 
       {result.fallback && (

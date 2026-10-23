@@ -81,6 +81,42 @@ describe('buildWorkshopDeliverable · note-package(小红书)', () => {
   });
 });
 
+describe('buildWorkshopDeliverable · article/note 收尾倒扫(续聊轮最终答复是散文收尾)', () => {
+  const note = (title: string) =>
+    `【标题】\n${title}\n【封面文案】\n封面一句话\n【正文】\n${'笔记正文内容足够长以便通过有效性校验。'.repeat(6)}\n【标签】\n#穿搭 #ootd`;
+  const prose = '以上就是本轮的成稿说明,文章已经按你的要求修改完毕,如需继续调整随时告诉我。'.repeat(3);
+
+  it('article:final 是散文、成稿在中间步骤 → 倒扫取最后一段能解析的成稿', () => {
+    const steps = ['中间过程答复', article('旧版标题', '旧版摘要。'), article('终版标题', '终版摘要。'), prose];
+    const d = buildWorkshopDeliverable('article-package', prose, '任务名', steps)!;
+    expect(d).not.toBeNull();
+    expect(d.title).toBe('终版标题');
+    expect(d.content).toContain('# 终版标题');
+    expect(d.count).toBe(1);
+  });
+
+  it('article:final 本身能解析出包 → 不倒扫(steps 里的旧成稿不改写取源)', () => {
+    const final = article('本轮终版', '本轮摘要。');
+    const steps = [article('上一轮旧稿', '旧摘要。'), final];
+    const d = buildWorkshopDeliverable('article-package', final, '任务名', steps)!;
+    expect(d.title).toBe('本轮终版');
+  });
+
+  it('note:final 是散文、笔记包在 steps → 倒扫取笔记包', () => {
+    const steps = [note('通勤穿搭笔记'), prose];
+    const d = buildWorkshopDeliverable('note-package', prose, '小红书成稿·勾选选题', steps)!;
+    expect(d).not.toBeNull();
+    expect(d.title).toBe('通勤穿搭笔记');
+    expect(d.content).toContain('#穿搭 #ootd');
+  });
+
+  it('final 与 steps 都无成品(选题清单/散文)→ null,绝不发布', () => {
+    const steps = ['【选题 1】\n秋冬通勤穿搭', prose, undefined];
+    expect(buildWorkshopDeliverable('note-package', prose, 't', steps)).toBeNull();
+    expect(buildWorkshopDeliverable('article-package', '', 't', steps)).toBeNull();
+  });
+});
+
 describe('resolveDeliverableKind(声明驱动:仅声明结构化交付物的工坊参与自动落地)', () => {
   it('知乎/公众号 → article-package;小红书 → note-package', () => {
     expect(resolveDeliverableKind('zhihu')).toBe('article-package');

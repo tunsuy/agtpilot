@@ -229,11 +229,14 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
         }
       : null;
   const topicRunning = Boolean(topicState?.running);
-  /** 发起选题任务:与订阅同款 prompt(已托管登录则读小红书热门话题,否则降级),标题带标记供弹窗回查 */
+  /** 发起选题任务:与订阅同款 prompt(已托管登录则读小红书热门话题,否则降级),标题带标记供弹窗回查。
+   *  带工坊 payload 走服务端权威渲染:mission 落下 workshopId(交付物库/记忆蒸馏认它),
+   *  档案服务端现读(客户端 prompt 仅乐观展示,服务端忽略) */
   const launchTopics = () =>
     onRun(
       buildXhsWeeklyTopicsPrompt({ count: subCount, profile: scenarioProfile ?? undefined }),
-      '小红书每周选题·手动'
+      '小红书每周选题·手动',
+      { id: 'xhs', params: { mode: 'weekly_topics', count: subCount } }
     );
 
   const handleSubmit = () => {
@@ -359,7 +362,17 @@ export function ContentWorkshopForm({ workshop, onRun, onClose, scenarioProfile,
                 result={topicPicks.result}
                 missionId={null}
                 compact
-                onRunMission={(prompt) => onRun(prompt, '小红书成稿·勾选选题')}
+                onRunMission={(prompt, _title, _missionId, picks) =>
+                  onRun(
+                    prompt,
+                    '小红书成稿·勾选选题',
+                    // 新开成稿任务带工坊 payload:服务端按勾选清单权威重建 prompt,
+                    // mission 落下 workshopId,成稿笔记包才能进交付物库
+                    picks && picks.length > 0
+                      ? { id: 'xhs', params: { mode: 'topic_draft', picks } }
+                      : undefined
+                  )
+                }
               />
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] text-zinc-400 leading-relaxed">

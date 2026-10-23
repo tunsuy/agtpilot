@@ -694,7 +694,9 @@ export function MobileActivityView({
                                       compact
                                       result={parsed}
                                       missionId={mission.id}
-                                      onRunMission={onRunMission}
+                                      missionStatus={mission.status}
+                                      /* 续聊轮:mission 已带 workshopId,只透传前三参(picks 别漏进 workshop 位) */
+                                      onRunMission={(prompt, title, mid) => onRunMission(prompt, title, mid)}
                                     />
                                   </div>
                                 );

@@ -1367,7 +1367,10 @@ export function CockpitView({
                                 <TopicPickList
                                   result={pickResult}
                                   missionId={activeMissionId || currentMission?.id}
-                                  onRunMission={onRunMission}
+                                  missionStatus={currentMission?.status}
+                                  /* 续聊轮:mission 已带 workshopId,只透传前三参
+                                     (第 4 参 picks 是弹窗新开任务专用,别漏进 workshop 位) */
+                                  onRunMission={(prompt, title, mid) => onRunMission(prompt, title, mid)}
                                 />
                               ) : st.answer && parsedNovel ? (
                                 /* 小说包(开书三段化):设定包/大纲包/续写包/文风锚包各一张卡,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseTopicPicks,
+  parseTopicPicksParam,
   buildTopicPickReplyText,
   findLatestTopicPicks,
   hasRunningTopicMission,
@@ -9,6 +10,8 @@ import {
   type TopicPick,
   type TopicPicksMissionLike,
 } from '../topic-picks';
+import { WORKSHOP_SKILL } from '../skill';
+import { buildXhsWeeklyTopicsPrompt } from '../context';
 
 /** 标准 7 字段输出样例(与 buildXhsWeeklyTopicsPrompt 的格式契约一致) */
 const STANDARD_TEXT = `本周选题会开完,以下是 7 条候选。
@@ -325,5 +328,62 @@ describe('hasRunningTopicMission · 弹窗防重复发起', () => {
     expect(
       hasRunningTopicMission([{ id: 'x', title: '小红书成稿·勾选选题', status: 'ACTIVE', startedAt: 1, steps: [] }])
     ).toBe(false);
+  });
+});
+
+describe('parseTopicPicksParam · 勾选清单参数收敛(工坊 payload 消毒)', () => {
+  it('合法条目原样收敛;编号缺失按顺序递补;hooks 容忍单字符串', () => {
+    const out = parseTopicPicksParam([
+      { number: 2, direction: ' 通勤穿搭 ', hooks: ['钩子A', '  ', '钩子B'], basis: '热度上升' },
+      { direction: '露营装备', hooks: '单条钩子' },
+    ]);
+    expect(out).toEqual([
+      { number: 2, direction: '通勤穿搭', hooks: ['钩子A', '钩子B'], basis: '热度上升' },
+      { number: 2, direction: '露营装备', hooks: ['单条钩子'] },
+    ]);
+  });
+
+  it('非法条目整条丢弃(非对象/缺 direction);超过上限截前 3 条', () => {
+    const many = Array.from({ length: 5 }, (_, i) => ({ number: i + 1, direction: `方向${i + 1}`, hooks: [] }));
+    expect(parseTopicPicksParam([null, 42, { hooks: ['x'] }, ...many])).toHaveLength(MAX_TOPIC_PICKS);
+    expect(parseTopicPicksParam([null, 42, { hooks: ['x'] }])).toEqual([]);
+  });
+
+  it('非数组输入 → 空数组(不抛错,由调用方决定拒绝语义)', () => {
+    expect(parseTopicPicksParam(undefined)).toEqual([]);
+    expect(parseTopicPicksParam('方向1')).toEqual([]);
+    expect(parseTopicPicksParam({ direction: 'x' })).toEqual([]);
+  });
+});
+
+describe('xhs WORKSHOP_SKILL.run · 弹窗手动派发模式(workshopId 贯穿)', () => {
+  it('mode=weekly_topics:与 cron 同款选题 prompt,标题含回查标记', () => {
+    const run = WORKSHOP_SKILL.run({ mode: 'weekly_topics', count: 5 }, undefined);
+    expect(run.prompt).toBe(buildXhsWeeklyTopicsPrompt({ count: 5 }));
+    expect(run.title).toBe('小红书每周选题·手动');
+    expect(run.title.includes(TOPIC_MISSION_TITLE_MARK)).toBe(true);
+  });
+
+  it('mode=topic_draft:与卡片同一个 buildTopicPickReplyText 重建 prompt', () => {
+    const picks: TopicPick[] = [
+      { number: 1, direction: '通勤穿搭', hooks: ['钩子A'] },
+      { number: 3, direction: '露营装备', hooks: [] },
+    ];
+    const run = WORKSHOP_SKILL.run({ mode: 'topic_draft', picks }, undefined);
+    expect(run.prompt).toBe(buildTopicPickReplyText(picks));
+    expect(run.title).toBe('小红书成稿·勾选选题');
+  });
+
+  it('mode=topic_draft 勾选全部非法 → 抛错拒绝渲染(绝不静默派发空成稿任务)', () => {
+    expect(() => WORKSHOP_SKILL.run({ mode: 'topic_draft', picks: [null, { direction: '' }] }, undefined)).toThrow(
+      /勾选选题缺失/
+    );
+    expect(() => WORKSHOP_SKILL.run({ mode: 'topic_draft' }, undefined)).toThrow(/勾选选题缺失/);
+  });
+
+  it('缺省 mode 不受影响:仍走内容工坊主 prompt(表单预览/重跑口径不变)', () => {
+    const run = WORKSHOP_SKILL.run({ topic: '秋冬穿搭', style: '种草推荐', count: 2 }, undefined);
+    expect(run.title).toBe('小红书内容工坊 · 种草推荐');
+    expect(run.prompt).toContain('秋冬穿搭');
   });
 });

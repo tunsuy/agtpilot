@@ -611,7 +611,9 @@ export function MobileConversationView({
                                 compact
                                 result={pickResult}
                                 missionId={mission.id}
-                                onRunMission={reply}
+                                missionStatus={mission.status}
+                                /* 续聊轮:mission 已带 workshopId,只透传前三参(picks 别漏进 workshop 位) */
+                                onRunMission={(prompt, title, mid) => reply(prompt, title, mid)}
                               />
                             ) : st.answer && parsedNovel ? (
                               /* 小说包(开书三段化):「存入书库」落状态库,「继续:下一步」串下一段任务 */

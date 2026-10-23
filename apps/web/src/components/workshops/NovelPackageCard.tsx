@@ -179,6 +179,8 @@ type SaveState =
       reviewDue?: boolean;
       /** 派生回填(挂载时从书库列表认出「已在库」),非本次点击入库 */
       derived?: boolean;
+      /** 本次点击命中服务端 existed 幂等:同名书已在库,本次设定未写入(诚实呈现,不谎称入库) */
+      existed?: boolean;
     }
   | { phase: 'error'; message: string };
 
@@ -206,12 +208,13 @@ function SaveButton({
   savedLabel?: string;
 }) {
   if (state.phase === 'saved') {
+    let badge = '已入库';
+    if (state.existed) badge = '同名书已在库 · 本次设定未写入';
+    else if (state.derived) badge = '已在书库';
     return (
       <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-medium">
         <Check className="h-3.5 w-3.5" />
-        {savedLabel ||
-          (state.derived ? '已在书库' : '已入库') +
-            ` · 共${state.chapterCount}章 ${state.wordCount}字 · 书号 ${state.bookId}`}
+        {savedLabel || `${badge} · 共${state.chapterCount}章 ${state.wordCount}字 · 书号 ${state.bookId}`}
       </span>
     );
   }
@@ -278,7 +281,13 @@ function GenesisCard({ pkg }: { pkg: NovelGenesisPackage }) {
       });
       const data = await res.json();
       if (data.success && data.bookId && data.progress) {
-        setSave({ phase: 'saved', bookId: data.bookId, ...data.progress });
+        setSave({
+          phase: 'saved',
+          bookId: data.bookId,
+          ...data.progress,
+          // existed 幂等命中:同名书已在库,本次设定并未写入 → 走「已在书库」诚实文案
+          ...(data.existed ? { derived: true, existed: true } : {}),
+        });
       } else {
         setSave({ phase: 'error', message: data.error || '入库失败' });
       }
@@ -364,6 +373,11 @@ function GenesisCard({ pkg }: { pkg: NovelGenesisPackage }) {
             {save.message}
           </p>
         )}
+        {save.phase === 'saved' && save.existed && (
+          <p className="text-[11px] text-amber-600 leading-relaxed">
+            库里已有同名书(书号 {save.bookId}),为避免覆盖既有进度,本次设定未写入;确要换设定请改书名重跑,或先在书库删除旧书。
+          </p>
+        )}
         {save.phase === 'saved' && <FanqieSyncRow bookId={save.bookId} />}
       </div>
     </div>
@@ -416,7 +430,13 @@ function GenesisBibleCard({
       });
       const data = await res.json();
       if (data.success && data.bookId && data.progress) {
-        setSave({ phase: 'saved', bookId: data.bookId, ...data.progress });
+        setSave({
+          phase: 'saved',
+          bookId: data.bookId,
+          ...data.progress,
+          // existed 幂等命中:同名书已在库,本次设定并未写入 → 走「已在书库」诚实文案
+          ...(data.existed ? { derived: true, existed: true } : {}),
+        });
       } else {
         setSave({ phase: 'error', message: data.error || '建书失败' });
       }
@@ -494,7 +514,13 @@ function GenesisBibleCard({
             label="存入书库"
             savedLabel={
               save.phase === 'saved'
-                ? `${save.derived ? '已在书库' : '已建书'} · 书号 ${save.bookId}`
+                ? `${
+                    save.existed
+                      ? '同名书已在库 · 本次设定未写入'
+                      : save.derived
+                      ? '已在书库'
+                      : '已建书'
+                  } · 书号 ${save.bookId}`
                 : ''
             }
           />
@@ -503,6 +529,11 @@ function GenesisBibleCard({
           <p className="text-[11px] text-red-600 flex items-start gap-1">
             <TriangleAlert className="h-3.5 w-3.5 mt-px shrink-0" />
             {save.message}
+          </p>
+        )}
+        {save.phase === 'saved' && save.existed && (
+          <p className="text-[11px] text-amber-600 leading-relaxed">
+            库里已有同名书(书号 {save.bookId}),为避免覆盖既有进度,本次设定未写入;确要换设定请改书名重跑,或先在书库删除旧书。
           </p>
         )}
         {/* 三段化串联:入库成功才给下一步(没书号没法注入设定地基);派生 saved 同样激活 */}

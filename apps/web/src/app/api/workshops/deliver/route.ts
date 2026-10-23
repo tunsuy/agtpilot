@@ -83,8 +83,12 @@ export async function POST(req: NextRequest) {
           broadcast: backend.broadcast.bind(backend),
         });
       } catch (e) {
-        // 台账回写失败不影响投递事实(草稿已在平台侧);仅记录,不回滚
-        console.error('direct-delivery: 步骤回写失败', e);
+        // 台账回写失败不影响投递事实(草稿已在平台侧);仅记录,不回滚。
+        // 带上定位上下文:哪次投递、哪个任务的台账断了(排查「投递成功但会话里看不到步骤」)
+        console.error(
+          `direct-delivery: 步骤回写失败(platform=${platform}, mission=${missionId ?? '(裸投递)'})`,
+          e
+        );
       }
     }
 

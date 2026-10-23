@@ -71,6 +71,13 @@ function hasTextContractAnchor(text: string): boolean {
   return /【(标题|正文)】/.test(text);
 }
 
+/** 包解析分发(article/note 共用):倒扫门槛与最终渲染吃同一批 packages,只解析一次 */
+function parseContentPackages(kind: 'article-package' | 'note-package', text: string) {
+  return kind === 'article-package'
+    ? parseArticlePackages(text).packages
+    : parseNotePackages(text).packages;
+}
+
 /**
  * 按交付物类型从最终答复抽取成品并渲染成一份交付文档。
  *
@@ -84,7 +91,8 @@ function hasTextContractAnchor(text: string): boolean {
  * - 解析不出任何包(非成品格式:选题清单 / 自由文本 / 空答复)→ null,绝不发布
  *   (绝不把非成品当交付件,也绝不为凑数发布空文档)。
  * - fallbackTitle 用于多篇合并、或单篇标题缺失时的兜底标题(通常传任务名)。
- * - stepAnswers 为本轮各步答复(按序),oss-opportunity 与 text-deliverable 倒扫取源用。
+ * - stepAnswers 为本轮各步答复(按序),各 kind 倒扫取源用:oss 无条件倒扫,
+ *   text-deliverable 锚缺失才倒扫,article/note 最终答复解析不出包才倒扫。
  */
 export function buildWorkshopDeliverable(
   kind: DeliverableKind,
@@ -137,11 +145,21 @@ export function buildWorkshopDeliverable(
       count: Math.max(parts.length, 1),
     };
   }
-  // 只解析一次:titles[0] 取标题、渲染取正文,复用同一批 packages
-  const packages =
-    kind === 'article-package'
-      ? parseArticlePackages(source).packages
-      : parseNotePackages(source).packages;
+  // 只解析一次:titles[0] 取标题、渲染取正文,复用同一批 packages。
+  // 续聊轮步数耗尽强制总结时,最终答复可能是散文收尾,成稿留在中间 step ——
+  // 仅当最终答复解析不出包才倒扫 stepAnswers(与 text-deliverable 的锚门槛同原则;
+  // 解析得出不倒扫,绝不无谓改写取源)
+  let packages = parseContentPackages(kind, source);
+  if (packages.length === 0 && stepAnswers) {
+    for (let i = stepAnswers.length - 1; i >= 0; i--) {
+      const a = stepAnswers[i];
+      if (a && parseContentPackages(kind, a).length > 0) {
+        source = a;
+        packages = parseContentPackages(kind, source);
+        break;
+      }
+    }
+  }
   if (packages.length === 0) return null;
 
   const rendered =

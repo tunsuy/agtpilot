@@ -34,17 +34,26 @@ function toDerived(b: NovelBookSummary): DerivedBookState {
  * 设定包/旧开书包:书名精确匹配 → 已建书。
  * 同名多本取 updatedAt 最新者 —— 与服务端 findNovelBookByTitle 幂等键同一口径,
  * 保证卡片显示与「再点一次存入书库会发生什么」一致。
+ *
+ * 卖点(premise)一致性门槛:同名但卖点不同的书是「另一套设定」——重跑开书
+ * 生成的新设定包,库里那本同名旧书并没有这份内容(create 幂等只回书号不写内容)。
+ * 双方卖点都非空且不一致时不派生 saved(按钮保持可点,点击后由服务端 existed
+ * 回执给出「未写入」的诚实提示),避免卡片谎称「已在书库」而书库躺着旧设定。
+ * 任一侧卖点为空(历史包/旧数据)退回纯书名匹配,不误伤。
  */
 export function deriveBibleSaved(
-  pkg: { title: string },
+  pkg: { title: string; premise?: string },
   books: NovelBookSummary[] | null
 ): DerivedBookState | null {
   if (!books) return null;
   const title = String(pkg.title || '').trim();
   if (!title) return null;
+  const premise = String(pkg.premise || '').trim();
   let best: NovelBookSummary | null = null;
   for (const b of books) {
     if (String(b.title || '').trim() !== title) continue;
+    const bookPremise = String(b.premise || '').trim();
+    if (premise && bookPremise && premise !== bookPremise) continue;
     if (!best || b.updatedAt > best.updatedAt) best = b;
   }
   return best ? toDerived(best) : null;

@@ -5,6 +5,7 @@
  */
 import { Share2 } from 'lucide-react';
 import { buildXhsWorkshopPrompt, buildXhsWeeklyTopicsPrompt } from './context';
+import { buildTopicPickReplyText, parseTopicPicksParam } from './topic-picks';
 import {
   buildXhsDraftReplyText,
   buildXhsDraftPayload,
@@ -69,6 +70,29 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
     ],
   },
   run: (params, ctx) => {
+    // 弹窗「立即出选题」手动派发:与 cron 场景同款 prompt(档案由服务端现读注入),
+    // 走 skill.run 才能带上 workshopId(交付物落地/记忆蒸馏都认这个标识)。
+    // 标题含 TOPIC_MISSION_TITLE_MARK,弹窗回查(findLatestTopicPicks)口径不变
+    if (str(params.mode) === 'weekly_topics') {
+      return {
+        prompt: buildXhsWeeklyTopicsPrompt({
+          count: num(params.count, 7),
+          ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
+        }),
+        title: '小红书每周选题·手动',
+      };
+    }
+    // 弹窗「勾选成稿」(无既有 mission 可续聊时新开任务):勾选清单结构化进 params,
+    // 服务端用与卡片同一个 buildTopicPickReplyText 重建 prompt(格式即契约)。
+    // 勾选全部非法 → 抛错拒绝渲染(绝不静默派发一个空成稿任务)
+    if (str(params.mode) === 'topic_draft') {
+      const picks = parseTopicPicksParam(params.picks);
+      if (picks.length === 0) throw new Error('勾选选题缺失或非法,无法发起成稿');
+      return {
+        prompt: buildTopicPickReplyText(picks),
+        title: '小红书成稿·勾选选题',
+      };
+    }
     const style = str(params.style, '种草推荐');
     return {
       prompt: buildXhsWorkshopPrompt({

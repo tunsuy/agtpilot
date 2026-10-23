@@ -31,7 +31,7 @@ function mkBook(over: Partial<NovelBookSummary> = {}): NovelBookSummary {
   };
 }
 
-describe('deriveBibleSaved(书名精确匹配)', () => {
+describe('deriveBibleSaved(书名精确匹配 + 卖点一致性门槛)', () => {
   it('books 未加载(null)→ 不派生', () => {
     expect(deriveBibleSaved({ title: '书A' }, null)).toBeNull();
   });
@@ -61,6 +61,30 @@ describe('deriveBibleSaved(书名精确匹配)', () => {
 
   it('reviewDue 的书带出体检提醒字段', () => {
     expect(deriveBibleSaved({ title: '书A' }, [mkBook({ reviewDue: true })])?.reviewDue).toBe(true);
+  });
+
+  it('同名但卖点不一致 → 不派生(重跑开书的新设定包,库里旧书没有这份内容)', () => {
+    const books = [mkBook({ premise: '旧卖点:凡人流修仙' })];
+    expect(deriveBibleSaved({ title: '书A', premise: '新卖点:系统流修仙' }, books)).toBeNull();
+  });
+
+  it('同名且卖点一致 → 照常派生', () => {
+    const books = [mkBook({ premise: '凡人流修仙' })];
+    expect(deriveBibleSaved({ title: '书A', premise: ' 凡人流修仙 ' }, books)?.bookId).toBe('nv_1');
+  });
+
+  it('任一侧卖点为空 → 退回纯书名匹配(历史包/旧数据不误伤)', () => {
+    expect(deriveBibleSaved({ title: '书A', premise: '新卖点' }, [mkBook({ premise: '' })])?.bookId).toBe('nv_1');
+    expect(deriveBibleSaved({ title: '书A' }, [mkBook({ premise: '旧卖点' })])?.bookId).toBe('nv_1');
+  });
+
+  it('同名多本:卖点冲突的排除后,余下取 updatedAt 最新者', () => {
+    const books = [
+      mkBook({ bookId: 'nv_conflict', premise: '另一套设定', updatedAt: 300 }),
+      mkBook({ bookId: 'nv_match_old', premise: '同一套设定', updatedAt: 100 }),
+      mkBook({ bookId: 'nv_match_new', premise: '同一套设定', updatedAt: 200 }),
+    ];
+    expect(deriveBibleSaved({ title: '书A', premise: '同一套设定' }, books)?.bookId).toBe('nv_match_new');
   });
 });
 

@@ -213,6 +213,40 @@ ${quoted}`;
 }
 
 /**
+ * 勾选选题参数收敛(工坊 payload 用):表单/卡片把勾选的 TopicPick[] 塞进
+ * params.picks 走服务端权威渲染,这里按结构逐条消毒(宽松进严格出)——
+ * 非法条目整条丢弃,编号缺失按顺序递补,hooks 容忍单字符串,截前 MAX_TOPIC_PICKS 条。
+ * 全部非法 → 空数组,调用方(skill.run)显式抛错拒绝渲染,绝不静默降级成空成稿任务。
+ */
+export function parseTopicPicksParam(input: unknown): TopicPick[] {
+  if (!Array.isArray(input)) return [];
+  const out: TopicPick[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const direction = typeof raw.direction === 'string' ? raw.direction.trim() : '';
+    if (!direction) continue;
+    const hooks = Array.isArray(raw.hooks)
+      ? raw.hooks.filter((h): h is string => typeof h === 'string' && h.trim() !== '').map((h) => h.trim())
+      : typeof raw.hooks === 'string' && raw.hooks.trim()
+      ? [raw.hooks.trim()]
+      : [];
+    const optStr = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    out.push({
+      number: Math.max(1, Math.floor(Number(raw.number)) || out.length + 1),
+      direction,
+      hooks,
+      ...(optStr(raw.angle) ? { angle: optStr(raw.angle)! } : {}),
+      ...(optStr(raw.basis) ? { basis: optStr(raw.basis)! } : {}),
+      ...(optStr(raw.imageIdea) ? { imageIdea: optStr(raw.imageIdea)! } : {}),
+      ...(optStr(raw.publishDay) ? { publishDay: optStr(raw.publishDay)! } : {}),
+    });
+    if (out.length >= MAX_TOPIC_PICKS) break;
+  }
+  return out;
+}
+
+/**
  * 找最近一次「已完成」选题任务的可勾选清单(工坊弹窗内嵌勾选卡用)。
  * 标题含标记 + status DONE,按 startedAt 取最新;任务内 assistant 步骤从后往前,
  * 取第一个解析出非空选题的 answer(过程中间答复不算)。无匹配返回 null,调用方降级为「立即出选题」入口。

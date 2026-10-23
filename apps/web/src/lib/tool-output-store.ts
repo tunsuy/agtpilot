@@ -30,8 +30,9 @@ import { isV2Enabled, safeName, userDirV2 } from './user-store-v2';
 export const SPILL_BUDGET_MB_DEFAULT = 20;
 /** TTL(天,env 可调):过期后读取诚实报错(已清理,需要请重新执行原工具) */
 export const SPILL_TTL_DAYS_DEFAULT = 7;
-/** 续读单次返回上限(字符,对齐 REFERENCE_CONTENT_LIMIT) */
-export const TOOL_OUTPUT_READ_LIMIT = 8000;
+/** 续读单次返回上限(字符,对齐 REFERENCE_CONTENT_LIMIT —— 同受内核
+ *  TOOL_OUTPUT_LIMIT 16384 约束,续读结果本身也不能再超截断线) */
+export const TOOL_OUTPUT_READ_LIMIT = 14000;
 
 /** taskId/callId 形态白名单(内核生成 id 均为 [A-Za-z0-9_-] 序列;拒绝路径穿越) */
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;

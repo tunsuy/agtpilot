@@ -816,10 +816,14 @@ export class OrchestratorService extends Service {
         },
       });
 
-      // 主循环用量入账（强制总结轮在下方补记，之后统一上报）
+      // 主循环用量入账（强制总结轮在下方补记，之后统一上报）。
+      // 取 max(SDK 汇总, 逐步已发之和)兜底:网关应报全步累计(plugin-model 已
+      // 改用 totalUsage),但若某网关退化成只报最后一步(result.usage 旧语义),
+      // 效率行会低报数倍(生产实测:逐步累计 126.6k vs 末步 29.1k)。max 之后
+      // 下方残差恒 ≥0,负残差被 emitUsageDelta 零闸拦下的旧路径不再依赖。
       usageAcc = {
-        promptTokens: loopResult.usage?.promptTokens || 0,
-        completionTokens: loopResult.usage?.completionTokens || 0,
+        promptTokens: Math.max(loopResult.usage?.promptTokens || 0, usageEmitted.promptTokens),
+        completionTokens: Math.max(loopResult.usage?.completionTokens || 0, usageEmitted.completionTokens),
       };
       // 残差对账：SDK 汇总与逐步汇报的口径差（如缓存 token 计法差异）
       // 一次性补发；逐步已发够（或超发）时不发 —— mission 总账仍与旧口径一致

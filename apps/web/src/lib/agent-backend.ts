@@ -2239,7 +2239,11 @@ class AgentBackend {
             historyMessages = (targetMission.steps || [])
               .filter((st: any) => st.role === 'user' && st.userPrompt)
               .slice(-6)
-              .map((st: any) => ({ role: 'user' as const, content: st.userPrompt as string }));
+              .map((st: any) => ({ role: 'user' as const, content: st.userPrompt as string }))
+              // 首轮启动时 step_user_init.userPrompt 与本次 prompt(goal)同文:
+              // orchestrator 还会把 prompt 追加为末条 user 消息,不去重就双发
+              // 同一份任务书(且后续每轮全量重发,白付双份 tokens)
+              .filter((msg) => msg.content !== goal);
           }
 
           // 工坊工具白名单(docs/design/token-consumption-and-tool-loading.md §9.1):

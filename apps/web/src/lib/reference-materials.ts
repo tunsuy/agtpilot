@@ -10,8 +10,13 @@ import type { ToolDefinition } from '@agtpilot/core';
 import { getUserMissions } from './user-store';
 import { loadMaterialUploadManifest, readMaterialText, UPLOAD_ID_RE } from './material-uploads';
 
-/** 服务端单次返回正文上限(字符);超出标记 truncated,Agent 可分段追读 */
-export const REFERENCE_CONTENT_LIMIT = 8000;
+/** 服务端单次返回正文上限(字符);超出标记 truncated,Agent 可分段追读。
+ *  取值 14000:分页结果经 JSON 序列化(转义膨胀 + success/title/nextOffset 外壳)
+ *  后仍须低于内核 TOOL_OUTPUT_LIMIT(16384 字符),否则会触发 spill 落盘换指针、
+ *  反而多一轮续读往返。旧值 8000 让 4 万字符文档分 5 页读,每页进上下文后在
+ *  后续每轮全量重发滚雪球(生产实测:一篇公众号文输入 126.6k tokens,重发占
+ *  约六成);调大后同文档 3 页读完,常见 ≤14k 字符文档一页读完。 */
+export const REFERENCE_CONTENT_LIMIT = 14000;
 
 export interface ReferenceMaterialBody {
   id: string;

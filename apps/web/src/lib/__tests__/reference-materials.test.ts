@@ -27,6 +27,9 @@ vi.mock('../user-store', () => ({
 
 // 上传库替身(真库落盘逻辑在 material-uploads.test.ts 覆盖;这里只测解析分支)
 const UPL_ID = 'upl_lz4k1a2b3c_0123456789abcdef';
+// 夹具长度跟随分页上限自适应:恒超一页 1000 字符,坐实 truncated/分页断言
+// (写死 9000 曾在 LIMIT 8000→14000 调整时失去「超长」前提)
+const UPL_LEN = REFERENCE_CONTENT_LIMIT + 1000;
 vi.mock('../material-uploads', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../material-uploads')>();
   return {
@@ -34,7 +37,7 @@ vi.mock('../material-uploads', async (importOriginal) => {
     loadMaterialUploadManifest: (uid: string, id: string) =>
       uid === 'u1' && id === UPL_ID ? { uploadId: id, fileName: '手册.pdf', title: '产品手册', kind: 'pdf' } : null,
     readMaterialText: (uid: string, id: string) =>
-      uid === 'u1' && id === UPL_ID ? 'y'.repeat(9000) : null,
+      uid === 'u1' && id === UPL_ID ? 'y'.repeat(UPL_LEN) : null,
   };
 });
 
@@ -102,7 +105,7 @@ describe('resolveReferenceMaterial · upl_ 上传文件分支(2026-10-20)', () =
   it('合法 upl_ id → 上传库解析(标题取 manifest,正文为抽取文本,超长标 truncated)', () => {
     const body = resolveReferenceMaterial('u1', UPL_ID);
     expect(body?.title).toBe('产品手册');
-    expect(body?.content).toHaveLength(9000);
+    expect(body?.content).toHaveLength(UPL_LEN);
     expect(body?.truncated).toBe(true);
     expect(body?.missionTitle).toBeUndefined(); // 上传文件不关联任务
   });
@@ -125,7 +128,7 @@ describe('read_reference_material 工具 · 上传资料分页', () => {
     expect(r1.truncated).toBe(true);
     expect(r1.nextOffset).toBe(REFERENCE_CONTENT_LIMIT);
     const r2: any = await tool.execute!({ materialId: UPL_ID, offset: REFERENCE_CONTENT_LIMIT } as any, {} as any);
-    expect(r2.content).toHaveLength(9000 - REFERENCE_CONTENT_LIMIT);
+    expect(r2.content).toHaveLength(UPL_LEN - REFERENCE_CONTENT_LIMIT);
     expect(r2.truncated).toBe(false);
   });
   it('解析失败给降级话术(上传文件已删除场景)', async () => {

@@ -257,4 +257,28 @@ describe('token 用量实时上报(agtpilot/usage 增量流)', () => {
     await h.run();
     expect(h.usageEvents).toEqual([]);
   });
+
+  it('SDK 汇总 < 逐步之和(网关退化成只报末步)→ 不补残差,效率行取逐步总和', async () => {
+    // 生产实况复刻:公众号任务 6 步,逐步 prompt 累计 126.6k,而 loopResult.usage
+    // 只带最后一步 29.1k —— 效率行曾因此低报 4 倍。orchestrator 取 max 兜底后,
+    // 效率行 = 逐步累计,残差为负被零闸拦截不补发,mission 总账(事件累计)不变。
+    const h = buildUsageHarness({
+      stepUsages: [
+        { promptTokens: 8000, completionTokens: 150 },
+        { promptTokens: 13000, completionTokens: 200 },
+        { promptTokens: 29000, completionTokens: 22900 },
+      ],
+      totalUsage: { promptTokens: 29000, completionTokens: 22900 }, // 仅末步口径
+    });
+    const result = await h.run();
+    // 只有 3 条逐步增量,无残差补发
+    expect(h.usageEvents).toEqual([
+      { promptTokens: 8000, completionTokens: 150 },
+      { promptTokens: 13000, completionTokens: 200 },
+      { promptTokens: 29000, completionTokens: 22900 },
+    ]);
+    // 效率行不再低报:取逐步累计总和而非末步值
+    expect(result.efficiency?.promptTokens).toBe(50000);
+    expect(result.efficiency?.completionTokens).toBe(23250);
+  });
 });

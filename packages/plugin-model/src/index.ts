@@ -378,12 +378,15 @@ export class ModelService extends Service implements ModelGateway {
     if (options.abortSignal?.aborted) throw new Error('Aborted');
 
     // 工具已在流消费期间由 SDK 执行完毕；这里只收集结果（属性均为 Promise）
-    // 用量已在 onStepFinish 按步实时记账（此处整包再记会双倍计数）
-    const [text, finishReason, steps, usage, response] = await Promise.all([
+    // 用量已在 onStepFinish 按步实时记账；上层拿本汇总做残差对账(只补正差,
+    // 不会双倍计数)。必须取 totalUsage(全步累计)—— result.usage 是「仅最后
+    // 一步」口径,多步任务会低报数倍(生产实测 126.6k 累计 vs 29.1k 末步)。
+    const [text, finishReason, steps, usage, totalUsage, response] = await Promise.all([
       result.text,
       result.finishReason,
       result.steps,
       result.usage,
+      result.totalUsage,
       result.response,
     ]);
 
@@ -405,8 +408,8 @@ export class ModelService extends Service implements ModelGateway {
       stepsExhausted: finishReason === 'tool-calls',
       responseMessages: response?.messages ?? [],
       usage: {
-        promptTokens: usage?.inputTokens ?? 0,
-        completionTokens: usage?.outputTokens ?? 0,
+        promptTokens: totalUsage?.inputTokens ?? usage?.inputTokens ?? 0,
+        completionTokens: totalUsage?.outputTokens ?? usage?.outputTokens ?? 0,
       },
     };
   }

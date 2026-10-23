@@ -749,7 +749,9 @@ export default function Workspace() {
     text: string,
     title?: string,
     targetMissionId?: string | null,
-    workshop?: WorkshopRunPayload
+    workshop?: WorkshopRunPayload,
+    /** 显式引用的技能包名:undefined=继承任务记录,数组(含 [])=显式覆盖(空=清空) */
+    skillPacks?: string[]
   ) => {
     if (!text.trim() || isSubmitting) return;
 
@@ -825,6 +827,8 @@ export default function Workspace() {
         startedAt: Date.now(),
         steps: [optimisticUserStep, optimisticLiveStep],
         conversationMessages: [],
+        // 乐观会话带上引用,驾驶舱 prefill 在 mission_created 替换前不闪空
+        ...(skillPacks?.length ? { skillPacks } : {}),
       };
       pendingLocalMissionIdRef.current = localMission.id;
       setMissions((prev) => [localMission, ...prev]);
@@ -836,7 +840,14 @@ export default function Workspace() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // 带 workshop 载荷的工坊任务由服务端权威渲染(注册表+当前档案+覆盖目录),忽略客户端 prompt
-        body: JSON.stringify({ prompt: text.trim(), title, missionId, ...(workshop ? { workshop } : {}) }),
+        // skillPacks:undefined 不发键(继承语义),[] 要发(续聊清空语义)
+        body: JSON.stringify({
+          prompt: text.trim(),
+          title,
+          missionId,
+          ...(workshop ? { workshop } : {}),
+          ...(skillPacks !== undefined ? { skillPacks } : {}),
+        }),
       });
     } catch (e) {
       console.error(e);

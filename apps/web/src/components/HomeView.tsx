@@ -35,9 +35,11 @@ import {
   MemoryItem,
   CronJobItem,
 } from '../types/agent';
+import { SkillPackPicker } from './SkillPackPicker';
 
 interface HomeViewProps {
-  onRunMission: (prompt: string, title?: string) => void;
+  /** 第 5 参 = 显式引用的技能包名;首页无 prefill,只在非空时发送(避免续聊误清继承值) */
+  onRunMission: (prompt: string, title?: string, missionId?: string | null, workshop?: any, skillPacks?: string[]) => void;
   missions: Mission[];
   connectors: ConnectorApp[];
   /** MCP 连接器就绪数，并入「N 个渠道就绪」统计（与连接器页口径一致） */
@@ -77,6 +79,8 @@ export function HomeView({
 
   const [promptText, setPromptText] = useState('');
   const [activeMode, setActiveMode] = useState<'goal' | 'patrol' | 'creative' | 'research'>('goal');
+  // 显式引用的技能包(提交后清空;非空才随派发发送)
+  const [selectedPacks, setSelectedPacks] = useState<string[]>([]);
 
   // 心智交互模式（以超级智能体为中心）
   const modes = [
@@ -125,8 +129,11 @@ export function HomeView({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!promptText.trim()) return;
-    onRunMission(promptText.trim());
+    // 技能包只在非空时发送:首页提交可能续聊现有任务(handleRun 回落
+    // activeMissionId),显式 [] 会误清任务记录里继承的引用
+    onRunMission(promptText.trim(), undefined, undefined, undefined, selectedPacks.length ? selectedPacks : undefined);
     setPromptText('');
+    setSelectedPacks([]);
   };
 
   const connectedCount =
@@ -227,6 +234,9 @@ export function HomeView({
                   </select>
                 </div>
               )}
+
+              {/* 技能包显式引用(向上弹层:footer 贴屏幕底) */}
+              <SkillPackPicker selected={selectedPacks} onChange={setSelectedPacks} direction="up" />
 
               <div className="hidden sm:flex items-center gap-2 text-[11px] text-zinc-400 font-mono ml-1">
                 <span>Enter 发送，Shift + Enter 换行</span>

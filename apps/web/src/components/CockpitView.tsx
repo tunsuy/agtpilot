@@ -5,6 +5,7 @@ import { copyToClipboard } from '../utils/nativeBridge';
 import {useSession } from 'next-auth/react';
 import ReactMarkdown from 'react-markdown';
 import { AnswerMarkdown } from './AnswerMarkdown';
+import { SkillPackPicker } from './SkillPackPicker';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import {
@@ -145,7 +146,8 @@ interface CockpitViewProps {
     missionId: string,
     part: 'artifact' | 'terminal' | 'viewport'
   ) => Promise<any> | void;
-  onRunMission: (prompt: string, title?: string, missionId?: string) => void;
+  /** 第 5 参 = 显式引用的技能包名;驾驶舱有 prefill(从任务记录预填),提交总是显式发送([]=清空) */
+  onRunMission: (prompt: string, title?: string, missionId?: string, workshop?: any, skillPacks?: string[]) => void;
   /** 小说包「下一步」出口(开书三段化串联):工坊载荷走服务端权威渲染,
    *  prompt 只作乐观气泡展示。续写包/大纲包之外的历史任务不触发。 */
   onRunNovelChain?: (workshop: WorkshopRunPayload, display: { prompt: string; title?: string }) => void;
@@ -199,6 +201,8 @@ export function CockpitView({
   const { data: session } = useSession();
   const currentUser = session?.user;
   const [prompt, setPrompt] = useState('');
+  // 显式引用的技能包:切会话时从任务记录预填(prefill effect 在 currentMission 定义后)
+  const [selectedPacks, setSelectedPacks] = useState<string[]>([]);
   const [copiedArtifact, setCopiedArtifact] = useState(false);
   const [copiedStepId, setCopiedStepId] = useState<string | null>(null);
   const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'source' | 'social'>('preview');
@@ -303,6 +307,13 @@ export function CockpitView({
   const currentMission = activeMissionId
     ? (missions.find((m) => m.id === activeMissionId) || null)
     : null;
+
+  // 技能包引用 prefill:切会话时从任务记录预填(续聊继承的引用可见可改);
+  // 同会话内的 SSE 更新不重填,不打断用户正在编辑的选择
+  useEffect(() => {
+    setSelectedPacks(currentMission?.skillPacks || []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMission?.id]);
 
   // 步骤 id → 下标(一次构建,避免每个步骤 findIndex 造成 O(n²))
   const stepIndexById = useMemo(() => {
@@ -429,7 +440,8 @@ export function CockpitView({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isSubmitting) return;
-    onRunMission(prompt.trim(), undefined, activeMissionId || undefined);
+    // 技能包总是显式发送(输入区有 prefill,WYSIWYG:[] = 清空任务记录的引用)
+    onRunMission(prompt.trim(), undefined, activeMissionId || undefined, undefined, selectedPacks);
     setPrompt('');
     // 发送后回到贴底态,跟进新一轮输出
     atBottomRef.current = true;
@@ -1589,6 +1601,13 @@ export function CockpitView({
               className="flex-1 resize-none bg-transparent border-none text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none leading-relaxed py-1 max-h-[200px] overflow-y-auto"
             />
             <div className="flex items-center gap-1.5 flex-shrink-0 pb-0.5">
+              {/* 技能包显式引用(紧凑触发器,向上弹层):prefill 自任务记录 */}
+              <SkillPackPicker
+                selected={selectedPacks}
+                onChange={setSelectedPacks}
+                compact
+                direction="up"
+              />
               {/* 执行中停止键常驻:打字不再把它顶掉,随时可终止;有文字时并排出现发送键 */}
               {currentMission && currentMission.status !== 'DONE' && (
                 <button

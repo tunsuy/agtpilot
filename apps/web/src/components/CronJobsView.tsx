@@ -24,13 +24,28 @@ import { CRUISE_TITLE_PREFIX } from '@/lib/mission-wire';
 import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
 import { buildOssRadarPrompt } from '@/workshops/oss_radar/context';
 import type { CronScenario } from '@/lib/cron-scenario';
+import { SkillPackPicker } from './SkillPackPicker';
 
 interface CronJobsViewProps {
   jobs: CronJobItem[];
   /** 巡航执行历史行(state/init cronRuns 下行 + SSE 广播实时更新) */
   runs?: CronRunMeta[];
-  onCreateJob: (job: { name: string; pattern: string; prompt: string; scenario?: CronScenario }) => Promise<void>;
-  onUpdateJob?: (job: { id: string; name: string; pattern: string; prompt: string }) => Promise<void>;
+  onCreateJob: (job: {
+    name: string;
+    pattern: string;
+    prompt: string;
+    scenario?: CronScenario;
+    /** 普通任务显式引用的技能包名(场景订阅任务永不携带) */
+    skillPacks?: string[];
+  }) => Promise<void>;
+  onUpdateJob?: (job: {
+    id: string;
+    name: string;
+    pattern: string;
+    prompt: string;
+    /** 总是显式发送(prefill UI,WYSIWYG):[]=清空继承值 */
+    skillPacks?: string[];
+  }) => Promise<void>;
   onToggleJob: (id: string) => Promise<void>;
   onDeleteJob: (id: string) => Promise<void>;
   onTriggerJob?: (id: string) => Promise<void>;
@@ -71,6 +86,8 @@ export function CronJobsView({
   const [isSaving, setIsSaving] = useState(false);
   // 预设带来的场景标记(scenario 任务触发时按最新档案重建 prompt,表单里的 prompt 仅作展示快照)
   const [presetScenario, setPresetScenario] = useState<CronScenario | null>(null);
+  // 显式引用的技能包(仅普通任务;场景订阅 = 内置 SOP,选择器不渲染)
+  const [skillPacksInput, setSkillPacksInput] = useState<string[]>([]);
 
   // 该任务的执行历史行:结构化 jobId 优先;旧数据(无 jobId)按标题约定匹配
   // (runs 服务端已按 startedAt 新前旧后排序)
@@ -122,6 +139,7 @@ export function CronJobsView({
     setPatternInput('0 9 * * *');
     setPromptInput('');
     setPresetScenario(null);
+    setSkillPacksInput([]);
     setIsModalOpen(true);
   };
 
@@ -132,6 +150,7 @@ export function CronJobsView({
     setPromptInput(job.prompt);
     // 编辑时保留原任务的 scenario 标记(触发时重建逻辑不变)
     setPresetScenario(job.scenario || null);
+    setSkillPacksInput(job.skillPacks || []);
     setIsModalOpen(true);
   };
 
@@ -141,11 +160,13 @@ export function CronJobsView({
     setIsSaving(true);
     try {
       if (editingJobId && onUpdateJob) {
+        // 编辑 = prefill UI,总是显式发送(WYSIWYG:[]=清空继承值)
         await onUpdateJob({
           id: editingJobId,
           name: nameInput.trim(),
           pattern: patternInput.trim(),
           prompt: promptInput.trim(),
+          skillPacks: skillPacksInput,
         });
       } else {
         await onCreateJob({
@@ -153,11 +174,14 @@ export function CronJobsView({
           pattern: patternInput.trim(),
           prompt: promptInput.trim(),
           scenario: presetScenario || undefined,
+          // 场景订阅任务永不携带;普通任务仅非空时发送
+          ...(!presetScenario && skillPacksInput.length ? { skillPacks: skillPacksInput } : {}),
         });
       }
       setNameInput('');
       setPromptInput('');
       setPatternInput('0 9 * * *');
+      setSkillPacksInput([]);
       setEditingJobId(null);
       setIsModalOpen(false);
     } finally {
@@ -171,6 +195,7 @@ export function CronJobsView({
     setPatternInput(preset.pattern);
     setPromptInput(preset.prompt);
     setPresetScenario(preset.scenario || null);
+    setSkillPacksInput([]);
   };
 
   return (
@@ -517,6 +542,19 @@ export function CronJobsView({
                   className="w-full px-3 py-2 text-xs rounded-xl border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
+
+              {/* 引用技能包:仅普通任务(场景订阅 = 内置 SOP,技能由工坊文档自管) */}
+              {!presetScenario && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-700 mb-1">
+                    引用技能包{' '}
+                    <span className="text-[10px] text-zinc-400 font-normal">
+                      (可选 · 每次触发注入其 SKILL.md 全文)
+                    </span>
+                  </label>
+                  <SkillPackPicker selected={skillPacksInput} onChange={setSkillPacksInput} />
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
                 <button

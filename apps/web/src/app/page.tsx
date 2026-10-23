@@ -209,6 +209,7 @@ export default function Workspace() {
     pattern: string;
     prompt: string;
     scenario?: CronScenario;
+    skillPacks?: string[];
   }) => {
     try {
       const res = await fetch('/api/cron/jobs', {
@@ -251,7 +252,13 @@ export default function Workspace() {
     }
   };
 
-  const handleUpdateCronJob = async (job: { id: string; name: string; pattern: string; prompt: string }) => {
+  const handleUpdateCronJob = async (job: {
+    id: string;
+    name: string;
+    pattern: string;
+    prompt: string;
+    skillPacks?: string[];
+  }) => {
     try {
       const res = await fetch('/api/cron/jobs', {
         method: 'POST',

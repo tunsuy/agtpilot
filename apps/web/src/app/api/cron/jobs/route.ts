@@ -73,6 +73,13 @@ export async function POST(req: NextRequest) {
         nextRun,
       };
       if (scenario) newJob.scenario = scenario;
+      // 显式技能包引用:仅普通任务(场景订阅 = 内置 SOP,永不携带);
+      // 白名单收敛为 canonical name,永不信任客户端
+      if (!scenario && Array.isArray(body.skillPacks) && body.skillPacks.length) {
+        const { sanitizeSkillPackRefs } = await import('@/lib/skill-center');
+        const packs = sanitizeSkillPackRefs(userId, body.skillPacks);
+        if (packs.length) newJob.skillPacks = packs;
+      }
       const jobs = saveUserCronJob(userId, newJob);
       // 同步注册到后台 Node.js 内存定时调度器
       backend.registerUserCronJob(userId, newJob);
@@ -118,6 +125,14 @@ export async function POST(req: NextRequest) {
       }
       if (name) existing.name = name.trim();
       if (prompt) existing.prompt = prompt.trim();
+      // 技能包引用:显式数组 = 覆盖(编辑表单是 prefill UI,[]=清空);
+      // 清空赋 undefined 而非 delete —— saveUserCronJob 是 merge-spread,缺键不清旧值。
+      // 场景任务忽略该字段(内置 SOP 永不携带)
+      if (Array.isArray(body.skillPacks) && !existing.scenario) {
+        const { sanitizeSkillPackRefs } = await import('@/lib/skill-center');
+        const packs = sanitizeSkillPackRefs(userId, body.skillPacks);
+        existing.skillPacks = packs.length ? packs : undefined;
+      }
       saveUserCronJob(userId, existing);
 
       if (existing.status === 'active') {

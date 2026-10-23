@@ -960,7 +960,18 @@ class AgentBackend {
             // text-deliverable 声明参与:契约字段头文本本身即交付件,原样落库(同款
             // 倒扫;无契约锚/过短 = 非成品,绝不发布)。模型已自行发布过(mission.artifact
             // 已存在)则跳过;非成品格式解析不出包也绝不发布。
-            if (mission.workshopId && !mission.artifact) {
+            // 续聊轮同样要刷新(2026-10-23 生产实证:公众号改写轮 artifact 仍是旧稿,
+            // 右栏交付成果永远停在首轮):旧守卫 `!mission.artifact` 让首轮落地后交付库
+            // 永久锁死。放宽为「无 artifact 或 artifact 是自动落地的(描述带标记)」——
+            // 模型经 artifact_render/PPT 显式发布的产物(无标记)仍跳过不覆盖;自动
+            // 抽取的产物按原 id 就地更新,交付库不长重复记录,artifact 事件广播
+            // (mission_updated/artifact_updated)天然刷新右栏。
+            const AUTO_DELIVERABLE_MARK = '收尾自动落入交付库';
+            const prevArtifact = mission.artifact;
+            const prevIsAutoLanded = String(prevArtifact?.description || '').includes(
+              AUTO_DELIVERABLE_MARK
+            );
+            if (mission.workshopId && (!prevArtifact || prevIsAutoLanded)) {
               try {
                 const { resolveDeliverableKind } = require('@/workshops/registry');
                 const kind = resolveDeliverableKind(mission.workshopId);
@@ -986,10 +997,12 @@ class AgentBackend {
                       kind === 'oss-opportunity' ? '条' : kind === 'text-deliverable' ? '份' : '篇';
                     svc.createOrUpdateArtifact(
                       {
+                        // 续聊刷新走原 id 就地更新(ArtifactService 同 id 覆盖不重复计数)
+                        ...(prevIsAutoLanded && prevArtifact?.id ? { id: prevArtifact.id } : {}),
                         title: deliv.title,
                         type: 'markdown',
                         content: deliv.content,
-                        description: `${label} · ${deliv.count} ${unit}(收尾自动落入交付库)`,
+                        description: `${label} · ${deliv.count} ${unit}(${AUTO_DELIVERABLE_MARK})`,
                       },
                       mission.id
                     );

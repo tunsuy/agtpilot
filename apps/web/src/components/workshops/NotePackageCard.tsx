@@ -13,7 +13,7 @@
  *   /api/workshops/deliver 服务端直调落稿工具,正文不过模型、不耗 token;
  * - 无 direct 声明时回退旧路径:续聊同一 mission,Agent 按投递指令调工具。
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Copy, Check, FileText, ChevronDown, SendHorizonal } from 'lucide-react';
 import { copyToClipboard } from '../../utils/nativeBridge';
 import {
@@ -97,6 +97,13 @@ function NotePackageCard({
   const [sending, setSending] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [justDelivered, setJustDelivered] = useState(false);
+  /** 本卡是否发起过投递轮(旧续聊路径)。draftInFlight 只在此为真时才代表
+   *  「投递中」—— 无关续聊(改写轮/追问)同样让 mission ACTIVE,按钮不能
+   *  冒充投递状态(与 ArticlePackageCard 同款修复,2026-10-23 生产实证) */
+  const [deliverStarted, setDeliverStarted] = useState(false);
+  useEffect(() => {
+    if (!draftInFlight) setDeliverStarted(false);
+  }, [draftInFlight]);
 
   const handleCopyAll = async () => {
     const ok = await copyToClipboard(buildNotePackageCopyText(pkg, selectedTitle));
@@ -112,6 +119,8 @@ function NotePackageCard({
       setConfirmOpen(true);
       return;
     }
+    // 旧续聊路径:本轮续聊就是投递轮,按钮据此进入「投递中…」
+    setDeliverStarted(true);
     onRunMission?.(draft.build(pkg, selectedTitle), undefined, missionId || undefined);
   };
 
@@ -137,6 +146,8 @@ function NotePackageCard({
   const delivered =
     justDelivered || isDraftDelivered(draftDelivered, pkg.titles[selectedTitle], pkg.body);
   const inFlight = draftInFlight || sending;
+  /** 真·投递在飞:直连 send 中,或本卡发出的旧路径投递轮还在跑 */
+  const delivering = sending || (Boolean(draftInFlight) && deliverStarted);
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
@@ -267,18 +278,23 @@ function NotePackageCard({
             无声明回退旧续聊路径(Agent 调工具,high 审批门)。发布永远人工。
             投递终态从 mission 步骤推导(直连成功也会回写同形 DONE 步骤):
             已落稿 → 已投递不可再点(防重复);任务在飞/直连在飞 → 禁用;
-            失败 → 内联报错,按钮回到可点(可重试) */}
+            失败 → 内联报错,按钮回到可点(可重试)。
+            「投递中…」只在本卡真的发起投递时出现;无关续聊(改写轮)期间按钮
+            置灰保留原标签 + title 提示,不冒充投递状态 */}
         {draft && draftEnabled && (draft.direct || onRunMission) && (
           <button
             type="button"
             onClick={handleDraft}
             disabled={delivered || inFlight}
+            title={inFlight && !delivering && !delivered ? '任务执行中,完成后可投递' : undefined}
             className={`w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition shadow-xs ${
               delivered
                 ? 'bg-zinc-100 text-zinc-400 cursor-default'
-                : inFlight
+                : delivering
                   ? 'bg-emerald-300 text-white cursor-not-allowed'
-                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  : inFlight
+                    ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
             }`}
           >
             {delivered ? (
@@ -286,7 +302,7 @@ function NotePackageCard({
                 <Check className="h-3.5 w-3.5" />
                 已存入草稿箱
               </>
-            ) : inFlight ? (
+            ) : delivering ? (
               <>
                 <span className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
                 投递中…

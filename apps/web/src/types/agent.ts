@@ -328,9 +328,15 @@ export interface ArtifactSocialPostMeta {
 }
 
 export interface ArtifactState {
+  /** 产物 id(服务端 payload 为完整 ArtifactData,art_<ts>_<rand>;续聊轮
+   *  自动落地刷新按原 id 就地更新,交付库不长重复记录) */
+  id?: string;
   title?: string;
   type?: string;
   content: string;
+  /** 产物描述(服务端 ArtifactData 透传;「收尾自动落入交付库」标记是
+   *  自动抽取产物的身份锚,续聊刷新只覆盖带此标记的,不碰模型显式发布的) */
+  description?: string;
   postMeta?: ArtifactSocialPostMeta;
   /** type='file' 时携带:二进制文件本体在服务端文件库,凭 fileId 走 /api/artifacts/file 下载 */
   fileMeta?: {

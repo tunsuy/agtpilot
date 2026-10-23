@@ -50,8 +50,14 @@ interface MobileActivityViewProps {
   terminalLogs: TerminalLog[];
   /** 跳到交付物 Tab（看最终产物），不传则不显示入口 */
   onOpenDeliverable?: () => void;
-  /** 续聊同一 mission（勾选选题一键成稿的移动端唯一回复入口） */
-  onRunMission?: (prompt: string, title?: string, missionId?: string) => void;
+  /** 续聊同一 mission（勾选选题一键成稿的移动端唯一回复入口）;skillPacks=显式技能包引用(undefined 继承/数组覆盖) */
+  onRunMission?: (
+    prompt: string,
+    title?: string,
+    missionId?: string,
+    workshop?: any,
+    skillPacks?: string[]
+  ) => void;
   /** 小说包「下一步」链式出口(对话态 novel 卡;与桌面驾驶舱同款) */
   onRunNovelChain?: NovelChainHandler;
   /** 发送防重入(page.tsx isSubmitting):composer 发送键转圈 */
@@ -206,9 +212,9 @@ export function MobileActivityView({
   const runInChat = useMemo(
     () =>
       onRunMission
-        ? (text: string, title?: string, missionId?: string) => {
+        ? (text: string, title?: string, missionId?: string, workshop?: any, skillPacks?: string[]) => {
             setFollowToken((t) => t + 1);
-            onRunMission(text, title, missionId);
+            onRunMission(text, title, missionId, workshop, skillPacks);
           }
         : undefined,
     [onRunMission]

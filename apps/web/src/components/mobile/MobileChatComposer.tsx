@@ -13,13 +13,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Loader2, Square } from 'lucide-react';
 import type { Mission } from '../../types/agent';
+import { SkillPackPicker } from '../SkillPackPicker';
 
 interface MobileChatComposerProps {
   mission: Mission;
   /** 发送防重入(page.tsx isSubmitting) */
   isSubmitting: boolean;
-  /** 发送:prompt + 显式 mission.id(续聊当前会话,绝不回落新会话) */
-  onRunMission: (prompt: string, title?: string, missionId?: string) => void;
+  /** 发送:prompt + 显式 mission.id(续聊当前会话,绝不回落新会话)+ 显式技能包引用 */
+  onRunMission: (
+    prompt: string,
+    title?: string,
+    missionId?: string,
+    workshop?: any,
+    skillPacks?: string[]
+  ) => void;
   /** 停止执行中任务(mission 未终态时显示停止钮) */
   onStopMission?: (missionId: string) => void;
 }
@@ -31,7 +38,15 @@ export function MobileChatComposer({
   onStopMission,
 }: MobileChatComposerProps) {
   const [draft, setDraft] = useState('');
+  const [selectedPacks, setSelectedPacks] = useState<string[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 有 prefill 宿主:切换会话时从任务记录预填引用;SSE 更新(mission 对象
+  // 变化但 id 不变)不重填,不打断用户正在进行的编辑
+  useEffect(() => {
+    setSelectedPacks(mission.skillPacks || []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mission.id]);
 
   // 输入框随内容自动长高(多行自适应,上限后内部滚动)
   useEffect(() => {
@@ -46,8 +61,9 @@ export function MobileChatComposer({
     if (!draft.trim() || isSubmitting) return;
     // 显式传 mission.id:回退会话(activeMissionId 为 null)也能续对,
     // undefined 会被 handleRun 回落逻辑误开新会话。发送后不收键盘
-    // (继续跟进流式输出,不打断输入节奏)
-    onRunMission(draft.trim(), undefined, mission.id);
+    // (继续跟进流式输出,不打断输入节奏)。
+    // 技能包总是显式发送(prefill 宿主 WYSIWYG:[]=清空继承值)
+    onRunMission(draft.trim(), undefined, mission.id, undefined, selectedPacks);
     setDraft('');
   };
 
@@ -76,6 +92,12 @@ export function MobileChatComposer({
           className="flex-1 resize-none bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 focus:bg-white leading-relaxed max-h-[140px] overflow-y-auto"
         />
         <div className="flex items-center gap-1.5 flex-shrink-0 pb-0.5">
+          <SkillPackPicker
+            selected={selectedPacks}
+            onChange={setSelectedPacks}
+            variant="sheet"
+            compact
+          />
           {/* 执行中停止键常驻(桌面同口径:status !== 'DONE' 显示) */}
           {mission.status !== 'DONE' && onStopMission && (
             <button

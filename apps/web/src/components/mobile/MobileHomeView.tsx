@@ -4,6 +4,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { ArrowUp, Loader2, Square, ChevronRight, CheckCircle2, AlertCircle, Hourglass, ShieldQuestion } from 'lucide-react';
 import { Mission } from '../../types/agent';
 import { isCronMission } from '../../lib/mission-wire';
+import { SkillPackPicker } from '../SkillPackPicker';
 
 interface MobileHomeViewProps {
   missions: Mission[];
@@ -11,7 +12,13 @@ interface MobileHomeViewProps {
   userName?: string | null;
   isLoggedIn: boolean;
   approvalCount: number;
-  onRunMission: (text: string, title?: string) => void;
+  onRunMission: (
+    text: string,
+    title?: string,
+    missionId?: string | null,
+    workshop?: any,
+    skillPacks?: string[]
+  ) => void;
   onStopMission: (missionId: string) => void;
   /** 点击任务 → 跳到"动态"tab 查看该任务时间线 */
   onOpenMission: (missionId: string) => void;
@@ -59,6 +66,7 @@ export function MobileHomeView({
   onRequireLogin,
 }: MobileHomeViewProps) {
   const [draft, setDraft] = useState('');
+  const [selectedPacks, setSelectedPacks] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 巡航会话不进移动端首页的进行中/最近完成列表(执行历史在巡航中心,
@@ -87,8 +95,10 @@ export function MobileHomeView({
       onRequireLogin();
       return;
     }
-    onRunMission(text);
+    // 无 prefill 宿主:仅非空时发送(提交可能续聊现有任务,空选择器不得误清继承值)
+    onRunMission(text, undefined, undefined, undefined, selectedPacks.length ? selectedPacks : undefined);
     setDraft('');
+    setSelectedPacks([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
@@ -133,8 +143,16 @@ export function MobileHomeView({
           placeholder="一句话派个任务，如：帮我调研下周末北京适合遛娃的地方"
           className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-6 text-zinc-900 placeholder:text-zinc-400 focus:outline-none"
         />
-        <div className="flex items-center justify-between px-3 pb-3">
-          <span className="text-[11px] text-zinc-300 pl-1">Enter 发送 · Shift+Enter 换行</span>
+        <div className="flex items-center justify-between gap-2 px-3 pb-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <SkillPackPicker
+              selected={selectedPacks}
+              onChange={setSelectedPacks}
+              variant="sheet"
+              compact
+            />
+            <span className="text-[11px] text-zinc-300 pl-1 truncate">Enter 发送 · Shift+Enter 换行</span>
+          </div>
           <button
             type="button"
             onClick={submit}

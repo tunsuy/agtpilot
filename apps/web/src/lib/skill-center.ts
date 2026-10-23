@@ -868,11 +868,11 @@ export function marketSources(): MarketRegistrySource[] {
     }
   }
   return [
-    // 缺省挂魔搭+SkillHub 双国内源:国内网络路径快、条目全(魔搭 8 万+ /
-    // SkillHub 20 万+),是主力浏览源。
+    // 缺省挂 SkillHub+魔搭 双国内源(SkillHub 排首位:20 万+ 条目、sortBy=score
+    // 精选、清单带 sha256 可做内容级校验,是主力浏览源;魔搭 8 万+ 次之)。
     // Anthropic 官方库暂下线(直连不稳);需要时用 AGTPILOT_SKILL_REGISTRY_SOURCES 配回。
-    { id: 'modelscope', label: '魔搭技能库(国内)', repo: '', type: 'modelscope' },
     { id: 'skillhub', label: 'SkillHub(腾讯·国内)', repo: '', type: 'skillhub' },
+    { id: 'modelscope', label: '魔搭技能库(国内)', repo: '', type: 'modelscope' },
   ];
 }
 

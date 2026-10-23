@@ -8,7 +8,6 @@ import {
   X,
   RotateCw,
   Package,
-  Store,
   Cpu,
   Download,
   Eye,
@@ -90,15 +89,17 @@ const PLATFORM_META: Record<string, { label: string; badgeCls: string }> = {
   skillhub: { label: 'SkillHub', badgeCls: 'bg-purple-50 text-purple-600 border-purple-200' }, // 紫色与魔搭蓝区分
 };
 
-/** 市场源头部 & 卡片外链:平台级主页与 title(github 回落 repo 形态) */
-const SOURCE_META: Record<string, { home: string; linkTitle: string; badge: string; badgeCls: string }> = {
+/** 市场源子 tab/头部 & 卡片外链:tab 短名、平台级主页与 title(github 回落 repo 形态) */
+const SOURCE_META: Record<string, { tab: string; home: string; linkTitle: string; badge: string; badgeCls: string }> = {
   modelscope: {
+    tab: '魔搭',
     home: 'https://modelscope.cn/skills',
     linkTitle: '在魔搭打开(新标签)',
     badge: '国内',
     badgeCls: 'bg-blue-50 text-blue-600 border-blue-200',
   },
   skillhub: {
+    tab: 'SkillHub',
     home: 'https://skillhub.cn/skills?sortBy=score',
     linkTitle: '在 SkillHub 打开(新标签)',
     badge: '腾讯·国内',
@@ -114,8 +115,8 @@ interface SkillsViewProps {
 }
 
 export function SkillsView({ onCountsChange }: SkillsViewProps) {
-  // 默认落「技能市场」且只看国内双源(魔搭+SkillHub):它们是主力浏览路径
-  // (8万+/20万+条目、服务端搜索、国内快),GitHub 源小且网络不稳;
+  // 默认落「技能市场」且只看国内双源(SkillHub 首位+魔搭):它们是主力浏览路径
+  // (20万+/8万+ 条目、服务端搜索、国内快),GitHub 源小且网络不稳;
   // 「全部」分区仍保留(四块堆叠),只是不再作为落地态
   const [section, setSection] = useState<Section>('market');
   const [searchQuery, setSearchQuery] = useState('');
@@ -342,6 +343,10 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
   useEffect(() => {
     setMarketVisible({});
   }, [marketSearch, section, market]);
+  // 市场源子 tab:魔搭/SkillHub 一次只看一源(替代平铺,页面高度减半)。派生回落:
+  // 选中源被滤掉(搜索零结果/env 换源)时自动落回首源,无需复位 effect
+  const [marketSourceId, setMarketSourceId] = useState<string | null>(null);
+  const activeMarketSrc = filteredMarket.find((s) => s.id === marketSourceId) ?? filteredMarket[0] ?? null;
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 py-8 md:py-12 space-y-8 animate-fadeIn">
@@ -555,25 +560,9 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
         </section>
       )}
 
-      {/* 技能市场 */}
+      {/* 技能市场(顶部 tab 即标题,不再另立分区标题;双源走子 tab 一次一源,不平铺) */}
       {show('market') && (
         <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5">
-              <Store className="h-4 w-4 text-blue-500" />
-              技能市场
-              <span className="text-[10px] font-normal text-zinc-400">Agent Skills 开放标准生态 · 服务端索引</span>
-            </h2>
-            {market !== null && (
-              <button
-                onClick={() => loadMarket(true, marketSearch || undefined)}
-                className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 transition"
-              >
-                <RefreshCw className={`h-3 w-3 ${marketLoading ? 'animate-spin' : ''}`} />
-                重新拉取
-              </button>
-            )}
-          </div>
           {!marketEnabled ? (
             <EmptyHint text="技能市场已关闭(AGTPILOT_SKILL_MARKET=0)" />
           ) : marketLoading && market === null ? (
@@ -584,14 +573,53 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
             </div>
           ) : (
             <>
-              {filteredMarket.map((src) => {
+              {/* 源子 tab(分段控制器,与记忆页主体切换同语言)+ 重新拉取 */}
+              {activeMarketSrc && (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="inline-flex items-center gap-0.5 p-1 rounded-xl bg-zinc-100 border border-zinc-200/60 max-w-full overflow-x-auto">
+                    {filteredMarket.map((src) => {
+                      const active = src.id === activeMarketSrc.id;
+                      return (
+                        <button
+                          key={src.id}
+                          onClick={() => setMarketSourceId(src.id)}
+                          className={`px-3.5 py-1.5 rounded-lg text-xs whitespace-nowrap transition flex items-center gap-1.5 ${
+                            active
+                              ? 'bg-white text-zinc-900 font-semibold shadow-xs'
+                              : 'text-zinc-500 font-medium hover:text-zinc-700'
+                          }`}
+                        >
+                          <span>{(src.type && SOURCE_META[src.type]?.tab) || src.label}</span>
+                          <span
+                            className={`text-[10px] px-1 rounded-full ${
+                              active ? 'bg-zinc-100 text-zinc-600' : 'bg-zinc-200/70 text-zinc-500'
+                            }`}
+                          >
+                            {src.skills.length}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => loadMarket(true, marketSearch || undefined)}
+                    className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 transition flex-shrink-0"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${marketLoading ? 'animate-spin' : ''}`} />
+                    重新拉取
+                  </button>
+                </div>
+              )}
+              {filteredMarket
+                .filter((src) => src.id === activeMarketSrc?.id)
+                .map((src) => {
               // 每源独立的渐进披露:marketVisible 记录该源已展开到的张数(缺省 = 首屏)
               const shown = Math.min(marketVisible[src.id] ?? MARKET_PAGE, src.skills.length);
               const remaining = src.skills.length - shown;
               return (
               <div key={src.id} className="space-y-2">
                 <div className="flex items-center gap-2 text-[11px] text-zinc-500">
-                  <span className="font-semibold text-zinc-700">{src.label}</span>
+                  {/* 源名已在子 tab,这里只留徽标/主页外链/搜索态提示 */}
                   {src.type && SOURCE_META[src.type] ? (
                     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${SOURCE_META[src.type].badgeCls}`}>
                       {SOURCE_META[src.type].badge}

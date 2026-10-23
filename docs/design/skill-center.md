@@ -15,7 +15,7 @@ plugin-skill 已有三种技能形态,技能中心不新造形态,只做**管理
 | card(TRS 五字段技能卡) | 任务轨迹自动蒸馏 | 用户域 `data.skillCards` | 展示 + **删除** |
 | pack(用户安装域)**新增** | 生态市场引用导入 | 用户域 `v2/<user>/skill-packs/` | 展示 + **解除引用** |
 
-生态标准对齐 **Agent Skills 开放标准**(agentskills.io:SKILL.md + YAML frontmatter)。缺省三个注册表源:`anthropics/skills`(GitHub,事实标准、纯文件形态与现有 pack 扫描器零转换兼容、可离线自托管)、**魔搭 ModelScope**(国内源,技能是其 hub 仓库类型之一,匿名 HTTP 全通、无需 git 与 token,总量 8 万+ 条,列表自带中文描述)与 **SkillHub**(腾讯系国内源 skillhub.cn,匿名 HTTP 全通,总量 20 万+ 条,列表自带中文名/中文子类/下载量,文件清单逐文件带 sha256)。
+生态标准对齐 **Agent Skills 开放标准**(agentskills.io:SKILL.md + YAML frontmatter)。缺省两个国内注册表源:**SkillHub**(腾讯系国内源 skillhub.cn,排首位——20 万+ 条目、sortBy=score 精选、文件清单带 sha256 可做内容级校验,匿名 HTTP 全通)与**魔搭 ModelScope**(国内源,技能是其 hub 仓库类型之一,匿名 HTTP 全通、无需 git 与 token,总量 8 万+ 条,列表自带中文描述)。`anthropics/skills`(GitHub,事实标准、纯文件形态与现有 pack 扫描器零转换兼容、可离线自托管)因直连不稳暂下线,需要时用 `AGTPILOT_SKILL_REGISTRY_SOURCES` 配回。
 
 ## 2. 分层(铁律对照)
 
@@ -112,14 +112,14 @@ plugin-skill 已有三种技能形态,技能中心不新造形态,只做**管理
 
 ## 8. UI(SkillsView)
 
-五个分区:全部 / 技能卡(自沉淀,五字段展示+删除) / 已引用(来源 repo@sha·path 或「魔搭/SkillHub · id」、文件数、解除引用) / 生态市场(懒加载、按源分组、详情预览弹窗、引用需风险确认) / 内置(只读)。市场搜索框输入停顿 500ms 触发**服务端搜索**(魔搭 8 万+ / SkillHub 20 万+ 条目本地过滤不够;服务端搜索平台条目豁免本地过滤,防抖等待期不本地重滤防跳动);魔搭条目带「魔搭」蓝标、SkillHub 条目带「SkillHub」紫标,均有下载量与外链跳转,已引用判断带平台维度(不同平台同 repo 名不串)。详情弹窗展示 SKILL.md 全文,SkillHub 条目另带「腾讯安全扫描」徽标(benign 绿 / 其他警示色,附报告外链;best-effort,拿不到不渲染)。Navbar「技能」入口带琥珀色计数徽标(卡数+已引用数);移动端「我的」页有技能中心入口(全屏覆盖层)。删除/卸载均有确认弹窗并提示「进台账留痕」。
+五个分区:全部 / 技能卡(自沉淀,五字段展示+删除) / 已引用(来源 repo@sha·path 或「魔搭/SkillHub · id」、文件数、解除引用) / 生态市场(懒加载、**源子 tab 一次一源**——分段控制器,SkillHub 首位、tab 带计数,不平铺;详情预览弹窗、引用需风险确认) / 内置(只读)。市场搜索框输入停顿 500ms 触发**服务端搜索**(魔搭 8 万+ / SkillHub 20 万+ 条目本地过滤不够;服务端搜索平台条目豁免本地过滤,防抖等待期不本地重滤防跳动);魔搭条目带「魔搭」蓝标、SkillHub 条目带「SkillHub」紫标,均有下载量与外链跳转,已引用判断带平台维度(不同平台同 repo 名不串)。详情弹窗展示 SKILL.md 全文,SkillHub 条目另带「腾讯安全扫描」徽标(benign 绿 / 其他警示色,附报告外链;best-effort,拿不到不渲染)。Navbar「技能」入口带琥珀色计数徽标(卡数+已引用数);移动端「我的」页有技能中心入口(全屏覆盖层)。删除/卸载均有确认弹窗并提示「进台账留痕」。
 
 ## 9. 环境变量
 
 | 变量 | 缺省 | 作用 |
 |---|---|---|
 | `AGTPILOT_SKILL_MARKET` | 开 | `=0` 关闭市场(索引/导入/详情全拒) |
-| `AGTPILOT_SKILL_REGISTRY_SOURCES` | `anthropics/skills` + 魔搭 + SkillHub | JSON 数组覆盖注册表源 `[{id,label,repo,type?}]`;`type:'modelscope'|'skillhub'` 时 `repo` 可空(平台级索引),其余按 github `owner/repo` 校验 |
+| `AGTPILOT_SKILL_REGISTRY_SOURCES` | SkillHub + 魔搭(anthropics/skills 暂下线,env 配回) | JSON 数组覆盖注册表源 `[{id,label,repo,type?}]`;`type:'modelscope'|'skillhub'` 时 `repo` 可空(平台级索引),其余按 github `owner/repo` 校验 |
 | `GITHUB_TOKEN` | 无 | 可选;提高 GitHub API 限额(魔搭/SkillHub 无需 token) |
 
 ## 10. 测试覆盖

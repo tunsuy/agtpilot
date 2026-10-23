@@ -274,15 +274,17 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
 
   const filteredCards = cards.filter((c) => matchQ(c.trigger, c.steps, c.avoid, ...(c.keywords || [])));
   const filteredInstalled = installed.filter((p) => matchQ(p.name, p.description, p.source?.repo));
-  // 搜索态且服务端结果已同步时,魔搭条目以服务端搜索为准(服务端匹配字段更全,
-  // 本地不再二次过滤,避免误杀);github 条目服务端也已过滤,本地过滤仅作输入中的即时反馈
-  const msServerFresh = marketSearch !== '' && marketSearch === searchQuery.trim();
+  // 魔搭条目不做本地过滤:服务端搜索是唯一权威(匹配字段更全,本地 matchQ 反而误杀)。
+  // 此前输入期间(防抖未触发、marketSearch 还是旧值)每个键击都本地重滤一遍前 50 条,
+  // 三列网格随键伸缩、页面跳动;现在防抖等待期保持上一批服务端结果稳定展示,
+  // 新结果到达一次性替换(每次搜索至多一次重排)。github 条目(env 配源才会出现)
+  // 仍本地过滤作输入中的即时反馈。
   const filteredMarket: MarketSource[] = (market || [])
     .map((s) => ({
       ...s,
       skills: s.skills.filter(
         (k) =>
-          (msServerFresh && k.platform === 'modelscope') ||
+          k.platform === 'modelscope' ||
           matchQ(k.name, k.displayName, k.description, k.path, k.category, k.repo)
       ),
     }))

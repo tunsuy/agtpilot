@@ -37,12 +37,18 @@ export function MemoriesView({
   const [categoryInput, setCategoryInput] = useState<MemoryItem['category']>('preference');
   const [isSaving, setIsSaving] = useState(false);
 
+  // 分类计数跟随当前主体:选「Agent 经验」时只统计 agent 记忆的分类分布,
+  // 不再拿全局数字误导(此前两排计数各自独立,看起来像重复的一排)。
+  const subjectScoped = memories.filter(
+    (m) => subjectFilter === 'all' || (m.subject || 'user') === subjectFilter
+  );
+
   const categories = [
-    { id: 'all', label: '全部记忆', count: memories.length },
-    { id: 'preference', label: '个性与偏好', count: memories.filter((m) => m.category === 'preference').length },
-    { id: 'rule', label: '执行红线/规则', count: memories.filter((m) => m.category === 'rule').length },
-    { id: 'project', label: '项目背景', count: memories.filter((m) => m.category === 'project').length },
-    { id: 'fact', label: '关键事实', count: memories.filter((m) => m.category === 'fact').length },
+    { id: 'all', label: '全部分类', count: subjectScoped.length },
+    { id: 'preference', label: '个性与偏好', count: subjectScoped.filter((m) => m.category === 'preference').length },
+    { id: 'rule', label: '执行红线/规则', count: subjectScoped.filter((m) => m.category === 'rule').length },
+    { id: 'project', label: '项目背景', count: subjectScoped.filter((m) => m.category === 'project').length },
+    { id: 'fact', label: '关键事实', count: subjectScoped.filter((m) => m.category === 'fact').length },
   ];
 
   // 记忆主体分组:用户事实记忆(画像/偏好) vs Agent 经验记忆(环境/工具/流程)
@@ -149,22 +155,22 @@ export function MemoriesView({
         </button>
       </div>
 
-      {/* 记忆主体分组(用户事实记忆 / Agent 经验记忆) */}
-      <div className="flex items-center gap-1.5">
+      {/* 记忆主体分组(用户事实记忆 / Agent 经验记忆)——分段控制器样式,与下方分类 chips 视觉区分 */}
+      <div className="inline-flex items-center gap-0.5 p-1 rounded-xl bg-zinc-100 border border-zinc-200/60">
         {subjects.map((s) => (
           <button
             key={s.id}
             onClick={() => setSubjectFilter(s.id)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-medium transition flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 ${
               subjectFilter === s.id
-                ? 'bg-zinc-900 text-white shadow-xs'
-                : 'bg-zinc-100 hover:bg-zinc-200/70 text-zinc-600'
+                ? 'bg-white text-zinc-900 font-semibold shadow-xs'
+                : 'text-zinc-500 font-medium hover:text-zinc-700'
             }`}
           >
             <span>{s.label}</span>
             <span
               className={`text-[10px] px-1 rounded-full ${
-                subjectFilter === s.id ? 'bg-zinc-700 text-zinc-200' : 'bg-zinc-200 text-zinc-500'
+                subjectFilter === s.id ? 'bg-zinc-100 text-zinc-600' : 'bg-zinc-200/70 text-zinc-500'
               }`}
             >
               {s.count}

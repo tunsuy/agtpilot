@@ -89,21 +89,18 @@ const PLATFORM_META: Record<string, { label: string; badgeCls: string }> = {
   skillhub: { label: 'SkillHub', badgeCls: 'bg-purple-50 text-purple-600 border-purple-200' }, // 紫色与魔搭蓝区分
 };
 
-/** 市场源子 tab/头部 & 卡片外链:tab 短名、平台级主页与 title(github 回落 repo 形态) */
-const SOURCE_META: Record<string, { tab: string; home: string; linkTitle: string; badge: string; badgeCls: string }> = {
+/** 市场源子 tab/外链 & 卡片外链:tab 短名、平台级主页与 title(github 回落 repo 形态)。
+ *  徽标不再单列(源名与「国内/腾讯」语义已进 tab 文案),badge 字段随之退役 */
+const SOURCE_META: Record<string, { tab: string; home: string; linkTitle: string }> = {
   modelscope: {
     tab: '魔搭',
     home: 'https://modelscope.cn/skills',
     linkTitle: '在魔搭打开(新标签)',
-    badge: '国内',
-    badgeCls: 'bg-blue-50 text-blue-600 border-blue-200',
   },
   skillhub: {
     tab: 'SkillHub',
     home: 'https://skillhub.cn/skills?sortBy=score',
     linkTitle: '在 SkillHub 打开(新标签)',
-    badge: '腾讯·国内',
-    badgeCls: 'bg-purple-50 text-purple-600 border-purple-200',
   },
 };
 
@@ -601,13 +598,33 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                       );
                     })}
                   </div>
-                  <button
-                    onClick={() => loadMarket(true, marketSearch || undefined)}
-                    className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 transition flex-shrink-0"
-                  >
-                    <RefreshCw className={`h-3 w-3 ${marketLoading ? 'animate-spin' : ''}`} />
-                    重新拉取
-                  </button>
+                  <div className="flex items-center gap-2.5 flex-shrink-0">
+                    {/* 源主页外链:源名/徽标语义已在子 tab,不再单占一行 */}
+                    <a
+                      href={
+                        activeMarketSrc.type && SOURCE_META[activeMarketSrc.type]
+                          ? SOURCE_META[activeMarketSrc.type].home
+                          : `https://github.com/${activeMarketSrc.repo}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-zinc-400 hover:text-zinc-700 transition"
+                      title={
+                        activeMarketSrc.type && SOURCE_META[activeMarketSrc.type]
+                          ? SOURCE_META[activeMarketSrc.type].linkTitle
+                          : '在 GitHub 打开(新标签)'
+                      }
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                    <button
+                      onClick={() => loadMarket(true, marketSearch || undefined)}
+                      className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-800 transition"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${marketLoading ? 'animate-spin' : ''}`} />
+                      重新拉取
+                    </button>
+                  </div>
                 </div>
               )}
               {filteredMarket
@@ -618,28 +635,6 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               const remaining = src.skills.length - shown;
               return (
               <div key={src.id} className="space-y-2">
-                <div className="flex items-center gap-2 text-[11px] text-zinc-500">
-                  {/* 源名已在子 tab,这里只留徽标/主页外链/搜索态提示 */}
-                  {src.type && SOURCE_META[src.type] ? (
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${SOURCE_META[src.type].badgeCls}`}>
-                      {SOURCE_META[src.type].badge}
-                    </span>
-                  ) : (
-                    <span className="font-mono">{src.repo}</span>
-                  )}
-                  <a
-                    href={src.type && SOURCE_META[src.type] ? SOURCE_META[src.type].home : `https://github.com/${src.repo}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-zinc-400 hover:text-zinc-700 transition"
-                    title={src.type && SOURCE_META[src.type] ? SOURCE_META[src.type].linkTitle : '在 GitHub 打开(新标签)'}
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  {src.type && SOURCE_META[src.type] && marketSearch && (
-                    <span className="text-zinc-400">搜索「{marketSearch}」的服务端结果</span>
-                  )}
-                </div>
                 {src.error && (
                   <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-700">
                     该源拉取失败: {src.error}

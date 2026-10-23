@@ -247,8 +247,43 @@ export default function Workspace() {
       });
       const data = await res.json();
       if (data.jobs) setCronJobs(data.jobs);
+      // 级联清理:服务端已删掉该任务的巡航会话(终态),前端同步摘除执行历史行
+      // 与交付摘要行(deletedRunIds 精确摘;旧服务端缺字段时按 jobId 兜底摘)
+      const deleted: string[] = Array.isArray(data.deletedRunIds) ? data.deletedRunIds : [];
+      if (deleted.length > 0) {
+        const gone = new Set(deleted);
+        setCronRuns((prev) => prev.filter((r) => !gone.has(r.id)));
+        setCronDeliverables((prev) => prev.filter((m) => !gone.has(m.id)));
+      } else if (!Array.isArray(data.deletedRunIds)) {
+        setCronRuns((prev) => prev.filter((r) => r.jobId !== id));
+      }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  /**
+   * 删除单条巡航执行记录(执行历史行 = 巡航会话):走与手动会话同一个删除路由
+   * (持久化 + 内存态 + 工具输出级联清理),前端把执行行与交付摘要行一并摘除。
+   * 执行中/排队中的行组件层不给入口,服务端也会 409 拒绝(双保险)。
+   */
+  const handleDeleteCronRun = async (runId: string) => {
+    try {
+      const res = await fetch('/api/agent/mission/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ missionId: runId }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        alert(data?.error || '删除失败,请稍后重试');
+        return;
+      }
+      setCronRuns((prev) => prev.filter((r) => r.id !== runId));
+      setCronDeliverables((prev) => prev.filter((m) => m.id !== runId));
+    } catch (err) {
+      console.error(err);
+      alert('删除失败,请稍后重试');
     }
   };
 
@@ -1647,6 +1682,7 @@ export default function Workspace() {
                 onTriggerJob={handleTriggerCronJob}
                 runs={cronRuns}
                 onOpenRun={openCronRun}
+                onDeleteRun={handleDeleteCronRun}
               />
             )}
           </div>
@@ -1931,6 +1967,7 @@ export default function Workspace() {
                 onTriggerJob={handleTriggerCronJob}
                 runs={cronRuns}
                 onOpenRun={openCronRun}
+                onDeleteRun={handleDeleteCronRun}
               />
             </main>
           )}

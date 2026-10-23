@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { getUserCronJobs, saveUserCronJob, deleteUserCronJob } from '@/lib/user-store';
+import {
+  getUserCronJobs,
+  saveUserCronJob,
+  deleteUserCronJob,
+  getUserMissions,
+  deleteUserMission,
+} from '@/lib/user-store';
 import { getNextCronRun, isValidCronPattern } from '@/lib/cron-utils';
 import { getAgentBackend } from '@/lib/agent-backend';
 import { normalizeCronScenario } from '@/lib/cron-scenario';
+import { CRUISE_TITLE_PREFIX } from '@/lib/mission-wire';
 
 export async function GET() {
   try {
@@ -149,9 +156,32 @@ export async function POST(req: NextRequest) {
       if (!id) {
         return NextResponse.json({ success: false, error: '缺少任务 ID' }, { status: 400 });
       }
+      // 级联清理要按任务名回退匹配旧数据(无 cronJobId 的历史巡航会话),先留住任务记录
+      const existing = getUserCronJobs(userId).find((j: any) => j.id === id);
       backend.unregisterUserCronJob(id);
       const jobs = deleteUserCronJob(userId, id);
-      return NextResponse.json({ success: true, jobs });
+
+      // 级联清理该任务产生的巡航会话(持久化 + 内存态):只删终态(DONE/INTERRUPTED)
+      // —— 执行中的回路还在写盘,删了会被 checkpoint 重新落盘,让它跑完(任务卡已删,
+      // 不会再展示;下轮触发也不会再来,调度已注销)。旧数据无 cronJobId 时按
+      // 「【自动巡航】+任务名」精确回退匹配(与前端 runsOf 同口径,不误删手动会话)
+      const deletedRunIds: string[] = [];
+      if (existing) {
+        const cruiseTitle = `${CRUISE_TITLE_PREFIX}${existing.name}`;
+        const DELETABLE = new Set(['DONE', 'INTERRUPTED']);
+        const owned = (m: any) =>
+          m && (m.cronJobId === id || (!m.cronJobId && m.title === cruiseTitle));
+        for (const m of getUserMissions(userId) || []) {
+          if (!owned(m) || !DELETABLE.has(m.status)) continue;
+          deleteUserMission(userId, m.id);
+          deletedRunIds.push(m.id);
+        }
+        backend.state.missions = backend.state.missions.filter(
+          (m) => !(m.userId === userId && owned(m) && DELETABLE.has(m.status))
+        );
+      }
+
+      return NextResponse.json({ success: true, jobs, deletedRunIds });
     }
 
     if (action === 'trigger') {

@@ -21,7 +21,7 @@ vi.mock('@/lib/agent-backend', () => ({ getAgentBackend: vi.fn() }));
 import { auth } from '@/auth';
 import { getAgentBackend } from '@/lib/agent-backend';
 import { POST } from '@/app/api/cron/jobs/route';
-import { getUserCronJobs, saveUserCronJob } from '@/lib/user-store';
+import { getUserCronJobs, saveUserCronJob, saveUserMission, getUserMissions } from '@/lib/user-store';
 import { userSkillPacksDir, REFERENCED_PACK_MAX } from '@/lib/skill-center';
 
 let tmpRoot: string;
@@ -51,12 +51,14 @@ beforeEach(() => {
   prevUserDataDir = process.env.USER_DATA_DIR;
   process.env.USER_DATA_DIR = tmpRoot;
   vi.mocked(auth).mockResolvedValue({ user: { id: 'u_a' } } as any);
-  // 调度器全桩:create/update/toggle 都会触达 register/unregister
+  // 调度器全桩:create/update/toggle 都会触达 register/unregister;
+  // state.missions 供 cancel 级联清理读写(内存态巡航会话摘除)
   vi.mocked(getAgentBackend).mockReturnValue({
     initCronScheduler: vi.fn(),
     registerUserCronJob: vi.fn(),
     unregisterUserCronJob: vi.fn(),
     triggerUserCronJob: vi.fn(),
+    state: { missions: [], activeMissionId: null },
   } as any);
 });
 
@@ -162,5 +164,71 @@ describe('/api/cron/jobs 技能包引用', () => {
     vi.mocked(auth).mockResolvedValue(null as any);
     const { status } = await call({ ...createBase, skillPacks: ['x'] });
     expect(status).toBe(401);
+  });
+});
+
+describe('/api/cron/jobs cancel · 级联清理巡航执行记录', () => {
+  const mkMission = (over: Record<string, any>) => ({
+    id: 'm_1',
+    userId: 'u_a',
+    title: '【自动巡航】巡检',
+    status: 'DONE',
+    startedAt: 1,
+    steps: [],
+    ...over,
+  });
+
+  it('终态巡航会话(cronJobId 命中 + 旧数据标题回退)一并删除,返回 deletedRunIds', async () => {
+    saveUserCronJob('u_a', { id: 'cron_x', name: '巡检', pattern: '0 9 * * *', prompt: 'p', status: 'active' } as any);
+    saveUserMission('u_a', mkMission({ id: 'run_new', cronJobId: 'cron_x' }));
+    // 旧数据无 cronJobId:按「【自动巡航】+任务名」精确回退匹配
+    saveUserMission('u_a', mkMission({ id: 'run_legacy', status: 'INTERRUPTED' }));
+    const { json } = await call({ action: 'cancel', id: 'cron_x' });
+    expect(json.success).toBe(true);
+    expect(json.deletedRunIds.sort()).toEqual(['run_legacy', 'run_new']);
+    const left = getUserMissions('u_a').map((m: any) => m.id);
+    expect(left).not.toContain('run_new');
+    expect(left).not.toContain('run_legacy');
+  });
+
+  it('执行中(ACTIVE)的巡航会话不删(回路还在写盘,删不干净)', async () => {
+    saveUserCronJob('u_a', { id: 'cron_x', name: '巡检', pattern: '0 9 * * *', prompt: 'p', status: 'active' } as any);
+    saveUserMission('u_a', mkMission({ id: 'run_active', status: 'ACTIVE', cronJobId: 'cron_x' }));
+    const { json } = await call({ action: 'cancel', id: 'cron_x' });
+    expect(json.deletedRunIds).toEqual([]);
+    expect(getUserMissions('u_a').map((m: any) => m.id)).toContain('run_active');
+  });
+
+  it('手动会话与其他任务的巡航会话不误删(标题回退只精确匹配本任务名)', async () => {
+    saveUserCronJob('u_a', { id: 'cron_x', name: '巡检', pattern: '0 9 * * *', prompt: 'p', status: 'active' } as any);
+    saveUserMission('u_a', mkMission({ id: 'manual', title: '随便聊聊天', cronJobId: undefined }));
+    saveUserMission('u_a', mkMission({ id: 'other_job', cronJobId: 'cron_y' }));
+    saveUserMission('u_a', mkMission({ id: 'other_legacy', title: '【自动巡航】别的任务', cronJobId: undefined }));
+    const { json } = await call({ action: 'cancel', id: 'cron_x' });
+    expect(json.deletedRunIds).toEqual([]);
+    const left = getUserMissions('u_a').map((m: any) => m.id).sort();
+    expect(left).toEqual(['manual', 'other_job', 'other_legacy']);
+  });
+
+  it('内存态同 id 终态会话一并摘除;任务本身从列表消失', async () => {
+    saveUserCronJob('u_a', { id: 'cron_x', name: '巡检', pattern: '0 9 * * *', prompt: 'p', status: 'active' } as any);
+    saveUserMission('u_a', mkMission({ id: 'run_mem', cronJobId: 'cron_x' }));
+    const backend: any = {
+      initCronScheduler: vi.fn(),
+      registerUserCronJob: vi.fn(),
+      unregisterUserCronJob: vi.fn(),
+      triggerUserCronJob: vi.fn(),
+      state: {
+        missions: [
+          mkMission({ id: 'run_mem', cronJobId: 'cron_x' }),
+          mkMission({ id: 'keep_manual', title: '手动会话', cronJobId: undefined }),
+        ],
+        activeMissionId: null,
+      },
+    };
+    vi.mocked(getAgentBackend).mockReturnValue(backend);
+    await call({ action: 'cancel', id: 'cron_x' });
+    expect(backend.state.missions.map((m: any) => m.id)).toEqual(['keep_manual']);
+    expect(getUserCronJobs('u_a')).toEqual([]);
   });
 });

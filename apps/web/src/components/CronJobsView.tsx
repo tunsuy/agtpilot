@@ -51,6 +51,8 @@ interface CronJobsViewProps {
   onTriggerJob?: (id: string) => Promise<void>;
   /** 点开某次执行的会话详情(懒回水后跳工作台打开) */
   onOpenRun?: (missionId: string) => void;
+  /** 删除单条执行记录(巡航会话);执行中/排队中的行不给入口 */
+  onDeleteRun?: (missionId: string) => Promise<void>;
 }
 
 /** 执行历史行的状态展示(与工作台会话状态枚举对齐) */
@@ -77,6 +79,7 @@ export function CronJobsView({
   onDeleteJob,
   onTriggerJob,
   onOpenRun,
+  onDeleteRun,
 }: CronJobsViewProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
@@ -425,6 +428,17 @@ export function CronJobsView({
                                       className="ml-auto shrink-0 text-[11px] text-zinc-400 hover:text-violet-600 transition"
                                     >
                                       查看会话 →
+                                    </button>
+                                  )}
+                                  {/* 执行记录删除:只给终态行(执行中/排队中删不干净,
+                                      服务端同样 409 拒绝);会话与其交付物摘要一并摘除 */}
+                                  {onDeleteRun && (r.status === 'DONE' || r.status === 'INTERRUPTED') && (
+                                    <button
+                                      onClick={() => onDeleteRun(r.id)}
+                                      className={`${onOpenRun ? '' : 'ml-auto'} shrink-0 p-0.5 rounded text-zinc-300 hover:text-red-500 hover:bg-red-50 transition`}
+                                      title="删除这条执行记录(会话与交付物一并清除)"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
                                     </button>
                                   )}
                                 </li>

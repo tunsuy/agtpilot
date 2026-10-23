@@ -24,6 +24,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { GoalItem, GoalMilestone } from '../types/agent';
+import { SkillPackPicker } from './SkillPackPicker';
 
 interface GoalsViewProps {
   goals: GoalItem[];
@@ -33,6 +34,8 @@ interface GoalsViewProps {
     category?: GoalItem['category'];
     targetDate?: string;
     milestones: Array<{ title: string; description?: string; status?: GoalMilestone['status'] }>;
+    /** 「推进此里程碑」派发时透传的技能包引用(仅非空时发送) */
+    skillPacks?: string[];
   }) => Promise<void>;
   onUpdateGoal?: (goal: {
     id: string;
@@ -42,6 +45,8 @@ interface GoalsViewProps {
     targetDate?: string;
     status?: GoalItem['status'];
     milestones?: GoalMilestone[];
+    /** 总是显式发送(prefill UI,WYSIWYG):[]=清空 */
+    skillPacks?: string[];
   }) => Promise<void>;
   onDeleteGoal: (id: string) => Promise<void>;
   onToggleMilestone: (goalId: string, milestoneId: string, status?: GoalMilestone['status']) => Promise<void>;
@@ -128,6 +133,8 @@ export function GoalsView({
   ]);
   const [isDecomposing, setIsDecomposing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  // 显式引用的技能包:「推进此里程碑」派发任务时透传(注入 SKILL.md 全文)
+  const [skillPacksInput, setSkillPacksInput] = useState<string[]>([]);
 
   // 统计指标
   const totalGoals = goals.length;
@@ -188,6 +195,7 @@ export function GoalsView({
       { title: '阶段 2：核心攻坚与最小可用成果交付', description: '' },
       { title: '阶段 3：成果落地、验收与长期固化', description: '' },
     ]);
+    setSkillPacksInput([]);
     setIsModalOpen(true);
   };
 
@@ -202,6 +210,7 @@ export function GoalsView({
         description: m.description,
       }))
     );
+    setSkillPacksInput([]);
     setIsModalOpen(true);
   };
 
@@ -219,6 +228,7 @@ export function GoalsView({
         status: m.status,
       }))
     );
+    setSkillPacksInput(goal.skillPacks || []);
     setIsModalOpen(true);
   };
 
@@ -285,6 +295,7 @@ export function GoalsView({
     setIsSaving(true);
     try {
       if (editingGoalId && onUpdateGoal) {
+        // 编辑 = prefill UI,总是显式发送(WYSIWYG:[]=清空)
         await onUpdateGoal({
           id: editingGoalId,
           title: titleInput.trim(),
@@ -292,6 +303,7 @@ export function GoalsView({
           category: categoryInput,
           targetDate: targetDateInput.trim(),
           milestones: validMilestones as GoalMilestone[],
+          skillPacks: skillPacksInput,
         });
       } else {
         await onCreateGoal({
@@ -300,6 +312,8 @@ export function GoalsView({
           category: categoryInput,
           targetDate: targetDateInput.trim(),
           milestones: validMilestones,
+          // 新建仅非空时发送(空 = 无引用,不发键)
+          ...(skillPacksInput.length ? { skillPacks: skillPacksInput } : {}),
         });
       }
       setIsModalOpen(false);
@@ -857,6 +871,17 @@ export function GoalsView({
                   rows={3}
                   className="w-full px-3.5 py-2 rounded-xl border border-zinc-200 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-400"
                 />
+              </div>
+
+              {/* 引用技能包:「推进此里程碑」派发的任务携带(注入 SKILL.md 全文) */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-700">
+                  引用技能包{' '}
+                  <span className="text-[10px] text-zinc-400 font-normal">
+                    (可选 · 推进里程碑时随任务注入其 SKILL.md 全文)
+                  </span>
+                </label>
+                <SkillPackPicker selected={skillPacksInput} onChange={setSkillPacksInput} />
               </div>
 
               {/* 里程碑拆解区 */}

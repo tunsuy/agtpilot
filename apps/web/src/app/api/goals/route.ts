@@ -173,6 +173,14 @@ export async function POST(req: NextRequest) {
         ? Math.round((completedCount / formattedMilestones.length) * 100)
         : 0;
 
+      // 显式技能包引用:白名单收敛为 canonical name(「推进此里程碑」派发时透传给任务)
+      let skillPacks: string[] | undefined;
+      if (Array.isArray(body.skillPacks) && body.skillPacks.length) {
+        const { sanitizeSkillPackRefs } = await import('@/lib/skill-center');
+        const packs = sanitizeSkillPackRefs(userId, body.skillPacks);
+        if (packs.length) skillPacks = packs;
+      }
+
       const newGoal = {
         id: `goal_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         title: String(title).trim(),
@@ -182,6 +190,7 @@ export async function POST(req: NextRequest) {
         progress,
         targetDate: targetDate || '',
         milestones: formattedMilestones,
+        ...(skillPacks ? { skillPacks } : {}),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -215,6 +224,14 @@ export async function POST(req: NextRequest) {
           ? Math.round((completedCount / milestones.length) * 100)
           : existing.progress;
         if (existing.progress === 100) existing.status = 'completed';
+      }
+
+      // 技能包引用:显式数组 = 覆盖(编辑表单是 prefill UI,[]=清空);
+      // 清空赋 undefined 而非 delete —— saveUserGoal 是 merge-spread,缺键不清旧值
+      if (Array.isArray(body.skillPacks)) {
+        const { sanitizeSkillPackRefs } = await import('@/lib/skill-center');
+        const packs = sanitizeSkillPackRefs(userId, body.skillPacks);
+        existing.skillPacks = packs.length ? packs : undefined;
       }
 
       const goals = saveUserGoal(userId, existing);

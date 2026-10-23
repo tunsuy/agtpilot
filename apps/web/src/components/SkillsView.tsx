@@ -317,7 +317,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
             )}
           </div>
           <p className="text-xs text-zinc-500 mt-1 max-w-xl leading-relaxed">
-            任务跑完自动蒸馏的操作程序沉淀为技能卡(可随时删除);生态技能包可一键引用到本机(第三方代码,安装前请确认风险),不再需要时解除引用即彻底移除。
+            任务跑完自动蒸馏的操作程序沉淀为技能卡(可随时删除);生态技能包可一键引用到本机(第三方代码,安装前请确认风险)。安装后不自动载入任何会话 —— 只有在会话输入区、巡航任务或长期目标里显式勾选引用,其指令才会注入对应任务;不再需要时解除引用即彻底移除。
           </p>
         </div>
         <button
@@ -436,7 +436,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
           <h2 className="text-sm font-semibold text-zinc-800 flex items-center gap-1.5">
             <Package className="h-4 w-4 text-emerald-500" />
             已引用生态技能
-            <span className="text-[10px] font-normal text-zinc-400">安装在本机你的专属目录 · 不自动更新</span>
+            <span className="text-[10px] font-normal text-zinc-400">安装在本机你的专属目录 · 任务显式引用才注入 · 不自动更新</span>
           </h2>
           {filteredInstalled.length === 0 ? (
             <EmptyHint text="还没有引用生态技能 —— 去「技能市场」挑一个,或让 Agent 在任务里建议" />
@@ -741,7 +741,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               ) : null}{' '}
               到你的专属技能目录。请知悉:
               <ul className="mt-2 space-y-1 text-[11px] text-zinc-600 list-disc pl-4">
-                <li>这是<b>第三方内容</b>:SKILL.md 指令会注入 Agent 上下文,请确认来源可信(建议先看详情)</li>
+                <li>这是<b>第三方内容</b>:安装后不自动载入,只有你在任务里<b>显式引用</b>时其 SKILL.md 指令才会注入 Agent 上下文,请确认来源可信(建议先看详情)</li>
                 <li>包内脚本只可经沙箱工具执行,敏感操作仍走审批门</li>
                 <li>安装后<b>不自动更新</b>(防供应链投毒);升级 = 解除引用后重装</li>
                 <li>来源版本(repo/commit/文件哈希)会记录在案,可随时解除引用</li>

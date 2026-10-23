@@ -442,6 +442,7 @@ export default function Workspace() {
     category?: GoalItem['category'];
     targetDate?: string;
     milestones: Array<{ title: string; description?: string; status?: GoalMilestone['status'] }>;
+    skillPacks?: string[];
   }) => {
     try {
       const res = await fetch('/api/goals', {
@@ -464,6 +465,7 @@ export default function Workspace() {
     targetDate?: string;
     status?: GoalItem['status'];
     milestones?: GoalMilestone[];
+    skillPacks?: string[];
   }) => {
     try {
       const res = await fetch('/api/goals', {
@@ -508,7 +510,8 @@ export default function Workspace() {
 
   const handleAdvanceMilestone = (goal: GoalItem, milestone: GoalMilestone) => {
     const prompt = `【推进长期目标里程碑】\n目标名称：${goal.title}\n所属领域：${goal.category || '综合'}\n当前阶段：${milestone.title}\n阶段要求与成果：${milestone.description || '按阶段规划推进'}\n\n请作为我的个人超级智能体，围绕此阶段目标为我制定落地行动方案并执行攻坚，产出结构化阶段交付成果。`;
-    handleRun(prompt);
+    // 目标绑定的技能包引用随派发透传(新任务记录携带;未绑定 = 不发键)
+    handleRun(prompt, undefined, undefined, undefined, goal.skillPacks?.length ? goal.skillPacks : undefined);
     setActiveView('cockpit');
   };
 

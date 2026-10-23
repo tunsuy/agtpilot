@@ -23,7 +23,11 @@ import {
 } from './tool-catalog';
 import { messageText, truncateToolOutput, buildSpillPointer, toolSpillEnabled, effectiveOutputLimit } from './text';
 import { stripReasoningParts, reasoningStripEnabled } from './reasoning';
-import { compactConversationMessages } from './compaction';
+import {
+  compactConversationMessages,
+  continuationCompactThreshold,
+  continuationCompactEnabled,
+} from './compaction';
 import {
   effectiveCompactThreshold,
   estimateToolsBlockTokens,
@@ -169,10 +173,33 @@ export class OrchestratorService extends Service {
       reasoningPartsStripped += r.stripped;
       historyIn = r.messages;
     }
-    const baseMessages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> =
+    let baseMessages: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> =
       historyIn.length > 0
         ? [...historyIn, { role: 'user', content: options.prompt }]
         : [{ role: 'user', content: options.prompt }];
+
+    // 闸0(续聊轮入口):对「上一轮及更早」的历史强制蒸馏一次(§9.8)。
+    // task-end 压缩只在估算超动态阈值(≈30k)时触发,且估算不含 system/tools
+    // 固定开销 —— 「估算刚好低于阈值」的历史全额落盘后,续聊轮每一步都按
+    // 30k+ 实付(生产实测:公众号续聊轮首步 promptTokens 30.5k)。这里用低
+    // 阈值(默认 10k)在开轮前压一次:更早的工具流水/长文本折叠成一条纪要,
+    // 近期窗口(上一轮末尾的答复——续聊追问引用的正是它)与新消息原样保留。
+    // 自限:历史比阈值短 → 守卫返回 null,连蒸馏调用都不发生;蒸馏结果随
+    // task-end 的 result.messages 落盘,下一轮续聊从「纪要+近期」起步不再膨胀。
+    // 失败保持全额历史,不阻塞本轮(与 task-end 同款兜底)。
+    if (historyIn.length > 0 && continuationCompactEnabled()) {
+      try {
+        baseMessages =
+          ((await this.compactConversation(
+            baseMessages,
+            options,
+            'round-start',
+            continuationCompactThreshold()
+          )) as typeof baseMessages) ?? baseMessages;
+      } catch {
+        // 入口蒸馏失败不影响续聊轮本身
+      }
+    }
 
     // 死循环熔断状态：滑动窗口签名计数。窗口内同一签名（工具名 + 归一化参数）
     // 累计出现达到阈值即熔断。相比旧版"只查与上一次调用是否相同"，能同时抓住：
@@ -1031,7 +1058,7 @@ export class OrchestratorService extends Service {
   private async compactConversation(
     messages: Array<{ role: string; content: any }>,
     options: TaskOptions,
-    phase: 'task-end' | 'in-loop' | 'wrap-up' = 'task-end',
+    phase: 'task-end' | 'in-loop' | 'wrap-up' | 'round-start' = 'task-end',
     thresholdTokens?: number
   ): Promise<Array<{ role: string; content: any }> | null> {
     const enabled = process.env.AGTPILOT_COMPACTION_CLASSIFY !== '0';
@@ -1082,11 +1109,18 @@ export class OrchestratorService extends Service {
         return result?.text || '';
       },
       onProgress: ({ totalTokens, entries }) => {
+        // 相位文案走平铺映射(四相位嵌套三目不可读)
+        const phaseLabel: Record<string, string> = {
+          'in-loop': '任务执行中',
+          'wrap-up': '强制总结前',
+          'task-end': '任务收尾',
+          'round-start': '续聊开始',
+        };
         this.ctx.agent.emitEvent({
           type: 'thought',
           payload: {
             text: `${
-              phase === 'in-loop' ? '任务执行中' : phase === 'wrap-up' ? '强制总结前' : '任务收尾'
+              phaseLabel[phase] ?? phase
             }检测到会话上下文约 ${totalTokens} tokens，超过压缩阈值，正在把 ${entries} 条历史工具记录蒸馏为纪要…`,
           },
           timestamp: Date.now(),

@@ -57,6 +57,8 @@ export {
 export {
   compactConversationMessages,
   assistantTextDigestEnabled,
+  continuationCompactThreshold,
+  continuationCompactEnabled,
   COMPACT_THRESHOLD_TOKENS,
   COMPACT_RECENT_MESSAGES,
   COMPACT_RECENT_TOKEN_BUDGET,

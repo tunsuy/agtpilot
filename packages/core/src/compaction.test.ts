@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { compactConversationMessages } from './compaction';
+import { describe, it, expect, afterEach } from 'vitest';
+import {
+  compactConversationMessages,
+  continuationCompactThreshold,
+  continuationCompactEnabled,
+} from './compaction';
 
 const mk = (role: string, content: any) => ({ role, content });
 
@@ -304,5 +308,28 @@ describe('compactConversationMessages', () => {
       // 只有近期窗口内的长交付幸免(窗口 ≤10 条 → 至多最后几轮)
       expect(keptLong.length).toBeLessThan(8);
     });
+  });
+});
+
+describe('续聊入口蒸馏开关(闸0 env 助手)', () => {
+  afterEach(() => {
+    delete process.env.AGTPILOT_CONTINUATION_COMPACT;
+    delete process.env.AGTPILOT_CONTINUATION_COMPACT_THRESHOLD;
+  });
+
+  it('threshold 默认 10k(近期窗口预算 8k + 余量),env 覆盖,下限钳 2000', () => {
+    expect(continuationCompactThreshold()).toBe(10_000);
+    process.env.AGTPILOT_CONTINUATION_COMPACT_THRESHOLD = '15000';
+    expect(continuationCompactThreshold()).toBe(15_000);
+    process.env.AGTPILOT_CONTINUATION_COMPACT_THRESHOLD = '100';
+    expect(continuationCompactThreshold()).toBe(2000);
+  });
+
+  it('enabled 默认开,=0 关(保险丝语义与 STRIP_REASONING 同款)', () => {
+    expect(continuationCompactEnabled()).toBe(true);
+    process.env.AGTPILOT_CONTINUATION_COMPACT = '0';
+    expect(continuationCompactEnabled()).toBe(false);
+    process.env.AGTPILOT_CONTINUATION_COMPACT = '1';
+    expect(continuationCompactEnabled()).toBe(true);
   });
 });

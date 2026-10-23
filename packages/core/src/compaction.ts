@@ -65,6 +65,28 @@ export function assistantTextDigestEnabled(): boolean {
   return process.env.AGTPILOT_COMPACT_ASSISTANT_TEXT !== '0';
 }
 
+/**
+ * 续聊轮入口强制蒸馏阈值（§9.8 延伸）：历史+新消息的估算 tokens 超过它
+ * 就在开轮前蒸馏一次，上一轮的工具流水不再在本轮每一步全额重付。
+ * 背景：task-end 压缩用动态阈值（≈30k）且估算不含 system/tools 固定开销，
+ * 「估算刚好低于阈值」的历史落盘后续聊每步实付 30k+（生产实测）。
+ * 默认 10k = 近期窗口预算（8k）+ 余量 —— 历史比窗口还短时没有可压的
+ * 中间区，compactConversationMessages 守卫天然返回 null，连蒸馏调用
+ * 都不发生（自限）。AGTPILOT_CONTINUATION_COMPACT_THRESHOLD 可调。
+ */
+export function continuationCompactThreshold(): number {
+  return Math.max(
+    2000,
+    Number(process.env.AGTPILOT_CONTINUATION_COMPACT_THRESHOLD) || 10_000
+  );
+}
+
+/** AGTPILOT_CONTINUATION_COMPACT=0 关闭续聊入口蒸馏（保险丝，对齐
+ *  AGTPILOT_STRIP_REASONING 先例：出问题时单点回退，不牵连其他相位） */
+export function continuationCompactEnabled(): boolean {
+  return process.env.AGTPILOT_CONTINUATION_COMPACT !== '0';
+}
+
 /** 蒸馏回调：把工具流水蒸馏成纪要文本；返回空串/抛错时走原文截断兜底 */
 export type DigestSummarizer = (digest: string) => Promise<string>;
 

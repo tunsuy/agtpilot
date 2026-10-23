@@ -141,6 +141,13 @@ export interface Mission {
    */
   materialRefs?: Array<{ id: string; title: string }>;
   /**
+   * 用户显式引用的技能包名列表(技能中心「引用」安装的生态技能包;canonical
+   * name)。派发时经 /api/agent/run 白名单收敛落库;续聊轮不带显式引用时继承
+   * 本字段,带显式引用(含空数组=清空)时覆盖并回写。非空 = 注入 SKILL.md
+   * 全文块 + 挂载 skill_pack_read;旧任务无此字段(零迁移,不注入不挂载)。
+   */
+  skillPacks?: string[];
+  /**
    * 巡航任务 id(docs/design/cruise-session-split.md):定时触发与巡航页「立即
    * 执行」派生的会话携带,是「巡航会话 vs 手动会话」分流的身份事实源 ——
    * 工作台列表过滤、state/init 下行分流、持久化分窗保留(手动 50 / 每任务 20)
@@ -383,6 +390,8 @@ export interface CronJobItem {
   prompt: string;
   /** 订阅类任务标记:触发时按最新档案重建 prompt(如 xhs_weekly_topics 每周选题、oss_radar_weekly 雷达周扫) */
   scenario?: CronScenario;
+  /** 普通任务显式引用的技能包名(canonical name;场景订阅任务 = 内置 SOP,永不携带) */
+  skillPacks?: string[];
   nextRun?: string;
   runCount: number;
   lastRunAt?: number;
@@ -409,6 +418,8 @@ export interface GoalItem {
   createdAt: number;
   updatedAt: number;
   milestones: GoalMilestone[];
+  /** 「推进此里程碑」派发时透传给任务的技能包引用(canonical name) */
+  skillPacks?: string[];
   linkedMissionIds?: string[];
   linkedDeliverableIds?: string[];
 }

@@ -1561,7 +1561,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; materialRefs?: Array<{ id: string; title: string }>; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string; cronJobId?: string } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; materialRefs?: Array<{ id: string; title: string }>; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string; cronJobId?: string; skillPacks?: string[] } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1682,6 +1682,27 @@ class AgentBackend {
       // 派发即点亮「正在思考」live step：续聊场景下用户气泡与思考占位
       // 同帧到达，记忆构建/压缩/首轮模型调用等静默窗口不再像卡死
       ensureLiveStep(targetMission);
+      // 显式技能包引用覆盖:本轮 options 带 skillPacks(含空数组=清空)→ 回写
+      // 任务记录,后续轮次(排队续聊/后台唤醒/IM/cron 重触发)不带时继承新值。
+      // 放在 broadcast 之前:客户端 prefill 随 mission_updated 同步到新引用。
+      if (options.skillPacks !== undefined) {
+        const next = options.skillPacks.length ? options.skillPacks : undefined;
+        const prev = targetMission.skillPacks;
+        const changed =
+          (next?.length || 0) !== (prev?.length || 0) ||
+          (next || []).some((n, i) => prev?.[i] !== n);
+        if (changed) {
+          targetMission.skillPacks = next;
+          if (targetMission.userId) {
+            try {
+              const { saveUserMission } = await import('@/lib/user-store');
+              saveUserMission(targetMission.userId, targetMission);
+            } catch {
+              // 落盘失败不阻塞本轮,轮末检查点会再存(与答题/排队路径同口径)
+            }
+          }
+        }
+      }
       this.broadcast({ type: 'mission_updated', data: targetMission });
       this.addTerminalLog('system', `[Session Continued] ID: ${targetMission.id} | New Goal: ${goal}`, targetMission.userId);
     } else {
@@ -1707,6 +1728,9 @@ class AgentBackend {
         // 工坊参考资料引用(docs/design/material-uploads.md):交付物页「参考
         // 资料」区的数据源;只在新建任务时落,续聊不覆盖首轮的资料清单
         ...(options.materialRefs?.length ? { materialRefs: options.materialRefs } : {}),
+        // 用户显式引用的技能包(路由层已白名单收敛):注入块与 skill_pack_read
+        // 挂载的唯一事实源;续聊不带显式引用时继承本字段
+        ...(options.skillPacks?.length ? { skillPacks: options.skillPacks } : {}),
         // 巡航会话身份标记(docs/design/cruise-session-split.md):工作台列表
         // 过滤、state/init 下行分流、持久化分窗保留全读它
         ...(options.cronJobId ? { cronJobId: options.cronJobId } : {}),
@@ -1791,19 +1815,23 @@ class AgentBackend {
           } catch (e) {
             // 技能卡检索失败不影响任务
           }
-          // 1.6 用户安装技能包目录块(技能中心「引用」的生态技能;渐进披露:
-          // 只注入名字+描述目录,全文经 skill_pack_read 工具按需读)。任务开始
-          // 组装一次,任务内前缀稳定;未安装任何包时为空串,零开销。
+          // 1.6 用户显式引用的技能包(SKILL.md 全文注入,「用户指定,严格遵循」
+          // + 第三方护栏):只有 mission.skillPacks 非空才注入(派发时的显式覆盖
+          // 已在续聊分支回写记录);未引用 → 空串零开销,且 2.46 不挂
+          // skill_pack_read —— 第三方内容只在用户点名时进场。任务开始组装一次,
+          // 任务内前缀稳定(不破自动前缀缓存)。
           try {
-            const { buildUserPackCatalogBlock } = await import('@/lib/skill-center');
-            const packBlock = buildUserPackCatalogBlock(options.userId);
-            if (packBlock) {
-              userMemoryPrompt = userMemoryPrompt
-                ? `${userMemoryPrompt}\n\n${packBlock}`
-                : packBlock;
+            if (targetMission.skillPacks?.length) {
+              const { buildReferencedPacksBlock } = await import('@/lib/skill-center');
+              const packBlock = buildReferencedPacksBlock(options.userId, targetMission.skillPacks);
+              if (packBlock) {
+                userMemoryPrompt = userMemoryPrompt
+                  ? `${userMemoryPrompt}\n\n${packBlock}`
+                  : packBlock;
+              }
             }
           } catch (e) {
-            // 目录块构建失败不影响任务
+            // 注入块构建失败不影响任务
           }
         }
 
@@ -1954,13 +1982,16 @@ class AgentBackend {
             this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`, uid);
           }
 
-          // 2.46 用户安装技能包读取工具(skill_pack_read,技能中心「引用」的生态
-          // 技能;渐进披露的第二步:目录块在 system prompt,全文按需读)。只读、
-          // 路径围栏在用户安装域内、体积上限、二进制拒绝;未安装任何包时不挂载。
+          // 2.46 技能包读取工具(skill_pack_read):仅当本任务有显式引用时挂载 ——
+          // 读引用包的脚本/模板/参考文档,以及注入块里被截断的 SKILL.md 余文。
+          // 无引用 → 无任何包工具(渐进披露两步都只对引用包开放)。只读、
+          // 路径围栏在用户安装域内、体积上限、二进制拒绝。
           try {
-            const { buildUserSkillPackTools, listInstalledPacks } = await import('@/lib/skill-center');
-            if (listInstalledPacks(uid).length > 0) {
-              taskTools = [...(taskTools || []), ...buildUserSkillPackTools(uid)];
+            if (targetMission.skillPacks?.length) {
+              const { buildUserSkillPackTools, listInstalledPacks } = await import('@/lib/skill-center');
+              if (listInstalledPacks(uid).length > 0) {
+                taskTools = [...(taskTools || []), ...buildUserSkillPackTools(uid)];
+              }
             }
           } catch (e: any) {
             this.addTerminalLog('stderr', `[Skills] 技能包读取工具挂载异常: ${e?.message || e}`, uid);
@@ -2685,6 +2716,11 @@ class AgentBackend {
           workshopId: cronWorkshopId(jobInfo),
           cronJobId: jobInfo.id,
           unattended: true, // 无人值守:不挂 ask_user(提问没人答)
+          // 普通巡航任务携带用户配置的技能包引用;场景订阅(内置 SOP,派发去
+          // 工坊)永不携带 —— cronWorkshopId 有值即丢弃(纵深防御,存储/路由层已挡两道)
+          ...(Array.isArray(jobInfo.skillPacks) && jobInfo.skillPacks.length && !cronWorkshopId(jobInfo)
+            ? { skillPacks: jobInfo.skillPacks }
+            : {}),
         });
       } catch (err: any) {
         this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);
@@ -2739,6 +2775,10 @@ class AgentBackend {
         workshopId: cronWorkshopId(jobInfo),
         cronJobId: jobInfo.id,
         unattended: true, // 与定时触发同语义:巡航 prompt 已定型,不留提问悬挂点
+        // 与定时触发同款:普通任务携带技能包引用,场景订阅永不携带
+        ...(Array.isArray(jobInfo.skillPacks) && jobInfo.skillPacks.length && !cronWorkshopId(jobInfo)
+          ? { skillPacks: jobInfo.skillPacks }
+          : {}),
       });
     } catch (err: any) {
       this.addTerminalLog('stderr', `[自动巡航执行异常] ${jobInfo.name}: ${err.message}`, userId);

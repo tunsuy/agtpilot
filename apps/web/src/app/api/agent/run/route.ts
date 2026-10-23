@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { prompt, title, missionId, workshop } = await req.json();
+    const { prompt, title, missionId, workshop, skillPacks } = await req.json();
 
     // 工坊任务可选携带 {workshopId, params}:服务端权威渲染(注册表 + 档案现读 +
     // 覆盖目录热修),该请求忽略客户端拼好的 prompt;普通手输 prompt 不受影响。
@@ -44,6 +44,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
     }
 
+    // 显式技能包引用:白名单收敛(只认本人已安装,name|dirName 归一 canonical,
+    // 上限 5);工坊任务永不携带(工坊有自己的 SOP 与工具白名单)。
+    // 显式 [] 透传(续聊清空语义);缺省 undefined = 继承任务记录。
+    let finalSkillPacks: string[] | undefined;
+    if (!workshop && Array.isArray(skillPacks)) {
+      const { sanitizeSkillPackRefs } = await import('@/lib/skill-center');
+      finalSkillPacks = sanitizeSkillPackRefs(session.user.id, skillPacks);
+    }
+
     const backend = getAgentBackend();
     const mission = await backend.runMission(finalPrompt, {
       title: finalTitle,
@@ -56,6 +65,8 @@ export async function POST(req: NextRequest) {
       materialRefs: finalMaterialRefs,
       // 逐字段交付契约:声明后挂载 workshop_deliver_field 工具并写投影
       delivery: finalDelivery,
+      // 用户显式引用的技能包(见 Mission.skillPacks 注):undefined=继承,[]=清空
+      ...(finalSkillPacks !== undefined ? { skillPacks: finalSkillPacks } : {}),
     });
 
     return NextResponse.json({

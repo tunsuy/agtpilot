@@ -4,7 +4,7 @@
  * - 最小 tar 解析:正常提取、目录条目、软链/硬链拒绝、路径穿越拒绝、限额
  * - 用户安装域:清单 / 解除引用(围栏 + 台账)/ 技能卡删除(台账 + 审计)
  * - 引用导入:riskAck 强制、仓库名校验、mock fetch 全链路、同名冲突、来源记录
- * - 任务侧接线:目录块 / skill_pack_read 工具(围栏 + 二进制拒绝)
+ * - 任务侧接线:显式引用注入块 / 引用收敛 / skill_pack_read 工具(围栏 + 二进制拒绝)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
@@ -44,8 +44,11 @@ import {
   marketSources,
   fetchMarketIndex,
   fetchMarketSkillDetail,
-  buildUserPackCatalogBlock,
+  buildReferencedPacksBlock,
+  sanitizeSkillPackRefs,
   buildUserSkillPackTools,
+  REFERENCED_PACK_MAX,
+  REFERENCED_PACK_CHARS,
   IMPORT_MAX_FILES,
   IMPORT_MAX_FILE_BYTES,
 } from '../skill-center';
@@ -681,15 +684,64 @@ describe('importSkillPack · 魔搭链路', () => {
 
 // ---- 任务侧接线 ----
 
-describe('目录块与 skill_pack_read 工具', () => {
-  it('无安装 → 目录块空串;有安装 → 含名字与描述与第三方警示', () => {
-    expect(buildUserPackCatalogBlock('u11')).toBe('');
+describe('显式引用注入块 / 引用收敛 / skill_pack_read 工具', () => {
+  it('无引用或全部解析不到 → 空串(零开销)', () => {
+    expect(buildReferencedPacksBlock('u11', undefined)).toBe('');
+    expect(buildReferencedPacksBlock('u11', [])).toBe('');
     seedInstalledPack('u11', 'demo-skill', 'demo-skill');
-    const block = buildUserPackCatalogBlock('u11');
-    expect(block).toContain('用户安装技能包');
-    expect(block).toContain('demo-skill');
-    expect(block).toContain('skill_pack_read');
+    expect(buildReferencedPacksBlock('u11', ['没装过的包'])).toBe('');
+  });
+
+  it('引用已装包 → SKILL.md 全文注入,含「用户指定/严格遵循」与第三方护栏,frontmatter 已剥', () => {
+    seedInstalledPack('u11', 'demo-skill', 'demo-skill');
+    const block = buildReferencedPacksBlock('u11', ['demo-skill']);
+    expect(block).toContain('用户指定技能包');
+    expect(block).toContain('严格遵循');
     expect(block).toContain('第三方');
+    expect(block).toContain('不得越权');
+    expect(block).toContain('技能包「demo-skill」');
+    expect(block).toContain('body'); // 正文注入
+    expect(block).not.toContain('description: 测试包'); // frontmatter 已剥
+  });
+
+  it('dirName 寻址命中(fm.name ≠ dirName 时按 dirName 引用也解析,注入用 canonical name)', () => {
+    seedInstalledPack('u14', 'pack-dir', '包名甲');
+    const block = buildReferencedPacksBlock('u14', ['pack-dir']);
+    expect(block).toContain('技能包「包名甲」');
+  });
+
+  it('去重 + 上限:同名重复只注入一次;超过上限只取前 N 个可解析的', () => {
+    for (let i = 0; i < REFERENCED_PACK_MAX + 2; i++) {
+      seedInstalledPack('u15', `pack-${i}`, `pack-${i}`);
+    }
+    const names = ['pack-0', 'pack-0', ...Array.from({ length: REFERENCED_PACK_MAX + 1 }, (_, i) => `pack-${i + 1}`)];
+    const block = buildReferencedPacksBlock('u15', names);
+    expect(block).toContain('技能包「pack-0」');
+    expect(block.split('### 技能包「').length - 1).toBe(REFERENCED_PACK_MAX);
+    expect(block).not.toContain(`pack-${REFERENCED_PACK_MAX + 1}`);
+  });
+
+  it('超长 SKILL.md → 截断到预算并附指向 skill_pack_read 的截断标记', () => {
+    const dir = seedInstalledPack('u16', 'big-skill', 'big-skill');
+    const long = 'x'.repeat(REFERENCED_PACK_CHARS + 5000);
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: big-skill\n---\n${long}`);
+    const block = buildReferencedPacksBlock('u16', ['big-skill']);
+    expect(block).toContain('全文已截断');
+    expect(block).toContain('skill_pack_read');
+    expect(block).not.toContain('x'.repeat(REFERENCED_PACK_CHARS + 1));
+  });
+
+  it('sanitizeSkillPackRefs:过滤未安装/非字符串/空串,dirName 归一 canonical name,去重 + cap', () => {
+    seedInstalledPack('u17', 'pack-dir', '包名乙');
+    seedInstalledPack('u17', 'other', 'other');
+    expect(sanitizeSkillPackRefs('u17', '不是数组')).toEqual([]);
+    expect(sanitizeSkillPackRefs('u17', ['包名乙', 'pack-dir', 'other', 42, '', '  ', '没装的'])).toEqual([
+      '包名乙',
+      'other',
+    ]);
+    const many = Array.from({ length: REFERENCED_PACK_MAX + 3 }, (_, i) => `pack-${i}`);
+    for (let i = 0; i < REFERENCED_PACK_MAX + 3; i++) seedInstalledPack('u18', `pack-${i}`, `pack-${i}`);
+    expect(sanitizeSkillPackRefs('u18', many)).toHaveLength(REFERENCED_PACK_MAX);
   });
 
   it('skill_pack_read:读 SKILL.md / 子文件;未装包、越界路径、不存在文件都真实报错', async () => {

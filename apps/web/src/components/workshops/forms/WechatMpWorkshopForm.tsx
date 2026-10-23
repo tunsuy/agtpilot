@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
-import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS, WECHAT_MP_THEME_OPTIONS } from '@/workshops/wechat_mp/context';
+import { WECHAT_MP_ARTICLE_STYLES, WECHAT_MP_TOPIC_PRESETS, WECHAT_MP_THEME_OPTIONS, parseStyleRefs, STYLE_REF_LIMIT } from '@/workshops/wechat_mp/context';
 import type { ScenarioProfile } from '../../../lib/scenario-profile';
 import type { Mission } from '../../../types/agent';
 import type { WorkshopDef } from '../registry';
@@ -49,6 +49,15 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
   const [theme, setTheme] = useState<string>(
     typeof saved.theme === 'string' ? saved.theme : WECHAT_MP_THEME_OPTIONS[0].id
   );
+  // 风格参照:范文链接 textarea 原文(一行一条);历史回填兼容字符串/数组两种落盘形态
+  const [styleRefText, setStyleRefText] = useState<string>(() =>
+    Array.isArray(saved.styleRefs)
+      ? saved.styleRefs.filter((v: unknown) => typeof v === 'string').join('\n')
+      : typeof saved.styleRefs === 'string'
+        ? saved.styleRefs
+        : ''
+  );
+  const parsedStyleRefs = parseStyleRefs(styleRefText);
 
   // ---- 参考资料:会话交付物 + 本地上传勾选,收进 params.materials 拼进 prompt ----
   const uploads = useMaterialUploads();
@@ -121,7 +130,14 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
   };
 
   const materials = resolveMaterials(materialOptions, materialIds);
-  const params = { topic, style, count, theme, ...(materials.length > 0 ? { materials } : {}) };
+  const params = {
+    topic,
+    style,
+    count,
+    theme,
+    ...(styleRefText.trim() ? { styleRefs: styleRefText.trim() } : {}),
+    ...(materials.length > 0 ? { materials } : {}),
+  };
   const preview = buildWorkshopRun(
     workshop.id,
     params,
@@ -201,6 +217,30 @@ export function WechatMpWorkshopForm({ workshop, onRun, onClose, scenarioProfile
           onChange={setStyle}
           accent={workshop.accent}
         />
+      </div>
+
+      {/* 风格参照:范文链接(一行一条,≤3 条)。Agent 动笔前先读范文提炼风格档案,
+          成稿模仿档案而非抽象风格名;只学风格不抄内容(契约见 prompt.main.md) */}
+      <div className="space-y-1.5">
+        <FieldLabel optional>风格参照(范文链接)</FieldLabel>
+        <textarea
+          value={styleRefText}
+          onChange={(e) => setStyleRefText(e.target.value)}
+          rows={2}
+          placeholder={'贴 1-3 篇想模仿风格的文章链接(一行一条);同一博客 2-3 篇风格提炼更稳。Agent 只学风格,不抄内容'}
+          className={inputClass}
+        />
+        {styleRefText.trim() !== '' && (
+          <p
+            className={`text-[10px] leading-relaxed ${
+              parsedStyleRefs.length > 0 ? 'text-zinc-400' : 'text-amber-600'
+            }`}
+          >
+            {parsedStyleRefs.length > 0
+              ? `已识别 ${parsedStyleRefs.length} 条有效链接(最多取前 ${STYLE_REF_LIMIT} 条),Agent 将先读完范文再动笔`
+              : `未识别到有效链接(需以 http:// 或 https:// 开头,一行一条)`}
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildWechatMpWorkshopPrompt, WECHAT_MP_TOPIC_PRESETS } from '../context';
+import { buildWechatMpWorkshopPrompt, parseStyleRefs, WECHAT_MP_TOPIC_PRESETS } from '../context';
 import { normalizeScenarioProfile } from '@/lib/scenario-profile';
 
 const profileInput = {
@@ -122,6 +122,94 @@ describe('buildWechatMpWorkshopPrompt · 材料模式(勾交付物 + 空主题)'
     expect(prompt).toContain('主题:AI 编程工具横评');
     expect(prompt).not.toContain('主题:未指定');
     expect(prompt).toContain('【参考资料】');
+  });
+});
+
+describe('buildWechatMpWorkshopPrompt · 风格参照(范文链接)', () => {
+  it('回归锚点:无 styleRefs 时 prompt 不出现「风格参照」段(与旧版逐字节一致)', () => {
+    const prompt = buildWechatMpWorkshopPrompt({ topic: '大模型科普', style: '深度长文', count: 1 });
+    expect(prompt).not.toContain('【风格参照】');
+    expect(prompt).not.toContain('browser_navigate');
+  });
+
+  it('有效链接 → 注入风格契约:先读范文、提炼风格档案、优先于抽象风格、只学不抄、失败降级', () => {
+    const prompt = buildWechatMpWorkshopPrompt({
+      topic: 'AI 编程工具横评',
+      style: '深度长文',
+      count: 1,
+      styleRefs: 'https://blog.example.com/post-1',
+    });
+    expect(prompt).toContain('【风格参照】');
+    expect(prompt).toContain('1. https://blog.example.com/post-1');
+    // 读取工具指路 + 降级链
+    expect(prompt).toContain('browser_navigate');
+    expect(prompt).toContain('browser_firecrawl_scrape');
+    // 覆盖关系:范文档案优先于「文章风格」一行
+    expect(prompt).toContain('优先于上面「文章风格」一行');
+    // 版权红线:只学风格
+    expect(prompt).toContain('不得复用范文的表达、例子、数据或标题');
+    // 全部读取失败的降级:按风格行继续 + 成稿末尾注明
+    expect(prompt).toContain('范文未能读取');
+    // 契约段位于「文章风格」行之后(覆盖关系就近声明)
+    expect(prompt.indexOf('文章风格:深度长文')).toBeLessThan(prompt.indexOf('【风格参照】'));
+  });
+
+  it('多条链接按编号列出;超过 3 条截断', () => {
+    const prompt = buildWechatMpWorkshopPrompt({
+      style: '深度长文',
+      count: 1,
+      topic: 'x',
+      styleRefs: 'https://a.com/1\nhttps://a.com/2\nhttps://a.com/3\nhttps://a.com/4',
+    });
+    expect(prompt).toContain('1. https://a.com/1');
+    expect(prompt).toContain('3. https://a.com/3');
+    expect(prompt).not.toContain('a.com/4');
+  });
+
+  it('与材料模式并存:内容来源不变,风格契约叠加(选题从资料、风格从范文)', () => {
+    const prompt = buildWechatMpWorkshopPrompt({
+      style: '深度长文',
+      count: 1,
+      materials: [{ id: 'art_1', title: '行业研报' }],
+      styleRefs: 'https://blog.example.com/style',
+    });
+    expect(prompt).toContain('主题:未指定,不需要调研热点选题');
+    expect(prompt).toContain('【参考资料】');
+    expect(prompt).toContain('【风格参照】');
+  });
+});
+
+describe('parseStyleRefs · 输入收敛', () => {
+  it('textarea 原文按换行/逗号/空格切分,数组形态同样接受', () => {
+    expect(parseStyleRefs('https://a.com/1\nhttps://a.com/2,https://a.com/3 https://a.com/4')).toEqual([
+      'https://a.com/1',
+      'https://a.com/2',
+      'https://a.com/3',
+    ]);
+    expect(parseStyleRefs(['https://a.com/1', 'https://a.com/2'])).toEqual([
+      'https://a.com/1',
+      'https://a.com/2',
+    ]);
+  });
+
+  it('非 http(s) 协议与非法链接整条丢弃(javascript:/ftp:/裸文本不进 prompt)', () => {
+    expect(
+      parseStyleRefs('javascript:alert(1)\nftp://x.com/a\nnot-a-url\nhttps://ok.com/x')
+    ).toEqual(['https://ok.com/x']);
+  });
+
+  it('去重;空输入/非字符串非数组 → 空数组', () => {
+    expect(parseStyleRefs('https://a.com/1\nhttps://a.com/1')).toEqual(['https://a.com/1']);
+    expect(parseStyleRefs('')).toEqual([]);
+    expect(parseStyleRefs('   \n  ')).toEqual([]);
+    expect(parseStyleRefs(undefined)).toEqual([]);
+    expect(parseStyleRefs(42)).toEqual([]);
+    expect(parseStyleRefs(['https://a.com/1', 42, null])).toEqual(['https://a.com/1']);
+  });
+
+  it('超长链接(>500 字符)整条丢弃(截断会指向错误页面)', () => {
+    const long = `https://a.com/${'p'.repeat(600)}`;
+    expect(parseStyleRefs(`${long}\nhttps://ok.com/x`)).toEqual(['https://ok.com/x']);
   });
 });
 

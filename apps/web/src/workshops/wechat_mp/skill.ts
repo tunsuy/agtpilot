@@ -57,6 +57,11 @@ export const WORKSHOP_SKILL: WorkshopSkill = {
         style,
         count: num(params.count),
         materials: parseMaterials(params.materials),
+        // 风格参照:表单存 textarea 原文(字符串),服务端重渲染同形透传;
+        // 数组形态也收(parseStyleRefs 双兼容),其余类型视为缺省
+        ...(typeof params.styleRefs === 'string' || Array.isArray(params.styleRefs)
+          ? { styleRefs: params.styleRefs as string | string[] }
+          : {}),
         ...(params.theme ? { theme: str(params.theme) } : {}),
         ...(ctx?.scenarioProfile ? { profile: ctx.scenarioProfile } : {}),
       }),

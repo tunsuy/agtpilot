@@ -44,7 +44,7 @@ interface InstalledPack {
   hasScripts: boolean;
   importedAt?: number;
   fileCount?: number;
-  source?: { platform?: 'github' | 'modelscope'; repo: string; ref: string; sha: string; path: string };
+  source?: { platform?: 'github' | 'modelscope' | 'skillhub'; repo: string; ref: string; sha: string; path: string };
   contentHash?: string;
 }
 
@@ -56,7 +56,7 @@ interface BuiltinInventory {
 interface MarketSkill {
   sourceId: string;
   sourceLabel: string;
-  platform?: 'github' | 'modelscope';
+  platform?: 'github' | 'modelscope' | 'skillhub';
   repo: string;
   path: string;
   name: string;
@@ -71,7 +71,7 @@ interface MarketSource {
   id: string;
   label: string;
   repo: string;
-  type?: 'github' | 'modelscope';
+  type?: 'github' | 'modelscope' | 'skillhub';
   error?: string;
   skills: MarketSkill[];
 }
@@ -80,7 +80,31 @@ interface SkillDetail {
   name: string;
   description: string;
   content: string;
+  /** SkillHub 详情专属:腾讯安全扫描摘要(其他平台无此字段) */
+  security?: { status: string; statusText?: string; reportUrl?: string };
 }
+
+/** 平台徽标/文案映射(github 是缺省平台:无徽标,来源行走 repo@sha·path 形态) */
+const PLATFORM_META: Record<string, { label: string; badgeCls: string }> = {
+  modelscope: { label: '魔搭', badgeCls: 'bg-blue-50 text-blue-600 border-blue-200' },
+  skillhub: { label: 'SkillHub', badgeCls: 'bg-purple-50 text-purple-600 border-purple-200' }, // 紫色与魔搭蓝区分
+};
+
+/** 市场源头部 & 卡片外链:平台级主页与 title(github 回落 repo 形态) */
+const SOURCE_META: Record<string, { home: string; linkTitle: string; badge: string; badgeCls: string }> = {
+  modelscope: {
+    home: 'https://modelscope.cn/skills',
+    linkTitle: '在魔搭打开(新标签)',
+    badge: '国内',
+    badgeCls: 'bg-blue-50 text-blue-600 border-blue-200',
+  },
+  skillhub: {
+    home: 'https://skillhub.cn/skills?sortBy=score',
+    linkTitle: '在 SkillHub 打开(新标签)',
+    badge: '腾讯·国内',
+    badgeCls: 'bg-purple-50 text-purple-600 border-purple-200',
+  },
+};
 
 type Section = 'all' | 'cards' | 'installed' | 'market' | 'builtin';
 
@@ -90,8 +114,9 @@ interface SkillsViewProps {
 }
 
 export function SkillsView({ onCountsChange }: SkillsViewProps) {
-  // 默认落「技能市场」且只看魔搭:魔搭是主力浏览路径(8万+条目、服务端搜索、国内快),
-  // GitHub 源小且网络不稳;「全部」分区仍保留(四块堆叠),只是不再作为落地态
+  // 默认落「技能市场」且只看国内双源(魔搭+SkillHub):它们是主力浏览路径
+  // (8万+/20万+条目、服务端搜索、国内快),GitHub 源小且网络不稳;
+  // 「全部」分区仍保留(四块堆叠),只是不再作为落地态
   const [section, setSection] = useState<Section>('market');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -105,7 +130,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
   const [market, setMarket] = useState<MarketSource[] | null>(null);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketError, setMarketError] = useState<string | null>(null);
-  // 已发给服务端的搜索词(魔搭 8 万+ 条目必须走服务端搜索;防抖 600ms)
+  // 已发给服务端的搜索词(魔搭 8 万+ / SkillHub 20 万+ 条目必须走服务端搜索;防抖 600ms)
   const [marketSearch, setMarketSearch] = useState('');
 
   // 弹窗状态
@@ -238,7 +263,9 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
         body: JSON.stringify({
           repo: importTarget.repo,
           path: importTarget.path,
-          ...(importTarget.platform === 'modelscope' ? { platform: 'modelscope' } : {}),
+          ...(importTarget.platform && importTarget.platform !== 'github'
+            ? { platform: importTarget.platform }
+            : {}),
           riskAck: true,
         }),
       });
@@ -258,7 +285,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
     setDetailLoading(skill);
     try {
       const qs = new URLSearchParams({ repo: skill.repo, path: skill.path });
-      if (skill.platform === 'modelscope') qs.set('platform', 'modelscope');
+      if (skill.platform && skill.platform !== 'github') qs.set('platform', skill.platform);
       const res = await fetch(`/api/skills/market?${qs.toString()}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '详情加载失败');
@@ -276,7 +303,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
 
   const filteredCards = cards.filter((c) => matchQ(c.trigger, c.steps, c.avoid, ...(c.keywords || [])));
   const filteredInstalled = installed.filter((p) => matchQ(p.name, p.description, p.source?.repo));
-  // 魔搭条目不做本地过滤:服务端搜索是唯一权威(匹配字段更全,本地 matchQ 反而误杀)。
+  // 魔搭/SkillHub 条目不做本地过滤:服务端搜索是唯一权威(匹配字段更全,本地 matchQ 反而误杀)。
   // 此前输入期间(防抖未触发、marketSearch 还是旧值)每个键击都本地重滤一遍前 50 条,
   // 三列网格随键伸缩、页面跳动;现在防抖等待期保持上一批服务端结果稳定展示,
   // 新结果到达一次性替换(每次搜索至多一次重排)。github 条目(env 配源才会出现)
@@ -287,6 +314,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
       skills: s.skills.filter(
         (k) =>
           k.platform === 'modelscope' ||
+          k.platform === 'skillhub' ||
           matchQ(k.name, k.displayName, k.description, k.path, k.category, k.repo)
       ),
     }))
@@ -488,8 +516,10 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                     {p.source && (
                       <p className="text-[10px] text-zinc-400 font-mono mt-2 break-all">
                         <FolderGit2 className="inline h-3 w-3 mr-1" />
-                        {p.source.platform === 'modelscope' ? (
-                          <>魔搭 · {p.source.repo}</>
+                        {p.source.platform && p.source.platform !== 'github' ? (
+                          <>
+                            {PLATFORM_META[p.source.platform].label} · {p.source.repo}
+                          </>
                         ) : (
                           <>
                             {p.source.repo}@{p.source.sha.slice(0, 8)} · {p.source.path}
@@ -562,23 +592,23 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               <div key={src.id} className="space-y-2">
                 <div className="flex items-center gap-2 text-[11px] text-zinc-500">
                   <span className="font-semibold text-zinc-700">{src.label}</span>
-                  {src.type === 'modelscope' ? (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-200">
-                      国内
+                  {src.type && SOURCE_META[src.type] ? (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${SOURCE_META[src.type].badgeCls}`}>
+                      {SOURCE_META[src.type].badge}
                     </span>
                   ) : (
                     <span className="font-mono">{src.repo}</span>
                   )}
                   <a
-                    href={src.type === 'modelscope' ? 'https://modelscope.cn/skills' : `https://github.com/${src.repo}`}
+                    href={src.type && SOURCE_META[src.type] ? SOURCE_META[src.type].home : `https://github.com/${src.repo}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-zinc-400 hover:text-zinc-700 transition"
-                    title={src.type === 'modelscope' ? '在魔搭打开(新标签)' : '在 GitHub 打开(新标签)'}
+                    title={src.type && SOURCE_META[src.type] ? SOURCE_META[src.type].linkTitle : '在 GitHub 打开(新标签)'}
                   >
                     <ExternalLink className="h-3 w-3" />
                   </a>
-                  {src.type === 'modelscope' && marketSearch && (
+                  {src.type && SOURCE_META[src.type] && marketSearch && (
                     <span className="text-zinc-400">搜索「{marketSearch}」的服务端结果</span>
                   )}
                 </div>
@@ -595,7 +625,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                         p.source?.repo === s.repo &&
                         p.source?.path === s.path
                     );
-                    const isMs = s.platform === 'modelscope';
+                    const meta = s.platform && s.platform !== 'github' ? PLATFORM_META[s.platform] : undefined;
                     return (
                       <div
                         key={`${s.sourceId}:${s.repo}:${s.path}`}
@@ -605,14 +635,14 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                           <div className="min-w-0">
                             <h3 className="text-xs font-semibold text-zinc-900 truncate flex items-center gap-1.5">
                               <span className="truncate">{s.displayName || s.name}</span>
-                              {isMs && (
-                                <span className="text-[9px] px-1 py-px rounded bg-blue-50 text-blue-600 border border-blue-200 flex-shrink-0">
-                                  魔搭
+                              {meta && (
+                                <span className={`text-[9px] px-1 py-px rounded border flex-shrink-0 ${meta.badgeCls}`}>
+                                  {meta.label}
                                 </span>
                               )}
                             </h3>
                             <p className="text-[10px] text-zinc-400 font-mono truncate mt-0.5">
-                              {isMs ? s.repo : `${s.category ? `${s.category}/` : ''}${s.name}`}
+                              {meta ? s.repo : `${s.category ? `${s.category}/` : ''}${s.name}`}
                             </p>
                           </div>
                           {isInstalled && (
@@ -650,7 +680,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                           </button>
                           <span className="flex-1" />
                           {typeof s.downloads === 'number' && s.downloads > 0 && (
-                            <span className="text-[10px] text-zinc-400 flex items-center gap-0.5" title="魔搭下载量">
+                            <span className="text-[10px] text-zinc-400 flex items-center gap-0.5" title={`${meta?.label || 'GitHub'}下载量`}>
                               <Download className="h-2.5 w-2.5" />
                               {s.downloads >= 10000 ? `${(s.downloads / 10000).toFixed(1)}万` : s.downloads}
                             </span>
@@ -661,7 +691,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-zinc-400 hover:text-zinc-700 transition"
-                              title="在魔搭打开(新标签)"
+                              title={(s.platform && SOURCE_META[s.platform]?.linkTitle) || '在 GitHub 打开(新标签)'}
                             >
                               <ExternalLink className="h-3 w-3" />
                             </a>
@@ -681,7 +711,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               );
             })}
               {filteredMarket.length === 0 && (
-                <EmptyHint text="没有匹配的技能 —— 换个搜索词试试(魔搭 8 万+ 条目走服务端搜索)" />
+                <EmptyHint text="没有匹配的技能 —— 换个搜索词试试(魔搭 8 万+ / SkillHub 20 万+ 条目走服务端搜索)" />
               )}
             </>
           )}
@@ -747,8 +777,8 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               将从本机彻底删除技能包「{uninstallTarget.name}」(删除进台账留痕;之后可随时重新引用):
               {uninstallTarget.source && (
                 <p className="mt-2 px-3 py-2 rounded-lg bg-zinc-50 border border-zinc-200 text-[10px] text-zinc-500 font-mono break-all">
-                  {uninstallTarget.source.platform === 'modelscope'
-                    ? `魔搭 · ${uninstallTarget.source.repo}`
+                  {uninstallTarget.source.platform && uninstallTarget.source.platform !== 'github'
+                    ? `${PLATFORM_META[uninstallTarget.source.platform].label} · ${uninstallTarget.source.repo}`
                     : `${uninstallTarget.source.repo}@${uninstallTarget.source.sha.slice(0, 8)} · ${uninstallTarget.source.path}`}
                 </p>
               )}
@@ -770,7 +800,10 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
           body={
             <>
               即将从 <span className="font-mono text-zinc-700">{importTarget.repo}</span>
-              {importTarget.platform === 'modelscope' ? '(魔搭)' : ''} 安装
+              {importTarget.platform && importTarget.platform !== 'github'
+                ? `(${PLATFORM_META[importTarget.platform].label})`
+                : ''}{' '}
+              安装
               {importTarget.path ? (
                 <>
                   {' '}
@@ -802,12 +835,38 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
               <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-zinc-900 truncate">{detail.data.name}</h3>
                 <p className="text-[10px] text-zinc-400 font-mono mt-0.5 truncate">
-                  {detail.skill.platform === 'modelscope' ? '魔搭 · ' : ''}
+                  {detail.skill.platform && detail.skill.platform !== 'github'
+                    ? `${PLATFORM_META[detail.skill.platform].label} · `
+                    : ''}
                   {detail.skill.repo}
                   {detail.skill.path ? ` · ${detail.skill.path}` : ''}
                 </p>
                 {detail.data.description && (
                   <p className="text-xs text-zinc-600 mt-1.5 leading-relaxed">{detail.data.description}</p>
+                )}
+                {detail.data.security && (
+                  <p className="mt-1.5 flex items-center gap-1.5 flex-wrap text-[11px]">
+                    <span
+                      className={`px-1.5 py-0.5 rounded border ${
+                        detail.data.security.status === 'benign'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-amber-50 text-amber-700 border-amber-200'
+                      }`}
+                    >
+                      腾讯安全扫描:{detail.data.security.statusText || detail.data.security.status}
+                    </span>
+                    {detail.data.security.reportUrl && (
+                      <a
+                        href={detail.data.security.reportUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-zinc-400 hover:text-zinc-700 transition flex items-center gap-0.5"
+                      >
+                        查看报告
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </p>
                 )}
               </div>
               <button onClick={() => setDetail(null)} className="text-zinc-400 hover:text-zinc-700 p-1 flex-shrink-0">

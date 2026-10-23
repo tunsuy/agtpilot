@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
+import * as crypto from 'crypto';
 
 // USER_DATA_DIR 指向临时目录(getDataDir 每次调用时读 env,先设后导入无顺序问题)
 let tmpRoot: string;
@@ -33,6 +34,7 @@ afterEach(() => {
 import {
   isSafeRepoSlug,
   isSafeModelScopeId,
+  isSafeSkillHubId,
   isSafeRelPath,
   sanitizePackName,
   extractTarSubdir,
@@ -122,6 +124,18 @@ describe('校验纯函数', () => {
     expect(isSafeModelScopeId('single')).toBe(false);
     expect(isSafeModelScopeId('')).toBe(false);
     expect(isSafeModelScopeId(123 as any)).toBe(false);
+  });
+
+  it('isSafeSkillHubId:@handle/slug 与 handle/slug 合法;穿越/多段/空/非字符串拒绝', () => {
+    expect(isSafeSkillHubId('@ake/dev-god')).toBe(true);
+    expect(isSafeSkillHubId('ake/dev-god')).toBe(true);
+    expect(isSafeSkillHubId('a.b_c/d-e')).toBe(true);
+    expect(isSafeSkillHubId('../etc/passwd')).toBe(false);
+    expect(isSafeSkillHubId('@ake/dev-god/extra')).toBe(false);
+    expect(isSafeSkillHubId('owner/../escape')).toBe(false);
+    expect(isSafeSkillHubId('single')).toBe(false);
+    expect(isSafeSkillHubId('')).toBe(false);
+    expect(isSafeSkillHubId(123 as any)).toBe(false);
   });
 
   it('isSafeRelPath:相对路径合法;绝对/..段/首尾斜杠/空拒绝', () => {
@@ -679,6 +693,363 @@ describe('importSkillPack · 魔搭链路', () => {
     const res = await importSkillPack('m8', { ...MS_OPTS });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain('不存在');
+  });
+});
+
+// ---- SkillHub(腾讯)源:注册表 / 索引 / 详情 / 导入 ----
+
+/** 注册表源 env 接管(只留一个 SkillHub 源,隔离 GitHub 网络面) */
+function useSkillHubRegistry() {
+  process.env.AGTPILOT_SKILL_REGISTRY_SOURCES = JSON.stringify([
+    { id: 'sh', label: 'SkillHub(腾讯·国内)', repo: '', type: 'skillhub' },
+  ]);
+}
+
+const SH_SKILL_MD = '---\nname: dev-god\ndescription: 编程大神\n---\n\n# 用法\n照做。';
+
+function sha256Hex(buf: Buffer): string {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+/** 列表项 fixture(照 api.skillhub.cn 实测样本形态) */
+function shItem(over: Record<string, any> = {}) {
+  return {
+    name: '编程大神.Skill',
+    slug: 'dev-god',
+    namespace: { canonicalName: '@ake/dev-god', handle: 'ake', displayName: 'ake' },
+    description_zh: '编程大神技能',
+    description: 'dev god skill',
+    category: 'dev-programming',
+    subCategories: [{ key: 'code-gen', name: '代码生成' }],
+    downloads: 8005822,
+    version: '1.2.4',
+    ...over,
+  };
+}
+
+/**
+ * SkillHub mock fetch:
+ * - /api/v1/skills/<slug>/files? → 文件清单 {count,files:[{path,sha256,size}],version}
+ *   (sha256 由内容现算;shaOverride 篡改/置空模拟缺字段;sizeOverride 撒谎)
+ * - /api/v1/skills/<slug>/file? → 文件原文(files 以 path 为键)
+ * - /api/v1/skills/<slug>? → 详情裸对象(securityReports.keen;detailStatus 故障注入)
+ * - /api/skills? → 索引信封 {code:0,data:{skills,total}}
+ * 分发顺序敏感:/files? → /file? → 详情裸对象 → 索引信封
+ */
+function mockSkillHubFetch(opts: {
+  index?: any[];
+  files?: Record<string, string | Buffer>;
+  version?: string;
+  shaOverride?: string;
+  sizeOverride?: number;
+  filesStatus?: number;
+  detailStatus?: number;
+}) {
+  const fn = vi.fn(async (url: any) => {
+    const u = String(url);
+    if (u.includes('/api/v1/skills/') && u.includes('/files?')) {
+      if (opts.filesStatus && opts.filesStatus !== 200) {
+        return { ok: false, status: opts.filesStatus, json: async () => ({}) } as any;
+      }
+      const entries = Object.entries(opts.files ?? {}).map(([p, content]) => {
+        const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf-8');
+        return {
+          path: p,
+          sha256: opts.shaOverride !== undefined ? opts.shaOverride : sha256Hex(buf),
+          size: opts.sizeOverride !== undefined ? opts.sizeOverride : buf.length,
+        };
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          count: entries.length,
+          files: entries,
+          namespace: 'ake',
+          version: opts.version ?? '1.2.4',
+        }),
+      } as any;
+    }
+    if (u.includes('/api/v1/skills/') && u.includes('/file?')) {
+      const p = new URL(u).searchParams.get('path') || '';
+      const content = opts.files?.[p];
+      if (content === undefined) return { ok: false, status: 404, text: async () => '' } as any;
+      const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf-8');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => buf.toString('utf-8'),
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      } as any;
+    }
+    if (u.includes('/api/v1/skills/')) {
+      if (opts.detailStatus && opts.detailStatus !== 200) {
+        return { ok: false, status: opts.detailStatus, json: async () => ({}) } as any;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          securityReports: {
+            keen: { status: 'benign', statusText: '安全,无风险', reportUrl: 'https://tix.qq.com/report/x' },
+          },
+        }),
+      } as any;
+    }
+    if (u.includes('/api/skills?')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 0, data: { skills: opts.index ?? [], total: (opts.index ?? []).length } }),
+      } as any;
+    }
+    return { ok: false, status: 404, json: async () => ({}) } as any;
+  });
+  vi.stubGlobal('fetch', fn);
+  return fn;
+}
+
+describe('marketSources · SkillHub 注册表', () => {
+  afterEach(() => {
+    delete process.env.AGTPILOT_SKILL_REGISTRY_SOURCES;
+  });
+
+  it('缺省源含 SkillHub;env 配置 type=skillhub 时 repo 可空', () => {
+    const defaults = marketSources();
+    expect(defaults.some((s) => s.type === 'skillhub')).toBe(true);
+    useSkillHubRegistry();
+    const custom = marketSources();
+    expect(custom).toHaveLength(1);
+    expect(custom[0]).toMatchObject({ id: 'sh', type: 'skillhub', repo: '' });
+  });
+});
+
+describe('fetchMarketIndex · SkillHub 索引', () => {
+  afterEach(() => {
+    delete process.env.AGTPILOT_SKILL_REGISTRY_SOURCES;
+  });
+
+  it('/api/skills 列表映射:platform/repo=canonicalName/path 空/中文名与分类/外链/下载量;脏数据跳过', async () => {
+    useSkillHubRegistry();
+    mockSkillHubFetch({
+      index: [
+        shItem(),
+        shItem({ slug: 'evil', namespace: { canonicalName: 'bad id/../../evil', handle: 'ake' } }),
+        shItem({ slug: undefined }),
+      ],
+    });
+    const idx = await fetchMarketIndex(true);
+    expect(idx.sources).toHaveLength(1);
+    const skills = idx.sources[0].skills;
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({
+      platform: 'skillhub',
+      repo: '@ake/dev-god',
+      path: '',
+      name: '编程大神.Skill',
+      category: '代码生成', // 中文子类名优先于平台分类 key
+      description: '编程大神技能',
+      downloads: 8005822,
+      externalUrl: 'https://skillhub.cn/skills/ake/dev-god', // web 主机,非 API 主机
+    });
+  });
+
+  it('search 透传到服务端(20 万+ 条目必须服务端搜索;sortBy=score 精选)', async () => {
+    useSkillHubRegistry();
+    const fn = mockSkillHubFetch({ index: [] });
+    await fetchMarketIndex(true, 'pdf');
+    const url = String(fn.mock.calls[0][0]);
+    expect(url).toContain('/api/skills?');
+    expect(url).toContain('keyword=pdf');
+    expect(url).toContain('sortBy=score');
+    expect(url).toContain('pageSize=50');
+  });
+
+  it('单源失败带 error 返回(HTTP 500 / 信封 code≠0,不静默成空列表)', async () => {
+    useSkillHubRegistry();
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }) as any));
+    const idx = await fetchMarketIndex(true);
+    expect(idx.sources[0].error).toContain('500');
+    expect(idx.sources[0].skills).toEqual([]);
+    // 信封 code≠0(HTTP 200)同样显式报错
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ code: 500, message: 'rate limited' }) }) as any)
+    );
+    const idx2 = await fetchMarketIndex(true);
+    expect(idx2.sources[0].error).toContain('code=500');
+    expect(idx2.sources[0].skills).toEqual([]);
+  });
+});
+
+describe('fetchMarketSkillDetail · SkillHub 详情', () => {
+  it('SKILL.md frontmatter + 全文 + 安全扫描摘要透传', async () => {
+    mockSkillHubFetch({ files: { 'SKILL.md': SH_SKILL_MD } });
+    const res = await fetchMarketSkillDetail('@ake/dev-god', '', 'HEAD', 'skillhub');
+    expect(res).toMatchObject({ ok: true, name: 'dev-god', description: '编程大神' });
+    if (res.ok) {
+      expect(res.content).toContain('# 用法');
+      expect(res.security).toEqual({
+        status: 'benign',
+        statusText: '安全,无风险',
+        reportUrl: 'https://tix.qq.com/report/x',
+      });
+    }
+  });
+
+  it('security 端点故障 → best-effort 不阻塞 SKILL.md 预览', async () => {
+    mockSkillHubFetch({ files: { 'SKILL.md': SH_SKILL_MD }, detailStatus: 500 });
+    const res = await fetchMarketSkillDetail('@ake/dev-god', '', 'HEAD', 'skillhub');
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain('# 用法');
+      expect(res.security).toBeUndefined();
+    }
+  });
+
+  it('非法 id 拒绝;SKILL.md 404 真实报错', async () => {
+    mockSkillHubFetch({ files: {} });
+    const bad = await fetchMarketSkillDetail('../evil', '', 'HEAD', 'skillhub');
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toContain('不合法');
+    const miss = await fetchMarketSkillDetail('@ake/nope', '', 'HEAD', 'skillhub');
+    expect(miss.ok).toBe(false);
+    if (!miss.ok) expect(miss.error).toContain('SKILL.md');
+  });
+});
+
+describe('importSkillPack · SkillHub 链路', () => {
+  const SH_OPTS = { platform: 'skillhub', repo: '@ake/dev-god', path: '', riskAck: true } as const;
+
+  function shDemoMocks() {
+    return mockSkillHubFetch({
+      files: { 'SKILL.md': SH_SKILL_MD, 'scripts/run.sh': '#!/bin/sh\nhi\n' },
+    });
+  }
+
+  it('成功引用:files 清单 → 逐文件拉取(version 钉快照)→ provenance 记 sha=sh-<版本号>', async () => {
+    const fn = shDemoMocks();
+    const res = await importSkillPack('h1', { ...SH_OPTS });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.pack.name).toBe('dev-god'); // frontmatter name 优先
+    expect(res.pack.dirName).toBe('dev-god');
+    expect(res.pack.hasScripts).toBe(true);
+    expect(res.pack.provenance?.source).toMatchObject({
+      platform: 'skillhub',
+      repo: '@ake/dev-god',
+      ref: '1.2.4',
+      sha: 'sh-1.2.4', // 版本号即内容版本信号(无 commit sha)
+      path: '',
+    });
+    // version 钉快照:全部 /file 请求携带清单解析出的同一 version
+    const fileUrls = fn.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/file?'));
+    expect(fileUrls).toHaveLength(2);
+    expect(fileUrls.every((u) => u.includes('version=1.2.4'))).toBe(true);
+    const dir = path.join(userSkillPacksDir('h1'), 'dev-god');
+    expect(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf-8')).toContain('编程大神');
+    expect(fs.readFileSync(path.join(dir, 'scripts/run.sh'), 'utf-8')).toBe('#!/bin/sh\nhi\n');
+    expect(fs.readdirSync(userSkillPacksDir('h1')).some((n) => n.startsWith('.tmp-'))).toBe(false);
+    expect(listInstalledPacks('h1').map((p) => p.dirName)).toEqual(['dev-god']);
+  });
+
+  it('riskAck 未确认 / id 不合法 → 拒绝且不发请求', async () => {
+    const fn = shDemoMocks();
+    const noAck = await importSkillPack('h2', { platform: 'skillhub', repo: '@ake/dev-god', path: '' });
+    expect(noAck.ok).toBe(false);
+    if (!noAck.ok) expect(noAck.error).toContain('risk-ack-required');
+    const badId = await importSkillPack('h2', { ...SH_OPTS, repo: '../../etc' });
+    expect(badId.ok).toBe(false);
+    if (!badId.ok) expect(badId.error).toContain('不合法');
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('清单含穿越路径 → 下载前整包拒绝,不落盘', async () => {
+    mockSkillHubFetch({ files: { 'SKILL.md': SH_SKILL_MD, '../../escaped.md': 'evil' } });
+    const res = await importSkillPack('h3', { ...SH_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('非法路径');
+    const root = userSkillPacksDir('h3');
+    expect(fs.existsSync(root) ? fs.readdirSync(root) : []).toEqual([]);
+    expect(fs.existsSync(path.join(tmpRoot, 'escaped.md'))).toBe(false);
+  });
+
+  it('清单 size 超单文件上限 → 下载前整包拒绝(/file 一次不打)', async () => {
+    const fn = mockSkillHubFetch({
+      files: { 'SKILL.md': SH_SKILL_MD, 'big.bin': 'small' },
+      sizeOverride: IMPORT_MAX_FILE_BYTES + 1,
+    });
+    const res = await importSkillPack('h4', { ...SH_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('单文件超过上限');
+    expect(fn.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/file?'))).toBe(false);
+  });
+
+  it('清单 size 撒谎(实际字节超限)→ 拉取时字节复核拒绝', async () => {
+    mockSkillHubFetch({
+      files: { 'SKILL.md': SH_SKILL_MD, 'big.bin': Buffer.alloc(IMPORT_MAX_FILE_BYTES + 1, 7) },
+      sizeOverride: 10,
+    });
+    const res = await importSkillPack('h5', { ...SH_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('单文件超过上限');
+    const root = userSkillPacksDir('h5');
+    expect(fs.existsSync(root) ? fs.readdirSync(root) : []).toEqual([]);
+  });
+
+  it('文件内容 sha256 不匹配(调包/篡改)→ 拒绝', async () => {
+    mockSkillHubFetch({
+      files: { 'SKILL.md': SH_SKILL_MD, 'notes.md': 'original' },
+      shaOverride: 'b'.repeat(64), // 形态合法但内容不匹配
+    });
+    const res = await importSkillPack('h6', { ...SH_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('sha256');
+    const root = userSkillPacksDir('h6');
+    expect(fs.existsSync(root) ? fs.readdirSync(root) : []).toEqual([]);
+  });
+
+  it('清单缺 sha256 → 整包拒绝(硬护栏不降级,/file 一次不打)', async () => {
+    const fn = mockSkillHubFetch({ files: { 'SKILL.md': SH_SKILL_MD }, shaOverride: '' });
+    const res = await importSkillPack('h6b', { ...SH_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('缺少 sha256');
+    expect(fn.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/file?'))).toBe(false);
+  });
+
+  it('文件数超上限 → 整包拒绝', async () => {
+    const files: Record<string, string> = { 'SKILL.md': SH_SKILL_MD };
+    for (let i = 0; i < IMPORT_MAX_FILES + 1; i++) files[`f${i}.txt`] = 'x';
+    mockSkillHubFetch({ files });
+    const res = await importSkillPack('h7', { ...SH_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('文件数超过上限');
+  });
+
+  it('缺 SKILL.md → 拒绝且不留残余;同名冲突 → already-installed,overwrite 可替换', async () => {
+    mockSkillHubFetch({ files: { 'readme.md': 'hello' } });
+    const noMd = await importSkillPack('h8', { ...SH_OPTS });
+    expect(noMd.ok).toBe(false);
+    if (!noMd.ok) expect(noMd.error).toContain('SKILL.md');
+    const root = userSkillPacksDir('h8');
+    expect(fs.existsSync(root) ? fs.readdirSync(root) : []).toEqual([]);
+
+    shDemoMocks();
+    const first = await importSkillPack('h8', { ...SH_OPTS });
+    expect(first.ok).toBe(true);
+    const dup = await importSkillPack('h8', { ...SH_OPTS });
+    expect(dup.ok).toBe(false);
+    if (!dup.ok) expect(dup.error).toContain('already-installed');
+    const over = await importSkillPack('h8', { ...SH_OPTS, overwrite: true });
+    expect(over.ok).toBe(true);
+    expect(listInstalledPacks('h8')).toHaveLength(1);
+  });
+
+  it('技能不存在(/files 404)→ 真实原因透传', async () => {
+    mockSkillHubFetch({ files: { 'SKILL.md': SH_SKILL_MD }, filesStatus: 404 });
+    const res = await importSkillPack('h9', { ...SH_OPTS });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('不存在或已下架');
   });
 });
 

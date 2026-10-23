@@ -55,9 +55,17 @@ const MODELSCOPE_WWW = 'https://www.modelscope.cn';
 /** 魔搭索引单页条数与文件清单递归深度上限(防御性) */
 const MODELSCOPE_PAGE_SIZE = 50;
 const MODELSCOPE_TREE_MAX_DEPTH = 8;
+/** SkillHub(skillhub.cn,腾讯系 AI Skills 社区,20万+):API 主机 + web 主机(外链用) */
+const SKILLHUB_API = 'https://api.skillhub.cn';
+const SKILLHUB_WWW = 'https://skillhub.cn';
+/** SkillHub 索引单页条数(服务端 pageSize 上限 100;与魔搭同取 50,总量靠 search 收窄) */
+const SKILLHUB_PAGE_SIZE = 50;
+/** SkillHub 逐文件拉取并发(无鉴权无公开限流,取保守值,与 MARKET_ENRICH_CONCURRENCY 同档) */
+const SKILLHUB_FETCH_CONCURRENCY = 6;
 
 /** 引用限额:第三方技能包按不可信输入设硬上限 */
-export const IMPORT_MAX_FILES = 64;
+// 256:SkillHub 热门技能半数超 64 文件(实测最大 152);字节限额(单文件/总量)才是真护栏
+export const IMPORT_MAX_FILES = 256;
 export const IMPORT_MAX_FILE_BYTES = 2 * 1024 * 1024; // 单文件 2MB
 export const IMPORT_MAX_TOTAL_BYTES = 20 * 1024 * 1024; // 解压后总量 20MB
 const TARBALL_MAX_BYTES = 100 * 1024 * 1024; // 下载压缩流上限 100MB
@@ -94,6 +102,20 @@ export function isSafeRepoSlug(repo: unknown): repo is string {
  */
 export function isSafeModelScopeId(id: unknown): id is string {
   return typeof id === 'string' && /^@?[\w.-]+\/[\w.-]+$/.test(id) && !id.includes('..');
+}
+
+/**
+ * SkillHub canonicalName 校验:@handle/slug(如 @ake/dev-god),与魔搭 id 同形态
+ * (委托同一谓词;保留独立函数名供报错文案与未来平台差异收紧)。
+ */
+export function isSafeSkillHubId(id: unknown): id is string {
+  return isSafeModelScopeId(id);
+}
+
+/** canonicalName(@handle/slug 或 handle/slug)→ { handle, slug };形态非法返回 null */
+function parseSkillHubId(id: string): { handle: string; slug: string } | null {
+  const m = /^@?([\w.-]+)\/([\w.-]+)$/.exec(id);
+  return m ? { handle: m[1], slug: m[2] } : null;
 }
 
 /** 仓库内相对路径校验:非空、非绝对、无 .. 段、无首尾斜杠 */
@@ -225,8 +247,8 @@ export function extractTarSubdir(
 
 export interface SkillPackProvenance {
   source: {
-    /** 平台(缺省 github;魔搭为 modelscope,sha 记 ms-<提交时间戳>) */
-    platform?: 'github' | 'modelscope';
+    /** 平台(缺省 github;魔搭为 modelscope,sha 记 ms-<提交时间戳>;SkillHub 为 skillhub,sha 记 sh-<版本号>) */
+    platform?: 'github' | 'modelscope' | 'skillhub';
     repo: string;
     ref: string;
     sha: string;
@@ -292,13 +314,13 @@ export function listInstalledPacks(userId: string): InstalledSkillPack[] {
 }
 
 export type ImportSkillOpts = {
-  /** github=owner/repo;modelscope=技能 id(owner/name 或 @owner/name) */
+  /** github=owner/repo;modelscope=技能 id(owner/name 或 @owner/name);skillhub=canonicalName(@handle/slug) */
   repo: string;
-  /** 仓库内技能目录(含 SKILL.md 的那层);缺省 ref 走仓库默认分支。modelscope 恒为根目录 */
+  /** 仓库内技能目录(含 SKILL.md 的那层);缺省 ref 走仓库默认分支。modelscope/skillhub 恒为根目录 */
   path: string;
   ref?: string;
   /** 平台(缺省 github) */
-  platform?: 'github' | 'modelscope';
+  platform?: 'github' | 'modelscope' | 'skillhub';
   /** 用户已阅读第三方代码风险明示(API 层与本函数双重强制) */
   riskAck?: boolean;
   overwrite?: boolean;
@@ -349,14 +371,16 @@ function hashDir(dir: string): { contentHash: string; fileCount: number; totalBy
 
 /**
  * 引用(导入)生态技能包。github:解析 ref → tarball 一次下载 → 围栏提取;
- * modelscope:repo/files 列表 → 限额预检 → resolve 逐文件拉取。
- * 两条链路共用收尾(SKILL.md 校验/命名/冲突/来源记录/原子落位/审计)。
+ * modelscope:repo/files 列表 → 限额预检 → resolve 逐文件拉取;
+ * skillhub:files 清单(sha256)→ 限额预检 → /file 逐文件拉取 + sha256 内容级校验。
+ * 三条链路共用收尾(SKILL.md 校验/命名/冲突/来源记录/原子落位/审计)。
  * 任何一步失败都清理临时目录并返回真实原因。
  */
 export async function importSkillPack(userId: string, opts: ImportSkillOpts): Promise<ImportSkillResult> {
   if (!isSkillMarketEnabled()) return { ok: false, error: '技能市场已关闭(AGTPILOT_SKILL_MARKET=0)' };
   if (opts.riskAck !== true) return { ok: false, error: 'risk-ack-required: 需用户确认第三方代码风险' };
   if (opts.platform === 'modelscope') return importFromModelScope(userId, opts);
+  if (opts.platform === 'skillhub') return importFromSkillHub(userId, opts);
   if (!isSafeRepoSlug(opts.repo)) return { ok: false, error: `仓库名不合法: ${String(opts.repo).slice(0, 100)}` };
   if (!isSafeRelPath(opts.path)) return { ok: false, error: `技能目录路径不合法: ${String(opts.path).slice(0, 100)}` };
 
@@ -427,7 +451,7 @@ export async function importSkillPack(userId: string, opts: ImportSkillOpts): Pr
 }
 
 /**
- * 共用收尾(github/modelscope 两条链路):tmpDir 内必须已有提取好的技能文件。
+ * 共用收尾(github/modelscope/skillhub 三条链路):tmpDir 内必须已有提取好的技能文件。
  * SKILL.md 必须存在且 frontmatter 可解析 → 命名 → 冲突检查(overwrite 显式
  * 传入才允许替换)→ 来源记录 → 原子落位 → 审计。失败返回真实原因,
  * 调用方 finally 负责清理 tmpDir(成功时已 rename 走,清理为 no-op)。
@@ -468,7 +492,7 @@ function finalizeImport(
     at: provenance.importedAt,
     actor: 'user',
     op: 'skill-pack-import',
-    detail: `${source.platform === 'modelscope' ? 'modelscope:' : ''}${source.repo}@${source.sha.slice(0, 8)}:${source.path || '(root)'} → ${dirName} (${fileCount} 文件, ${totalBytes}B)`,
+    detail: `${source.platform && source.platform !== 'github' ? `${source.platform}:` : ''}${source.repo}@${source.sha.slice(0, 8)}:${source.path || '(root)'} → ${dirName} (${fileCount} 文件, ${totalBytes}B)`,
   } as any);
 
   const pack: InstalledSkillPack = {
@@ -487,8 +511,8 @@ function finalizeImport(
  * 魔搭(ModelScope)引用链路:纯匿名 HTTP,无 git 无 token。
  * 1) repo/files 列表(非递归,tree 用 Root= 逐层走,深度设防);
  * 2) 限额预检 —— 列表自带 Size,超限整包在下载前拒绝;路径围栏预检;
- * 3) resolve 逐文件拉取(并发 4;实际字节数复核限额,不信任列表 Size;
- *    写入前 isSafeRelPath + resolve 围栏双查);
+ * 3) resolve 逐文件拉取(并发 4;实际字节数复核限额——单文件+累计总量,
+ *    不信任列表 Size;写入前 isSafeRelPath + resolve 围栏双查);
  * 4) 共用收尾。sha 记 `ms-<最新提交时间戳>`(魔搭列表无 commit sha,
  *    CommittedDate 是可得的最新内容版本信号,如实记录不造假)。
  */
@@ -507,7 +531,7 @@ async function importFromModelScope(userId: string, opts: ImportSkillOpts): Prom
       if (depth > MODELSCOPE_TREE_MAX_DEPTH) throw new Error('技能包目录层级过深(拒绝)');
       const qs = new URLSearchParams({ Revision: 'master' });
       if (dirPath) qs.set('Root', dirPath);
-      const res = await msFetch(`${MODELSCOPE_API}/skills/${opts.repo}/repo/files?${qs.toString()}`, 15_000);
+      const res = await anonFetch(`${MODELSCOPE_API}/skills/${opts.repo}/repo/files?${qs.toString()}`, 15_000);
       if (!res.ok) {
         throw new Error(res.status === 404 ? '技能不存在或已下架' : `ModelScope API ${res.status}`);
       }
@@ -549,6 +573,10 @@ async function importFromModelScope(userId: string, opts: ImportSkillOpts): Prom
     fs.mkdirSync(tmpDir, { recursive: true });
     const destRoot = path.resolve(tmpDir) + path.sep;
     let idx = 0;
+    // 累计实际字节复核:预检信任列表 Size,撒谎服务器可让每个文件都贴着单文件
+    // 限额过检;这里按实际下载字节收敛回总量限额语义(与 GitHub tar 路径的
+    // extractTarSubdir 逐条累计同构)
+    let actualTotal = 0;
     const fail: { msg: string | null } = { msg: null };
     const worker = async (): Promise<void> => {
       while (idx < files.length) {
@@ -556,11 +584,15 @@ async function importFromModelScope(userId: string, opts: ImportSkillOpts): Prom
         const f = files[idx++];
         try {
           const url = `${MODELSCOPE_WWW}/skills/${opts.repo}/resolve/master/${f.p.split('/').map(encodeURIComponent).join('/')}`;
-          const res = await msFetch(url, 30_000);
+          const res = await anonFetch(url, 30_000);
           if (!res.ok) throw new Error(`拉取文件失败(${res.status}): ${f.p}`);
           const buf = Buffer.from(await res.arrayBuffer());
           if (buf.length > IMPORT_MAX_FILE_BYTES) {
             throw new Error(`单文件超过上限 ${IMPORT_MAX_FILE_BYTES} 字节(拒绝): ${f.p}`);
+          }
+          actualTotal += buf.length;
+          if (actualTotal > IMPORT_MAX_TOTAL_BYTES) {
+            throw new Error(`总大小超过上限 ${IMPORT_MAX_TOTAL_BYTES} 字节(整包拒绝)`);
           }
           const resolved = path.resolve(tmpDir, f.p);
           if (!resolved.startsWith(destRoot)) throw new Error(`技能包含非法路径(拒绝): ${f.p}`);
@@ -596,6 +628,139 @@ async function importFromModelScope(userId: string, opts: ImportSkillOpts): Prom
   } catch (e: any) {
     const msg = String(e?.message || e);
     return { ok: false, error: `引用失败: ${msg.includes('Timeout') || msg.includes('timeout') ? 'ModelScope 网络超时' : msg}` };
+  } finally {
+    try {
+      if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+/**
+ * SkillHub(腾讯)引用链路:纯匿名 HTTP,无 git 无 token(照抄魔搭四步模式)。
+ * 1) /files 清单(不带 version → 服务端解析最新版;用响应 version 钉住快照);
+ * 2) 限额预检 —— 清单自带 size,超限整包在下载前拒绝;路径围栏预检;
+ *    sha256 缺失视为脏数据整包拒(校验是硬护栏,不降级;实测清单全量携带,
+ *    属 API 契约字段,若线上出现误拒再降级为跳过校验+warn);
+ * 3) /file 逐文件拉取(并发 6;实际字节复核 + 逐文件 sha256 内容级校验 ——
+ *    比魔搭更强:调包/篡改/截断全部现形,且钉死实际字节=清单字节,
+ *    使 declaredTotal 预检可信;写入前 isSafeRelPath + resolve 围栏双查);
+ * 4) 共用收尾。sha 记 `sh-<version>`(SkillHub 无 commit sha,版本号即内容版本信号)。
+ */
+async function importFromSkillHub(userId: string, opts: ImportSkillOpts): Promise<ImportSkillResult> {
+  if (!isSafeSkillHubId(opts.repo)) {
+    return { ok: false, error: `SkillHub 技能 id 不合法: ${String(opts.repo).slice(0, 100)}` };
+  }
+  const parsed = parseSkillHubId(opts.repo);
+  if (!parsed) {
+    return { ok: false, error: `SkillHub 技能 id 不合法: ${String(opts.repo).slice(0, 100)}` };
+  }
+  const { handle, slug } = parsed;
+  const root = userSkillPacksDir(userId);
+  fs.mkdirSync(root, { recursive: true });
+  const tmpDir = path.join(root, `.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  try {
+    // 1. 文件清单(不带 version → 服务端解析最新;用返回 version 钉快照,/file 传同一 version)
+    const listQs = new URLSearchParams({ namespace: handle });
+    const listRes = await anonFetch(`${SKILLHUB_API}/api/v1/skills/${slug}/files?${listQs.toString()}`, 15_000);
+    if (!listRes.ok) {
+      throw new Error(listRes.status === 404 ? '技能不存在或已下架' : `SkillHub API ${listRes.status}`);
+    }
+    const listJson = (await listRes.json()) as any;
+    const entries: any[] = Array.isArray(listJson?.files) ? listJson.files : [];
+    const version = typeof listJson?.version === 'string' && listJson.version ? listJson.version : '';
+    const files: Array<{ p: string; size: number; sha256: string }> = [];
+    for (const e of entries) {
+      if (typeof e?.path !== 'string' || !e.path) continue;
+      files.push({
+        p: e.path,
+        size: Number(e.size) || 0,
+        sha256: typeof e.sha256 === 'string' ? e.sha256.toLowerCase() : '', // digest('hex') 是小写,归一后比对
+      });
+    }
+    if (files.length === 0) return { ok: false, error: `SkillHub 技能 ${opts.repo} 没有可提取文件` };
+
+    // 2. 限额预检(下载前整包拒绝)+ 路径围栏预检 + sha256 硬护栏
+    if (files.length > IMPORT_MAX_FILES) {
+      return { ok: false, error: `文件数超过上限 ${IMPORT_MAX_FILES}(整包拒绝)` };
+    }
+    let declaredTotal = 0;
+    for (const f of files) {
+      if (!isSafeRelPath(f.p)) return { ok: false, error: `技能包含非法路径(拒绝): ${String(f.p).slice(0, 100)}` };
+      if (!/^[0-9a-f]{64}$/.test(f.sha256)) {
+        return { ok: false, error: `文件清单缺少 sha256(拒绝): ${f.p}` };
+      }
+      if (f.size > IMPORT_MAX_FILE_BYTES) {
+        return { ok: false, error: `单文件超过上限 ${IMPORT_MAX_FILE_BYTES} 字节(拒绝): ${f.p}` };
+      }
+      declaredTotal += f.size;
+    }
+    if (declaredTotal > IMPORT_MAX_TOTAL_BYTES) {
+      return { ok: false, error: `总大小超过上限 ${IMPORT_MAX_TOTAL_BYTES} 字节(整包拒绝)` };
+    }
+
+    // 3. 逐文件拉取(并发 6;worker 吞错记 fail.msg,保证全部 worker 退出后才走
+    //    清理,避免后台写入与 finally 删目录竞态;version 钉住清单同一快照)
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const destRoot = path.resolve(tmpDir) + path.sep;
+    let idx = 0;
+    let actualTotal = 0; // 累计实际字节复核(sha256 已钉死字节,此为纵深防御,与魔搭同构)
+    const fail: { msg: string | null } = { msg: null };
+    const worker = async (): Promise<void> => {
+      while (idx < files.length) {
+        if (fail.msg) return;
+        const f = files[idx++];
+        try {
+          const qs = new URLSearchParams({ path: f.p, namespace: handle });
+          if (version) qs.set('version', version); // 钉住清单同一版本快照
+          const res = await anonFetch(`${SKILLHUB_API}/api/v1/skills/${slug}/file?${qs.toString()}`, 30_000);
+          if (!res.ok) throw new Error(`拉取文件失败(${res.status}): ${f.p}`);
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length > IMPORT_MAX_FILE_BYTES) {
+            throw new Error(`单文件超过上限 ${IMPORT_MAX_FILE_BYTES} 字节(拒绝): ${f.p}`);
+          }
+          actualTotal += buf.length;
+          if (actualTotal > IMPORT_MAX_TOTAL_BYTES) {
+            throw new Error(`总大小超过上限 ${IMPORT_MAX_TOTAL_BYTES} 字节(整包拒绝)`);
+          }
+          // sha256 内容级校验(比魔搭的字节数复核更强:调包/篡改/截断全部现形)
+          const actualSha = crypto.createHash('sha256').update(buf).digest('hex');
+          if (actualSha !== f.sha256) {
+            throw new Error(`文件 sha256 校验失败(拒绝): ${f.p}`);
+          }
+          const resolved = path.resolve(tmpDir, f.p);
+          if (!resolved.startsWith(destRoot)) throw new Error(`技能包含非法路径(拒绝): ${f.p}`);
+          fs.mkdirSync(path.dirname(resolved), { recursive: true });
+          fs.writeFileSync(resolved, buf);
+        } catch (e: any) {
+          if (!fail.msg) fail.msg = String(e?.message || e);
+          return;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: SKILLHUB_FETCH_CONCURRENCY }, () => worker()));
+    if (fail.msg) {
+      const msg = fail.msg;
+      return { ok: false, error: `引用失败: ${msg.includes('Timeout') || msg.includes('timeout') ? 'SkillHub 网络超时' : msg}` };
+    }
+
+    // 4. 共用收尾(fallbackName 用 slug 而非中文显示名,目录名优先 frontmatter name)
+    return finalizeImport(
+      userId,
+      tmpDir,
+      root,
+      slug,
+      {
+        platform: 'skillhub',
+        repo: opts.repo,
+        ref: version || 'latest',
+        sha: version ? `sh-${version}` : 'sh-unknown', // 如实记录,不造假(仿 ms-unknown 先例)
+        path: '',
+      },
+      opts.overwrite
+    );
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return { ok: false, error: `引用失败: ${msg.includes('Timeout') || msg.includes('timeout') ? 'SkillHub 网络超时' : msg}` };
   } finally {
     try {
       if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -674,12 +839,12 @@ export function deleteSkillCard(
 export interface MarketRegistrySource {
   id: string;
   label: string;
-  /** github 源:owner/repo;modelscope 源:留空(平台级索引,不绑单仓) */
+  /** github 源:owner/repo;modelscope/skillhub 源:留空(平台级索引,不绑单仓) */
   repo: string;
   /** 只索引该子目录下的技能(缺省全仓;仅 github 源有效) */
   subdir?: string;
   /** 源类型(缺省 github,向后兼容既有 env 配置) */
-  type?: 'github' | 'modelscope';
+  type?: 'github' | 'modelscope' | 'skillhub';
 }
 
 export function marketSources(): MarketRegistrySource[] {
@@ -693,7 +858,7 @@ export function marketSources(): MarketRegistrySource[] {
             s &&
             typeof s.id === 'string' &&
             typeof s.label === 'string' &&
-            (s.type === 'modelscope' || isSafeRepoSlug(s.repo))
+            (s.type === 'modelscope' || s.type === 'skillhub' || isSafeRepoSlug(s.repo))
         ) as MarketRegistrySource[];
         if (valid.length > 0) return valid;
       }
@@ -703,31 +868,33 @@ export function marketSources(): MarketRegistrySource[] {
     }
   }
   return [
-    // 缺省只挂魔搭:国内网络路径快、条目全(8万+),是主力浏览源。
+    // 缺省挂魔搭+SkillHub 双国内源:国内网络路径快、条目全(魔搭 8 万+ /
+    // SkillHub 20 万+),是主力浏览源。
     // Anthropic 官方库暂下线(直连不稳);需要时用 AGTPILOT_SKILL_REGISTRY_SOURCES 配回。
     { id: 'modelscope', label: '魔搭技能库(国内)', repo: '', type: 'modelscope' },
+    { id: 'skillhub', label: 'SkillHub(腾讯·国内)', repo: '', type: 'skillhub' },
   ];
 }
 
 export interface MarketSkillEntry {
   sourceId: string;
   sourceLabel: string;
-  /** 平台类型(缺省 github;modelscope 条目导入/详情走魔搭适配器) */
-  platform?: 'github' | 'modelscope';
-  /** github:owner/repo;modelscope:技能 id(owner/name 或 @owner/name) */
+  /** 平台类型(缺省 github;modelscope/skillhub 条目导入/详情走各自平台适配器) */
+  platform?: 'github' | 'modelscope' | 'skillhub';
+  /** github:owner/repo;modelscope:技能 id(owner/name 或 @owner/name);skillhub:canonicalName(@handle/slug) */
   repo: string;
-  /** 仓库内技能目录(含 SKILL.md 的那层);modelscope 技能恒为根目录('') */
+  /** 仓库内技能目录(含 SKILL.md 的那层);modelscope/skillhub 技能恒为根目录('') */
   path: string;
   /** 目录名(展示名以详情 frontmatter 为准) */
   name: string;
-  /** 顶层分组(多级目录时取第一段;modelscope 为平台分类) */
+  /** 顶层分组(多级目录时取第一段;modelscope/skillhub 为平台分类) */
   category?: string;
   description?: string;
   /** frontmatter 名(富化命中时) */
   displayName?: string;
-  /** 平台页外链(market 卡片「GitHub/魔搭」跳转) */
+  /** 平台页外链(market 卡片「GitHub/魔搭/SkillHub」跳转) */
   externalUrl?: string;
-  /** 平台下载量(modelscope 列表自带;排序参考) */
+  /** 平台下载量(modelscope/skillhub 列表自带;排序参考) */
   downloads?: number;
 }
 
@@ -738,7 +905,7 @@ export interface MarketIndexResult {
     label: string;
     repo: string;
     /** 源平台(缺省 github;UI 据此决定外链与徽标) */
-    type?: 'github' | 'modelscope';
+    type?: 'github' | 'modelscope' | 'skillhub';
     /** 单源失败的真实原因(反模式 #14:失败显式,不静默) */
     error?: string;
     skills: MarketSkillEntry[];
@@ -777,8 +944,8 @@ async function fetchSourceSkills(src: MarketRegistrySource): Promise<MarketSkill
   return skills.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-/** 魔搭请求(匿名 HTTP,无 token;UA + 超时) */
-async function msFetch(url: string, timeoutMs: number): Promise<Response> {
+/** 匿名 HTTP 请求(无 token;UA + 超时 + 跟随重定向;魔搭/SkillHub 共用) */
+async function anonFetch(url: string, timeoutMs: number): Promise<Response> {
   return fetch(url, {
     headers: { 'User-Agent': 'agtpilot-skill-center' },
     signal: AbortSignal.timeout(timeoutMs),
@@ -794,7 +961,7 @@ async function msFetch(url: string, timeoutMs: number): Promise<Response> {
 async function fetchModelScopeSkills(src: MarketRegistrySource, search?: string): Promise<MarketSkillEntry[]> {
   const qs = new URLSearchParams({ page_size: String(MODELSCOPE_PAGE_SIZE), page_number: '1' });
   if (search && search.trim()) qs.set('search', search.trim().slice(0, 100));
-  const res = await msFetch(`${MODELSCOPE_OPENAPI}/skills?${qs.toString()}`, 20_000);
+  const res = await anonFetch(`${MODELSCOPE_OPENAPI}/skills?${qs.toString()}`, 20_000);
   if (!res.ok) throw new Error(`ModelScope API ${res.status}`);
   const json = (await res.json()) as any;
   const items: any[] = Array.isArray(json?.data?.skills) ? json.data.skills : [];
@@ -814,6 +981,51 @@ async function fetchModelScopeSkills(src: MarketRegistrySource, search?: string)
       category: typeof s.category === 'string' && s.category ? s.category : undefined,
       description: typeof s.description === 'string' && s.description ? s.description : undefined,
       externalUrl: `${MODELSCOPE_WWW}/skills/${id}`,
+      downloads: typeof s.downloads === 'number' ? s.downloads : undefined,
+    });
+  }
+  return skills;
+}
+
+/**
+ * SkillHub 索引:GET /api/skills(总量 20 万+,只取第一页 50 条;sortBy=score
+ * 为站点默认精选排序;keyword 走服务端搜索)。列表自带中文描述(description_zh),
+ * 无需富化。repo 承载 namespace.canonicalName(@handle/slug,导入寻址用);path 恒 ''。
+ */
+async function fetchSkillHubSkills(src: MarketRegistrySource, search?: string): Promise<MarketSkillEntry[]> {
+  const qs = new URLSearchParams({ page: '1', pageSize: String(SKILLHUB_PAGE_SIZE), sortBy: 'score' });
+  if (search && search.trim()) qs.set('keyword', search.trim().slice(0, 100));
+  const res = await anonFetch(`${SKILLHUB_API}/api/skills?${qs.toString()}`, 20_000);
+  if (!res.ok) throw new Error(`SkillHub API ${res.status}`);
+  const json = (await res.json()) as any;
+  // 信封 code 非 0 显式抛(反模式 #14:失败真实,不静默成空列表)
+  if (json?.code !== 0) {
+    throw new Error(`SkillHub API code=${json?.code}: ${String(json?.message || '').slice(0, 100)}`);
+  }
+  const items: any[] = Array.isArray(json?.data?.skills) ? json.data.skills : [];
+  const skills: MarketSkillEntry[] = [];
+  for (const s of items) {
+    const canonical = typeof s?.namespace?.canonicalName === 'string' ? s.namespace.canonicalName : '';
+    const handle = typeof s?.namespace?.handle === 'string' ? s.namespace.handle : '';
+    const slug = typeof s?.slug === 'string' ? s.slug : '';
+    // 非法 canonicalName / 缺 handle/slug 直接跳过(防御:不让脏数据进入导入寻址与外链)
+    if (!isSafeSkillHubId(canonical) || !handle || !slug) continue;
+    const subs: any[] = Array.isArray(s.subCategories) ? s.subCategories : [];
+    const subZh = typeof subs[0]?.name === 'string' && subs[0].name ? subs[0].name : '';
+    const descZh = typeof s.description_zh === 'string' ? s.description_zh : '';
+    const desc = typeof s.description === 'string' ? s.description : '';
+    skills.push({
+      sourceId: src.id,
+      sourceLabel: src.label,
+      platform: 'skillhub',
+      repo: canonical,
+      path: '',
+      name: (typeof s.name === 'string' && s.name) || slug,
+      // 中文子类名优先(如「代码生成」),回落平台分类 key(如 dev-programming)
+      category: subZh || (typeof s.category === 'string' && s.category ? s.category : undefined),
+      description: descZh || desc || undefined,
+      // web 详情页(canonical 外链;勿用 item.homepage,那是 API 主机)
+      externalUrl: `${SKILLHUB_WWW}/skills/${handle}/${slug}`,
       downloads: typeof s.downloads === 'number' ? s.downloads : undefined,
     });
   }
@@ -858,9 +1070,14 @@ async function enrichDescriptions(skills: MarketSkillEntry[]): Promise<void> {
   }
 }
 
+/** 服务端搜索平台(魔搭/SkillHub)条目:本地过滤豁免、索引富化豁免(列表自带中文描述) */
+function isServerSearchPlatform(p?: string): boolean {
+  return p === 'modelscope' || p === 'skillhub';
+}
+
 /**
  * 市场索引(内存缓存 10min;force 跳过缓存;单源失败带 error 返回)。
- * search 非空时:魔搭源走服务端搜索,github 源本地过滤;搜索态不读不写
+ * search 非空时:魔搭/SkillHub 源走服务端搜索,github 源本地过滤;搜索态不读不写
  * 全局缓存(结果与查询强相关,缓存会串味)。
  */
 export async function fetchMarketIndex(force = false, search?: string): Promise<MarketIndexResult> {
@@ -875,10 +1092,10 @@ export async function fetchMarketIndex(force = false, search?: string): Promise<
   const results = await Promise.all(
     sources.map(async (src) => {
       try {
-        const skills =
-          src.type === 'modelscope'
-            ? await fetchModelScopeSkills(src, query || undefined)
-            : await fetchSourceSkills(src);
+        let skills: MarketSkillEntry[];
+        if (src.type === 'modelscope') skills = await fetchModelScopeSkills(src, query || undefined);
+        else if (src.type === 'skillhub') skills = await fetchSkillHubSkills(src, query || undefined);
+        else skills = await fetchSourceSkills(src);
         return { id: src.id, label: src.label, repo: src.repo, type: src.type, skills };
       } catch (e: any) {
         return {
@@ -892,19 +1109,19 @@ export async function fetchMarketIndex(force = false, search?: string): Promise<
       }
     })
   );
-  // github 源搜索态本地过滤(魔搭已在服务端搜过)
+  // github 源搜索态本地过滤(魔搭/SkillHub 已在服务端搜过)
   if (query) {
     const q = query.toLowerCase();
     for (const r of results) {
       r.skills = r.skills.filter(
         (s) =>
-          s.platform === 'modelscope' ||
+          isServerSearchPlatform(s.platform) ||
           `${s.name} ${s.displayName || ''} ${s.description || ''} ${s.path}`.toLowerCase().includes(q)
       );
     }
   }
-  // 描述富化只对 github 源做(魔搭列表自带描述);best-effort,失败不影响索引可用
-  await enrichDescriptions(results.flatMap((r) => r.skills).filter((s) => s.platform !== 'modelscope'));
+  // 描述富化只对 github 源做(魔搭/SkillHub 列表自带描述);best-effort,失败不影响索引可用
+  await enrichDescriptions(results.flatMap((r) => r.skills).filter((s) => !isServerSearchPlatform(s.platform)));
   const index: MarketIndexResult = { fetchedAt: Date.now(), sources: results };
   if (!query) marketCache = { at: index.fetchedAt, index };
   return index;
@@ -916,7 +1133,7 @@ async function fetchModelScopeSkillMd(
   timeoutMs = 15_000
 ): Promise<{ name?: string; description?: string; content: string } | null> {
   try {
-    const res = await msFetch(`${MODELSCOPE_WWW}/skills/${repo}/resolve/master/SKILL.md`, timeoutMs);
+    const res = await anonFetch(`${MODELSCOPE_WWW}/skills/${repo}/resolve/master/SKILL.md`, timeoutMs);
     if (!res.ok) return null;
     const content = await res.text();
     if (content.length > DETAIL_MAX_BYTES) return null;
@@ -927,13 +1144,75 @@ async function fetchModelScopeSkillMd(
   }
 }
 
-/** 技能详情(SKILL.md 全文预览 + frontmatter);github ref 缺省 HEAD,魔搭恒 master */
+/** SkillHub 安全扫描摘要(详情弹窗徽标用;仅 skillhub 详情分支返回) */
+export interface MarketSkillSecurity {
+  /** 'benign' | 其他(警示色) */
+  status: string;
+  /** 如「安全,无风险」 */
+  statusText?: string;
+  /** tix.qq.com 报告外链 */
+  reportUrl?: string;
+}
+
+/** SkillHub SKILL.md 原文(/api/v1/skills/{slug}/file?path=SKILL.md,RAW;超限或失败返回 null) */
+async function fetchSkillHubSkillMd(
+  handle: string,
+  slug: string,
+  timeoutMs = 15_000
+): Promise<{ name?: string; description?: string; content: string } | null> {
+  try {
+    const qs = new URLSearchParams({ path: 'SKILL.md', namespace: handle });
+    const res = await anonFetch(`${SKILLHUB_API}/api/v1/skills/${slug}/file?${qs.toString()}`, timeoutMs);
+    if (!res.ok) return null;
+    const content = await res.text();
+    if (content.length > DETAIL_MAX_BYTES) return null;
+    const fm = parseSkillMdFrontmatter(content);
+    return { name: fm.name || undefined, description: fm.description || undefined, content };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * SkillHub 安全扫描报告(详情端点为裸对象无信封;取 securityReports.keen)。
+ * best-effort:端点失败/字段漂移返回 null,不阻塞 SKILL.md 预览。
+ */
+async function fetchSkillHubSecurity(
+  handle: string,
+  slug: string,
+  timeoutMs = 10_000
+): Promise<MarketSkillSecurity | null> {
+  try {
+    const qs = new URLSearchParams({ namespace: handle });
+    const res = await anonFetch(`${SKILLHUB_API}/api/v1/skills/${slug}?${qs.toString()}`, timeoutMs);
+    if (!res.ok) return null;
+    const json = (await res.json()) as any;
+    const keen = json?.securityReports?.keen;
+    if (!keen || typeof keen.status !== 'string') return null;
+    return {
+      status: keen.status,
+      statusText: typeof keen.statusText === 'string' ? keen.statusText : undefined,
+      reportUrl: typeof keen.reportUrl === 'string' ? keen.reportUrl : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 技能详情(SKILL.md 全文预览 + frontmatter);github ref 缺省 HEAD,魔搭恒 master,
+ * skillhub 时 repo=canonicalName(@handle/slug)、dirPath/ref 忽略,可携带 security
+ * (腾讯安全扫描摘要,best-effort)。
+ */
 export async function fetchMarketSkillDetail(
   repo: string,
   dirPath: string,
   ref = 'HEAD',
-  platform: 'github' | 'modelscope' = 'github'
-): Promise<{ ok: true; name: string; description: string; content: string } | { ok: false; error: string }> {
+  platform: 'github' | 'modelscope' | 'skillhub' = 'github'
+): Promise<
+  | { ok: true; name: string; description: string; content: string; security?: MarketSkillSecurity }
+  | { ok: false; error: string }
+> {
   if (!isSkillMarketEnabled()) return { ok: false, error: '技能市场已关闭(AGTPILOT_SKILL_MARKET=0)' };
   if (platform === 'modelscope') {
     if (!isSafeModelScopeId(repo)) return { ok: false, error: `魔搭技能 id 不合法: ${String(repo).slice(0, 100)}` };
@@ -944,6 +1223,24 @@ export async function fetchMarketSkillDetail(
       name: md.name || repo.replace(/^@/, '').split('/').pop() || repo,
       description: md.description || '',
       content: md.content,
+    };
+  }
+  if (platform === 'skillhub') {
+    if (!isSafeSkillHubId(repo)) return { ok: false, error: `SkillHub 技能 id 不合法: ${String(repo).slice(0, 100)}` };
+    const parsed = parseSkillHubId(repo);
+    if (!parsed) return { ok: false, error: `SkillHub 技能 id 不合法: ${String(repo).slice(0, 100)}` };
+    // SKILL.md 与安全报告并行拉取;报告 best-effort,失败不影响预览
+    const [md, security] = await Promise.all([
+      fetchSkillHubSkillMd(parsed.handle, parsed.slug),
+      fetchSkillHubSecurity(parsed.handle, parsed.slug),
+    ]);
+    if (!md) return { ok: false, error: '拉取 SKILL.md 失败(技能不存在、网络或体积超限)' };
+    return {
+      ok: true,
+      name: md.name || parsed.slug,
+      description: md.description || '',
+      content: md.content,
+      ...(security ? { security } : {}),
     };
   }
   if (!isSafeRepoSlug(repo)) return { ok: false, error: `仓库名不合法: ${String(repo).slice(0, 100)}` };

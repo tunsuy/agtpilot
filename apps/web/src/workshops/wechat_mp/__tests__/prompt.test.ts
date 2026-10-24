@@ -56,10 +56,10 @@ describe('buildWechatMpWorkshopPrompt · 文章包格式契约', () => {
     expect(prompt).not.toContain('【发布建议】');
     expect(prompt).toContain('单独一行的 ---');
     expect(prompt).toContain('不要输出寒暄');
-    // 公众号平台限制写进契约(标题 64 字 / 摘要 120 字 / 正文 1500-3000 字)
+    // 公众号平台限制写进契约(标题 64 字 / 摘要 120 字);字数预算按风格分档
     expect(prompt).toContain('64 字');
     expect(prompt).toContain('120 字');
-    expect(prompt).toContain('1500-3000');
+    expect(prompt).toContain('2500-5000');
   });
 
   it('篇数钳制在 1-3', () => {
@@ -107,14 +107,35 @@ describe('buildWechatMpWorkshopPrompt · 主题缺省降级链', () => {
 describe('buildWechatMpWorkshopPrompt · 材料模式(勾交付物 + 空主题)', () => {
   const materials = [{ id: 'art_1', title: '行业研报' }];
 
-  it('空主题 + 有材料:以参考资料为素材直接编写,不进热点调研', () => {
+  it('空主题 + 有材料:以参考资料为素材直接编写,不进热点调研;材料翻译契约与人工语气条款在位', () => {
     const prompt = buildWechatMpWorkshopPrompt({ style: '深度长文', count: 1, materials });
     expect(prompt).toContain('主题:未指定,不需要调研热点选题');
     expect(prompt).toContain('【参考资料】列出的交付物为核心素材直接编写');
     expect(prompt).toContain('read_reference_material');
     expect(prompt).toContain('「深度长文」');
+    // 材料翻译契约:本条事故的三处病灶(搬运结构/证据壳进正文/编造出处)各有一钉
+    expect(prompt).toContain('素材不是结构');
+    expect(prompt).toContain('只删证据壳不删知识点');
+    expect(prompt).toContain('不编造出处');
     expect(prompt).not.toContain('请先调研热点选题');
     expect(prompt).toContain('【资料1：行业研报】(materialId=art_1)');
+  });
+
+  it('深度长文按 2500-5000 字预算;其他风格维持 1500-3000 字', () => {
+    const deep = buildWechatMpWorkshopPrompt({ topic: 'x', style: '深度长文', count: 1 });
+    expect(deep).toContain('2500-5000 字');
+    expect(deep).not.toContain('1500-3000');
+    const casual = buildWechatMpWorkshopPrompt({ topic: 'x', style: '热点解读', count: 1 });
+    expect(casual).toContain('1500-3000 字');
+    expect(casual).not.toContain('2500-5000');
+  });
+
+  it('反 AI 语气条款在位:直说、不硬造比喻、不逐段配金句、术语随用随讲', () => {
+    const prompt = buildWechatMpWorkshopPrompt({ topic: 'x', style: '深度长文', count: 1 });
+    expect(prompt).toContain('像工程师写技术博客那样直说');
+    expect(prompt).toContain('不硬造比喻');
+    expect(prompt).toContain('不把观点包装成金句警句');
+    expect(prompt).toContain('随用随讲');
   });
 
   it('有主题 + 有材料:主题段与材料段并存', () => {

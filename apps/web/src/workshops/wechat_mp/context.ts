@@ -106,6 +106,9 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profil
   const themeId = WECHAT_MD_THEMES.some((x) => x.id === (theme || '').trim()) ? (theme || '').trim() : DEFAULT_WECHAT_MD_THEME_ID;
   const mats = parseMaterials(materials);
   const refs = parseStyleRefs(styleRefs);
+  // 正文字数预算按风格分档:深度长文知识点多,1500-3000 会把深度腰斩,
+  // 2026-10-23 生产实例(373k token 会话成稿却浅薄)的直接根因之一
+  const wordBudget = style === '深度长文' ? '2500-5000 字' : '1500-3000 字';
   return (
     renderTemplate(prompt, {
       topic: t,
@@ -124,6 +127,8 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profil
       styleRefList: refs.map((u, i) => `${i + 1}. ${u}`).join('\n'),
       // 工具指引按实际挂载面渲染(见 buildStyleRefToolHint 注释)
       styleRefTools: buildStyleRefToolHint(),
+      // 字数预算按风格分档(见上方 wordBudget 注释)
+      wordBudget,
     }) + buildMaterialsSection(mats)
   );
 }

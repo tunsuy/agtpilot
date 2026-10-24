@@ -76,6 +76,17 @@ const BING_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
+/**
+ * 免费聚合源(Bing 国际区 / Google News RSS / Wikipedia)总开关。
+ * AGTPILOT_SEARCH_FREE_SOURCES=0 → 整层停用:境内部署免费源可用性不稳
+ * (Bing 中文查询返回推广垃圾、Google News 无正文、维基偶发挂死)时,
+ * 与其每次挂 10s 超时×3 个源拿垃圾结果,不如关层让调用方拿到诚实报错
+ * (去配 EXA/TAVILY Key 或换源)。调用时求值,测试可 vi.stubEnv。
+ */
+export function freeSourcesEnabled(): boolean {
+  return process.env.AGTPILOT_SEARCH_FREE_SOURCES !== '0';
+}
+
 export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   // 工具路由自注册：prompt 命中搜索/资讯类关键词时挂载本插件工具组
   ctx.agent.registerToolRoute({
@@ -191,6 +202,12 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   ): Promise<{ items: SearchResultItem[]; errors: string[] }> {
     const errors: string[] = [];
 
+    // 总开关关闭:整层停用,返回空结果 + 明示原因(全源失败路径会聚成
+    // success:false 诚实报错,不再靠无界挂起浪费墙钟)
+    if (!freeSourcesEnabled()) {
+      return { items: [], errors: ['free-sources: AGTPILOT_SEARCH_FREE_SOURCES=0 已停用免费聚合层'] };
+    }
+
     // Bing 与 Google News 并行(互不拖慢);单源失败只降级不致命
     const isCjk = /[一-龥]/.test(query);
     const [bingR, gnewsR] = await Promise.allSettled([
@@ -227,8 +244,12 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     try {
       const lang = isCjk ? 'zh' : 'en';
       const wUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=${maxResults}`;
+      // 与 Bing/GNews 同款 10s 超时闸:维基媒体 API 偶发挂死,无界等待会把整个
+      // search_web 调用拖到墙钟分钟级(生产实例 2026-10-23:三次 search_web
+      // 各挂 400~500s,把公众号会话的 token 与时间预算一起拖垮)
       const wRes = await fetch(wUrl, {
         headers: { 'User-Agent': 'agtpilot-search/1.0' },
+        signal: AbortSignal.timeout(10_000),
       });
       if (wRes.ok) {
         const wData: any = await wRes.json();

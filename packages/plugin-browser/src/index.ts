@@ -279,6 +279,15 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   // 1. 真实导航与网页内容蒸馏 (browser_navigate)
   ctx.agent.registerTool({
     name: 'browser_navigate',
+    // 只读并行门控:导航是纯读取动作(导航 + Turndown 蒸馏,零写面);历史顾虑
+    // 「触共享浏览器会话」在 per-user 持久 profile 下实际指同一用户自己的
+    // 登录态 —— 导航会改变该用户 Page 的当前停留页,但读取类工具共用同一
+    // Page 本就是本插件的设计(风格参照/正文抓取需要登录态才能过反爬)。
+    // 2026-10-23 生产实例:子 agent 只挂 search_web,读范文任务结构性死路,
+    // 放行 navigate 让子 agent 拿到真实网页正文。
+    readOnly: true,
+    fallback: true, // 零命中收敛兜底(§9.5):正文抓取是检索链路的腿
+    dangerLevel: 'low',
     description:
       '使用持久化浏览器导航至指定网址，并返回蒸馏后的主要 Markdown 文本内容（每次最多 4000 字符）。' +
       '内容被截断时携带 offset 参数（返回值中的 nextOffset）可续读后续内容，无需换 URL 重抓。',

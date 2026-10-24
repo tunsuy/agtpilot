@@ -70,6 +70,8 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
       expect(tools, id).toContain('search_exa');
       expect(tools, id).toContain('search_tavily');
       expect(tools, id).toContain('research_subagent');
+      // 正文抓取双通道(2026-10-23 起):本地浏览器蒸馏(零 Key 真腿)+ Firecrawl(缺 Key 时摘除)
+      expect(tools, id).toContain('browser_navigate');
       expect(tools, id).toContain('browser_firecrawl_scrape');
       expect(tools, id).toContain('read_reference_material');
     }
@@ -103,21 +105,23 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
     expect(edu.some((t) => t.startsWith('mcp_twitterapi'))).toBe(false);
   });
 
-  it('research 档(oss_radar):search 三件套 + 调研件,不挂社媒热榜', () => {
+  it('research 档(oss_radar):search 三件套 + 调研件(含 browser_navigate 正文真腿),不挂社媒热榜', () => {
     const radar = resolveWorkshopActiveTools('oss_radar')!;
     expect(radar).toContain('search_web');
     expect(radar).toContain('research_subagent');
+    expect(radar).toContain('browser_navigate');
     expect(radar).toContain('browser_firecrawl_scrape');
     expect(radar).not.toContain('mcp_newsnow_*');
     expect(radar).not.toContain('mcp_zhihu_*');
     expect(radar).not.toContain('mcp_twitterapi_io_*');
   });
 
-  it('web 档(novel/ppt):仅 search 三件套', () => {
+  it('web 档(novel/ppt):仅 search 三件套(正文抓取件不随 web 档)', () => {
     for (const id of ['novel', 'ppt'] as WorkshopId[]) {
       const tools = resolveWorkshopActiveTools(id)!;
       expect(tools, id).toContain('search_web');
       expect(tools, id).not.toContain('research_subagent');
+      expect(tools, id).not.toContain('browser_navigate');
       expect(tools, id).not.toContain('browser_firecrawl_scrape');
       expect(tools, id).not.toContain('mcp_newsnow_*');
     }
@@ -142,8 +146,10 @@ describe('resolveWorkshopActiveTools · 工坊专属(D 层)', () => {
     expect(radar).toContain('mcp_github_mcp_list_commits');
     expect(radar).toContain('mcp_deepwiki_*');
     expect(radar).toContain('mcp_exa_*');
-    // 只读红线:写操作类工具一律不进(建 Issue/PR、评论、fork)
-    for (const banned of ['mcp_github_mcp_create_issue', 'mcp_github_mcp_create_pull_request', 'sandbox_run_command', 'git_apply_patch', 'browser_navigate']) {
+    // 只读红线:写操作类工具一律不进(建 Issue/PR、评论、fork)。
+    // browser_navigate 2026-10-23 起随 research 档进白名单(纯导航+蒸馏读取,
+    // 已声明 readOnly);写操作禁令不变。
+    for (const banned of ['mcp_github_mcp_create_issue', 'mcp_github_mcp_create_pull_request', 'sandbox_run_command', 'git_apply_patch', 'browser_click', 'browser_input']) {
       expect(radar, `雷达白名单不得含 ${banned}`).not.toContain(banned);
     }
   });

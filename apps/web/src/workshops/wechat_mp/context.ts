@@ -54,6 +54,23 @@ export function parseStyleRefs(input: unknown): string[] {
 export const WECHAT_MP_THEME_OPTIONS = WECHAT_MD_THEMES.map((t) => ({ id: t.id, name: t.name }));
 
 /**
+ * 风格参照的网页读取工具指引,按「实际会挂载的工具」渲染:
+ * browser_navigate(本地持久化浏览器,零 Key,research 档常挂)是主腿;
+ * browser_firecrawl_scrape 需要 FIRECRAWL_API_KEY —— 服务端没配时它根本不会
+ * 挂载,提它只会诱导模型调用不存在的工具(2026-10-23 生产实例:风格参照
+ * 段两条指路全是死路,agent 只能拿知乎镜像凑数)。
+ * 客户端 bundle 里 process.env 无此变量 → 按缺省(未配)渲染,与服务端
+ * 权威渲染同形;真有 Key 的部署会在服务端拿到含 Firecrawl 的完整指引。
+ */
+export function buildStyleRefToolHint(): string {
+  const base = 'browser_navigate,读到返回值里的 nextOffset 就带 offset 参数续读,直到 totalLength 读尽';
+  const firecrawlKey = process.env.FIRECRAWL_API_KEY;
+  return firecrawlKey
+    ? `${base};单篇读取失败可换 browser_firecrawl_scrape 重试`
+    : base;
+}
+
+/**
  * 主题方向预设(2026-10-10 与负责人定:先 AI 垂类,「看行业/追新/上手」三视角不重样)。
  * 弹窗里点 chip 填入主题,Agent 在该方向下每次挑具体新题;常量增删改即可调整,
  * 后续可升级为从场景档案自配。
@@ -105,6 +122,8 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profil
       // (模板变量是标量,多行列表照 sources 先例在上下文侧拼好)
       hasStyleRefs: refs.length > 0,
       styleRefList: refs.map((u, i) => `${i + 1}. ${u}`).join('\n'),
+      // 工具指引按实际挂载面渲染(见 buildStyleRefToolHint 注释)
+      styleRefTools: buildStyleRefToolHint(),
     }) + buildMaterialsSection(mats)
   );
 }

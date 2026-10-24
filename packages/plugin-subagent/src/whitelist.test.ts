@@ -23,13 +23,16 @@ describe('resolveReadonlyTools 双层过滤(spec §4.3 / §9.5)', () => {
     mkTool('rag_search', { readOnly: true }),
     mkTool('sandbox_exec'), // 未声明 readOnly → 保守视为写
     mkTool('sandbox_write_file', { readOnly: false }),
-    mkTool('browser_navigate', { readOnly: true }), // readOnly 但不在默认名单
+    // 2026-10-23 起 navigate 声明 readOnly 且进默认名单(子 agent 读文档需要);
+    // browser_click 代表「声明 readOnly 但不在名单」的工具
+    mkTool('browser_navigate', { readOnly: true }),
+    mkTool('browser_click', { readOnly: true }),
     mkTool(SELF_TOOL_NAME, { readOnly: true }), // 自身
   ];
 
   it('默认名单 ∩ 注册表 readOnly 硬校验,保持注册表顺序', () => {
     const out = resolveReadonlyTools(registry);
-    expect(out.map((t) => t.name)).toEqual(['search_web', 'rag_search']);
+    expect(out.map((t) => t.name)).toEqual(['search_web', 'rag_search', 'browser_navigate']);
   });
 
   it('未声明 readOnly 的工具即使在配置名单里也剔除', () => {
@@ -46,7 +49,7 @@ describe('resolveReadonlyTools 双层过滤(spec §4.3 / §9.5)', () => {
 
   it('不在名单内但声明 readOnly 的工具默认进不来', () => {
     const out = resolveReadonlyTools(registry);
-    expect(out.some((t) => t.name === 'browser_navigate')).toBe(false);
+    expect(out.some((t) => t.name === 'browser_click')).toBe(false);
   });
 
   it('空注册表返回空数组', () => {

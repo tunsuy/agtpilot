@@ -99,8 +99,16 @@ export function buildWorkshopRun(
  * 未声明白名单的工坊(理论上不存在,防御)返回 undefined → 走原路由。
  */
 const SEARCH_WEB_TOOLS = ['search_web', 'search_exa', 'search_tavily'];
-/** 调研增强件:并行子 agent + 网页正文抓取 + 参考资料库(research 档) */
-const RESEARCH_TOOLS = ['research_subagent', 'browser_firecrawl_scrape', 'read_reference_material'];
+/** 调研增强件:并行子 agent + 网页正文抓取(零 Key 本地浏览器 + Firecrawl)+ 参考资料库(research 档)。
+ *  browser_navigate 2026-10-23 补入:Firecrawl 缺 Key 时整组是壳,主/子 agent
+ *  双双陷入「想读网页却无工具」死路(公众号风格参照生产实例)——本地持久化
+ *  浏览器蒸馏是零依赖真腿,navigate 已声明 readOnly(纯导航+读取)。 */
+const RESEARCH_TOOLS = [
+  'research_subagent',
+  'browser_navigate',
+  'browser_firecrawl_scrape',
+  'read_reference_material',
+];
 // 2026-10-19 降载:原 full 档(直挂 mcp_newsnow_*/mcp_zhihu_*/mcp_twitterapi_io_*
 // 社媒热榜通配)移除 —— 社媒 MCP 一律走 C 层 deps 映射(单一事实源),
 // invest/edu 等无社媒 deps 的工坊不再每步白背 2~8k token schema。

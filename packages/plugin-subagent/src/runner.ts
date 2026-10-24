@@ -76,8 +76,16 @@ export interface SubagentRunMeta {
   budgetHit?: boolean;
   /** 子循环剥离的 reasoning 部件数(prepareStep + 强制收敛合计;0 时不写字段) */
   reasoningPartsStripped?: number;
-  /** 仅失败时:'timeout' | 'budget' | 'model-error' | 'internal-error' */
-  reason?: 'timeout' | 'budget' | 'model-error' | 'internal-error';
+  /** 仅失败时:'timeout' | 'budget' | 'model-error' | 'internal-error' | 'content-filter' | 'circuit-open' */
+  reason?:
+    | 'timeout'
+    | 'budget'
+    | 'model-error'
+    | 'internal-error'
+    /** 子循环输入被平台内容安全审查拦截(DataInspectionFailed 类) */
+    | 'content-filter'
+    /** 同任务连败熔断生效,本次派发被拦下(未跑模型) */
+    | 'circuit-open';
 }
 
 export type SubagentResult =
@@ -147,7 +155,17 @@ export interface SubagentEngineConfig {
   resolveModelOverride?: (userId: string | undefined) => ModelConfigOverride | undefined;
   /** M2:宿主注入的 transcript 落盘适配器;缺失静默不落盘 */
   appendTranscript?: (entry: SubagentTranscript) => void;
+  /**
+   * 同任务连败熔断阈值:同一父任务里子 agent 连续失败 N 次后停派(成功一次
+   * 即清零,连续口径)。主循环的常见行为是原样重派失败的子任务,死循环白烧
+   * token(2026-10-23 公众号会话生产实例:三连败 ~110k prompt tokens、零有效
+   * 产出)。0 = 关闭熔断;缺省 DEFAULT_MAX_TASK_FAILURES。
+   */
+  maxTaskFailures?: number;
 }
+
+/** 同任务连败熔断缺省阈值(env AGTPILOT_SUBAGENT_MAX_TASK_FAILURES 可调) */
+export const DEFAULT_MAX_TASK_FAILURES = 2;
 
 /** 子系统提示:必须包含提示注入防线(spec §6.5) */
 export const SUBAGENT_SYSTEM_PROMPT = [
@@ -186,11 +204,20 @@ export class SubagentEngine {
   private seq = 0;
   private active = 0;
   private readonly waiters: Array<() => void> = [];
+  // 同任务连败计数(taskId → 连续失败次数;成功一次清零)。只驻内存,不进
+  // 持久层 —— 熔断保护的是「一个任务生命周期内的死循环重派」,任务结束即失效
+  private readonly taskFailures = new Map<string, number>();
 
   constructor(
     private readonly deps: SubagentEngineDeps,
     private readonly cfg: SubagentEngineConfig,
   ) {}
+
+  private get maxTaskFailures(): number {
+    // 0 = 关闭熔断;负值同 0 处理
+    const n = this.cfg.maxTaskFailures ?? DEFAULT_MAX_TASK_FAILURES;
+    return n > 0 ? n : 0;
+  }
 
   /** 工具入口:永不 throw,一切异常收敛为 { ok: false }(spec §4.4 失败语义) */
   async run(args: SubagentRunArgs, session: ToolSession): Promise<SubagentResult> {
@@ -198,6 +225,22 @@ export class SubagentEngine {
     const subTaskId = `${session.taskId}:sub:${++this.seq}`;
     const queryDigest = (args?.query ?? '').slice(0, 200);
     try {
+      // 同任务连败熔断:主循环对失败子任务的行为通常是原样重派(生产实例三连败
+      // 白烧 ~110k prompt tokens)。第二次起直接拦下,把「别再重派,换路径」
+      // 的指示交给主循环 —— 拦截本身不烧 token,失败原因仍如实带回。
+      const fails = this.taskFailures.get(session.taskId) ?? 0;
+      if (this.maxTaskFailures > 0 && fails >= this.maxTaskFailures) {
+        return {
+          ok: false,
+          error: `本任务内子 agent 已连续失败 ${fails} 次,熔断停派(防死循环重派白烧 token)。请不要再重派同类子任务,改用主循环直接检索(search_web / browser_firecrawl_scrape),或基于已有资料继续。`,
+          meta: {
+            subTaskId,
+            durationMs: 0,
+            reason: 'circuit-open',
+            stepsCount: 0,
+          },
+        };
+      }
       this.deps.emit({
         phase: 'started',
         parentTaskId: session.taskId,
@@ -206,6 +249,13 @@ export class SubagentEngine {
         durationMs: 0,
       });
       const result = await this.runInner(args ?? ({} as SubagentRunArgs), session, subTaskId);
+      if (result.ok) {
+        this.taskFailures.delete(session.taskId);
+      } else {
+        this.taskFailures.set(session.taskId, fails + 1);
+        // 长驻进程护栏:任务结束的残留在 Map 里只占小字符串,千条兜底清空
+        if (this.taskFailures.size > 1000) this.taskFailures.clear();
+      }
       this.deps.emit({
         phase: result.ok ? 'finished' : 'failed',
         parentTaskId: session.taskId,
@@ -232,7 +282,7 @@ export class SubagentEngine {
     const startedAt = Date.now();
     const fail = (
       error: string,
-      reason: 'timeout' | 'budget' | 'model-error' | 'internal-error',
+      reason: 'timeout' | 'budget' | 'model-error' | 'internal-error' | 'content-filter',
       extra?: Partial<SubagentRunMeta>,
     ): SubagentResult => ({
       ok: false,
@@ -382,7 +432,18 @@ export class SubagentEngine {
       if (timedOut) {
         return fail(`子 agent 墙钟超时(${this.cfg.timeoutMs}ms),已中止`, 'timeout');
       }
-      return fail(`子循环模型错误:${err?.message ?? String(err)}`, 'model-error');
+      const errMsg = err?.message ?? String(err);
+      // DashScope/Aliyun 输入侧内容安全审查拦截(<400> InternalError.Algo.
+      // DataInspectionFailed):换 token 重试大概率仍被拦。明确告知主循环别走
+      // 重试路线(生产实例 2026-10-23:被 generic「子循环模型错误」语义糊掉,
+      // 主循环无从判断,又烧了一发)。
+      if (/DataInspectionFailed/i.test(errMsg)) {
+        return fail(
+          '子循环输入被平台内容安全审查拦截(DataInspectionFailed,子任务文本触发了模型服务方的内容风控)。原样重派大概率仍被拦截:请改用主循环自身工具完成该检索,或大幅改写子任务表述/换资料方向后再试。',
+          'content-filter',
+        );
+      }
+      return fail(`子循环模型错误:${errMsg}`, 'model-error');
     }
     clearTimeout(timer);
 
@@ -390,8 +451,17 @@ export class SubagentEngine {
     let stepsCount = loopResult.stepsCount;
     let usage = loopResult.usage;
 
-    // 强制收敛:步数耗尽,或预算触顶但模型没给出报告文本(仿 orchestrator 强制总结模式)
-    if (loopResult.stepsExhausted || (budgetHit && !report.trim())) {
+    // 报告提取闸(fix:过渡性碎语冒充报告):finishReason=tool-calls 意味着末轮
+    // 模型还挂着未应答的工具调用、还想继续干活,此时的尾文本是「正在继续」的
+    // 过程性插话而非最终报告 —— 一律不作数,强制收敛重取真报告;收敛也拿不到
+    // 就诚实失败。生产实例 2026-10-23:子 agent 拿「找到关键线索…现在尝试读取
+    // 全文」的插话 + 未执行的工具调用内容当报告通关,~110k prompt tokens 换回
+    // 零价值交付。finishReason=stop 的尾文本(自然收口/部分结论)不受影响。
+    const tailIsToolCall = loopResult.finishReason === 'tool-calls';
+    if (tailIsToolCall) report = '';
+
+    // 强制收敛:步数耗尽 / 工具调用截停,或预算触顶但模型没给出报告文本(仿 orchestrator 强制总结模式)
+    if (loopResult.stepsExhausted || tailIsToolCall || (budgetHit && !report.trim())) {
       try {
         // 收敛消息同剥 reasoning(orchestrator 闸3 同款:SDK responseMessages 保留全部步思考)
         let convMsgs = [...baseMessages, ...loopResult.responseMessages];
@@ -441,7 +511,9 @@ export class SubagentEngine {
 
     if (!report.trim()) {
       return fail(
-        `子 agent 未产出最终报告(finishReason=${loopResult.finishReason})`,
+        tailIsToolCall
+          ? `子 agent 在工具调用中途停住(finishReason=tool-calls),强制收敛也未能产出最终报告 —— 请勿原样重派同一子任务,改用主循环直接检索或基于已有资料继续`
+          : `子 agent 未产出最终报告(finishReason=${loopResult.finishReason})`,
         budgetHit ? 'budget' : 'internal-error',
         {
           stepsCount,

@@ -22,6 +22,14 @@ export interface CallVerdict {
 }
 export type Asker = (groups: ToolCallGroup[]) => Promise<Map<string, { keepCall: number; keepResult: number }>>;
 
+/**
+ * 蒸馏豁免的「物证型」读取工具:结果即任务核心素材,蒸馏转述必然失真还触发
+ * 「抹掉→重读」双花(生产实例 2026-10-23:3 个 14k 字符资料 chunk 四轮蒸馏
+ * 全被丢,re-read 把同一内容的 token 付了两遍)。read_reference_material 的
+ * 结果由工具端原样分片返回,内容密度高、无 list_/dir_ 类低信噪形态,直接 keep。
+ */
+export const MATERIAL_RESULT_TOOLS = new Set(['read_reference_material']);
+
 export function collectToolCalls(
   messages: Array<{ role: string; content: any }>,
   preserveRecent = 6
@@ -72,6 +80,11 @@ export function heuristicAsker(): Asker {
     const out = new Map<string, { keepCall: number; keepResult: number }>();
     for (const g of groups) {
       const name = g.toolName.toLowerCase();
+      // 物证型资料读取:原样 keep,不进蒸馏(见 MATERIAL_RESULT_TOOLS 注释)
+      if (MATERIAL_RESULT_TOOLS.has(name)) {
+        out.set(g.id, { keepCall: 1, keepResult: 1 });
+        continue;
+      }
       let keepCall = 0.55;
       let keepResult = 0.4;
       if (g.isError) {

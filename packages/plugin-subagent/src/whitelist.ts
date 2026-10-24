@@ -21,7 +21,9 @@ export const DEFAULT_READONLY_WHITELIST: readonly string[] = [
   'search_web',
   'search_exa',
   'search_tavily',
-  // plugin-browser(browser 组唯一只读,不触共享浏览器会话)
+  // plugin-browser(navigate 2026-10-23 起声明 readOnly:纯导航+蒸馏读取;
+  // 子 agent 读文档/范文需要它,firecrawl 需要 Key 缺失时由 filterToolsByEnv 摘除)
+  'browser_navigate',
   'browser_firecrawl_scrape',
   // plugin-rag
   'rag_search',

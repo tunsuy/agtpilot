@@ -13,6 +13,7 @@ import '@agtpilot/core';
 import type { ModelConfigOverride, ToolDefinition, ToolSession } from '@agtpilot/core';
 import {
   SubagentEngine,
+  DEFAULT_MAX_TASK_FAILURES,
   type SubagentEventPayload,
   type SubagentModel,
   type SubagentResult,
@@ -45,6 +46,10 @@ const MAX_TOKENS = readInt('AGTPILOT_SUBAGENT_MAX_TOKENS', 60000, 0, Number.MAX_
 const TIMEOUT_MS = readInt('AGTPILOT_SUBAGENT_TIMEOUT_MS', 180000, 30000, 24 * 3600 * 1000);
 const MAX_CONCURRENT = readInt('AGTPILOT_SUBAGENT_MAX_CONCURRENT', 4, 1, 8);
 const REPORT_LIMIT = readInt('AGTPILOT_SUBAGENT_REPORT_LIMIT', 8000, 500, 64000);
+// 同任务连败熔断阈值:同一任务里子 agent 连续失败 N 次后停派(成功一次清零);
+// 0 = 关闭。缺省 2 —— 主循环对失败子任务的行为通常是原样重派,死循环白烧
+// token(2026-10-23 公众号会话三连败 ~110k prompt tokens 零有效产出)。
+const MAX_TASK_FAILURES = readInt('AGTPILOT_SUBAGENT_MAX_TASK_FAILURES', DEFAULT_MAX_TASK_FAILURES, 0, 20);
 // 静态缺省档(原 router fast 档语义,router 已删除);AGTPILOT_SUBAGENT_PROVIDER/_MODEL
 // 可单独覆盖(spec §4.2)。web 宿主注入 resolveModelOverride 后本档只是回退缺省。
 const PROVIDER =
@@ -121,6 +126,8 @@ export interface SubagentPluginConfig {
   timeoutMs?: number;
   maxConcurrent?: number;
   reportLimit?: number;
+  /** 同任务连败熔断阈值(缺省 env AGTPILOT_SUBAGENT_MAX_TASK_FAILURES → 2;0 = 关) */
+  maxTaskFailures?: number;
   /** M2:宿主注入 transcript 落盘(web 侧 JSONL);缺失静默不落盘 */
   appendTranscript?: (entry: SubagentTranscript) => void;
 }
@@ -143,6 +150,7 @@ class SubagentService extends Service {
         timeoutMs: config.timeoutMs ?? TIMEOUT_MS,
         maxConcurrent: config.maxConcurrent ?? MAX_CONCURRENT,
         reportLimit: config.reportLimit ?? REPORT_LIMIT,
+        maxTaskFailures: config.maxTaskFailures ?? MAX_TASK_FAILURES,
         whitelist,
         mcpServers: config.mcpServers ?? MCP_SERVERS,
         resolveMcpServers: config.resolveMcpServers,
@@ -228,6 +236,6 @@ export type {
   SubagentEventPayload,
   SubagentTranscript,
 } from './runner';
-export { SubagentEngine, SUBAGENT_SYSTEM_PROMPT, buildTaskPrompt, clampSteps } from './runner';
+export { SubagentEngine, SUBAGENT_SYSTEM_PROMPT, buildTaskPrompt, clampSteps, DEFAULT_MAX_TASK_FAILURES } from './runner';
 export { resolveReadonlyTools, mcpServerPrefix } from './whitelist';
 export type { SubagentToolFilter } from './whitelist';

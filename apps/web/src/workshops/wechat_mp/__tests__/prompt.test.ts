@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { buildWechatMpWorkshopPrompt, parseStyleRefs, WECHAT_MP_TOPIC_PRESETS } from '../context';
+import { describe, it, expect, vi } from 'vitest';
+import { buildWechatMpWorkshopPrompt, buildStyleRefToolHint, parseStyleRefs, WECHAT_MP_TOPIC_PRESETS } from '../context';
 import { normalizeScenarioProfile } from '@/lib/scenario-profile';
 
 const profileInput = {
@@ -141,9 +141,9 @@ describe('buildWechatMpWorkshopPrompt · 风格参照(范文链接)', () => {
     });
     expect(prompt).toContain('【风格参照】');
     expect(prompt).toContain('1. https://blog.example.com/post-1');
-    // 读取工具指路 + 降级链
+    // 读取工具指路:browser_navigate 主腿 + nextOffset 续读语义
     expect(prompt).toContain('browser_navigate');
-    expect(prompt).toContain('browser_firecrawl_scrape');
+    expect(prompt).toContain('nextOffset');
     // 覆盖关系:范文档案优先于「文章风格」一行
     expect(prompt).toContain('优先于上面「文章风格」一行');
     // 版权红线:只学风格
@@ -166,7 +166,7 @@ describe('buildWechatMpWorkshopPrompt · 风格参照(范文链接)', () => {
     expect(prompt).not.toContain('a.com/4');
   });
 
-  it('与材料模式并存:内容来源不变,风格契约叠加(选题从资料、风格从范文)', () => {
+  it('与材料模式并存:内容来源不变,风格契约叠加(选题从资料、风格从范文)', async () => {
     const prompt = buildWechatMpWorkshopPrompt({
       style: '深度长文',
       count: 1,
@@ -176,6 +176,39 @@ describe('buildWechatMpWorkshopPrompt · 风格参照(范文链接)', () => {
     expect(prompt).toContain('主题:未指定,不需要调研热点选题');
     expect(prompt).toContain('【参考资料】');
     expect(prompt).toContain('【风格参照】');
+  });
+});
+
+describe('buildStyleRefToolHint · 按实际挂载面渲染工具指引', () => {
+  it('无 FIRECRAWL_API_KEY → 只指 browser_navigate 主腿,不提未挂载的 Firecrawl', async () => {
+    vi.stubEnv('FIRECRAWL_API_KEY', '');
+    try {
+      const hint = buildStyleRefToolHint();
+      expect(hint).toContain('browser_navigate');
+      expect(hint).toContain('nextOffset');
+      expect(hint).not.toContain('browser_firecrawl_scrape');
+      const prompt = buildWechatMpWorkshopPrompt({
+        topic: 'x',
+        style: '深度长文',
+        count: 1,
+        styleRefs: 'https://blog.example.com/a',
+      });
+      expect(prompt).toContain('browser_navigate');
+      expect(prompt).not.toContain('browser_firecrawl_scrape');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('配了 FIRECRAWL_API_KEY → 追加 Firecrawl 降级腿', async () => {
+    vi.stubEnv('FIRECRAWL_API_KEY', 'test-key');
+    try {
+      const hint = buildStyleRefToolHint();
+      expect(hint).toContain('browser_navigate');
+      expect(hint).toContain('browser_firecrawl_scrape');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

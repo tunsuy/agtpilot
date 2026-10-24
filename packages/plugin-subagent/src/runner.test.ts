@@ -471,6 +471,140 @@ describe('失败语义(spec §9.4)', () => {
     expect(res.error).toContain('upstream 500');
     expect(events.map((e) => e.phase)).toEqual(['started', 'failed']);
   });
+
+  it('DataInspectionFailed → reason content-filter,错误明确劝阻重试', async () => {
+    const { model } = makeFakeModel(() => {
+      throw new Error('<400> InternalError.Algo.DataInspectionFailed: Input text data may contain inappropriate content.');
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.meta.reason).toBe('content-filter');
+    expect(res.error).toContain('内容安全审查');
+    expect(res.error).toContain('请改用主循环自身工具');
+  });
+});
+
+// ---- 4a. 报告提取闸(2026-10-23 生产事故:尾句插话冒充报告) ----
+
+describe('报告提取闸(finishReason=tool-calls)', () => {
+  it('工具调用截停的尾文本不作数 → 强制收敛重取真报告', async () => {
+    const { model, calls } = makeFakeModel(
+      () =>
+        resultOf({
+          text: '找到关键线索,现在尝试读取全文。',
+          finishReason: 'tool-calls',
+          stepsExhausted: false,
+        }),
+      () => ({ text: '这是一份真正的最终报告' }),
+    );
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.report).toBe('这是一份真正的最终报告');
+    expect(calls.step).toHaveLength(1);
+    expect(res.meta.finishReason).toBe('tool-calls');
+  });
+
+  it('工具调用截停 + 收敛仍无文本 → 诚实失败,错误劝阻原样重派', async () => {
+    const { model } = makeFakeModel(
+      () => resultOf({ text: '插话', finishReason: 'tool-calls' }),
+      () => ({ text: '' }),
+    );
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.meta.reason).toBe('internal-error');
+    expect(res.error).toContain('请勿原样重派');
+  });
+
+  it('finishReason=stop 的尾文本照旧作数(自然收口不受提取闸影响)', async () => {
+    const { model, calls } = makeFakeModel(() => resultOf({ text: '自然收口的部分结论', finishReason: 'stop' }));
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.report).toBe('自然收口的部分结论');
+    expect(calls.step).toHaveLength(0);
+  });
+});
+
+// ---- 4b. 同任务连败熔断(2026-10-23 生产事故:三连败 ~110k token 零产出) ----
+
+describe('同任务连败熔断(maxTaskFailures)', () => {
+  it('缺省阈值 2:连败 2 次后第 3 次派发被拦(reason circuit-open,不触模型)', async () => {
+    const { model, calls } = makeFakeModel(() => {
+      throw new Error('upstream 500');
+    });
+    const { engine, events } = makeEngine(model);
+    for (let i = 0; i < 2; i++) {
+      const res = await engine.run({ query: 'q' }, baseSession);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.meta.reason).toBe('model-error');
+    }
+    const third = await engine.run({ query: '再派一个' }, baseSession);
+    expect(third.ok).toBe(false);
+    if (third.ok) return;
+    expect(third.meta.reason).toBe('circuit-open');
+    // 拦截发生在 started 事件之前,且不再触模型(只有前 2 次进了 loop)
+    expect(calls.loop).toHaveLength(2);
+    expect(events.filter((e) => e.phase === 'started')).toHaveLength(2);
+    // 错误给主循环指了活路
+    expect(third.error).toContain('熔断停派');
+    expect(third.error).toContain('改用主循环直接检索');
+  });
+
+  it('成功一次清零(连续口径):成败交替不熔断', async () => {
+    let failNext = false;
+    const { model } = makeFakeModel(() => {
+      if (failNext) throw new Error('upstream 500');
+      return resultOf();
+    });
+    const { engine } = makeEngine(model);
+    failNext = true;
+    expect((await engine.run({ query: 'q' }, baseSession)).ok).toBe(false);
+    failNext = false;
+    expect((await engine.run({ query: 'q' }, baseSession)).ok).toBe(true);
+    failNext = true;
+    expect((await engine.run({ query: 'q' }, baseSession)).ok).toBe(false);
+    failNext = false;
+    expect((await engine.run({ query: 'q' }, baseSession)).ok).toBe(true);
+  });
+
+  it('任务隔离:不同 taskId 各自计数互不影响', async () => {
+    const { model } = makeFakeModel(() => {
+      throw new Error('upstream 500');
+    });
+    const { engine } = makeEngine(model);
+    const otherSession: ToolSession = { ...baseSession, taskId: 'task-2' };
+    for (let i = 0; i < 2; i++) {
+      await engine.run({ query: 'q' }, otherSession);
+    }
+    // task-2 已熔断
+    const blocked = await engine.run({ query: 'q' }, otherSession);
+    expect(blocked.ok).toBe(false);
+    if (blocked.ok) return;
+    expect(blocked.meta.reason).toBe('circuit-open');
+    // task-1 不受牵连,照常派发
+    const independent = await engine.run({ query: 'q' }, baseSession);
+    expect(independent.ok).toBe(false);
+    if (independent.ok) return;
+    expect(independent.meta.reason).toBe('model-error');
+  });
+
+  it('maxTaskFailures=0 关闭熔断:任意连败都不拦', async () => {
+    const { model, calls } = makeFakeModel(() => {
+      throw new Error('upstream 500');
+    });
+    const { engine } = makeEngine(model, undefined, { maxTaskFailures: 0 });
+    for (let i = 0; i < 4; i++) {
+      await engine.run({ query: 'q' }, baseSession);
+    }
+    expect(calls.loop).toHaveLength(4);
+  });
 });
 
 // ---- 5. 内部工具包装 ----

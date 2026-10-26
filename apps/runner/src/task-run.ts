@@ -11,6 +11,16 @@ import type { ExecutorAdapter, InterjectHandle, ParsedStreamEvent } from './exec
 import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } from './repo';
 
 /**
+ * 上轮会话线索的采集上限(条):进度流里留尾 N 条工具轨迹/思考摘要。
+ * 只留末段 —— 调研轨迹前半通常是被后半修正的假设,断点附近才最有价值;
+ * 40 条 × 单条 ≤160 字符 ≈ 6KB,prompt 注入体积可控。
+ */
+export const PRIOR_TRAIL_LIMIT = 40;
+
+/** 上轮会话线索的注入上限(字符):极端长摘要兜底截断(正常远达不到) */
+export const PRIOR_FINDINGS_MAX_CHARS = 8000;
+
+/**
  * 单个已领取任务的本地执行编排(M2,§6.1):
  * 状态事件(running)→ 仓库准备 → adapter.run(进度事件批量上行)→
  * 成功:phase1_result + awaiting_approval / 失败:error + failed /
@@ -30,7 +40,10 @@ import { defaultExecAsync, isWorktreePristine, prepareRepo, type PreparedRepo } 
  *   带【续跑模式】指令重跑,agent 先看 git 记录认清现场再接着做(git 记录 =
  *   中断后续作的恢复点,负责人方案)。超时/max_turns/验收失败/无产出不重试;
  *   retryable 仍随最终失败上行,云端标「可重试」。人工重派同样保留分支现场续跑
- *   (prepareRepo mode='resumed' → 首跑即注入续跑指令)。
+ *   (prepareRepo mode='resumed' → 首跑即注入续跑指令)。重试会话另注入「上轮
+ *   会话线索」(进度流留尾的工具轨迹/思考摘要 → priorFindings):git 记录管已
+ *   落盘的产出,线索管没落盘的认知 —— 只读调研挂掉时现场是干净的,40 分钟
+ *   调研不该原样重走(2026-10-26 CubeSandbox #2046 生产实例)。
  */
 
 export interface TaskRunDeps {
@@ -138,13 +151,28 @@ export async function runTask(
     } else {
       push('progress', { kind: ev.kind, summary: ev.summary });
     }
+    // 上轮会话线索采集(2026-10-26「考古税」):只留末段 —— 调研类轨迹前半
+    // 通常是被后半修正的假设,留尾 40 条既给断点又控 prompt 体积。挂掉时
+    // 从这份轨迹生成 priorFindings 注入重试会话(见下方 retry 块)。
+    trackTrail(ev);
     if (queue.length >= threshold) void flush();
   };
 
-  const runOnce = (continuation: boolean) =>
+  // 工具轨迹与思考摘要(一行一条),留尾 PRIOR_TRAIL_LIMIT 条;process 事件
+  // (system/result)不进轨迹 —— 会话启动/成败标志对断点续接没有信息量
+  const trail: string[] = [];
+  const trackTrail = (ev: ParsedStreamEvent) => {
+    if (ev.kind !== 'tool' && ev.kind !== 'text') return;
+    const line = ev.kind === 'tool' ? `${ev.tool} ${ev.summary}` : ev.summary;
+    if (!line.trim()) return;
+    trail.push(line);
+    if (trail.length > PRIOR_TRAIL_LIMIT) trail.splice(0, trail.length - PRIOR_TRAIL_LIMIT);
+  };
+
+  const runOnce = (opts: { continuation?: boolean; priorFindings?: string }) =>
     deps.adapter.run(pack, repo.repoDir, onProgress, {
       baseBranch: repo.baseBranch,
-      ...(continuation ? { continuation: true } : {}),
+      ...opts,
       ...(deps.abortSignal ? { abortSignal: deps.abortSignal } : {}),
       ...(deps.interjectHandle ? { interjectHandle: deps.interjectHandle } : {}),
     });
@@ -162,7 +190,7 @@ export async function runTask(
     await flush();
   }
 
-  let result = await runOnce(resumed);
+  let result = await runOnce(resumed ? { continuation: true } : {});
   // 本地 CLI 用量补账(2026-10-20):按轮累计(首跑 + 自动重试轮),终局随
   // phase1_result/error 事件上行。云端跨重派轮次再累加,任务详情展示。
   let localUsage: RunnerLocalUsage | undefined = result.usage;
@@ -181,11 +209,18 @@ export async function runTask(
   // → 原地自动重试一次。现场检查不再是重试闸,只选重试姿势:干净(什么都没干
   // 就挂了)从头重跑;已有产出(WIP commit/未提交改动)带续跑指令重跑 ——
   // agent 先看 git log/status/diff 认清现场,接着上次断点做,已完成的不重做。
+  // 2026-10-26 补:两姿势都带「上轮会话线索」—— CubeSandbox #2046 生产实例,
+  // 两轮各 20 分钟纯只读调研(grep/sed/git show)后网关瞬断,工作分支零 commit、
+  // git 现场干净,重试会话把全部调研原样重走一遍(「考古税」)。认知没落盘
+  // 就从进度流抢救:trail 里留尾的工具轨迹与思考摘要注入重试 prompt,新会话
+  // 直接从断点续接。git 记录管已落盘的产出,这份线索管没落盘的认知。
   if (!result.ok && result.retryable) {
     const pristine = await checkPristine(repo.repoDir, repo.baseBranch);
     const continuation = !pristine;
+    // 上轮线索:轨迹非空才注入(启动即挂/纯 max_turns 场景轨迹为空,不注空块)
+    const priorFindings = trail.length > 0 ? trail.join('\n').slice(0, PRIOR_FINDINGS_MAX_CHARS) : undefined;
     log(
-      `任务 ${taskId} 瞬时 API/网关错误 · ${continuation ? '保留现场续跑重试一次' : '现场干净,从头自动重试一次'}:${result.error}`
+      `任务 ${taskId} 瞬时 API/网关错误 · ${continuation ? '保留现场续跑' : '现场干净从头重跑'}自动重试一次${priorFindings ? '(附上轮探索线索)' : ''}:${result.error}`
     );
     audit({
       kind: 'task_retry',
@@ -193,14 +228,23 @@ export async function runTask(
       attempt: 1,
       mode: continuation ? 'continue' : 'fresh',
       reason: (result.error || '').slice(0, 500),
+      ...(priorFindings ? { priorFindingsChars: priorFindings.length } : {}),
     });
     push('progress', {
       kind: 'system',
       summary: continuation ? '瞬时 API/网关错误 · 保留已有产出,续跑模式自动重试一次' : '瞬时 API/网关错误 · 现场干净,自动重试一次',
     });
+    if (priorFindings) {
+      push('progress', { kind: 'system', summary: `已把上轮末段探索线索(${trail.length} 条)注入重试会话,不重走已完成的调研` });
+    }
     await flush();
     if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
-    result = await runOnce(continuation);
+    result = await runOnce({
+      // continuation:false 不进 opts —— 「缺省即从头」是 renderTaskPrompt 的
+      // additive 契约(缺省输出与旧版逐字节一致),显式传 false 会多注入续跑块
+      ...(continuation ? { continuation: true } : {}),
+      ...(priorFindings ? { priorFindings } : {}),
+    });
     localUsage = addRunnerUsage(localUsage, result.usage);
     // 重试途中也可能被终止:同样落 cancelled,不当失败上报
     if (result.aborted) {

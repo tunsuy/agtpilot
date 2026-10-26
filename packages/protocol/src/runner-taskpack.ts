@@ -39,6 +39,13 @@ export interface RenderTaskPromptOptions {
   continuation?: boolean;
   /** 实探生效的基线分支名(prepareRepo 回流;缺省 pack.baseBranch ?? 'main') */
   baseBranch?: string;
+  /**
+   * 上轮会话线索(2026-10-26 网关瞬断「考古税」):上一轮因瞬时 API/网关错误
+   * 中断时,runner 从进度流采集的末段探索轨迹(工具调用与思考摘要)。注入后
+   * 重试会话直接从断点续接,不把已走过的调研再走一遍。git 记录管落盘产出,
+   * 这条管**没落盘的认知**(只读调研挂掉时 git 现场是干净的,认知却有价值)。
+   */
+  priorFindings?: string;
 }
 
 export function renderTaskPrompt(pack: RunnerTaskPack, opts?: RenderTaskPromptOptions): string {
@@ -74,6 +81,14 @@ export function renderTaskPrompt(pack: RunnerTaskPack, opts?: RenderTaskPromptOp
   }
   if (pack.viaFork) {
     lines.push(`说明:本地克隆是你对 ${pack.repo} 的 fork 副本(origin 指向 fork);改动最终以 PR 从 fork 提交给上游,与你的工作方式无关——照常改码、commit 即可。`);
+  }
+  if (opts?.priorFindings) {
+    lines.push('');
+    lines.push('【上轮会话线索】上一轮会话因瞬时 API/网关错误中断,以下是那一轮末段的探索轨迹(工具调用与思考摘要,按时间序):');
+    lines.push('');
+    lines.push(opts.priorFindings);
+    lines.push('');
+    lines.push('从上轮停下的地方继续,已探查过的内容不必从零重走;但轨迹只是线索、其中的结论未经复核——动手前先快速验证关键事实,与当前代码对不上时以当前代码为准。');
   }
   lines.push(`Issue:${pack.issueUrl}`);
   if (pack.issueContext) {

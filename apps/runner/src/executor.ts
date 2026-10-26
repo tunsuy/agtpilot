@@ -76,6 +76,7 @@ export interface ExecutorAdapter {
    * opts.baseBranch = prepareRepo 实探基线(master 默认仓库的回落值),供 git 基线校验与 prompt 展示;
    * opts.continuation = 续跑模式(工作分支已有上次成果,renderTaskPrompt 注入续跑指令:
    * 先看 git log/status/diff 认清现场,接着做,不重做已完成的);
+   * opts.priorFindings = 上轮会话探索线索(瞬时错误重试注入,见 RenderTaskPromptOptions);
    * opts.abortSignal = 云端终止指令(用户止损),触发即杀 claude 进程树并带 aborted 返回;
    * opts.interjectHandle = 云端插话注入手柄(用户中途纠偏),会话存活期间写入 stdin。
    */
@@ -83,7 +84,7 @@ export interface ExecutorAdapter {
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal; interjectHandle?: InterjectHandle }
+    opts?: { baseBranch?: string; continuation?: boolean; priorFindings?: string; abortSignal?: AbortSignal; interjectHandle?: InterjectHandle }
   ): Promise<Phase1Result>;
 }
 
@@ -368,11 +369,12 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     pack: RunnerTaskPack,
     repoDir: string,
     onProgress?: (e: ParsedStreamEvent) => void,
-    opts?: { baseBranch?: string; continuation?: boolean; abortSignal?: AbortSignal; interjectHandle?: InterjectHandle }
+    opts?: { baseBranch?: string; continuation?: boolean; priorFindings?: string; abortSignal?: AbortSignal; interjectHandle?: InterjectHandle }
   ): Promise<Phase1Result> {
     const prompt = renderTaskPrompt(pack, {
       continuation: opts?.continuation === true,
       ...(opts?.baseBranch ? { baseBranch: opts.baseBranch } : {}),
+      ...(opts?.priorFindings ? { priorFindings: opts.priorFindings } : {}),
     });
     const args = buildClaudeArgs(pack, repoDir);
 

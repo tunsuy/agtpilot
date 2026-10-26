@@ -287,6 +287,33 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(prompt2).not.toContain('续跑模式');
   }, 20_000);
 
+  it('上轮会话线索:opts.priorFindings → prompt 注入【上轮会话线索】块;红线与续跑可叠加', async () => {
+    const dir = tmpDir();
+    process.env.FAKE_CLAUDE_ARGS_FILE = path.join(dir, 'argv.json');
+    process.env.FAKE_CLAUDE_STDIN_FILE = path.join(dir, 'stdin.json');
+    const adapter = new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() });
+
+    await adapter.run(pack, dir, undefined, { priorFindings: 'Bash grep -rn "CONNECT" CubeShim' });
+    const argv: string[] = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_ARGS_FILE!, 'utf-8'));
+    const prompt = (JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8')) as string[])[0];
+    expect(prompt).toContain('【上轮会话线索】');
+    expect(prompt).toContain('Bash grep -rn "CONNECT" CubeShim');
+    // 围栏零放松
+    expect(argv).not.toContain('--dangerously-skip-permissions');
+    expect(argv[argv.indexOf('--disallowedTools') + 1]).toBe(DISALLOWED_TOOLS);
+
+    // 叠加续跑:两块并存
+    await adapter.run(pack, dir, undefined, { continuation: true, priorFindings: 'Read sb.rs' });
+    const prompt2 = (JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8')) as string[])[0];
+    expect(prompt2).toContain('【续跑模式】');
+    expect(prompt2).toContain('【上轮会话线索】');
+
+    // 缺省无线索块(向后兼容)
+    await adapter.run(pack, dir);
+    const prompt3 = (JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_STDIN_FILE!, 'utf-8')) as string[])[0];
+    expect(prompt3).not.toContain('上轮会话线索');
+  }, 30_000);
+
   it('detect:--version 可执行 → installed + 版本;抛错 → installed=false', async () => {
     expect(await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec() }).detect()).toEqual({
       installed: true, version: '1.2.3 (fake claude)',

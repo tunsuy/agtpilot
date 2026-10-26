@@ -22,17 +22,17 @@ function fakeAdapter(opts: {
   results?: Phase1Result[];
   progress?: ParsedStreamEvent[];
   onRun?: () => void;
-}): ExecutorAdapter & { runCalled: number; runOpts: Array<{ baseBranch?: string; continuation?: boolean }> } {
+}): ExecutorAdapter & { runCalled: number; runOpts: Array<{ baseBranch?: string; continuation?: boolean; priorFindings?: string }> } {
   const a = {
     name: 'claude-code',
     runCalled: 0,
-    runOpts: [] as Array<{ baseBranch?: string; continuation?: boolean }>,
+    runOpts: [] as Array<{ baseBranch?: string; continuation?: boolean; priorFindings?: string }>,
     detect: async () => (opts.installed === false ? { installed: false } : { installed: true, version: 'fake' }),
     run: async (
       _p: RunnerTaskPack,
       _dir: string,
       onProgress?: (e: ParsedStreamEvent) => void,
-      runOpts?: { baseBranch?: string; continuation?: boolean }
+      runOpts?: { baseBranch?: string; continuation?: boolean; priorFindings?: string }
     ) => {
       const idx = a.runCalled;
       a.runCalled++;
@@ -333,6 +333,67 @@ describe('runTask · 瞬时 API 错误自动重试(加固 ① + 续跑模式)', 
     const { deps } = makeDeps({ adapter: fakeAdapter({ result: success }), checkPristine: async () => { pristineCalled++; return true; }, retryDelayMs: 0 });
     expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
     expect(pristineCalled).toBe(0);
+  });
+
+  it('上轮会话线索:首跑只读调研挂掉(现场干净)→ 重试注入末段轨迹,新会话不重走考古', async () => {
+    // 2026-10-26 CubeSandbox #2046 生产实例:20 分钟 grep/sed/git show 纯调研后网关瞬断,
+    // git 现场干净但认知没落盘 → 重试会话原样重走。本用例钉住:轨迹必须跟上重试
+    const progress: ParsedStreamEvent[] = [
+      { kind: 'tool', tool: 'Bash', summary: 'grep -rn "CONNECT" CubeShim --include="*.rs"' },
+      { kind: 'text', summary: 'Let me examine v0.7.3 pause path in detail' },
+      { kind: 'tool', tool: 'Bash', summary: 'git show v0.7.3:CubeShim/shim/src/sandbox/sb.rs | sed -n "243,330p"' },
+    ];
+    const adapter = fakeAdapter({ results: [transientFail, success], progress });
+    const { deps, flat } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    // 首跑不带线索;重试带上:工具轨迹与思考摘要都在
+    expect(adapter.runOpts[0]?.priorFindings).toBeUndefined();
+    const findings = adapter.runOpts[1]?.priorFindings ?? '';
+    expect(findings).toContain('Bash grep -rn "CONNECT" CubeShim');
+    expect(findings).toContain('Let me examine v0.7.3 pause path');
+    expect(findings).toContain('git show v0.7.3:CubeShim');
+    // 重试姿势仍是从头(现场干净),线索与续跑指令互不干扰
+    expect(adapter.runOpts[1]?.continuation).toBeUndefined();
+    // 线索注入对云端时间线可见
+    const summaries = flat().filter((e) => e.type === 'progress').map((e) => String((e.payload as any).summary));
+    expect(summaries.some((s) => s.includes('上轮末段探索线索'))).toBe(true);
+  });
+
+  it('续跑姿势重试同样带线索:git 现场与末段认知并存', async () => {
+    const progress: ParsedStreamEvent[] = [{ kind: 'tool', tool: 'Read', summary: 'sampling_params.py' }];
+    const adapter = fakeAdapter({ results: [transientFail, success], progress });
+    const { deps } = makeDeps({ adapter, checkPristine: async () => false, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(adapter.runOpts[1]?.continuation).toBe(true);
+    expect(adapter.runOpts[1]?.priorFindings).toContain('Read sampling_params.py');
+  });
+
+  it('上轮零进度(启动即挂)→ 不注入空线索;轨迹只留尾 PRIOR_TRAIL_LIMIT 条', async () => {
+    const adapter = fakeAdapter({ results: [transientFail, success] }); // 无 progress 事件
+    const { deps } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('awaiting_approval');
+    expect(adapter.runOpts[1]?.priorFindings).toBeUndefined();
+
+    // 超限留尾:45 条只留后 40 条(前半是被修正的假设,断点附近才值钱)
+    const many: ParsedStreamEvent[] = Array.from({ length: 45 }, (_, i) => ({
+      kind: 'tool' as const, tool: 'Bash', summary: `step-${String(i).padStart(2, '0')}`,
+    }));
+    const adapter2 = fakeAdapter({ results: [transientFail, success], progress: many });
+    const { deps: deps2 } = makeDeps({ adapter: adapter2, checkPristine: async () => true, retryDelayMs: 0 });
+    await runTask({ taskId: 'rtask_1', pack: validPack }, deps2);
+    const f = adapter2.runOpts[1]?.priorFindings ?? '';
+    expect(f).not.toContain('step-04'); // 前面被裁掉(step-05..step-44 共 40 条)
+    expect(f).toContain('step-05');
+    expect(f).toContain('step-44');
+  });
+
+  it('非瞬时失败(验收未过)→ 不重试,自然也没有线索注入', async () => {
+    const progress: ParsedStreamEvent[] = [{ kind: 'tool', tool: 'Bash', summary: 'pytest' }];
+    const adapter = fakeAdapter({ results: [{ ok: false, error: '验收命令未通过', testTail: 'FAILED' }], progress });
+    const { deps } = makeDeps({ adapter, checkPristine: async () => true, retryDelayMs: 0 });
+    expect(await runTask({ taskId: 'rtask_1', pack: validPack }, deps)).toBe('failed');
+    expect(adapter.runCalled).toBe(1);
+    expect(adapter.runOpts[0]?.priorFindings).toBeUndefined();
   });
 });
 

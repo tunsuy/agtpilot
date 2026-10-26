@@ -101,6 +101,36 @@ describe('renderTaskPrompt · WIP 留痕与续跑模式(中断续作,git 记录 
   });
 });
 
+describe('renderTaskPrompt · 上轮会话线索(2026-10-26「考古税」:只读调研挂掉,认知没落盘)', () => {
+  it('priorFindings → 注入【上轮会话线索】块:轨迹原文 + 断点续接 + 结论待复核护栏', () => {
+    const trail = 'Bash grep -rn "CONNECT" CubeShim --include="*.rs"\nBash git show v0.7.3:CubeShim/shim/src/sandbox/sb.rs';
+    const p = renderTaskPrompt(basePack, { priorFindings: trail });
+    expect(p).toContain('【上轮会话线索】');
+    expect(p).toContain('瞬时 API/网关错误中断');
+    expect(p).toContain(trail);
+    expect(p).toContain('不必从零重走');
+    // 护栏:轨迹只是线索,未经复核 —— 与当前代码对不上以当前代码为准
+    expect(p).toContain('未经复核');
+    expect(p).toContain('以当前代码为准');
+  });
+
+  it('与续跑模式可叠加(git 现场管落盘产出,线索管没落盘的认知)', () => {
+    const p = renderTaskPrompt(basePack, { continuation: true, priorFindings: 'Read sb.rs' });
+    expect(p).toContain('【续跑模式】');
+    expect(p).toContain('【上轮会话线索】');
+    // 顺序:续跑块在前(红线与现场认知),线索块在后
+    expect(p.indexOf('【续跑模式】')).toBeGreaterThan(0);
+    expect(p.indexOf('【续跑模式】')).toBeLessThan(p.indexOf('【上轮会话线索】'));
+  });
+
+  it('缺省 / 空 opts / priorFindings 空串 → 无线索块(additive,旧调用方零变化)', () => {
+    expect(renderTaskPrompt(basePack)).not.toContain('上轮会话线索');
+    expect(renderTaskPrompt(basePack, {})).not.toContain('上轮会话线索');
+    expect(renderTaskPrompt(basePack, { priorFindings: '' })).not.toContain('上轮会话线索');
+    expect(renderTaskPrompt(basePack, {})).toBe(renderTaskPrompt(basePack));
+  });
+});
+
 describe('renderTaskPrompt · no-action 例外出口(第 6 步,与 pr-final 二选一)', () => {
   const prompt = renderTaskPrompt(basePack);
 

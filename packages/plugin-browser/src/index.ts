@@ -6,6 +6,7 @@ import FirecrawlApp from '@mendable/firecrawl-js';
 import TurndownService from 'turndown';
 import path from 'path';
 import fs from 'fs';
+import { DomainCircuit } from './domain-circuit';
 
 export const name = 'agtpilot-plugin-browser';
 export const inject = ['agent'];
@@ -258,6 +259,11 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
   const svc = new BrowserServiceImpl(ctx, config);
   const getOrCreatePage = (userId?: string) => svc.acquirePage(userId);
 
+  // 域名级网络熔断(2026-10-26 生产实例:GitHub 反爬 ERR_ABORTED 66 连败烧穿
+  // 60 万 token,「不要原地重试」的软提示被无视)。进程级共享:反爬封的是出口
+  // IP,不分用户。阈值/冷却窗在 domain-circuit.ts 有据可查。
+  const circuit = new DomainCircuit();
+
   // 执行后补一帧 viewport_update 截图(输入类工具的视觉确认)
   const emitViewport = async (page: Page) => {
     try {
@@ -300,6 +306,26 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
       required: ['url'],
     },
     execute: async ({ url, offset = 0 }, session?: any) => {
+      // 熔断检查先于一切:同域名连续网络层失败已熔断 → 直接结构化拒绝,不发请求。
+      // 拒绝文案指路替代信息源,不再给模型「再试一次」的错觉。
+      const gate = circuit.check(url);
+      if (gate.blocked) {
+        ctx.agent.emitEvent({
+          type: 'tool_result',
+          payload: { tool: 'browser_navigate', success: false, url, error: `域名熔断:${gate.domain} 连续网络失败已熔断`, callId: session?.callId },
+          timestamp: Date.now(),
+        });
+        return {
+          success: false,
+          url,
+          error: `域名熔断:${gate.domain} 最近连续 ${gate.consecutiveFails} 次网络层失败,已停止对该域名的浏览器访问(约 ${Math.ceil(gate.retryAfterMs / 60000)} 分钟后自动恢复)`,
+          kind: 'network',
+          reason: `${gate.domain} 持续不可达(反爬拦截或网络故障),浏览器路线已对该域名熔断`,
+          hint:
+            '不要换 URL 路径再试该域名(同域名同样被拦)。替代路线:改用 search_web 检索该站点内容,或用 GitHub/DeepWiki 等只读 MCP 工具(若已挂载)拿结构化数据。',
+        };
+      }
+
       ctx.agent.emitEvent({
         type: 'tool_call',
         payload: { tool: 'browser_navigate', url, callId: session?.callId },
@@ -308,6 +334,7 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
 
       try {
         const result = await svc.navigateAndDistill(session?.userId, url, offset);
+        circuit.recordSuccess(url);
         const dataUri = result.screenshotBase64 ? `data:image/jpeg;base64,${result.screenshotBase64}` : '';
 
         ctx.agent.emitEvent({
@@ -340,11 +367,24 @@ export function apply(ctx: Context, config: BrowserPluginConfig = { headless: tr
           timestamp: Date.now(),
         });
         // P4:失败分类 + 下一步指引(环境级故障别让模型盲诊空转)
+        // P6:网络类失败喂域名熔断器 —— 连续 3 次后该域名直接拒绝(硬闸)
+        const classified = classifyBrowserFailure(err.message);
+        if (classified.kind === 'network') {
+          circuit.recordFailure(url);
+          const consecutive = circuit.check(url).consecutiveFails;
+          return {
+            success: false,
+            url,
+            error: err.message,
+            ...classified,
+            hint: `${classified.hint}${consecutive >= 2 ? `(该域名已连续失败 ${consecutive} 次,再失败将熔断,请立即改用替代信息源)` : ''}`,
+          };
+        }
         return {
           success: false,
           url,
           error: err.message,
-          ...classifyBrowserFailure(err.message),
+          ...classified,
         };
       }
     },

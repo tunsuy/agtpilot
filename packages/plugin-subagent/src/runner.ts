@@ -37,6 +37,25 @@ import type {
 } from '@agtpilot/core';
 import { resolveReadonlyTools } from './whitelist';
 
+/** 可中止的退避等待(④ 模型错误重试前给过载网关一点恢复窗口) */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new Error('Aborted'));
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
 // ---- 窄接口(依赖倒置,spec §4.2)----
 
 /** invokeStep 返回值中本引擎关心的最小面(ModelStepResult 结构兼容) */
@@ -76,6 +95,14 @@ export interface SubagentRunMeta {
   budgetHit?: boolean;
   /** 子循环剥离的 reasoning 部件数(prepareStep + 强制收敛合计;0 时不写字段) */
   reasoningPartsStripped?: number;
+  /**
+   * 本次实际挂载给子 agent 的工具名清单(2026-10-26 生产实例观测盲区:子 agent
+   * 只挂 browser_navigate/search_web 的事实埋在 60 万 token 灰烬里才能考古)。
+   * 主循环拿到失败结果时第一时间能对上「任务描述点名的工具 vs 实际工具面」。
+   */
+  mountedTools?: string[];
+  /** 首轮模型调用失败后自动重试过一次(重试成功/失败都记) */
+  modelErrorRetried?: boolean;
   /** 仅失败时:'timeout' | 'budget' | 'model-error' | 'internal-error' | 'content-filter' | 'circuit-open' */
   reason?:
     | 'timeout'
@@ -103,6 +130,8 @@ export interface SubagentEventPayload {
   usage?: SubagentUsage;
   durationMs: number;
   reason?: string;
+  /** 实际挂载的工具名清单(事件侧同样透出,失败可第一时间对出工具面缺口) */
+  mountedTools?: string[];
 }
 
 /** M2 transcript 落盘钩子的载荷(spec §5.3) */
@@ -153,6 +182,21 @@ export interface SubagentEngineConfig {
    * (AGTPILOT_SUBAGENT_PROVIDER/_MODEL)优先级由宿主决定是否注入本回调。
    */
   resolveModelOverride?: (userId: string | undefined) => ModelConfigOverride | undefined;
+  /**
+   * 逐用户解析额外工具池(宿主注入,①b 根修,2026-10-26 oss_radar 生产实例):
+   * web 多用户架构下用户 MCP 工具走「任务级 taskTools 注入」只喂主循环,
+   * 从不进全局注册表 —— 而本引擎默认只读全局注册表,子 agent 因此结构性
+   * 看不见用户 MCP 工具(任务描述点名 mcp_github_mcp_*,子 agent 实际只有
+   * browser_navigate/search_web,被迫裸撞反爬墙)。宿主注入本回调返回该用户
+   * 当前已连接的 MCP 工具定义(plugin-mcp getUserTools),引擎在白名单过滤前
+   * 并入工具池;返回值(含空数组)/回调异常均回退纯全局注册表,不击穿契约。
+   */
+  resolveUserTools?: (userId: string | undefined) => ToolDefinition[] | Promise<ToolDefinition[]>;
+  /**
+   * 首轮模型调用失败(零步消耗)的原地重试退避毫秒;默认 2000(给过载网关
+   * 一点恢复窗口)。重试只做一次;0 = 立即重试。
+   */
+  modelErrorRetryDelayMs?: number;
   /** M2:宿主注入的 transcript 落盘适配器;缺失静默不落盘 */
   appendTranscript?: (entry: SubagentTranscript) => void;
   /**
@@ -192,7 +236,14 @@ export function buildTaskPrompt(args: SubagentRunArgs): string {
   if (hint) parts.push(`建议检索源/关键词方向:${hint}`);
   const schema = args.output_schema?.trim();
   if (schema) parts.push(`期望报告结构:\n${schema}`);
-  parts.push('完成后直接输出最终报告(结论先行、附来源),不要粘贴原始检索内容。');
+  // 工具降级预案(①c,2026-10-26 生产实例):子任务描述点名的工具(如某 MCP
+  // 连接器)未必已挂载 —— 点名了但不可用时,立即改用你实际拥有的工具
+  // (search_web / browser_navigate 等)完成调研,并在报告末尾注明工具替代情况,
+  // 不要空转等待或反复尝试不可用的工具。
+  parts.push(
+    '完成后直接输出最终报告(结论先行、附来源),不要粘贴原始检索内容。' +
+      '若任务描述中点名的工具不可用,改用你实际拥有的工具完成调研并在报告中注明。',
+  );
   return parts.join('\n\n');
 }
 
@@ -264,6 +315,7 @@ export class SubagentEngine {
         stepsCount: result.meta.stepsCount,
         usage: result.meta.usage,
         durationMs: result.meta.durationMs,
+        ...(result.meta.mountedTools ? { mountedTools: result.meta.mountedTools } : {}),
         ...(result.ok ? {} : { reason: result.meta.reason }),
       });
       return result;
@@ -307,6 +359,22 @@ export class SubagentEngine {
         // 宿主解析失败(如 user-store 读盘异常)→ 回退静态配置
       }
     }
+    // ①b 根修:任务级工具池并入 —— 宿主注入 resolveUserTools 时按当前用户取
+    // 「已连接 MCP 工具定义」(web 多用户下这些工具只经任务级注入喂主循环,
+    // 全局注册表里没有,缺这一步子 agent 结构性看不见用户 MCP 工具)。
+    // 同名时用户工具优先(与主循环 taskTools 覆盖全局注册的合并语义一致)。
+    let toolPool = this.deps.listTools();
+    if (this.cfg.resolveUserTools) {
+      try {
+        const extra = await this.cfg.resolveUserTools(session.userId);
+        if (Array.isArray(extra) && extra.length > 0) {
+          const names = new Set(extra.map((t) => t.name));
+          toolPool = [...toolPool.filter((t) => !names.has(t.name)), ...extra];
+        }
+      } catch {
+        // 宿主取用户工具失败 → 回退纯全局注册表
+      }
+    }
     // 模型覆盖:宿主注入 resolveModelOverride 时按当前用户逐次解析(web = 用户
     // 连接器配置,子代理与主循环同源);返回 undefined / 回调异常回退静态缺省档
     let configOverride = this.cfg.configOverride;
@@ -317,7 +385,7 @@ export class SubagentEngine {
         // 宿主解析失败(如 user-store 读盘异常)→ 回退静态配置
       }
     }
-    let resolved = resolveReadonlyTools(this.deps.listTools(), {
+    let resolved = resolveReadonlyTools(toolPool, {
       whitelist: this.cfg.whitelist,
       mcpServers,
       mcpAllowTools: this.cfg.mcpAllowTools,
@@ -339,6 +407,9 @@ export class SubagentEngine {
         'internal-error',
       );
     }
+    // ①a 观测:实际挂载的工具名清单随 meta/事件/失败兜底透出 —— 子 agent 工具面
+    // 缺口不再需要考古 60 万 token 灰烬才能发现(2026-10-26 生产实例教训)
+    const mountedTools = mounted.map((t) => t.name);
 
     const maxSteps = clampSteps(args.max_steps, this.cfg.maxSteps);
     const baseMessages: any[] = [{ role: 'user', content: buildTaskPrompt(args) }];
@@ -353,6 +424,7 @@ export class SubagentEngine {
     let currentStep = 0;
     let budgetHit = false;
     let reasoningStripped = 0;
+    let modelErrorRetried = false;
 
     // 内部工具:合成子 session + catch→{error} + 16KB 截断(spec §4.3)
     const internalTools: AgentLoopTool[] = mounted.map((def) => ({
@@ -443,7 +515,57 @@ export class SubagentEngine {
           'content-filter',
         );
       }
-      return fail(`子循环模型错误:${errMsg}`, 'model-error');
+      // ④ 首轮模型错误原地重试一次(零步消耗才重试):上游过载/网关瞬断是一次性
+      // 故障的概率高(2026-10-26 生产实例:sub:1 首轮撞上游过载,零步即死,主循环
+      // 三发子 agent 全军覆没)。已跑出若干步的失败重试会重走已消耗的步,不重试。
+      if (currentStep === 0) {
+        try {
+          await sleep(Math.max(0, this.cfg.modelErrorRetryDelayMs ?? 2000), controller.signal);
+        } catch {
+          // 重试退避期间被中止(墙钟超时)→ 按超时语义收口
+        }
+        if (timedOut) {
+          return fail(`子 agent 墙钟超时(${this.cfg.timeoutMs}ms),已中止`, 'timeout', {
+            mountedTools,
+          });
+        }
+        try {
+          loopResult = await model.runAgentLoop({
+            system: SUBAGENT_SYSTEM_PROMPT,
+            messages: baseMessages,
+            maxSteps,
+            tools: internalTools,
+            abortSignal: controller.signal,
+            configOverride,
+            prepareStep,
+            onStepStart: ({ stepNumber }) => {
+              currentStep = stepNumber;
+            },
+          });
+          modelErrorRetried = true;
+        } catch (err2: any) {
+          clearTimeout(timer);
+          if (timedOut) {
+            return fail(`子 agent 墙钟超时(${this.cfg.timeoutMs}ms),已中止`, 'timeout', {
+              mountedTools,
+            });
+          }
+          const msg2 = err2?.message ?? String(err2);
+          if (/DataInspectionFailed/i.test(msg2)) {
+            return fail(
+              '子循环输入被平台内容安全审查拦截(DataInspectionFailed,子任务文本触发了模型服务方的内容风控)。原样重派大概率仍被拦截:请改用主循环自身工具完成该检索,或大幅改写子任务表述/换资料方向后再试。',
+              'content-filter',
+              { mountedTools, modelErrorRetried: true },
+            );
+          }
+          return fail(`子循环模型错误(已自动重试一次,仍失败):${msg2}`, 'model-error', {
+            mountedTools,
+            modelErrorRetried: true,
+          });
+        }
+      } else {
+        return fail(`子循环模型错误:${errMsg}`, 'model-error', { mountedTools });
+      }
     }
     clearTimeout(timer);
 
@@ -471,7 +593,12 @@ export class SubagentEngine {
           convMsgs = r.messages;
         }
         const wrap = await model.invokeStep({
-          system: `${SUBAGENT_SYSTEM_PROMPT}\n\n【重要】可用步数/预算已用尽,禁止再调用任何工具。请立即基于已获得的资料输出最终调研报告(结论先行、附来源)。`,
+          system: `${SUBAGENT_SYSTEM_PROMPT}
+
+【重要】可用步数/预算已用尽,禁止再调用任何工具。现在必须立即输出最终调研报告。报告要求:
+- 结论先行:每条子问题先给已确认的结论(哪怕只是部分结论),再给证据/来源链接。
+- 如实交代未能核验的点:明确列出「因步数/预算中断未能核验」的子项,并给出后续建议核验方式。禁止把「接下来打算怎么做」当成报告内容,禁止用「正在继续/即将完成」这类过程性表述充当结论。
+- 不要粘贴大段原始检索内容,提炼后回传。`,
           messages: convMsgs,
           configOverride,
           disableTools: true,
@@ -519,6 +646,8 @@ export class SubagentEngine {
           stepsCount,
           finishReason: loopResult.finishReason,
           usage,
+          mountedTools,
+          ...(modelErrorRetried ? { modelErrorRetried: true } : {}),
           ...(reasoningStripped > 0 ? { reasoningPartsStripped: reasoningStripped } : {}),
         },
       );
@@ -540,6 +669,8 @@ export class SubagentEngine {
         stepsCount,
         finishReason: loopResult.finishReason,
         usage,
+        mountedTools,
+        ...(modelErrorRetried ? { modelErrorRetried: true } : {}),
         ...(truncated ? { truncated } : {}),
         ...(budgetHit ? { budgetHit: true } : {}),
         ...(reasoningStripped > 0 ? { reasoningPartsStripped: reasoningStripped } : {}),

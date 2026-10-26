@@ -105,3 +105,53 @@ describe('browser_screenshot · 截图剥离', () => {
     expect(viewport.payload.screenshotBase64.length).toBeGreaterThan(0);
   });
 });
+
+describe('browser_navigate · 域名熔断(2026-10-26 生产止血:反爬 66 连败)', () => {
+  const navTool = async (ctx: any, url: string) =>
+    (await ctx.agent.getTool('browser_navigate')!).execute({ url }, { taskId: 't1', step: 1 });
+
+  it('同域名 3 次网络失败后,第 4 次不再发请求,直接结构化拒绝并指路替代信息源', async () => {
+    const h = buildHarness();
+    await loadPlugin(h.ctx);
+    h.page.goto.mockRejectedValue(new Error('net::ERR_ABORTED at https://github.com/x'));
+
+    for (let i = 0; i < 3; i++) {
+      const r: any = await navTool(h.ctx, 'https://github.com/foo/bar');
+      expect(r.success).toBe(false);
+      expect(r.kind).toBe('network');
+    }
+    expect(h.page.goto).toHaveBeenCalledTimes(3);
+
+    // 第 4 次:即使 goto 已恢复,熔断也在发请求前拒绝
+    h.page.goto.mockReset();
+    h.page.goto.mockResolvedValue(undefined as any);
+    const blocked: any = await navTool(h.ctx, 'https://github.com/anything/else');
+    expect(blocked.success).toBe(false);
+    expect(blocked.error).toContain('域名熔断');
+    expect(blocked.reason).toContain('github.com');
+    expect(blocked.hint).toContain('不要换 URL 路径再试');
+    expect(h.page.goto).toHaveBeenCalledTimes(0); // ← 硬闸:根本没碰网络
+  });
+
+  it('成功一次清零计数;非网络类失败不进熔断账', async () => {
+    const h = buildHarness();
+    await loadPlugin(h.ctx);
+    h.page.goto.mockRejectedValueOnce(new Error('net::ERR_ABORTED')).mockResolvedValue(undefined as any);
+    await navTool(h.ctx, 'https://example.com/a'); // 1 次网络失败
+    const r2: any = await navTool(h.ctx, 'https://example.com/a');
+    expect(r2.success).toBe(true); // 成功清零
+    const r3: any = await navTool(h.ctx, 'https://example.com/a');
+    expect(r3.success).toBe(true); // 不熔断
+
+    // 超时类(page-structure)失败 × 3:不计入,不熔断
+    h.page.goto.mockReset();
+    h.page.goto.mockRejectedValue(new Error('Timeout 30000ms exceeded'));
+    for (let i = 0; i < 3; i++) {
+      const r: any = await navTool(h.ctx, 'https://example.com/b');
+      expect(r.kind).toBe('page-structure');
+    }
+    const after: any = await navTool(h.ctx, 'https://example.com/b');
+    expect(after.success).toBe(false);
+    expect(after.error).toContain('Timeout'); // 仍是真实失败,而非熔断拒绝
+  });
+});

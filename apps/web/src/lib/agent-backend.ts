@@ -243,6 +243,22 @@ class AgentBackend {
                 const { buildUserSubagentMcpServers } = require('@/lib/mcp-connectors');
                 return buildUserSubagentMcpServers(userId ?? 'default');
               },
+          // ①b 根修(2026-10-26 oss_radar 生产实例):web 多用户下用户 MCP 工具走
+          // 任务级 taskTools 注入只喂主循环,从不进全局注册表 —— 子 agent 默认只读
+          // 全局注册表,结构上看不见用户 MCP 工具(任务描述点名 mcp_github_mcp_*,
+          // 子 agent 实际只有 browser_navigate/search_web,被迫裸撞反爬墙 66 次)。
+          // 按用户逐次取「当前已连接 MCP 工具定义」并入子 agent 工具池;连接在
+          // 任务启动时由 syncUserServers 建好,此处零额外连接开销。取不到回退空
+          // 数组(plugin-mcp 未挂载/读盘异常),不击穿「永不 throw」契约。
+          resolveUserTools: async (userId: string | undefined) => {
+            const svc = (this.ctx as any)?.mcp;
+            if (!userId || typeof svc?.getUserTools !== 'function') return [];
+            try {
+              return await svc.getUserTools(userId);
+            } catch {
+              return [];
+            }
+          },
           // 子代理模型继承用户连接器配置:不注入时插件静态缺省档钉 deepseek,
           // web 部署通常没有 DEEPSEEK_API_KEY env → 派发全挂,调研脏活回灌主
           // 上下文(2026-10 生产 mission 实证,34 万 token 会话的直接放大器)。

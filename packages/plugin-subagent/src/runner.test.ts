@@ -68,6 +68,10 @@ function makeEngine(
       timeoutMs: 5000,
       maxConcurrent: 2,
       reportLimit: 8000,
+      // ④ 首轮模型错误重试默认退避 2s —— 老测试的 fake model 常驻抛错(连败
+      // 熔断/信号量语义测试),退避会白等并让每次 run 多打一发 loop;归零后
+      // 由「模型错误重试」专测注入正退避验证真实时序
+      modelErrorRetryDelayMs: 0,
       ...cfg,
     },
   );
@@ -549,8 +553,9 @@ describe('同任务连败熔断(maxTaskFailures)', () => {
     expect(third.ok).toBe(false);
     if (third.ok) return;
     expect(third.meta.reason).toBe('circuit-open');
-    // 拦截发生在 started 事件之前,且不再触模型(只有前 2 次进了 loop)
-    expect(calls.loop).toHaveLength(2);
+    // 拦截发生在 started 事件之前,且不再触模型:前 2 次派发各打了 2 发 loop
+    // (④ 首轮模型错误自动重试一次,重试同样计入 —— always-throw 模型下每 run 双发)
+    expect(calls.loop).toHaveLength(4);
     expect(events.filter((e) => e.phase === 'started')).toHaveLength(2);
     // 错误给主循环指了活路
     expect(third.error).toContain('熔断停派');
@@ -603,7 +608,8 @@ describe('同任务连败熔断(maxTaskFailures)', () => {
     for (let i = 0; i < 4; i++) {
       await engine.run({ query: 'q' }, baseSession);
     }
-    expect(calls.loop).toHaveLength(4);
+    // ④ 首轮模型错误重试:always-throw 模型下每 run 双发(4 次派发 × 2 发)
+    expect(calls.loop).toHaveLength(8);
   });
 });
 
@@ -770,7 +776,8 @@ describe('并发信号量(spec §9.7)', () => {
     let count = 0;
     const { model } = makeFakeModel(() => {
       count += 1;
-      if (count === 1) throw new Error('boom');
+      // ④ 首轮错误会自动重试一次:前两发都抛错(run-a 彻底失败),run-b 成功
+      if (count <= 2) throw new Error('boom');
       return resultOf();
     });
     const { engine } = makeEngine(model, undefined, { maxConcurrent: 1 });
@@ -889,6 +896,181 @@ describe('resolveMcpServers(逐用户动态人工钥匙)', () => {
     const res = await engine.run({ query: 'q' }, baseSession);
     expect(res.ok).toBe(true);
     expect(loopToolNames(calls.loop)).toContain('mcp_zhihu_hot_fetch');
+  });
+});
+
+// ---- ④ 首轮模型错误自动重试一次(2026-10-26 生产实例:sub:1 首轮撞上游过载,零步即死)----
+
+describe('④ 首轮模型错误重试一次(零步消耗才重试)', () => {
+  it('首轮抛错、重试成功 → run 成功,meta.modelErrorRetried=true,loop 打了两发', async () => {
+    let count = 0;
+    const { model, calls } = makeFakeModel(() => {
+      count += 1;
+      if (count === 1) throw new Error('上游过载 503');
+      return resultOf();
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(res.meta.modelErrorRetried).toBe(true);
+    expect(calls.loop).toHaveLength(2);
+  });
+
+  it('重试仍失败 → 诚实失败,文案带「已自动重试一次」,modelErrorRetried=true', async () => {
+    const { model, calls } = makeFakeModel(() => {
+      throw new Error('网关瞬断');
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(false);
+    expect(res.meta.reason).toBe('model-error');
+    expect(res.error).toContain('已自动重试一次');
+    expect(res.meta.modelErrorRetried).toBe(true);
+    expect(res.meta.mountedTools).toContain('search_web');
+    expect(calls.loop).toHaveLength(2);
+  });
+
+  it('已消耗步数(currentStep > 0)的中途错误不重试 —— 重试会重走已消耗的步', async () => {
+    const { model, calls } = makeFakeModel((o) => {
+      o.onStepStart?.({ stepNumber: 1 });
+      throw new Error('跑到一半炸了');
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('子循环模型错误:');
+    expect(res.error).not.toContain('已自动重试一次');
+    expect(calls.loop).toHaveLength(1);
+  });
+
+  it('正退避生效:modelErrorRetryDelayMs=80 时重试前真实等待', async () => {
+    let count = 0;
+    const { model } = makeFakeModel(() => {
+      count += 1;
+      if (count === 1) throw new Error('boom');
+      return resultOf();
+    });
+    const { engine } = makeEngine(model, undefined, { modelErrorRetryDelayMs: 80 });
+    const t0 = Date.now();
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(70);
+  });
+
+  it('DataInspectionFailed 内容审查拦截不重试(换发大概率仍被拦)', async () => {
+    const { model, calls } = makeFakeModel(() => {
+      throw new Error('<400> InternalError.Algo.DataInspectionFailed');
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(false);
+    expect(res.meta.reason).toBe('content-filter');
+    expect(calls.loop).toHaveLength(1);
+  });
+});
+
+// ---- ①b resolveUserTools 逐用户任务级工具池注入(2026-10-26 60 万 token 事故根修)----
+
+describe('resolveUserTools(逐用户任务级 MCP 工具池注入)', () => {
+  function loopToolNames(calls: AgentLoopOptions[]): string[] {
+    return (calls[calls.length - 1].tools ?? []).map((t) => t.name);
+  }
+
+  it('注入的用户 MCP 工具经双钥匙白名单挂载进子循环(全局注册表没有也能看见)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+      mcpServers: ['github_mcp'],
+      resolveUserTools: () => [mkTool('mcp_github_mcp_search_issues', { readOnly: true })],
+    });
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(loopToolNames(calls.loop)).toContain('mcp_github_mcp_search_issues');
+    expect(res.meta.mountedTools).toContain('mcp_github_mcp_search_issues');
+  });
+
+  it('人工钥匙仍把门:注入的 MCP 工具服务器不在 mcpServers 名单 → 不挂载', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+      mcpServers: ['deepwiki'],
+      resolveUserTools: () => [mkTool('mcp_github_mcp_search_issues', { readOnly: true })],
+    });
+    await engine.run({ query: 'q' }, baseSession);
+    expect(loopToolNames(calls.loop)).not.toContain('mcp_github_mcp_search_issues');
+  });
+
+  it('同名冲突时用户工具优先(与主循环 taskTools 覆盖全局注册同语义)', async () => {
+    const registryVersion = mkTool('mcp_github_mcp_search_issues', {
+      readOnly: true,
+      execute: async () => 'registry',
+    });
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true }), registryVersion], {
+      mcpServers: ['github_mcp'],
+      resolveUserTools: () => [
+        mkTool('mcp_github_mcp_search_issues', { readOnly: true, execute: async () => 'user' }),
+      ],
+    });
+    await engine.run({ query: 'q' }, baseSession);
+    const tool = (calls.loop[calls.loop.length - 1].tools ?? []).find(
+      (t) => t.name === 'mcp_github_mcp_search_issues',
+    )!;
+    expect(tool).toBeDefined();
+    expect(await tool.execute({})).toBe('user');
+  });
+
+  it('回调抛异常 → 回退纯全局注册表,run 仍成功(永不 throw 契约)', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+      resolveUserTools: () => {
+        throw new Error('user-store down');
+      },
+    });
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(loopToolNames(calls.loop)).toEqual(['search_web']);
+  });
+
+  it('以 session.userId 逐用户调用,不串号', async () => {
+    const { model } = makeFakeModel();
+    const seen: Array<string | undefined> = [];
+    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+      resolveUserTools: (uid) => {
+        seen.push(uid);
+        return [];
+      },
+    });
+    await engine.run({ query: 'q' }, { ...baseSession, userId: 'u2' });
+    expect(seen).toEqual(['u2']);
+  });
+});
+
+// ---- ①a mountedTools 观测(工具面缺口不再需要考古灰烬才能发现)----
+
+describe('①a mountedTools 观测透出', () => {
+  it('成功 run:meta.mountedTools 与 finished 事件都带实际挂载清单', async () => {
+    const { model } = makeFakeModel();
+    const { engine, events } = makeEngine(model, [
+      mkTool('search_web', { readOnly: true }),
+      mkTool('browser_navigate', { readOnly: true }),
+    ]);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    expect(res.meta.mountedTools).toEqual(['search_web', 'browser_navigate']);
+    const finished = events.find((e) => e.phase === 'finished')!;
+    expect(finished.mountedTools).toEqual(['search_web', 'browser_navigate']);
+  });
+
+  it('失败 run:failed 事件也带 mountedTools,主循环无需考古日志即可判断工具面', async () => {
+    const { model } = makeFakeModel(() => {
+      throw new Error('boom');
+    });
+    const { engine, events } = makeEngine(model, [mkTool('search_web', { readOnly: true })]);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(false);
+    expect(res.meta.mountedTools).toEqual(['search_web']);
+    const failed = events.find((e) => e.phase === 'failed')!;
+    expect(failed.mountedTools).toEqual(['search_web']);
+    expect(failed.reason).toBe('model-error');
   });
 });
 

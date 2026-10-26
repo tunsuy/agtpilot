@@ -68,13 +68,19 @@ describe('buildOssRadarPrompt · 格式契约(与 oss-opportunities.ts 解析器
     expect(prompt).toContain('good first issue');
   });
 
-  it('肥调研引导派只读检索子 agent(连接器只读工具默认开放,不再让模型猜白名单)', () => {
+  it('肥调研引导派只读检索子 agent(工具可用性如实描述,不替子 agent 预言挂载面)', () => {
     expect(prompt).toContain('research_subagent');
     expect(prompt).toContain('只读检索子 agent');
     expect(prompt).toContain('并行派发');
     // 生产实测 mission ar27n:含糊的「取决于负责人是否已加入白名单」让模型放弃子 agent、
-    // 在主上下文直调 MCP,42k 字符原始 JSON 逐轮重放 ≈12 万 tokens。现在明确默认开放。
-    expect(prompt).toContain('默认已对子 agent 开放');
+    // 在主上下文直调 MCP,42k 字符原始 JSON 逐轮重放 ≈12 万 tokens —— 要果断派子 agent。
+    // 2026-10-26 反向教训(oss_radar 60 万 token 事故):断言「默认已对子 agent 开放」
+    // 引导主循环把具体工具名写进子任务描述,子 agent 实际没挂载 → 点名工具被无视,
+    // 裸撞 GitHub 反爬 66 连败。现在改为如实表述 + 明确「任务描述不点名工具名」。
+    expect(prompt).toContain('若已挂载到子 agent 则可用');
+    expect(prompt).toContain('工具可用性以子 agent 实际挂载面为准');
+    expect(prompt).toContain('不要点名具体工具名');
+    expect(prompt).not.toContain('默认已对子 agent 开放');
     expect(prompt).not.toContain('取决于负责人是否已将其加入子 agent 白名单');
     expect(prompt).toContain('由你直接复核');
     expect(prompt).not.toContain('连接器检索不对子 agent 开放');

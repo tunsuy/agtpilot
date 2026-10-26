@@ -119,6 +119,13 @@ export interface SubagentPluginConfig {
    * env 语义优先。缺省不注入 → 静态缺省档(PROVIDER/MODEL)。
    */
   resolveModelOverride?: (userId: string | undefined) => ModelConfigOverride | undefined;
+  /**
+   * 逐用户解析额外工具池(宿主注入,①b 根修):web 多用户下用户 MCP 工具走任务级
+   * taskTools 注入只喂主循环、从不进全局注册表 —— 缺本注入时子 agent 结构性
+   * 看不见用户 MCP 工具。web 宿主注入 mcpSvc.getUserTools(userId);返回空数组/
+   * 异常回退纯全局注册表。
+   */
+  resolveUserTools?: (userId: string | undefined) => ToolDefinition[] | Promise<ToolDefinition[]>;
   /** MCP 工具名前缀逃生口;缺省 env AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS → 内置名单(deepwiki/newsnow,实测背书) */
   mcpAllowTools?: string[];
   maxSteps?: number;
@@ -130,6 +137,8 @@ export interface SubagentPluginConfig {
   maxTaskFailures?: number;
   /** M2:宿主注入 transcript 落盘(web 侧 JSONL);缺失静默不落盘 */
   appendTranscript?: (entry: SubagentTranscript) => void;
+  /** 首轮模型错误重试退避毫秒(缺省 2000;0 = 立即重试) */
+  modelErrorRetryDelayMs?: number;
 }
 
 class SubagentService extends Service {
@@ -154,6 +163,9 @@ class SubagentService extends Service {
         whitelist,
         mcpServers: config.mcpServers ?? MCP_SERVERS,
         resolveMcpServers: config.resolveMcpServers,
+        resolveUserTools: config.resolveUserTools,
+        // 首轮模型错误(零步消耗)自动重试一次的退避毫秒;缺省 2000
+        modelErrorRetryDelayMs: config.modelErrorRetryDelayMs,
         mcpAllowTools: config.mcpAllowTools ?? MCP_ALLOW_TOOLS,
         // 静态缺省档(不写全局状态,spec §4.2);宿主注入 resolveModelOverride 时按用户逐次覆盖
         configOverride: { activeModelId: PROVIDER, modelName: MODEL },

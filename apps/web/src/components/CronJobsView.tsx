@@ -92,6 +92,17 @@ export function CronJobsView({
   // 显式引用的技能包(仅普通任务;场景订阅 = 内置 SOP,选择器不渲染)
   const [skillPacksInput, setSkillPacksInput] = useState<string[]>([]);
 
+  // 长任务指令(如场景订阅的完整扫描 SOP)默认夹 3 行,展开过的任务记住展开态
+  const [expandedJobIds, setExpandedJobIds] = useState<Set<string>>(new Set());
+  const toggleJobExpanded = (jobId: string) => {
+    setExpandedJobIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  };
+
   // 该任务的执行历史行:结构化 jobId 优先;旧数据(无 jobId)按标题约定匹配
   // (runs 服务端已按 startedAt 新前旧后排序)
   const runsOf = (job: CronJobItem) =>
@@ -325,9 +336,30 @@ export function CronJobsView({
                         </span>
                       </div>
 
-                      <p className="text-xs text-zinc-600 leading-relaxed bg-zinc-50/80 p-2.5 rounded-lg border border-zinc-100 font-mono text-[11px]">
-                        {job.prompt}
-                      </p>
+                      {(() => {
+                        // 展示快照默认夹 3 行防撑高(场景订阅任务触发时按档案重建,此处仅预览);
+                        // 长指令给展开切换,完整原文始终可在编辑弹窗里看/改
+                        const long = job.prompt.length > 120;
+                        const expanded = expandedJobIds.has(job.id);
+                        return (
+                          <div className="text-xs text-zinc-600 leading-relaxed bg-zinc-50/80 rounded-lg border border-zinc-100 font-mono text-[11px]">
+                            <p
+                              className={`p-2.5 ${expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-3 break-all'}`}
+                              title={expanded ? undefined : '指令预览(默认截断)——展开或点编辑按钮查看全文'}
+                            >
+                              {job.prompt}
+                            </p>
+                            {long && (
+                              <button
+                                onClick={() => toggleJobExpanded(job.id)}
+                                className="w-full text-left px-2.5 pb-1.5 text-[10px] text-zinc-400 hover:text-blue-600 transition border-t border-zinc-100"
+                              >
+                                {expanded ? '收起指令 ↑' : `展开完整指令(${job.prompt.length} 字) ↓`}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       <div className="flex flex-wrap items-center gap-4 text-[11px] text-zinc-400 pt-1">
                         <div className="flex items-center gap-1">

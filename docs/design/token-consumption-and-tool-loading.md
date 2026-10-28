@@ -3,6 +3,7 @@
 > 记录日期:2026-10-17。触发事件:开源贡献雷达「选题」扫描任务单次 mission.usage 达 ~73 万
 > prompt tokens(未到派发阶段)。本文两部分:①73 万的逐环节归因;②工具挂载专题
 > (现状 / 业界对照 / 改造方案)。所有代码结论均附文件:行号,业界数字附来源链接。
+> 注:文中代码行号是当时快照,后续重构后可能漂移;机制描述以当前代码为准。
 > 状态:分析已定稿;工坊白名单(§9.1)、reasoning 剥离(§9.2)、层1 源头裁剪
 > (§9.3)、层0 目录卡片 B v1(§9.4)与路由零命中收敛兜底(§9.5)已实施。余待拍板。
 
@@ -407,8 +408,8 @@ done 事件落 mission,生产可验证剥离量。
 6 例(三道闸行为、前缀引用稳定、保险丝、tool-call 配对完好);core 141 /
 web 1206 全绿,golden 快照零漂移。
 **范围注记**:plugin-subagent 子循环最初未经三道闸(其 reasoning 仍在子循环内回传);
-2026-10-17 负责人点题「子agent也把思考剥离吧」已补齐 —— 子循环闸:runner.ts
-prepareStep 步前剥离(**放在 60k token 闸之前**,思考文本不再虚占预算)+ 强制收敛
+2026-10-17 负责人点题「子agent也把思考剥离吧」已补齐 —— 子循环闸:`runPreparePipeline`
+的 reasoning 中间件步前剥离(**放在 60k token 闸之前**,思考文本不再虚占预算)+ 强制收敛
 invokeStep 消息同剥(闸3 同款);transcript 落盘保持无损原文(观测记录不回传模型,
 事实源无损原则);保险丝 `AGTPILOT_STRIP_REASONING=0` 对子循环同样生效;
 可观测:`SubagentRunMeta.reasoningPartsStripped`(>0 才写)。测试 runner.test.ts

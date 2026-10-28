@@ -91,6 +91,7 @@ flowchart TD
 | 12 | 插件进程级状态无身份锚点（rag 全局索引、browser 全局 profile、observability 全局 span、artifact 全局 latest） | 多用户下 A 的私有文档/登录态/看板对 B 可见或串台 | 状态按 `session.userId` 分域（缺省 `default`）；`TaskOptions.userId` → orchestrator → `ToolSession{taskId, step, env, userId}`，事件 payload 统一盖章 `taskId` 供前端过滤 |
 | 13 | 向子进程整包透传 `process.env`（sandbox 命令执行、MCP stdio Server） | 宿主全部密钥（含其他用户配置的 Key）泄露给模型触发的一次执行 | 环境白名单（PATH/HOME/LANG/TZ/TMPDIR）+ 任务级 `session.env` 用户 Key；绝不 `{...process.env}` |
 | 14 | 失败被吞成「假成功」（notify 非 macOS 返回 true、git grep catch 返回 count:0、E2B 失败静默本地降级、search 全源失败报 0 条） | 模型把「工具坏了」当成「事实如此」，基于假数据收尾 | 失败就是 `success:false` + 具体原因；降级要在结果与事件里显式标注（`mode: local-fallback`） |
+| 15 | 父子 agent 各自维护工具包装与循环横切逻辑 | 缓存/熔断/守卫/截断/审批/统计语义漂移，修一处漏一处 | 机制下沉 core：`ToolRuntime`（工具执行）、`runAgentLoopWithHooks`（循环横切）、`runPreparePipeline`（每步策略链）、`run-control.ts`（墙钟/预算/重试）；父/子只装配策略 |
 
 ## 事件清单（cordis 事件 ≠ AgentEvent）
 

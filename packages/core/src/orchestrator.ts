@@ -11,7 +11,6 @@ import {
   selectActiveTools,
   widenMountedTools,
   filterToolsByEnv,
-  stableStringify,
   estimateTextTokens,
   isSmalltalkPrompt,
 } from './routing';
@@ -21,7 +20,7 @@ import {
   buildToolCatalogNote,
   createLoadToolsDefinition,
 } from './tool-catalog';
-import { messageText, truncateToolOutput, buildSpillPointer, toolSpillEnabled, effectiveOutputLimit } from './text';
+import { messageText, toolSpillEnabled } from './text';
 import { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 import {
   compactConversationMessages,
@@ -35,6 +34,10 @@ import {
 } from './context-budget';
 import { appendBackgroundNotice, appendBoardReminder, appendStepNotice, appendUserMessage } from './notice';
 import { ToolGate } from './tool-gate';
+import { ToolRuntime, isEmptyToolOutput } from './tool-runtime';
+import { runAgentLoopWithHooks } from './agent-loop';
+import { runPreparePipeline } from './prepare-pipeline';
+import type { PrepareStepContext, PrepareMiddleware } from './prepare-pipeline';
 import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
 /** 默认步数上限（一步 = 一轮模型调用）。可用环境变量 AGTPILOT_MAX_STEPS 或单任务 maxSteps 覆盖。
@@ -42,29 +45,7 @@ import type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
  *  真正的长任务会走"步数耗尽强制总结"路径优雅收尾，任务可继续追问。 */
 const DEFAULT_MAX_STEPS = Math.max(1, Number(process.env.AGTPILOT_MAX_STEPS) || 20);
 
-// ---- 死循环熔断（滑动窗口计数）----
-/** 统计窗口：最近 N 次工具调用 */
-const LOOP_WINDOW_SIZE = 20;
-/** 窗口内同一签名（工具名 + 归一化参数）出现次数达到该值即熔断 */
-const LOOP_TRIGGER_COUNT = 4;
-
-// ---- 只读工具结果复用（TTL 缓存）----
-/** 复用窗口：上下文压缩把早前的调用记录抹掉后,模型的失忆性重发多在 1 分钟内;
- *  5 分钟覆盖典型场景,又不至于长时间吃陈旧数据 */
-const TOOL_RESULT_CACHE_TTL_MS = 5 * 60_000;
-/** 缓存条数上限（FIFO 淘汰,防长任务内存膨胀） */
-const TOOL_RESULT_CACHE_MAX = 32;
-
-/** 工具「空返回」判定：null/undefined、空白串、空数组、无任何键的对象。
- *  框架把「返回空」当成功会系统性高估有效率 —— 生产实测 17 次调用中 4 次
- *  空返回,效率线仍报「失败 0 · 有效率 100%」。报错/跳过/拒绝各有口径,不算空返回。 */
-export function isEmptyToolOutput(out: any): boolean {
-  if (out == null) return true;
-  if (typeof out === 'string') return out.trim().length === 0;
-  if (Array.isArray(out)) return out.length === 0;
-  if (typeof out === 'object') return Object.keys(out).length === 0;
-  return false;
-}
+export { isEmptyToolOutput };
 
 /** 输出截断判定：finishReason=length（单轮输出上限触顶）且文本里留有未闭合的
  *  tool_call 标签 = 模型在「写工具调用」途中被截停。残段若被当最终答复收口，
@@ -201,21 +182,6 @@ export class OrchestratorService extends Service {
       }
     }
 
-    // 死循环熔断状态：滑动窗口签名计数。窗口内同一签名（工具名 + 归一化参数）
-    // 累计出现达到阈值即熔断。相比旧版"只查与上一次调用是否相同"，能同时抓住：
-    // 1) A→B→A→B 交替空转（每次都和上一次不同，旧版永远重置计数）；
-    // 2) 微调参数式重试（stableStringify 归一化后签名相同）。
-    const signatureWindow: string[] = [];
-    const signatureCounts = new Map<string, number>();
-    // 连续失败守卫：同一工具连续报错达到阈值后，在结果里注入换思路提示
-    let lastFailedTool = '';
-    let consecutiveFailures = 0;
-    const FAILURE_GUARD_THRESHOLD = 3;
-    // 效率统计（识别空转任务）；emptyCalls = 成功口径下的空返回,dedupedCalls = 只读复用
-    const stats = { toolCalls: 0, failedCalls: 0, skippedCalls: 0, approvalRejected: 0, emptyCalls: 0, dedupedCalls: 0, spilledOutputs: 0, spilledChars: 0 };
-    // 只读工具结果缓存：TTL 内同签名（工具名 + 归一化参数）直接复用,不重新执行。
-    // 非只读工具绝不入缓存（两次 email_send 可能都是合法的）。
-    const toolResultCache = new Map<string, { at: number; output: any }>();
     // 看板滞后检测状态(业界同款契约:看板进度由模型显式申报,内核只催不推):
     // - roundRealToolSuccess:本轮是否有「真实工具成功且模型未申报看板」
     //   (元工具 planner_/memory_/router_/observability_ 不算真实推进;
@@ -231,7 +197,7 @@ export class OrchestratorService extends Service {
     // 当前步序号（1-based，供工具会话上下文使用）
     let currentStep = 1;
 
-    // ---- 工具包装层：熔断 + 审批门 + 事件广播 + 结果截断 + 效率统计 + 看板滞后检测 ----
+    // ---- 工具装配：全局注册 + 任务级附加工具,后续统一交给 ToolRuntime 执行 ----
     // 全局注册工具 + 任务级附加工具（taskTools，如 MCP 用户连接器）；同名时任务级优先
     const globalTools = this.ctx.agent.getTools();
     const taskTools = options.taskTools || [];
@@ -342,231 +308,60 @@ export class OrchestratorService extends Service {
         toolsTokens: 0,
         calibratedFixedCost,
       });
+    const toolRuntime = new ToolRuntime({
+      policy: {
+        approval: 'hitl',
+        readonlyGate: true,
+        cache: true,
+        deadLoop: true,
+        failureGuard: true,
+        spill: true,
+        truncate: true,
+      },
+      emit: (event) =>
+        broadcast({
+          type: event.type,
+          payload: event.payload,
+          timestamp: Date.now(),
+        }),
+      approve: (request) => this.requestApproval(request, options.abortSignal, broadcast),
+      ...(options.spillToolOutput && toolSpillEnabled()
+        ? {
+            spill: (input) =>
+              options.spillToolOutput!({
+                taskId,
+                callId: input.callId,
+                toolName: input.toolName,
+                fullText: input.fullText,
+              }),
+          }
+        : {}),
+      gate: toolGate,
+    });
+
     const loopTools: AgentLoopTool[] = allTools.map((toolDef) => ({
       name: toolDef.name,
       description: toolDef.description,
-      parameters: toolDef.parameters, // 透传真实 JSON Schema，模型不再盲猜参数
+      parameters: toolDef.parameters,
       execute: async (args: any): Promise<any> => {
-        const toolSignature = `${toolDef.name}:${JSON.stringify(stableStringify(args))}`;
-        // 物理调用 id:tool_call/tool_result 事件与 ToolSession 双通道携带。
-        // 前端步骤记录按它精确对应 —— 同轮并行多工具 + 插件层双广播下,
-        // 「工具名+末位位置」倒查会关错步骤/留孤儿「执行中」(生产实例
-        // 2026-10-14:重复步骤对、入参与出参交叉、虚假百秒耗时)
-        const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        // 只读工具结果复用：上下文压缩会抹掉早前的工具记录,模型「失忆」后重发
-        // 同参数查询（生产实测:17 次调用里 5 对完全重复）。TTL 内直接复用:
-        // 不重新执行、不计入 toolCalls、单独计 dedupedCalls,事件流照常广播
-        //（UI 上该次调用照实展示,结果带 deduplicated 标记）。
-        if (toolDef.readOnly) {
-          const hit = toolResultCache.get(toolSignature);
-          if (hit && Date.now() - hit.at < TOOL_RESULT_CACHE_TTL_MS) {
-            stats.dedupedCalls++;
-            broadcast({ type: 'tool_call', payload: { tool: toolDef.name, args, callId }, timestamp: Date.now() });
-            broadcast({
-              type: 'tool_result',
-              payload: { tool: toolDef.name, output: hit.output, deduplicated: true, callId },
-              timestamp: Date.now(),
-            });
-            return hit.output;
-          }
-        }
-        stats.toolCalls++;
-        // 死循环检测 (Loop Detector)：滑动窗口计数见上；熔断降级为跳过本次调用
-        // 并返回提醒，让模型换思路，而非终止整个任务
-        signatureWindow.push(toolSignature);
-        signatureCounts.set(toolSignature, (signatureCounts.get(toolSignature) || 0) + 1);
-        if (signatureWindow.length > LOOP_WINDOW_SIZE) {
-          const evicted = signatureWindow.shift()!;
-          const remaining = (signatureCounts.get(evicted) || 1) - 1;
-          if (remaining <= 0) signatureCounts.delete(evicted);
-          else signatureCounts.set(evicted, remaining);
-        }
-        const occurrences = signatureCounts.get(toolSignature) || 1;
-        if (occurrences >= LOOP_TRIGGER_COUNT) {
-          stats.skippedCalls++;
-          return {
-            skipped: true,
-            message: `[Loop Detector] 工具 [${toolDef.name}] 在最近 ${LOOP_WINDOW_SIZE} 次调用中以相同（归一化后）参数出现了 ${occurrences} 次，疑似空转循环，本次已被跳过。请更换思路（调整参数、改用其他工具，或基于已有信息直接总结给出最终回答），不要重复相同调用。`,
-          };
-        }
-
-        // 安全审批拦截 (Human-in-the-Loop)：冻结挂起等待外部审批；
-        // 任务被主动终止时自动拒绝并释放挂起，避免永久悬挂
-        if (toolDef.dangerLevel === 'high') {
-          const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-          const approvalReq: ApprovalRequest = {
-            id: approvalId,
-            action: toolDef.name,
-            description: `Agent 正在尝试执行高危操作: ${toolDef.description}`,
-            dangerLevel: 'high',
-            params: args,
-          };
-
-          broadcast({
-            type: 'approval_request',
-            payload: approvalReq,
-            timestamp: Date.now(),
-          });
-
-          const approved = await new Promise<boolean>((resolve) => {
-            let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-            const settle = (value: boolean) => {
-              if (timeoutTimer) clearTimeout(timeoutTimer);
-              this.pendingApprovals.delete(approvalId);
-              resolve(value);
-            };
-            this.pendingApprovals.set(approvalId, settle);
-            const onAbort = () => {
-              if (this.pendingApprovals.has(approvalId)) settle(false);
-            };
-            if (options.abortSignal?.aborted) {
-              onAbort();
-            } else {
-              options.abortSignal?.addEventListener('abort', onAbort, { once: true });
-            }
-            if (APPROVAL_TIMEOUT_MS > 0) {
-              timeoutTimer = setTimeout(() => {
-                // 超时自动拒绝：拒绝结果照常回填给模型（走 rejected 兜底路径），
-                // 并广播 approval_resolved 让前端撤下审批卡片、任务状态恢复 ACTIVE
-                broadcast({
-                  type: 'approval_resolved',
-                  payload: { id: approvalId, approved: false, reason: 'timeout' },
-                  timestamp: Date.now(),
-                });
-                settle(false);
-              }, APPROVAL_TIMEOUT_MS);
-            }
-          });
-
-          if (!approved) {
-            stats.approvalRejected++;
-            return { rejected: true, message: `用户拒绝了执行工具 [${toolDef.name}] 的请求。` };
-          }
-        }
-
-        // 广播工具执行开始
-        broadcast({
-          type: 'tool_call',
-          payload: { tool: toolDef.name, args, callId },
-          timestamp: Date.now(),
+        const result = await toolRuntime.execute(toolDef, args, {
+          taskId,
+          step: currentStep,
+          env: options.taskEnv,
+          userId: options.userId,
+          sandbox: options.taskSandbox,
+          ...(options.activeTools ? { activeTools: options.activeTools } : {}),
         });
-
-        // 真实调用工具(经只读并行门控:readOnly 并行、其余独占串行。
-        // 审批等待在门控之外已完成,不会拿着独占锁等人工审批)
-        const invoke = async (): Promise<any> => {
-          try {
-            return await toolDef.execute(args, {
-              taskId,
-              step: currentStep,
-              env: options.taskEnv,
-              userId: options.userId,
-              sandbox: options.taskSandbox,
-              callId,
-              ...(options.activeTools ? { activeTools: options.activeTools } : {}),
-            });
-          } catch (err: any) {
-            return { error: err.message };
-          }
-        };
-        let output: any = toolDef.readOnly
-          ? await toolGate.runReadonly(invoke)
-          : await toolGate.runExclusive(invoke);
-
-        // 失败统计 + 连续失败守卫：同一工具连续失败达阈值时注入换思路提示
-        //（仍然返回真实报错，不拦截执行，避免误杀合法的重试序列）
-        const callFailed = Boolean(output && typeof output === 'object' && 'error' in output);
-        const callSkippedOrRejected = Boolean(
-          output && typeof output === 'object' && (output.skipped || output.rejected)
-        );
-        // 空返回统计：「返回空」既不是失败也不是有效调用 —— 单独计数,
-        // 有效率口径从 (总-失败-跳过)/总 收紧为 (总-失败-跳过-空返回)/总
-        const callEmpty = !callFailed && !callSkippedOrRejected && isEmptyToolOutput(output);
-        if (callEmpty) stats.emptyCalls++;
-        if (callFailed) {
-          stats.failedCalls++;
-          if (toolDef.name === lastFailedTool) {
-            consecutiveFailures++;
-          } else {
-            lastFailedTool = toolDef.name;
-            consecutiveFailures = 1;
-          }
-          if (consecutiveFailures >= FAILURE_GUARD_THRESHOLD) {
-            const hint = `[Efficiency Guard] 工具 [${toolDef.name}] 已连续失败 ${consecutiveFailures} 次。请停止简单重试：检查参数是否正确、改用其他工具，或基于已有信息直接总结。`;
-            output = { ...output, guardHint: hint };
-          }
-        } else {
-          lastFailedTool = '';
-          consecutiveFailures = 0;
-          // 看板滞后计数(替代旧的自动推进入队):真实工具成功但模型未申报
-          // 看板的轮数。planner_ 系工具执行本身就是显式申报 → 滞后清零;
-          // 元工具(memory_/router_/observability_)不产出任务交付物,不计;
-          // 失败/被熔断跳过/被审批拒绝/空返回不算真实推进。
-          if (/^planner_/.test(toolDef.name)) {
-            boardLagRounds = 0;
-          } else if (!callSkippedOrRejected && !callEmpty && !/^(memory_|router_|observability_)/.test(toolDef.name)) {
-            roundRealToolSuccess = true;
-          }
+        // 看板滞后检测：planner_ 系执行本身就是显式申报；真实工具成功才计推进
+        if (/^planner_/.test(toolDef.name)) {
+          boardLagRounds = 0;
+        } else if (
+          result.status === 'ok' &&
+          !/^(memory_|router_|observability_)/.test(toolDef.name)
+        ) {
+          roundRealToolSuccess = true;
         }
-
-        // 超长结果治理(docs/design/tool-output-spill.md):先试全量落盘换
-        // 「预览+指针」(可恢复,read_tool_output 续读),无回调/落盘失败/保险丝关
-        // → 回退头尾混合截断(truncateToolOutput —— 尾 > 头 > 中间的注意力分布
-        // + 报错在尾部的经验)。落盘决策先于广播,tool_result 事件得以携带
-        // spilled 元数据;广播的 output 始终为全量原文 —— UI 展示不受截断影响。
-        // 限额 = 工具级 outputCap(层1 源头裁剪 ②)与 TOOL_OUTPUT_LIMIT 的较小者
-        // (effectiveOutputLimit);未声明 outputCap 的工具行为与从前逐字节一致。
-        const serialized = typeof output === 'string' ? output : JSON.stringify(output);
-        const outputLimit = effectiveOutputLimit(toolDef.outputCap);
-        let finalOutput: any = output;
-        let spillInfo: { callId: string; originalChars: number } | undefined;
-        if (serialized.length > outputLimit) {
-          let storedRef: string | null = null;
-          if (toolSpillEnabled() && options.spillToolOutput) {
-            try {
-              const r = await options.spillToolOutput({
-                taskId,
-                callId,
-                toolName: toolDef.name,
-                fullText: serialized,
-              });
-              if (typeof r === 'string' && r.length > 0) storedRef = r;
-            } catch {
-              storedRef = null; // 落盘失败绝不失败工具调用 —— 降级为现行截断
-            }
-          }
-          if (storedRef !== null) {
-            stats.spilledOutputs++;
-            stats.spilledChars += serialized.length;
-            spillInfo = { callId, originalChars: serialized.length };
-            finalOutput = buildSpillPointer(serialized, toolDef.name, callId);
-          } else {
-            finalOutput = truncateToolOutput(serialized, toolDef.name, outputLimit);
-          }
-        }
-
-        // 广播工具执行结果（compensation 透传：持久化层随步骤快照落盘回滚把手，
-        // 治理不变量 I5 —— 每个行动都要留下可回滚/可追责的元数据;
-        // spilled = 本次输出已全量落盘的元数据,前端「已保存」徽章用）
-        broadcast({
-          type: 'tool_result',
-          payload: {
-            tool: toolDef.name,
-            output,
-            callId,
-            ...(toolDef.compensation ? { compensation: toolDef.compensation } : {}),
-            ...(spillInfo ? { spilled: spillInfo } : {}),
-          },
-          timestamp: Date.now(),
-        });
-        // 只读且拿到非空数据的调用入缓存（缓存的是模型实际拿到的 finalOutput,
-        // 复用时不再二次截断）；空返回不缓存 —— 可能是瞬时故障,重试可能成功
-        if (toolDef.readOnly && !callFailed && !callSkippedOrRejected && !callEmpty) {
-          if (toolResultCache.size >= TOOL_RESULT_CACHE_MAX) {
-            toolResultCache.delete(toolResultCache.keys().next().value as string);
-          }
-          toolResultCache.set(toolSignature, { at: Date.now(), output: finalOutput });
-        }
-        return finalOutput;
+        return result.output;
       },
     }));
 
@@ -584,7 +379,9 @@ export class OrchestratorService extends Service {
       usageEmitted.completionTokens += c;
       this.ctx.emit('agtpilot/usage', { taskId, promptTokens: p, completionTokens: c });
     };
-    const buildEfficiency = (stepsCount: number): TaskEfficiency => ({
+    const buildEfficiency = (stepsCount: number): TaskEfficiency => {
+      const stats = toolRuntime.getStats();
+      return {
       stepsCount,
       toolCalls: stats.toolCalls,
       failedCalls: stats.failedCalls,
@@ -609,11 +406,169 @@ export class OrchestratorService extends Service {
         : {}),
       promptTokens: usageAcc.promptTokens,
       completionTokens: usageAcc.completionTokens,
+      };
+    };
+
+    // prepareStep 策略链（AI SDK v5，每一步模型调用前触发）：
+    // 路由扩容 → 任务内压缩 → 看板催促 → 治理提示 → 后台通知 → 用户追加消息
+    // → 发送前预算护栏/检查点。顺序是契约：压缩必须在提示注入之前，提示才不会被
+    // 蒸馏掉；发送前护栏必须在最后，兜住提示注入重新顶爆窗口的极端情况。
+    // 子 agent 走自己的短链（见 plugin-subagent/runner.ts），共享同一管线形状。
+    const prepareMiddlewares: PrepareMiddleware[] = [];
+
+    if (routedTools) {
+      prepareMiddlewares.push(async (ctx) => {
+        const recentText = (ctx.messages || [])
+          .slice(-8)
+          .map((m) => messageText(m.content))
+          .join('\n');
+        // explicit(工坊白名单)必须同步传入:prepareStep 重算若不带它,
+        // 关键词路由会把白名单外的工具组(如雷达任务命中「网页/执行」拖进
+        // browser/sandbox 全组)经 widenMountedTools 扩容回挂载面,白名单
+        // 形同虚设。带上 explicit 后重算结果恒等于白名单∩目录,widen 无
+        // 新增可并 —— 声明前缀跨步字节稳定,缓存不破。
+        const next = selectActiveTools(
+          recentText,
+          allTools,
+          this.ctx.agent.getToolRoutes(),
+          options.activeTools
+        );
+        let changed = widenMountedTools(mountedNames, next) !== null;
+        // 目录点菜(§9.4 B):上一步 load_tools 点名的工具在本步并入挂载面
+        // (schema 上线)。与 widen 共用同一次写回 —— 一步内既扩容又点菜
+        // 也只破一次前缀缓存;点名只增不减,集合跨步稳定。
+        for (const n of loadedToolNames) {
+          if (!mountedNames.has(n)) {
+            mountedNames.add(n);
+            changed = true;
+          }
+        }
+        if (changed) {
+          ctx.adjust.activeTools = Array.from(mountedNames);
+          toolsMounted = ctx.adjust.activeTools.length;
+        }
+      });
+    }
+
+    prepareMiddlewares.push(async (ctx) => {
+      // 动态压缩阈值（§9.8）：按本步实际挂载面估 tools 块,与 system 估算
+      // (或上一步实测校准值)一起算历史预算,与静态阈值取小 —— 默认 64k 窗口
+      // 下不改变现状,小窗模型/重挂载面下自动收紧,兜住 context_length_exceeded。
+      const stepToolsTokens = estimateToolsBlockTokens(
+        routedTools ? allTools.filter((t) => mountedNames.has(t.name)) : allTools
+      );
+      const compactThreshold = effectiveCompactThreshold({
+        systemTokens: systemPromptTokens,
+        toolsTokens: stepToolsTokens,
+        calibratedFixedCost,
+      });
+      try {
+        const compacted = await this.compactConversation(ctx.messages, options, 'in-loop', compactThreshold);
+        if (compacted) ctx.messages = compacted;
+      } catch {
+        // 压缩失败继续用原消息
+      }
+    });
+
+    prepareMiddlewares.push(async (ctx) => {
+      // 看板滞后催促(压缩之后注入,与治理提示同点位防被蒸馏):上轮真实
+      // 工具成功而模型未申报看板 → 滞后轮数累计;达阈值注入一条同步提醒
+      // (文本由规划器给出,带当前步骤上下文)并清零计数 —— 防连环催促。
+      if (roundRealToolSuccess) {
+        roundRealToolSuccess = false;
+        boardLagRounds++;
+      }
+      if (boardLagRounds >= BOARD_LAG_THRESHOLD) {
+        const idleRounds = boardLagRounds;
+        boardLagRounds = 0;
+        try {
+          const reminder = this.ctx.reflect.get('planner')?.boardLagNotice(taskId, idleRounds);
+          const withReminder = appendBoardReminder(ctx.messages, reminder ?? null);
+          if (withReminder) ctx.messages = withReminder;
+        } catch {
+          // 看板提醒获取失败不影响主流程
+        }
+      }
+    });
+
+    prepareMiddlewares.push(async (ctx) => {
+      const getStepNotice = options.getStepNotice;
+      if (!getStepNotice) return;
+      try {
+        const notice = await getStepNotice();
+        const withNotice = appendStepNotice(ctx.messages, notice);
+        if (withNotice) ctx.messages = withNotice;
+      } catch {
+        // 治理提示获取失败不影响主流程
+      }
+    });
+
+    prepareMiddlewares.push(async (ctx) => {
+      const getBackgroundNotice = options.getBackgroundNotice;
+      if (!getBackgroundNotice) return;
+      try {
+        const bgNotice = await getBackgroundNotice();
+        const withBgNotice = appendBackgroundNotice(ctx.messages, bgNotice);
+        if (withBgNotice) ctx.messages = withBgNotice;
+      } catch {
+        // 后台通知获取失败不影响主流程(消息仍在队列里,下步重试)
+      }
+    });
+
+    prepareMiddlewares.push(async (ctx) => {
+      const getUserMessages = options.getUserMessages;
+      if (!getUserMessages) return;
+      try {
+        const userText = await getUserMessages();
+        const withUser = appendUserMessage(ctx.messages, userText);
+        if (withUser) ctx.messages = withUser;
+      } catch {
+        // 追加消息获取失败不影响主流程(消息仍在队列里,下步重试)
+      }
+    });
+
+    prepareMiddlewares.push(async (ctx) => {
+      // 发送前预算护栏（§9.8 双保险①）：治理提示/看板催促/用户追加消息都在
+      // 常规压缩之后注入,理论上能把本步重新顶爆窗口。发送前实测一次总账
+      // (消息估算 vs 历史预算),超了就地再压一轮(紧急相位,阈值=预算本身);
+      // 仍压不下去(全是不可压的近期文本)则如实放行 —— 溢出走诚实失败,不伪造。
+      const stepToolsTokens = estimateToolsBlockTokens(
+        routedTools ? allTools.filter((t) => mountedNames.has(t.name)) : allTools
+      );
+      const sendEstimate = (list: Array<any>) =>
+        list.reduce((acc: number, m: any) => acc + estimateTextTokens(messageText(m.content)), 0);
+      let outbound = ctx.messages;
+      let outboundEst = sendEstimate(outbound);
+      const budget = historyTokenBudget({
+        systemTokens: systemPromptTokens,
+        toolsTokens: stepToolsTokens,
+        calibratedFixedCost,
+      });
+      if (outboundEst > budget) {
+        try {
+          const forced = await this.compactConversation(outbound, options, 'in-loop', Math.max(2000, budget));
+          if (forced) {
+            ctx.messages = forced;
+            outbound = forced;
+            outboundEst = sendEstimate(forced);
+          }
+        } catch {
+          // 紧急压缩失败:按原消息发送,溢出由 provider 报错如实上浮
+        }
+      }
+      lastSentMessagesEst = outboundEst;
+      // 检查点采用本步实际使用的消息（含压缩重写与治理提示注入）
+      try {
+        this.ctx.emit('agtpilot/checkpoint', { taskId, stepNumber: ctx.stepNumber, messages: outbound });
+      } catch {
+        // 检查点失败不影响主流程
+      }
     });
 
     try {
       // ---- 主循环：完全交给模型网关的内置 agent loop ----
-      const loopResult = await model.runAgentLoop({
+      const loop = await runAgentLoopWithHooks({
+        gateway: model,
         model: options.model,
         system: systemPrompt,
         messages: baseMessages as any,
@@ -622,173 +577,14 @@ export class OrchestratorService extends Service {
         ...(options.tokenBudget !== undefined ? { tokenBudget: options.tokenBudget } : {}),
         tools: loopTools,
         activeTools: initialActiveTools,
-        // 每步准备回调（AI SDK v5 prepareStep，每一步模型调用前触发）：
-        // 1) 动态路由（仅初始路由已启用时生效）：用近期消息（含工具结果——
-        //    搜索结果里出现 URL 自然该把浏览器工具组挂进来）重算本步可见工具，
-        //    解决"路由在任务开始时一次性冻结、中途需要的工具永远声明不到"的问题；
-        //    重算结果经 widenMountedTools「只扩不缩」并入冻结集合（见其注释——
-        //    全量替换会每步打破 provider 前缀缓存，扩容那一步才写回一次）；
-        // 2) 任务内压缩（始终启用）：上下文超阈值时把较早的工具消息蒸馏成纪要
-        //    并重写本步消息 —— 长研究任务不再等到收尾才压缩，模型全程视野清爽。
-        //    压缩后的消息成为循环后续状态（SDK 原生支持 messages 重写），
-        //    下一步复查时已低于阈值，天然自限不会每步重复蒸馏。
-        // 3) 运行中检查点：把当前（压缩后）消息快照发 agtpilot/checkpoint 事件，
-        //    进程崩溃/重启后任务可从最近检查点续跑（消息历史已落盘）。
-        // 4) 治理提示注入（回退弧感知通道，getStepNotice 有值时）：把上层排队的
-        //    治理事件（记忆被删/授权撤销等）作为一条【系统治理提示】user 消息
-        //    追加到本步消息末尾 —— 刻意放在压缩之后，保证提示不被蒸馏掉。
         prepareStep: async ({ stepNumber, messages }: { stepNumber: number; messages: Array<any> }) => {
-          const adjust: { activeTools?: string[]; messages?: Array<any> } = {};
-          if (routedTools) {
-            const recentText = (messages || [])
-              .slice(-8)
-              .map((m) => messageText(m.content))
-              .join('\n');
-            // explicit(工坊白名单)必须同步传入:prepareStep 重算若不带它,
-            // 关键词路由会把白名单外的工具组(如雷达任务命中「网页/执行」拖进
-            // browser/sandbox 全组)经 widenMountedTools 扩容回挂载面,白名单
-            // 形同虚设。带上 explicit 后重算结果恒等于白名单∩目录,widen 无
-            // 新增可并 —— 声明前缀跨步字节稳定,缓存不破。
-            const next = selectActiveTools(
-              recentText,
-              allTools,
-              this.ctx.agent.getToolRoutes(),
-              options.activeTools
-            );
-            let changed = widenMountedTools(mountedNames, next) !== null;
-            // 目录点菜(§9.4 B):上一步 load_tools 点名的工具在本步并入挂载面
-            // (schema 上线)。与 widen 共用同一次写回 —— 一步内既扩容又点菜
-            // 也只破一次前缀缓存;点名只增不减,集合跨步稳定。
-            for (const n of loadedToolNames) {
-              if (!mountedNames.has(n)) {
-                mountedNames.add(n);
-                changed = true;
-              }
-            }
-            if (changed) {
-              adjust.activeTools = Array.from(mountedNames);
-              toolsMounted = adjust.activeTools.length;
-            }
-          }
-          // reasoning 剥离(闸2·循环内):provider 会把消息状态里历史 assistant 的
-          // reasoning 部件序列化回本步请求 —— 不剥则单轮思考在 20 步任务里全量
-          // 重发 ×19(73 万事件放大器 4)。放在压缩之前:蒸馏输入(messageText 对
-          // 数组 content 做 JSON.stringify)同步干净,不再为思考文本二次付费。
-          // 只在剥到部件时写回;幂等性保证改写只发生在最新一条 assistant 消息上
-          // (上一步已剥的前缀字节稳定),前缀缓存只在尾部破一次,不破 append-only。
-          if (reasoningStripEnabled()) {
-            const r = stripReasoningParts(adjust.messages ?? messages);
-            if (r.stripped > 0) {
-              adjust.messages = r.messages;
-              reasoningPartsStripped += r.stripped;
-            }
-          }
-          // 动态压缩阈值（§9.8）：按本步实际挂载面估 tools 块,与 system 估算
-          // (或上一步实测校准值)一起算历史预算,与静态阈值取小 —— 默认 64k 窗口
-          // 下不改变现状,小窗模型/重挂载面下自动收紧,兜住 context_length_exceeded。
-          const stepToolsTokens = estimateToolsBlockTokens(
-            routedTools ? allTools.filter((t) => mountedNames.has(t.name)) : allTools
-          );
-          const compactThreshold = effectiveCompactThreshold({
-            systemTokens: systemPromptTokens,
-            toolsTokens: stepToolsTokens,
-            calibratedFixedCost,
-          });
-          try {
-            const compacted = await this.compactConversation(adjust.messages ?? messages, options, 'in-loop', compactThreshold);
-            if (compacted) adjust.messages = compacted;
-          } catch {
-            // 压缩失败继续用原消息
-          }
-          // 看板滞后催促(压缩之后注入,与治理提示同点位防被蒸馏):上轮真实
-          // 工具成功而模型未申报看板 → 滞后轮数累计;达阈值注入一条同步提醒
-          // (文本由规划器给出,带当前步骤上下文)并清零计数 —— 防连环催促。
-          // 契约见 PlannerNotifier.boardLagNotice:看板进度由模型显式申报
-          // (业界同款),内核只负责把「忘了」变成一轮内自愈的催促。
-          if (roundRealToolSuccess) {
-            roundRealToolSuccess = false;
-            boardLagRounds++;
-          }
-          if (boardLagRounds >= BOARD_LAG_THRESHOLD) {
-            const idleRounds = boardLagRounds;
-            boardLagRounds = 0;
-            try {
-              const reminder = this.ctx.reflect.get('planner')?.boardLagNotice(taskId, idleRounds);
-              const withReminder = appendBoardReminder(adjust.messages ?? messages, reminder ?? null);
-              if (withReminder) adjust.messages = withReminder;
-            } catch {
-              // 看板提醒获取失败不影响主流程
-            }
-          }
-          if (options.getStepNotice) {
-            try {
-              const notice = await options.getStepNotice();
-              const withNotice = appendStepNotice(adjust.messages ?? messages, notice);
-              if (withNotice) adjust.messages = withNotice;
-            } catch {
-              // 治理提示获取失败不影响主流程
-            }
-          }
-          // 后台任务通知注入(压缩之后,与治理提示同一插入点):派生的后台
-          // 子任务完成/失败时,结果摘要在此进入父任务本轮上下文(docs/design/
-          // background-child-missions.md)。放在用户追加消息之前:用户消息
-          // 离末尾最近、注意力权重最高。多条通知由上层合并成一条
-          if (options.getBackgroundNotice) {
-            try {
-              const bgNotice = await options.getBackgroundNotice();
-              const withBgNotice = appendBackgroundNotice(adjust.messages ?? messages, bgNotice);
-              if (withBgNotice) adjust.messages = withBgNotice;
-            } catch {
-              // 后台通知获取失败不影响主流程(消息仍在队列里,下步重试)
-            }
-          }
-          // 用户追加消息注入(压缩之后,与治理提示同一插入点):任务执行中
-          // 用户排队的追问在此进入本轮上下文,模型下一步即见(docs/design/
-          // mid-run-user-messages.md)。注入的消息经 adjust.messages 进入循环
-          // 状态,随 result.messages 落进会话历史,续聊不丢
-          if (options.getUserMessages) {
-            try {
-              const userText = await options.getUserMessages();
-              const withUser = appendUserMessage(adjust.messages ?? messages, userText);
-              if (withUser) adjust.messages = withUser;
-            } catch {
-              // 追加消息获取失败不影响主流程(消息仍在队列里,下步重试)
-            }
-          }
-          // 发送前预算护栏（§9.8 双保险①）：治理提示/看板催促/用户追加消息都在
-          // 常规压缩之后注入,理论上能把本步重新顶爆窗口。发送前实测一次总账
-          // (消息估算 vs 历史预算),超了就地再压一轮(紧急相位,阈值=预算本身);
-          // 仍压不下去(全是不可压的近期文本)则如实放行 —— 溢出走诚实失败,不伪造。
-          const sendEstimate = (list: Array<any>) =>
-            list.reduce((acc: number, m: any) => acc + estimateTextTokens(messageText(m.content)), 0);
-          let outbound = adjust.messages ?? messages;
-          let outboundEst = sendEstimate(outbound);
-          const budget = historyTokenBudget({
-            systemTokens: systemPromptTokens,
-            toolsTokens: stepToolsTokens,
-            calibratedFixedCost,
-          });
-          if (outboundEst > budget) {
-            try {
-              const forced = await this.compactConversation(outbound, options, 'in-loop', Math.max(2000, budget));
-              if (forced) {
-                adjust.messages = forced;
-                outbound = forced;
-                outboundEst = sendEstimate(forced);
-              }
-            } catch {
-              // 紧急压缩失败:按原消息发送,溢出由 provider 报错如实上浮
-            }
-          }
-          lastSentMessagesEst = outboundEst;
-          // 检查点采用本步实际使用的消息（含压缩重写与治理提示注入）
-          const finalMessages = outbound;
-          try {
-            this.ctx.emit('agtpilot/checkpoint', { taskId, stepNumber, messages: finalMessages });
-          } catch {
-            // 检查点失败不影响主流程
-          }
-          return Object.keys(adjust).length > 0 ? adjust : undefined;
+          const ctx: PrepareStepContext = {
+            stepNumber,
+            messages: messages || [],
+            originalMessages: messages || [],
+            adjust: {},
+          };
+          return runPreparePipeline(ctx, prepareMiddlewares);
         },
         abortSignal: options.abortSignal,
         // 流式可见性接线：每步开始 → step_started（前端"正在思考"指示）；
@@ -842,6 +638,8 @@ export class OrchestratorService extends Service {
           }
         },
       });
+      const loopResult = loop.result;
+      reasoningPartsStripped += loop.reasoningPartsStripped;
 
       // 主循环用量入账（强制总结轮在下方补记，之后统一上报）。
       // 取 max(SDK 汇总, 逐步已发之和)兜底:网关应报全步累计(plugin-model 已
@@ -875,12 +673,7 @@ export class OrchestratorService extends Service {
       // invokeStep、task-end 压缩、result.messages 落盘(mission.conversationMessages)
       // 与跨轮续聊重发全部不带思考文本
       let responseMsgs: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> =
-        loopResult.responseMessages || [];
-      if (reasoningStripEnabled()) {
-        const r = stripReasoningParts(responseMsgs);
-        reasoningPartsStripped += r.stripped;
-        responseMsgs = r.messages;
-      }
+        loop.responseMessages || [];
       const conversation: Array<{ role: 'user' | 'assistant' | 'tool'; content: any }> = [
         ...baseMessages,
         ...responseMsgs,
@@ -1044,6 +837,50 @@ export class OrchestratorService extends Service {
         error: message,
       };
     }
+  }
+
+  /**
+   * 高危工具审批：宿主侧挂起/恢复/超时全部在这里实现，ToolRuntime 只等待布尔结果。
+   * 任务被主动终止时自动拒绝并释放挂起，避免永久悬挂。
+   */
+  private requestApproval(
+    request: ApprovalRequest,
+    abortSignal: AbortSignal | undefined,
+    broadcast: (event: AgentEvent) => void,
+  ): Promise<boolean> {
+    broadcast({
+      type: 'approval_request',
+      payload: request,
+      timestamp: Date.now(),
+    });
+
+    return new Promise<boolean>((resolve) => {
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+      const settle = (value: boolean) => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        this.pendingApprovals.delete(request.id);
+        resolve(value);
+      };
+      this.pendingApprovals.set(request.id, settle);
+      const onAbort = () => {
+        if (this.pendingApprovals.has(request.id)) settle(false);
+      };
+      if (abortSignal?.aborted) {
+        onAbort();
+      } else {
+        abortSignal?.addEventListener('abort', onAbort, { once: true });
+      }
+      if (APPROVAL_TIMEOUT_MS > 0) {
+        timeoutTimer = setTimeout(() => {
+          broadcast({
+            type: 'approval_resolved',
+            payload: { id: request.id, approved: false, reason: 'timeout' },
+            timestamp: Date.now(),
+          });
+          settle(false);
+        }, APPROVAL_TIMEOUT_MS);
+      }
+    });
   }
 
   /**

@@ -16,7 +16,7 @@
 
 生产雷达任务实测:单任务 73 万 input tokens。工具输出侧的病理链:
 
-1. **截断即永久丢失**:orchestrator 统一截断点(`orchestrator.ts:379-385`)对超过
+1. **截断即永久丢失**:共享 `ToolRuntime` 统一截断点对超过
    `TOOL_OUTPUT_LIMIT=16KB` 的工具结果做头尾混合截断(`text.ts truncateToolOutput`),
    截断标记里有原始大小与 offset 续读指引,但**被截掉的中间部分没有任何副本** ——
    模型想回看只能整体重取(重取是步数空转的典型来源,截断文案自己都这么写)。
@@ -88,7 +88,7 @@ spillToolOutput?: (info: {
 // 返回非空 = 落盘成功,返回值即指针 callId 确认文本;返回 null/抛错 = 走现行截断
 ```
 
-orchestrator 截断点改造(`orchestrator.ts:379-385`):
+共享 `ToolRuntime` 截断点改造:
 
 ```ts
 const serialized = typeof output === 'string' ? output : JSON.stringify(output);
@@ -103,7 +103,7 @@ if (serialized.length > TOOL_OUTPUT_LIMIT) {
 }
 ```
 
-- **UI 不受影响**:`tool_result` 广播在截断点之前、携带完整 output(`orchestrator.ts:370-376`),
+- **UI 不受影响**:`tool_result` 广播在截断点之前、携带完整 output,
   前端步骤展示照旧全文;spill 只改「回填模型上下文」的那一份;
 - **缓存联动**:`toolResultCache` 是 runTask 作用域,缓存的 finalOutput(预览+指针版)
   TTL 内同签名复用,指针仍有效,无跨任务泄漏;

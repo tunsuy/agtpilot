@@ -22,6 +22,8 @@ import {
 } from './runner';
 import { DEFAULT_READONLY_WHITELIST, SELF_TOOL_NAME } from './whitelist';
 
+const TRACE_TOOL_NAME = 'read_subagent_trace';
+
 // ---- 环境变量(模块顶层读取 + 钳制,样板 plugin-decision)----
 
 function readInt(name: string, fallback: number, min: number, max: number): number {
@@ -197,6 +199,7 @@ const TOOL_DESCRIPTION = [
   '不适用:单点查询(直接用 search_web 更快)、写操作、需要审批的动作。',
   '子 agent 在独立上下文中运行,只回传提炼后的结论报告(含来源引用),原始检索内容不占主上下文。',
   '多路独立调研可在一轮内并行派发多个调用。',
+  '失败处理:若返回工具面缺口(无可用工具/工具不全)或子任务被熔断,不要原样重派同一 query;改用主循环自身工具(search_web / browser_navigate 等)直接完成,或先修正连接器授权/依赖 Key 后再试。',
 ].join('');
 
 export function apply(ctx: Context, config: SubagentPluginConfig = {}) {
@@ -233,21 +236,56 @@ export function apply(ctx: Context, config: SubagentPluginConfig = {}) {
     prefixes: [SELF_TOOL_NAME],
     test: /调研|检索汇总|多路|横向对比|尽调|文献|雷达|research|survey|investigate|landscape/i,
   });
+
+  const traceTool: ToolDefinition = {
+    name: TRACE_TOOL_NAME,
+    description:
+      '读取一次子 agent 调研的执行轨迹（步骤、工具调用、输出摘要、最终报告）。只在需要审计/下钻子任务细节时调用；trace_id 来自 research_subagent 返回的 meta.traceId。',
+    dangerLevel: 'low',
+    readOnly: true,
+    baseline: false,
+    fallback: false,
+    parameters: {
+      type: 'object',
+      properties: {
+        trace_id: { type: 'string', description: 'research_subagent 返回的 meta.traceId' },
+      },
+      required: ['trace_id'],
+    },
+    execute: (args: any) => {
+      const traceId = String(args?.trace_id ?? '');
+      const events = service.engine.getTrace(traceId);
+      if (!events) {
+        return {
+          ok: false,
+          error: `trace 不存在或已过期:${traceId || '(空)'}`,
+        };
+      }
+      return { ok: true, trace_id: traceId, events };
+    },
+  };
+  ctx.agent.registerTool(traceTool);
+  ctx.agent.registerToolRoute({
+    id: 'subagent-trace',
+    prefixes: [TRACE_TOOL_NAME],
+    test: /子任务.*轨迹|子 agent.*轨迹|审计.*子任务|下钻.*子任务|trace/i,
+  });
   return service;
 }
 
 export const name = 'agtpilot-plugin-subagent';
 export const inject = ['agent', 'model'];
 
-export { SubagentService, DEFAULT_READONLY_WHITELIST, SELF_TOOL_NAME };
+export { SubagentService, DEFAULT_READONLY_WHITELIST, SELF_TOOL_NAME, TRACE_TOOL_NAME };
 export type {
   SubagentModel,
   SubagentResult,
   SubagentRunArgs,
   SubagentRunMeta,
   SubagentEventPayload,
+  SubagentTraceEvent,
   SubagentTranscript,
 } from './runner';
-export { SubagentEngine, SUBAGENT_SYSTEM_PROMPT, buildTaskPrompt, clampSteps, DEFAULT_MAX_TASK_FAILURES } from './runner';
+export { SubagentEngine, SUBAGENT_SYSTEM_PROMPT, buildTaskPrompt, buildToolSurfaceNotice, referencedToolNames, clampSteps, DEFAULT_MAX_TASK_FAILURES } from './runner';
 export { resolveReadonlyTools, mcpServerPrefix } from './whitelist';
 export type { SubagentToolFilter } from './whitelist';

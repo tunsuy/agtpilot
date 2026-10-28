@@ -2,6 +2,7 @@
 
 > 状态:**研究结论 + 提案**(2026-10-13;由负责人微信提问「工坊任务有必要多 agent 吗」触发。核心裁定:**不做 agent 团队编排;补一个只读检索子 agent(P1)+ 上下文工程只补真空白(P1);PPT 长任务走多段 Mission 分解(P2)**。同日二次核查修订 §6.2:Manus 上下文工程四要点经代码 + git log 逐项核实,**大半已在本仓实现**,该节改写为核查状态表 + 仅存空白)
 > 来源:Claude Code 子 agent 机制(第一手运行经验)、Anthropic 多 agent 研究系统工程博客、Manus 官方博客(Wide Research + 上下文工程)、Meta Muse 设计页、Cognition《Don't Build Multi-Agents》、OpenAI Agents SDK,以及本仓代码调研(orchestrator / planner / router / decision / runner / 工坊)
+> 注:文中代码行号是 2026-10-13 调研快照,后续重构后可能漂移;架构结论以当前代码为准。
 > 涉及模块:`packages/core/src/orchestrator.ts`、`packages/core/src/routing.ts`、`packages/plugin-router`、`packages/plugin-planner`、`packages/plugin-decision`、`packages/plugin-compaction`、`apps/runner`、`apps/web/src/components/workshops`
 > 关联文档:`personal-ai-landscape-insights.md`(多 Agent「推迟不排期」的原始裁定)、`agent-runtime-decoupling-insights.md`(subagent 标记「❌ 缺;随 Thread 搁置」)、`workshop-scenario-loop.md`(多步工作流 P1)、`local-runner-bridge.md`(派发 = 任务级委托)、`context-store-filesystem-paradigm.md`(文件系统范式,与 §6.2 直接相关)、`subagent-plugin-spec.md`(§6.1 的实施方案,2026-10-13 草案)
 
@@ -207,13 +208,13 @@ oss_radar / invest / edu / follow_builders / 小红书选题:多路异构检索(
 | Manus 要点 | 本仓状态 | 关键证据 |
 |---|---|---|
 | 文件系统当记忆 | ✅ 大半已做,缺「自动 offload」 | `context_file` 笔记区五动作、大输出存文件留摘要+路径(`apps/web/src/lib/memory-service.ts:1185-1240`);L0 清单只注入 path+大小(:893-897);浏览器 4000 字符窗口 + nextOffset 续读(`plugin-browser/src/index.ts:150-160,590-601`);工具输出 16KB 头尾截断(`core/src/text.ts:45-63`) |
-| todo.md 复述 | ❌ 没做(四项中唯一完全空白) | 看板只存进程内存 + 广播前端(`plugin-planner/src/index.ts:20,129-136`);`prepareStep` 每步做路由/压缩/治理/steering/检查点,**唯独不注入看板状态**(`orchestrator.ts:375-437`);模型唯一可见点是 `planner_create_plan` 的一次性返回值,无 get_plan 类查询工具 |
+| todo.md 复述 | ❌ 没做(四项中唯一完全空白) | 看板只存进程内存 + 广播前端;`prepareStep` 每步做路由/压缩/治理/steering/检查点/看板滞后催促,**但不注入完整看板状态**;模型唯一可见点是 `planner_create_plan` 的一次性返回值,无 get_plan 类查询工具 |
 | KV-cache 友好 | ⚠️ 部分做 | 已做:工具 tokens < 上下文 10% 时全量挂载、前缀恒定(`routing.ts:82-83`);任务内**只扩不缩**、注释明说为 provider 前缀缓存(`routing.ts:109-131`、`orchestrator.ts:324-329,389-399`);时间戳刻意日粒度(`task-system-prompt.ts:17-25`)。未做:activeTools 是**移除式**而非 Manus「保留定义 + tool_choice 屏蔽」(`plugin-model/src/index.ts:104-117`);动态内容(时间戳、userMemoryPrompt)嵌在前缀中部,记忆一更新整段前缀缓存失效 |
 | 保留失败动作 | ✅ 已显式做 | isError 检测 + 失败调用 keepCall=0.8/keepResult=0.95(`plugin-compaction/src/classify.ts:61,77-79`);keep 白名单调用+结果**原样保留**不进纪要(`core/src/compaction.ts:39-43,73-84`);连续失败守卫注入换思路提示且保留真实报错(`orchestrator.ts:255-272`) |
 
 **真空白(建议按此顺序补)**:
 
-1. **看板复述注入**(对应 Manus todo.md recitation,零架构改动):`prepareStep` 末尾把当前看板快照(步骤 + 完成态)注入模型上下文,或加一个 `planner_get_board` 只读工具。现状反而是负分:看板自动推进(`orchestrator.ts:380-388`)之后,模型再无任何渠道看到清单——创建完就"失忆",长任务(PPT 12 步)目标漂移风险真实存在。
+1. **看板复述注入**(对应 Manus todo.md recitation,零架构改动):`prepareStep` 末尾把当前看板快照(步骤 + 完成态)注入模型上下文,或加一个 `planner_get_board` 只读工具。现状反而是负分:看板自动推进之后,模型再无任何渠道看到清单——创建完就"失忆",长任务(PPT 12 步)目标漂移风险真实存在。
 2. **大结果自动 offload**(「丢中间」变「存中间」):现有 16KB 截断与 4000 字符窗口丢掉的中间内容**直接消失、不落盘、无法按路径取回**;压缩蒸馏出的纪要也不留被压原文的磁盘副本(唯一落盘是崩溃恢复面的 checkpoint 消息快照,模型不可寻址)。建议:超限工具结果自动全文写入笔记区文件、上下文留路径+摘要;compaction 时把被压原文归档到磁盘。
 3. **提示前缀治理**(静态前置、动态后置):把时间戳、userMemoryPrompt 等动态块移到系统提示**尾部**,行为准则等静态段前置,避免记忆更新击穿整段前缀缓存。进阶可选项:activeTools 从移除式改为全量声明 + tool_choice 屏蔽(Manus 原教旨做法),代价是请求体变大,需实测缓存命中收益后决定。
 

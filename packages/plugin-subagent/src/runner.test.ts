@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentLoopOptions, AgentLoopResult, ToolDefinition, ToolSession } from '@agtpilot/core';
 import {
   buildTaskPrompt,
+  buildToolSurfaceNotice,
   clampSteps,
+  referencedToolNames,
   SUBAGENT_SYSTEM_PROMPT,
   SubagentEngine,
   type SubagentEventPayload,
@@ -802,6 +804,53 @@ describe('杂项', () => {
     expect(p).toContain('期望报告结构:\n【结论】【来源】');
   });
 
+  it('referencedToolNames 抽取任务点名的工具标识(去重保序,支持通配)', () => {
+    expect(
+      referencedToolNames('用 mcp_github_mcp_* 查 issue,再用 search_web 补,最后 mcp_github_mcp_* 复核'),
+    ).toEqual(['mcp_github_mcp_*', 'search_web']);
+  });
+
+  it('buildToolSurfaceNotice 列出未挂载点名工具与实际可用工具', () => {
+    const notice = buildToolSurfaceNotice(['search_web', 'browser_navigate'], ['mcp_github_mcp_*']);
+    expect(notice).toContain('mcp_github_mcp_*');
+    expect(notice).toContain('search_web, browser_navigate');
+    expect(notice).toContain('不要尝试调用不可用工具');
+    expect(buildToolSurfaceNotice(['search_web'], [])).toBe('');
+  });
+
+  it('任务点名未挂载工具 → 首条 user 消息带工具面告知,避免步内空转', async () => {
+    const { model, calls } = makeFakeModel();
+    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })]);
+    await engine.run({ query: '用 mcp_github_mcp_* 查 issue 并汇总' }, baseSession);
+    const content = String(calls.loop[0].messages[0].content);
+    expect(content).toContain('【工具面】');
+    expect(content).toContain('mcp_github_mcp_*');
+    expect(content).toContain('search_web');
+  });
+
+  it('同一只读工具同一参数命中共享缓存,不重复执行', async () => {
+    let executions = 0;
+    const tools = [
+      mkTool('search_web', {
+        readOnly: true,
+        execute: async () => {
+          executions += 1;
+          return 'r';
+        },
+      }),
+    ];
+    let outputs: any[] = [];
+    const { model } = makeFakeModel(async (o) => {
+      outputs = [];
+      for (let i = 0; i < 5; i++) outputs.push(await o.tools![0].execute({ q: 1 }));
+      return resultOf();
+    });
+    const { engine } = makeEngine(model, tools);
+    await engine.run({ query: 'q' }, baseSession);
+    expect(executions).toBe(1);
+    expect(outputs).toEqual(['r', 'r', 'r', 'r', 'r']);
+  });
+
   it('appendTranscript 收到完整子数组;抛错不影响主流程', async () => {
     const entries: any[] = [];
     const { model } = makeFakeModel(() =>
@@ -1140,5 +1189,28 @@ describe('resolveModelOverride(逐用户模型覆盖,宿主注入)', () => {
     expect(res.ok).toBe(true);
     expect(calls.loop[0].configOverride).toEqual(USER_OVERRIDE);
     expect(calls.step[0].configOverride).toEqual(USER_OVERRIDE);
+  });
+
+  it('traceId 落在 meta 上,且轨迹可按需读取', async () => {
+    const { model } = makeFakeModel((o) => {
+      o.onStepStart?.({ stepNumber: 1 });
+      o.onTextDelta?.('hello');
+      o.onStepFinish?.({
+        stepNumber: 1,
+        text: 'done',
+        finishReason: 'stop',
+        usage: { promptTokens: 1, completionTokens: 1 },
+      });
+      return resultOf();
+    });
+    const { engine } = makeEngine(model);
+    const res = await engine.run({ query: 'q' }, baseSession);
+    expect(res.ok).toBe(true);
+    const traceId = res.meta.traceId!;
+    expect(traceId).toBe(res.meta.subTaskId);
+    const trace = engine.getTrace(traceId)!;
+    expect(trace.map((e) => e.phase)).toContain('step_started');
+    expect(trace.map((e) => e.phase)).toContain('assistant_delta');
+    expect(trace.map((e) => e.phase)).toContain('step_finished');
   });
 });

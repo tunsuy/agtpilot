@@ -81,6 +81,46 @@ export { appendStepNotice, STEP_NOTICE_PREFIX, appendBackgroundNotice, BACKGROUN
 export { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 export type { ReasoningMessageLike, StripReasoningResult } from './reasoning';
 export { ToolGate } from './tool-gate';
+export { runAgentLoopWithHooks } from './agent-loop';
+export type { RunAgentLoopOptions, RunAgentLoopResult } from './agent-loop';
+export { runPreparePipeline } from './prepare-pipeline';
+export type {
+  PrepareStepContext,
+  PrepareMiddleware,
+  PrepareStepAdjust,
+  PreparePipelineResult,
+} from './prepare-pipeline';
+export {
+  createDeadline,
+  estimateMessagesTokens,
+  runWithRetry,
+  createTokenBudgetMiddleware,
+} from './run-control';
+export type {
+  Deadline,
+  RetryOptions,
+  RetryResult,
+  TokenBudgetMiddlewareOptions,
+} from './run-control';
+export {
+  ToolRuntime,
+  DEFAULT_TOOL_RUNTIME_POLICY,
+  isEmptyToolOutput,
+  TOOL_LOOP_WINDOW_SIZE,
+  TOOL_LOOP_TRIGGER_COUNT,
+  TOOL_RESULT_CACHE_TTL_MS,
+  TOOL_RESULT_CACHE_MAX,
+  TOOL_FAILURE_GUARD_THRESHOLD,
+} from './tool-runtime';
+export type {
+  ToolRuntimePolicy,
+  ToolRuntimeOptions,
+  ToolRuntimeStats,
+  ToolRuntimeResult,
+  ToolRuntimeStatus,
+  ToolRuntimeEvent,
+  ToolApprovalMode,
+} from './tool-runtime';
 export type { StepNoticeMessage } from './notice';
 export { isPrivateOrReservedIp, guardUrlHost } from './net-guard';
 export type { HostLookup, UrlGuardResult } from './net-guard';
@@ -95,7 +135,7 @@ export {
 } from './sandbox-fence';
 export type { SandboxSessionPolicy, CredentialDecision, FenceDecision } from './sandbox-fence';
 export { AgentService } from './agent-service';
-export { OrchestratorService, DEFAULT_SYSTEM_PROMPT, isEmptyToolOutput, isCutOffToolCall, isCutOffAnswer } from './orchestrator';
+export { OrchestratorService, DEFAULT_SYSTEM_PROMPT, isCutOffToolCall, isCutOffAnswer } from './orchestrator';
 export type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';
 
 // ---- Cordis 模块增强：内核依赖的服务契约 ----

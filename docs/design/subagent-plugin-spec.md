@@ -24,7 +24,7 @@
 主 agent 视角,它就是工具注册表里的普通一员(现约 47 个工具 + 1):
 
 ```ts
-// ToolDefinition(contracts.ts:144-178)
+// ToolDefinition(contracts.ts)
 {
   name: 'research_subagent',
   description: '派发一个只读检索子 agent 完成广域调研:多路搜索/网页阅读/资料汇总。
@@ -32,8 +32,8 @@
                 不适用:单点查询(直接用 search_web)、写操作、需要审批的动作。
                 返回:提炼后的结论报告(含来源引用),不含原始检索内容。',
   dangerLevel: 'low',
-  readOnly: true,          // 关键:走 toolGate.runReadonly(orchestrator.ts:251-253),
-                           // 不占独占锁 → 一轮多个并行调用天然安全(tool-gate.ts:14-16)
+  readOnly: true,          // 关键:走 ToolGate.runReadonly,
+                           // 不占独占锁 → 一轮多个并行调用天然安全
   baseline: false,         // 进路由:调研类 prompt 命中时才挂载,闲聊不浪费 token
   parameters: {
     type: 'object',
@@ -67,7 +67,7 @@ type ResearchSubagentResult =
         → ctx.model.runAgentLoop({ messages: 子数组, tools: 只读白名单,
              maxSteps, configOverride: 档位模型, abortSignal, onStepFinish })
         → 子模型自主多步检索(原始结果只进子数组,单条同样 16KB 截断)
-        → 收敛 / 预算耗尽强制总结(invokeStep disableTools,仿 orchestrator.ts:508-514)
+        → 收敛 / 预算耗尽强制总结(invokeStep disableTools,仿主循环强制总结)
       返回 { ok, report, meta }               ← report 为子 agent 最后一条 assistant 消息
 ```
 
@@ -84,18 +84,18 @@ type ResearchSubagentResult =
 - **不调 `router.setTier()`**:那是全局偏好写入(plugin-router:88-96 → plugin-model:232-243),会污染主循环档位。
 - 用 per-call 覆盖:`runAgentLoop({ configOverride: { activeModelId, modelName } })`,解析优先级 configOverride > options.model > preferred > env(plugin-model:279-284),对全局零副作用。
 - 档位解析:默认对齐 router fast 档的 env(`AGTPILOT_FAST_PROVIDER`/`AGTPILOT_FAST_MODEL`,缺省 deepseek/deepseek-chat);`AGTPILOT_SUBAGENT_PROVIDER`/`_MODEL` 可单独覆盖。
-- 依赖倒置:插件内定义窄接口(仿 `SkillCardModel`,plugin-skill/src/cards.ts:94-102),便于测试:
+- 依赖倒置:插件内定义窄接口(仿 `SkillCardModel`,plugin-skill/src/cards.ts),便于测试:
 
 ```ts
 export interface SubagentModel {
-  runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult>;   // contracts.ts:103
-  invokeStep(options: ModelInvokeOptions): Promise<ModelStepResult>;   // contracts.ts:101
+  runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult>;   // contracts.ts
+  invokeStep(options: ModelInvokeOptions): Promise<ModelStepResult>;   // contracts.ts
 }
 ```
 
 ### 4.3 只读白名单(双层过滤)
 
-`whitelist.ts` 维护默认名单,运行时与注册表**取交集且强制校验 `readOnly === true` 声明**(contracts.ts:155:未声明者保守视为写 → 排除):
+`whitelist.ts` 维护默认名单,运行时与注册表**取交集且强制校验 `readOnly === true` 声明**(contracts.ts:未声明者保守视为写 → 排除):
 
 | 默认白名单(现有已声明 readOnly 的工具) | 来源 |
 |---|---|
@@ -109,37 +109,42 @@ export interface SubagentModel {
 - **MCP 工具(2026-10-14 起按「双钥匙」条件放行)**:plugin-mcp 注册时对每个工具做**只读自动分类(default-deny,`classify.ts` 的 `classifyToolReadOnly`)**,三级优先:① 服务器 `annotations` 有实质 hint(`readOnlyHint`/`destructiveHint` 任一为 boolean)→ 完全交给注解判定(`readOnlyHint === true && destructiveHint !== true` 才只读,即原 `mcpToolReadOnly`),启发式不介入;② 注解完全沉默 → 按工具名首词素做动词启发(明确只读动词开头且全名不含破坏性动词才判只读);③ 拿不准 = 拒绝(不带 `readOnly`)。判只读才带 `readOnly: true` 与 `readOnlyBasis`(`annotation`/`heuristic`,审计用),`dangerLevel` 维持 medium、主循环审批语义不变。分类在连接拿到 tools/list 时算一次、随连接缓存,重连自动重判——**不再依赖人工逐台配凭证跑测量脚本**。此启发式只补「机器钥匙」信号,仍须与人工钥匙(`subagentOpen` 目录标记)取交集:行情/写操作类服务器在目录层就 `false`,根本轮不到工具级分类,故误判最坏后果 = 某检索工具没被开进子 agent(可用逃生口或补注解救回),不会把写操作放进无人值守子 agent。子 agent 侧:工具进入内部工具集需同时满足 ① 服务器名在 `AGTPILOT_SUBAGENT_MCP_SERVERS` 白名单(人工钥匙;**内置默认 = 工坊调研链的检索类连接器** `github_mcp,huggingface,openalex,alphaxiv,deepwiki`,负责人 2026-10-14 要求默认带上;行情类依红线不入默认;`off` = 全关)② 注册表 `readOnly === true`(机器钥匙,来自服务器注解)。另设逃生口 `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS`(工具名前缀):用于无注解服务器,命中前缀不要求 readOnly 声明;**内置默认 `mcp_deepwiki_,mcp_newsnow_`,以 2026-10-14 `scripts/annotations-report.mjs` 实测记录为背书**(deepwiki 全部 3 工具、newsnow 全部 1 工具确认为只读;huggingface 官方 4/4 带只读注解,走双钥匙直通)。普通白名单里写 `mcp_` 名字一律无效。注解是服务器自报提示而非契约(MCP 官方立场),故双钥匙 AND 是硬要求;逃生口的新增项必须先跑实测脚本留档。**人工钥匙的目录化(2026-10-14)**:web 宿主不再依赖 env 静态名单——连接器目录 `McpServerDef.subagentOpen`(必填 boolean)由开发侧在目录条目处评审标记(版本化、可审计、新连接器不表态过不了编译),宿主经 `resolveMcpServers(userId)` 把「该用户已连接 ∩ 已标记」的服务器名单在每次派发时动态注入(用户新配连接器即生效,无需改 env/重启);env `AGTPILOT_SUBAGENT_MCP_SERVERS` 显式设置(含 `off`)时宿主不注入,env 语义优先。标记原则:检索/查询类且性质只读 → true;写操作/现实副作用/按量计费未评审 → false;行情数字类整类 false(红线:报告依据数字必须主循环直拉)——`mcp-connectors-subagent.test.ts` 锁死清单 + Finance 整类回归。
 - **工坊白名单对齐(2026-10-17 增补,负责人点题「子agent的工具绑定逻辑也要跟主agent一样」)**:主循环带显式白名单(`TaskOptions.activeTools`,工坊四层声明)时,编排器把它原样透传进 `ToolSession.activeTools`(orchestrator.ts 会话合成处;core orchestrator-session.test.ts 锁透传),Runner 在只读候选解析后、`filterToolsByEnv` 之前取「候选 ∩ 白名单」——匹配复用 core `resolveExplicitTools`,与主循环语义逐字一致:精确名 / `前缀*` 通配 / baseline 自动并入 / 零命中静默跳过。效果:主循环整台禁入的 MCP(如雷达的 github_mcp,子 agent 默认双钥匙本可放行其只读件)子循环同样禁入;工坊 B 组裁剪(如 novel 不要热榜)对子 agent 同样生效。缺省(闲聊/关键词路由任务)= 不交集,维持本节双层白名单原语义;交集为空 → 拒绝派发,错误信息如实说明。测试:runner.test.ts「3.6 工坊白名单对齐」6 例。
 - **明确排除**:`browser_stagehand_*`(操作共享浏览器会话)、一切写工具、`research_subagent` 自身(防递归,§6)。
-- **session 闭包**:`AgentLoopTool.execute(args)` 不带 session(contracts.ts:34-40;ToolSession 注入发生在编排器包装层 orchestrator.ts:240-246)。Runner 从父 session 取 `userId/env`,合成子 session `{ taskId: subTaskId, step, userId, env }` 闭包进每个内部工具;`step` 经 `onStepStart` 递增。
-- **内部结果截断**:内部工具直取注册表原始 execute,**绕过了编排器包装层的 16KB 截断**(orchestrator.ts:296-300)——Runner 必须自行复用 `core/src/text.ts` 的截断函数处理每条内部 tool result,否则单个网页全文就能撑爆子数组。
-- 编排器包装层的熔断/守卫(签名计数、连续失败)同样不在内部生效,由 §4.4 的三重预算闸替代。
+- **session 闭包**:`AgentLoopTool.execute(args)` 不带 session(ToolSession 注入发生在编排器装配工具时)。Runner 从父 session 取 `userId/env`,合成子 session `{ taskId: subTaskId, step, userId, env }` 闭包进每个内部工具;`step` 经 `onStepStart` 递增。
+- **工具执行**:子 agent 与父 agent 共用 `ToolRuntime`(只读缓存、死循环熔断、连续失败守卫、超长输出 spill/截断、调用统计)。Runner 只负责只读挂载计划、预算、墙钟、报告整形与 transcript;审批策略声明为 `deny`(fail-closed),不弹人工审批。
+- **prepareStep 管线**:父子共用 `runPreparePipeline` 形状。父链 = 路由扩容 → 压缩 → 看板/治理/后台/用户消息 → 发送前预算护栏;子链 = reasoning 剥离 → token 预算闸。共享管线机制,策略各自装配。
+- **运行控制机制**:墙钟用 `createDeadline`(超时 abort + dispose),token 闸用 `createTokenBudgetMiddleware`(超限收工具 + 注入提示),模型错误重试用 `runWithRetry`(可中止退避 + 只重试一次)。三者都在 `packages/core/src/run-control.ts`,父子可按 spec 选用。
+- **轨迹**:子 agent 每次运行生成 `traceId`(默认等于 `subTaskId`)，轨迹事件存内存；宿主可通过 `SubagentEngine.getTrace(traceId)` 或 `read_subagent_trace` 工具按需读取，不进入 SSE 主流。
+- **工具面告知(2026-10-26)**:候选解析完成后,Runner 从任务描述中抽取点名的工具标识(`mcp_`/`browser_`/`search_`/`sandbox_`/`git_`/`rag_`/`memory_`/`cron_`/`skill_` 前缀,支持 `*` 通配),与 `mountedTools` 比对;有点名但未挂载的工具时,在首条 user 消息追加【工具面】段——明确列出「点名但不可用」与「实际可用」,要求改用可用工具并在报告注明替代情况。子 agent 看不到不存在的工具 schema,提前一句话可省掉整段无效步数(2026-10-26 生产实例:任务点名 `mcp_github_mcp_*`,子 agent 只有 `browser_navigate`/`search_web`)。
+- **零挂载诊断(2026-10-26)**:`mounted.length === 0` 时,错误信息按三层漏斗如实带回「只读候选数 → 工坊白名单交集后数 → 缺 Key 剔除名单 → 实际挂载 0」,并明确要求主循环不要原样重派、改用主循环工具;失败 meta 同样带 `mountedTools: []`。
+- 父/子共用同一套熔断与连续失败守卫;子 agent 的额外约束是 §4.4 的三重预算闸与只读挂载计划。
 
 ### 4.4 预算与收敛(三重闸,任一触发即收口)
 
 | 闸 | 默认 | 机制 |
 |---|---|---|
-| 步数 | 8(钳制 2..20) | `runAgentLoop({ maxSteps })`,耗尽时 `stepsExhausted: true`(plugin-model:218) |
-| token | 60000/次(0=不限) | **插件自记账**:ModelService 预算是实例级全局单槽(plugin-model:39-41,247-254),不可 per-call;Runner 在 `onStepFinish` 累加 usage,超限触发 abortSignal |
-| 墙钟 | 180s(下限 30s) | 每次 run 独立 AbortController + setTimeout;abort 后 runAgentLoop 抛 'Aborted'(plugin-model:190-196),Runner 捕获归类 `reason: 'timeout'` |
+| 步数 | 8(钳制 2..20) | `runAgentLoop({ maxSteps })`,耗尽时 `stepsExhausted: true` |
+| token | 60000/次(0=不限) | **插件自记账 + 中间件**:`createTokenBudgetMiddleware` 在每步消息超限时收掉全部工具并注入收敛提示;不再依赖 abortSignal |
+| 墙钟 | 180s(下限 30s) | `createDeadline` 统一管理 AbortController + timer;超时 abort,Runner 归类 `reason: 'timeout'` |
 
-- **强制收敛**:步数耗尽或 token 触顶(非超时)时,追加一次 `invokeStep({ messages: 子数组 + 收敛指令, disableTools: true })` 要最终报告——复用 orchestrator.ts:508-514 的既有模式。(2026-10-18 注:token 闸的「收掉全部工具」信号 `activeTools: []` 依赖 plugin-model prepareStep 包装层透传——旧实现按 falsy 丢弃致收敛闸静默失效,已修复为 `adaptPrepareStepResult`,见 token 文档 §9.2 配套修复。)
-- **失败语义**:一切异常(模型错误/超时/内部工具全挂)→ `catch` 后返回 `{ ok: false, error }` 作为工具结果,**不 throw**;错误原文保留(Manus"保留失败动作"教训;compaction 的失败→keep 机制会自动保护它,plugin-compaction/classify.ts:77-79),主模型自行决定重试或降级直查。
+- **强制收敛**:步数耗尽或 token 触顶(非超时)时,追加一次 `invokeStep({ messages: 子数组 + 收敛指令, disableTools: true })` 要最终报告——复用主循环的强制总结模式。token 闸的「收掉全部工具」信号 `activeTools: []` 依赖 plugin-model 的 `adaptPrepareStepResult` 显式空数组透传(旧实现按 falsy 丢弃致收敛闸静默失效,已修复,见 token 文档 §9.2)。
+- **失败语义**:一切异常(模型错误/超时/内部工具全挂)→ `catch` 后返回 `{ ok: false, error }` 作为工具结果,**不 throw**;错误原文保留(Manus"保留失败动作"教训;compaction 的失败→keep 机制会自动保护它),主模型自行决定重试或降级直查。
 
 ### 4.5 并行
 
-- 主模型一轮发多个 `research_subagent` 调用 → AI SDK 并行执行工具;因 `readOnly: true` 走 `toolGate.runReadonly`,不互斥(tool-gate.ts:29)。
+- 主模型一轮发多个 `research_subagent` 调用 → AI SDK 并行执行工具;因 `readOnly: true` 走 `toolGate.runReadonly`,不互斥(tool-gate.ts)。
 - 插件内信号量:`AGTPILOT_SUBAGENT_MAX_CONCURRENT`(默认 4,钳制 1..8),超限调用排队等待,不拒绝。
-- 每个子 run 独立消息数组/AbortController/记账,无共享可变状态。
+- 每个子 run 独立消息数组 / `Deadline` / 记账,无共享可变状态。
 
 ## 5. 事件、观测与 transcript 落盘
 
 1. **cordis 自定义事件(M1)**:`'agtpilot/subagent'`(不进 SSE,仿 plugin-decision:88,107-109):
-   `{ phase: 'started'|'finished'|'failed', parentTaskId, subTaskId, query摘要(≤200字), tier, stepsCount?, usage?, durationMs, reason? }`——只存元数据与哈希级摘要,不落原文。observability 零改动即可按 `parentTaskId` 关联(plugin-observability:55)。
-2. **UI 可见性(M1 免费得到)**:主循环对 `research_subagent` 的 tool_call/tool_result 广播本来就会进驾驶舱;子 agent 内部步骤 M1 不流式上屏。**M2 可选**:在 `onStepFinish` 里经 `ctx.agent.emitEvent` 转发子步骤(复用现有 'tool_call' 类型 + `payload.subTaskId` + 自盖 `payload.taskId`——AgentEvent 类型是闭集,不新增 protocol 类型;插件直发需自盖 taskId,orchestrator.ts:86-98 的盖章只发生在主循环包装层)。
-3. **transcript 落盘(M2,宿主适配器)**:仿 plugin-skill 的 StoreAdapter 模式(plugin-skill:708-721 + web 注入 agent-backend.ts:141-148):
-   - `CreateAgentOptions` 增 `subagent?: SubagentPluginConfig`(app-kit:46-53),`mount('plugin-subagent', SubagentPlugin, options.subagent)`;
-   - 配置项 `appendTranscript?(entry: { subTaskId, parentTaskId, userId, messages, usage, finishedAt })`:web 侧仿 `appendBrowserAudit`(user-store.ts:569)追加 JSONL 到 `getDataDir()/subagents/`;
+   `{ phase: 'started'|'finished'|'failed', parentTaskId, subTaskId, query摘要(≤200字), tier, stepsCount?, usage?, durationMs, reason? }`——只存元数据与哈希级摘要,不落原文。observability 零改动即可按 `parentTaskId` 关联。
+2. **执行轨迹(M2,按需下钻)**:每次子 run 生成 `traceId`(默认等于 `subTaskId`),Runner 将 `step_started` / `assistant_delta` / `tool_call` / `tool_result` / `step_finished` / `wrap_up` 事件写入内存轨迹;`SubagentEngine.getTrace(traceId)` 读取,宿主也可注入 `onTrace` 实时消费。父模型通过 `read_subagent_trace` 工具按需读取,不默认灌入主上下文。轨迹默认不进 SSE 主流,避免噪声。
+3. **transcript 落盘(M2,宿主适配器)**:仿 plugin-skill 的 StoreAdapter 模式:
+   - `CreateAgentOptions` 增 `subagent?: SubagentPluginConfig`,`mount('plugin-subagent', SubagentPlugin, options.subagent)`;
+   - 配置项 `appendTranscript?(entry: { subTaskId, parentTaskId, userId, messages, usage, finishedAt })`:web 侧仿 `appendBrowserAudit` 追加 JSONL 到 `getDataDir()/subagents/`;
    - 适配器缺失 → 静默不落盘(与 compaction 未挂载走老路径同款优雅降级);
-   - **不复用 `agtpilot/checkpoint`**:agent-backend.ts:253 按 mission 查不到会静默丢弃,子 taskId 没有对应 mission。
+   - **不复用 `agtpilot/checkpoint`**:agent-backend 按 mission 查不到会静默丢弃,子 taskId 没有对应 mission。
 
 ## 6. 安全红线
 
@@ -194,7 +199,7 @@ export interface SubagentPluginConfig {
 
 ## 9. 验收(挂接 eval-hillclimb)
 
-**单元测试**(mock 范式:窄接口 `SubagentModel` + fake 返回严格贴合 `AgentLoopResult`(contracts.ts:82-93);ctx stub 抄 apps/web/src/lib/__tests__/plugin-search.test.ts:1-18。注:全仓现有测试对 `runAgentLoop` 零 mock,本插件是首例):
+**单元测试**(mock 范式:窄接口 `SubagentModel` + fake 返回严格贴合 `AgentLoopResult`(contracts.ts);ctx stub 抄 apps/web/src/lib/__tests__/plugin-search.test.ts。注:全仓现有测试对 `runAgentLoop` 零 mock,本插件是首例):
 
 1. 正常路径:report = 子循环最后一条 assistant 消息;meta.usage/stepsCount 正确;
 2. `stepsExhausted: true` → 触发 invokeStep 强制总结(disableTools 断言);

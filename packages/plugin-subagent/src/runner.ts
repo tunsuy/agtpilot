@@ -5,26 +5,29 @@
  * - 边界红线:子 agent 消息数组私有持有,跨界只回 final report + 小 meta(spec §4.1);
  * - 三重预算闸:步数(runAgentLoop maxSteps)/ token(prepareStep 自记账,超限下一步
  *   收工具 + 注入收敛提示,自然收口)/ 墙钟(AbortController + setTimeout);
- * - reasoning 剥离(子循环闸,与 orchestrator 闸2/闸3 同款语义):prepareStep 每步
- *   剥离思考部件再进模型与 token 闸记账;强制收敛 invokeStep 消息同剥;
- *   保险丝 AGTPILOT_STRIP_REASONING=0 整体回退(token 文档 §9.2 范围注记项落地);
- * - 内部工具直取注册表原始 execute,绕过编排器包装层 —— 必须自行合成子 session、
- *   自行 catch(错误以 { error } 对象回填,不 throw)、自行 16KB 截断(spec §4.3);
+ * - reasoning 剥离:由共享 loop harness(`runAgentLoopWithHooks`)统一处理,
+ *   prepareStep 与收尾装配合计;保险丝 AGTPILOT_STRIP_REASONING=0 整体回退。
+ *   子引擎保留一层幂等剥离,便于直接单测 prepareStep 语义;
+ * - 工具执行与父 agent 共用 ToolRuntime(缓存/死循环熔断/连续失败守卫/截断/统计),
+ *   子 spec 只把审批策略声明为 fail-closed;子引擎自身只负责只读挂载计划、预算、
+ *   墙钟、报告整形与 transcript;
  * - 强制收敛:stepsExhausted 或预算触顶且无报告文本时,追加一次 invokeStep
  *   (disableTools,仿 orchestrator 的既有模式);
  * - 并发信号量:超限排队不拒绝,槽位 handoff(release 直接递给 waiter);
  * - 纯类实现,不依赖 cordis,可单测(窄接口 SubagentModel,仿 plugin-skill SkillCardModel)。
  */
 import {
-  effectiveOutputLimit,
-  estimateTextTokens,
+  createDeadline,
+  createTokenBudgetMiddleware,
   filterToolsByEnv,
-  messageText,
   reasoningStripEnabled,
   resolveExplicitTools,
+  runAgentLoopWithHooks,
+  runPreparePipeline,
+  runWithRetry,
   stripReasoningParts,
+  ToolRuntime,
   truncateText,
-  truncateToolOutput,
 } from '@agtpilot/core';
 import type {
   AgentLoopOptions,
@@ -32,28 +35,16 @@ import type {
   AgentLoopTool,
   ModelConfigOverride,
   ModelInvokeOptions,
+  PrepareMiddleware,
+  PrepareStepContext,
   ToolDefinition,
   ToolSession,
 } from '@agtpilot/core';
 import { resolveReadonlyTools } from './whitelist';
 
-/** 可中止的退避等待(④ 模型错误重试前给过载网关一点恢复窗口) */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      reject(new Error('Aborted'));
-    };
-    if (signal) {
-      if (signal.aborted) onAbort();
-      else signal.addEventListener('abort', onAbort, { once: true });
-    }
-  });
+function isContentFilterError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /DataInspectionFailed/i.test(message);
 }
 
 // ---- 窄接口(依赖倒置,spec §4.2)----
@@ -85,6 +76,8 @@ export interface SubagentUsage {
 
 export interface SubagentRunMeta {
   subTaskId: string;
+  /** 执行轨迹引用 id（默认等于 subTaskId） */
+  traceId?: string;
   durationMs: number;
   stepsCount?: number;
   finishReason?: string;
@@ -134,6 +127,31 @@ export interface SubagentEventPayload {
   mountedTools?: string[];
 }
 
+/** 子 agent 执行轨迹事件：仅存内存/按需读取，不进入 SSE 主流 */
+export interface SubagentTraceEvent {
+  traceId: string;
+  parentTaskId: string;
+  subTaskId: string;
+  phase:
+    | 'step_started'
+    | 'assistant_delta'
+    | 'tool_call'
+    | 'tool_result'
+    | 'step_finished'
+    | 'wrap_up';
+  stepNumber?: number;
+  kind?: 'text' | 'reasoning';
+  delta?: string;
+  tool?: string;
+  args?: any;
+  output?: any;
+  callId?: string;
+  text?: string;
+  finishReason?: string;
+  usage?: SubagentUsage;
+  timestamp?: number;
+}
+
 /** M2 transcript 落盘钩子的载荷(spec §5.3) */
 export interface SubagentTranscript {
   subTaskId: string;
@@ -148,6 +166,8 @@ export interface SubagentEngineDeps {
   getModel: () => SubagentModel | undefined;
   listTools: () => ToolDefinition[];
   emit: (payload: SubagentEventPayload) => void;
+  /** 可选：实时轨迹回调（默认不发，避免 SSE 噪声） */
+  onTrace?: (event: SubagentTraceEvent) => void;
 }
 
 export interface SubagentEngineConfig {
@@ -247,22 +267,61 @@ export function buildTaskPrompt(args: SubagentRunArgs): string {
   return parts.join('\n\n');
 }
 
-function sumMessageTokens(messages: any[]): number {
-  return messages.reduce((acc, m) => acc + estimateTextTokens(messageText(m?.content)), 0);
+/** 任务文本里点名的工具标识(mcp_/browser_/search_/sandbox_/git_/rag_/memory_/cron_/skill_ 前缀) */
+const REFERENCED_TOOL_RE =
+  /\b(?:mcp|browser|search|sandbox|git|rag|memory|cron|skill)_[a-zA-Z0-9_]+\*?/g;
+
+/** 抽取任务描述中提到的工具名(去重,保持出现序) */
+export function referencedToolNames(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of text.matchAll(REFERENCED_TOOL_RE)) {
+    const name = m[0].trim();
+    if (!seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+/**
+ * 工具面告知:任务点名但实际未挂载的工具,开跑前就明确告诉子 agent。
+ * 子 agent 看不到「不存在工具的 schema」,只会在步内反复尝试/空转;提前
+ * 一句话把「点名 ≠ 可用」讲清楚,省的是整段无效步数(2026-10-26 生产实例:
+ * 任务点名 mcp_github_mcp_*,子 agent 只有 browser_navigate/search_web)。
+ */
+export function buildToolSurfaceNotice(mountedTools: readonly string[], missing: readonly string[]): string {
+  if (missing.length === 0) return '';
+  return (
+    `【工具面】任务描述中点名但当前不可用的工具: ${missing.join(', ')}。` +
+    `你实际可用的工具: ${mountedTools.join(', ') || '(无)'}。` +
+    '不要尝试调用不可用工具(它们不在你的工具列表中);立即改用实际可用工具完成调研,并在报告末尾注明工具替代情况。'
+  );
 }
 
 export class SubagentEngine {
   private seq = 0;
   private active = 0;
   private readonly waiters: Array<() => void> = [];
-  // 同任务连败计数(taskId → 连续失败次数;成功一次清零)。只驻内存,不进
-  // 持久层 —— 熔断保护的是「一个任务生命周期内的死循环重派」,任务结束即失效
   private readonly taskFailures = new Map<string, number>();
+  /** 轨迹缓存：traceId -> 事件列表（内存，按需读取） */
+  private readonly traces = new Map<string, SubagentTraceEvent[]>();
 
   constructor(
     private readonly deps: SubagentEngineDeps,
     private readonly cfg: SubagentEngineConfig,
   ) {}
+
+  /** 按需读取子 agent 执行轨迹；不存在返回 undefined */
+  getTrace(traceId: string): SubagentTraceEvent[] | undefined {
+    return this.traces.get(traceId);
+  }
+
+  /** 清理轨迹缓存（宿主可在任务结束后调用） */
+  clearTrace(traceId: string): void {
+    this.traces.delete(traceId);
+  }
 
   private get maxTaskFailures(): number {
     // 0 = 关闭熔断;负值同 0 处理
@@ -286,6 +345,7 @@ export class SubagentEngine {
           error: `本任务内子 agent 已连续失败 ${fails} 次,熔断停派(防死循环重派白烧 token)。请不要再重派同类子任务,改用主循环直接检索(search_web / browser_firecrawl_scrape),或基于已有资料继续。`,
           meta: {
             subTaskId,
+            traceId: subTaskId,
             durationMs: 0,
             reason: 'circuit-open',
             stepsCount: 0,
@@ -299,7 +359,13 @@ export class SubagentEngine {
         queryDigest,
         durationMs: 0,
       });
-      const result = await this.runInner(args ?? ({} as SubagentRunArgs), session, subTaskId);
+      const trace: SubagentTraceEvent[] = [];
+      const result = await this.runInner(args ?? ({} as SubagentRunArgs), session, subTaskId, trace);
+      this.traces.set(subTaskId, trace);
+      if (this.traces.size > 500) {
+        const first = this.traces.keys().next().value;
+        if (first) this.traces.delete(first);
+      }
       if (result.ok) {
         this.taskFailures.delete(session.taskId);
       } else {
@@ -330,6 +396,7 @@ export class SubagentEngine {
     args: SubagentRunArgs,
     session: ToolSession,
     subTaskId: string,
+    trace: SubagentTraceEvent[] = [],
   ): Promise<SubagentResult> {
     const startedAt = Date.now();
     const fail = (
@@ -339,8 +406,26 @@ export class SubagentEngine {
     ): SubagentResult => ({
       ok: false,
       error,
-      meta: { subTaskId, durationMs: Date.now() - startedAt, reason, ...extra },
+      meta: { subTaskId, traceId: subTaskId, durationMs: Date.now() - startedAt, reason, ...extra },
     });
+
+    const emitTrace = (
+      event: Omit<SubagentTraceEvent, 'traceId' | 'parentTaskId' | 'subTaskId' | 'timestamp'>,
+    ) => {
+      const full: SubagentTraceEvent = {
+        traceId: subTaskId,
+        parentTaskId: session.taskId,
+        subTaskId,
+        timestamp: Date.now(),
+        ...event,
+      };
+      trace.push(full);
+      try {
+        this.deps.onTrace?.(full);
+      } catch {
+        // 轨迹回调失败不影响子任务
+      }
+    };
 
     const query = (args.query ?? '').trim();
     if (!query) return fail('query 不能为空', 'internal-error');
@@ -396,15 +481,27 @@ export class SubagentEngine {
     // 语义逐字一致(精确名 / 前缀* 通配 / baseline 自动并入)—— 主循环整台禁入的
     // MCP(如雷达的 github_mcp)子循环同样禁入,工坊裁剪(如 novel 不要热榜)同样生效。
     // 缺省(闲聊/关键词路由任务)= 无工坊约束,维持自身双层白名单语义。
+    const readonlyCandidateCount = resolved.length;
     if (session.activeTools && session.activeTools.length > 0) {
       const allowed = new Set(resolveExplicitTools([...session.activeTools], resolved));
       resolved = resolved.filter((t) => allowed.has(t.name));
     }
-    const { mounted } = filterToolsByEnv(resolved, session.env);
+    const { mounted, missingKeyTools } = filterToolsByEnv(resolved, session.env);
     if (mounted.length === 0) {
+      // 零挂载是「子 agent 结构性没工具」的最后一公里。把三层漏斗的计数如实
+      // 带回主循环，模型才能判断该修授权/补 Key/改工坊白名单，而不是原样重派
+      // 同一子任务再烧一轮(2026-10-26 60 万 token 事故的典型放大器)。
+      const missingNames = missingKeyTools.map((t) => t.name);
+      const funnel = [
+        `只读候选 ${readonlyCandidateCount}`,
+        session.activeTools?.length ? `工坊白名单交集后 ${resolved.length}` : `工坊白名单:未启用`,
+        missingNames.length ? `缺 Key 剔除 [${missingNames.join(', ')}]` : `缺 Key 剔除 0`,
+        `实际挂载 0`,
+      ].join(' → ');
       return fail(
-        '无可用只读白名单工具(注册表未挂载、缺依赖 Key,或与任务工具白名单交集为空),子 agent 无法派发',
+        `无可用只读白名单工具(${funnel})。子 agent 无法派发:请检查连接器授权/依赖 Key/工具 readOnly 声明或工坊白名单;不要再原样重派同一子任务,改用主循环自身工具(search_web / browser_navigate 等)完成调研,或修正上述工具面后重试。`,
         'internal-error',
+        { mountedTools: [] },
       );
     }
     // ①a 观测:实际挂载的工具名清单随 meta/事件/失败兜底透出 —— 子 agent 工具面
@@ -412,162 +509,195 @@ export class SubagentEngine {
     const mountedTools = mounted.map((t) => t.name);
 
     const maxSteps = clampSteps(args.max_steps, this.cfg.maxSteps);
-    const baseMessages: any[] = [{ role: 'user', content: buildTaskPrompt(args) }];
+    const referencedTools = referencedToolNames(`${args.query ?? ''} ${args.sources_hint ?? ''}`);
+    const missingNamedTools = referencedTools.filter((name) => {
+      const bare = name.endsWith('*') ? name.slice(0, -1) : name;
+      return name.endsWith('*')
+        ? !mountedTools.some((m) => m.startsWith(bare))
+        : !mountedTools.includes(bare);
+    });
+    const surfaceNotice = buildToolSurfaceNotice(mountedTools, missingNamedTools);
+    const baseMessages: any[] = [
+      {
+        role: 'user',
+        content: surfaceNotice ? `${buildTaskPrompt(args)}\n\n${surfaceNotice}` : buildTaskPrompt(args),
+      },
+    ];
 
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, this.cfg.timeoutMs);
+    const deadline = createDeadline({ timeoutMs: this.cfg.timeoutMs });
 
     let currentStep = 0;
     let budgetHit = false;
     let reasoningStripped = 0;
     let modelErrorRetried = false;
 
-    // 内部工具:合成子 session + catch→{error} + 16KB 截断(spec §4.3)
+    // 子 agent 与父 agent 共用同一套工具执行运行时：缓存、死循环熔断、连续失败守卫、
+    // 截断与统计全部由 ToolRuntime 提供。子 spec 只把审批策略设为 fail-closed。
+    const toolRuntime = new ToolRuntime({
+      policy: {
+        approval: 'deny',
+        readonlyGate: false,
+        cache: true,
+        deadLoop: true,
+        deadLoopTriggerCount: 4,
+        failureGuard: true,
+        spill: false,
+        truncate: true,
+      },
+      emit: (ev) => {
+        const payload = ev.payload as any;
+        const output =
+          typeof payload.output === 'string'
+            ? payload.output.slice(0, 2000)
+            : payload.output;
+        emitTrace({
+          phase: ev.type === 'tool_call' ? 'tool_call' : 'tool_result',
+          stepNumber: currentStep,
+          tool: payload.tool,
+          args: payload.args,
+          output,
+          callId: payload.callId,
+        });
+      },
+    });
     const internalTools: AgentLoopTool[] = mounted.map((def) => ({
       name: def.name,
       description: def.description,
       parameters: def.parameters,
       execute: async (toolArgs: any) => {
-        const subSession: ToolSession = {
+        const result = await toolRuntime.execute(def, toolArgs, {
           taskId: subTaskId,
           step: currentStep,
           env: session.env,
           userId: session.userId,
           sandbox: session.sandbox,
-        };
-        let output: any;
-        try {
-          output = await def.execute(toolArgs, subSession);
-        } catch (err: any) {
-          return { error: err?.message ?? String(err) };
-        }
-        const serialized = typeof output === 'string' ? output : JSON.stringify(output);
-        // 限额与主循环同源(effectiveOutputLimit):工具声明的 outputCap(如 MCP
-        // 连接器按服务器裁剪)在子循环同样生效,未声明者沿用 TOOL_OUTPUT_LIMIT
-        const limit = effectiveOutputLimit(def.outputCap);
-        if (typeof serialized === 'string' && serialized.length > limit) {
-          return truncateToolOutput(serialized, def.name, limit);
-        }
-        return output;
+        });
+        return result.output;
       },
     }));
 
-    // reasoning 剥离(子循环闸)+ token 自记账闸:每步先剥思考部件再记账 ——
-    // 剥离放闸前,60k 体积闸不再被思考文本虚占;剥离幂等(orchestrator 闸2 同款),
-    // 每步只改写最新 assistant 尾部,前缀字节稳定不破 provider 缓存。
-    // 超限的下一步收掉全部工具 + 注入收敛提示,让循环自然收口(无需 abort)。
+    // token 自记账闸：reasoning 剥离已由共享 loop harness 统一处理，这里只负责
+    // 「预算触顶 → 下一步收工具 + 注入收敛提示」。超限让循环自然收口，不 abort。
+    // 子 agent 的 prepareStep 策略链：与父 agent 共享管线形状，只装两件中间件。
+    const prepareMiddlewares: PrepareMiddleware[] = [
+      (ctx) => {
+        currentStep = ctx.stepNumber;
+        if (reasoningStripEnabled()) {
+          const r = stripReasoningParts(ctx.messages);
+          reasoningStripped += r.stripped;
+          ctx.messages = r.messages;
+        }
+      },
+      createTokenBudgetMiddleware({
+        maxTokens: this.cfg.maxTokens,
+        notice:
+          '【系统提示】本子任务 token 预算已触顶。请立即停止一切检索,直接基于已有资料输出最终报告(结论先行、附来源)。',
+        shouldApply: () => !budgetHit,
+        onExceeded: () => {
+          budgetHit = true;
+        },
+      }),
+    ];
+
     const prepareStep: AgentLoopOptions['prepareStep'] = ({ stepNumber, messages }) => {
-      currentStep = stepNumber;
-      let msgs = messages;
-      if (reasoningStripEnabled()) {
-        const r = stripReasoningParts(messages);
-        reasoningStripped += r.stripped;
-        msgs = r.messages;
-      }
-      if (this.cfg.maxTokens > 0 && !budgetHit && sumMessageTokens(msgs) > this.cfg.maxTokens) {
-        budgetHit = true;
-        return {
-          activeTools: [],
-          messages: [
-            ...msgs,
-            {
-              role: 'user',
-              content:
-                '【系统提示】本子任务 token 预算已触顶。请立即停止一切检索,直接基于已有资料输出最终报告(结论先行、附来源)。',
-            },
-          ],
-        };
-      }
-      return msgs === messages ? undefined : { messages: msgs };
+      const ctx: PrepareStepContext = {
+        stepNumber,
+        messages: messages || [],
+        originalMessages: messages || [],
+        adjust: {},
+      };
+      return runPreparePipeline(ctx, prepareMiddlewares);
     };
 
-    let loopResult: AgentLoopResult;
-    try {
-      loopResult = await model.runAgentLoop({
+    const runLoop = () =>
+      runAgentLoopWithHooks({
+        gateway: model,
         system: SUBAGENT_SYSTEM_PROMPT,
         messages: baseMessages,
         maxSteps,
         tools: internalTools,
-        abortSignal: controller.signal,
+        abortSignal: deadline.signal,
         configOverride,
         prepareStep,
         onStepStart: ({ stepNumber }) => {
           currentStep = stepNumber;
+          emitTrace({ phase: 'step_started', stepNumber });
+        },
+        onTextDelta: (delta: string) => {
+          emitTrace({
+            phase: 'assistant_delta',
+            kind: 'text',
+            delta,
+            stepNumber: currentStep,
+          });
+        },
+        onReasoningDelta: (delta: string) => {
+          emitTrace({
+            phase: 'assistant_delta',
+            kind: 'reasoning',
+            delta,
+            stepNumber: currentStep,
+          });
+        },
+        onStepFinish: (info: {
+          stepNumber: number;
+          text: string;
+          finishReason: string;
+          usage?: { promptTokens: number; completionTokens: number };
+        }) => {
+          emitTrace({
+            phase: 'step_finished',
+            stepNumber: info.stepNumber,
+            text: info.text ? info.text.slice(0, 2000) : undefined,
+            finishReason: info.finishReason,
+            usage: info.usage,
+          });
         },
       });
+
+    let loopResult: AgentLoopResult;
+    let responseMessages: any[] = [];
+    try {
+      const retry = await runWithRetry(() => runLoop(), {
+        delayMs: Math.max(0, this.cfg.modelErrorRetryDelayMs ?? 2000),
+        signal: deadline.signal,
+        shouldRetry: (err) =>
+          currentStep === 0 && !isContentFilterError(err) && !deadline.timedOut,
+        onBeforeRetry: () => {
+          modelErrorRetried = true;
+        },
+      });
+      loopResult = retry.value.result;
+      responseMessages = retry.value.responseMessages;
+      reasoningStripped += retry.value.reasoningPartsStripped;
     } catch (err: any) {
-      clearTimeout(timer);
-      if (timedOut) {
-        return fail(`子 agent 墙钟超时(${this.cfg.timeoutMs}ms),已中止`, 'timeout');
+      deadline.dispose();
+      if (deadline.timedOut) {
+        return fail(`子 agent 墙钟超时(${this.cfg.timeoutMs}ms),已中止`, 'timeout', {
+          mountedTools,
+        });
       }
       const errMsg = err?.message ?? String(err);
       // DashScope/Aliyun 输入侧内容安全审查拦截(<400> InternalError.Algo.
       // DataInspectionFailed):换 token 重试大概率仍被拦。明确告知主循环别走
       // 重试路线(生产实例 2026-10-23:被 generic「子循环模型错误」语义糊掉,
       // 主循环无从判断,又烧了一发)。
-      if (/DataInspectionFailed/i.test(errMsg)) {
+      if (isContentFilterError(err)) {
         return fail(
           '子循环输入被平台内容安全审查拦截(DataInspectionFailed,子任务文本触发了模型服务方的内容风控)。原样重派大概率仍被拦截:请改用主循环自身工具完成该检索,或大幅改写子任务表述/换资料方向后再试。',
           'content-filter',
+          { ...(modelErrorRetried ? { modelErrorRetried: true } : {}) },
         );
       }
-      // ④ 首轮模型错误原地重试一次(零步消耗才重试):上游过载/网关瞬断是一次性
-      // 故障的概率高(2026-10-26 生产实例:sub:1 首轮撞上游过载,零步即死,主循环
-      // 三发子 agent 全军覆没)。已跑出若干步的失败重试会重走已消耗的步,不重试。
-      if (currentStep === 0) {
-        try {
-          await sleep(Math.max(0, this.cfg.modelErrorRetryDelayMs ?? 2000), controller.signal);
-        } catch {
-          // 重试退避期间被中止(墙钟超时)→ 按超时语义收口
-        }
-        if (timedOut) {
-          return fail(`子 agent 墙钟超时(${this.cfg.timeoutMs}ms),已中止`, 'timeout', {
-            mountedTools,
-          });
-        }
-        try {
-          loopResult = await model.runAgentLoop({
-            system: SUBAGENT_SYSTEM_PROMPT,
-            messages: baseMessages,
-            maxSteps,
-            tools: internalTools,
-            abortSignal: controller.signal,
-            configOverride,
-            prepareStep,
-            onStepStart: ({ stepNumber }) => {
-              currentStep = stepNumber;
-            },
-          });
-          modelErrorRetried = true;
-        } catch (err2: any) {
-          clearTimeout(timer);
-          if (timedOut) {
-            return fail(`子 agent 墙钟超时(${this.cfg.timeoutMs}ms),已中止`, 'timeout', {
-              mountedTools,
-            });
-          }
-          const msg2 = err2?.message ?? String(err2);
-          if (/DataInspectionFailed/i.test(msg2)) {
-            return fail(
-              '子循环输入被平台内容安全审查拦截(DataInspectionFailed,子任务文本触发了模型服务方的内容风控)。原样重派大概率仍被拦截:请改用主循环自身工具完成该检索,或大幅改写子任务表述/换资料方向后再试。',
-              'content-filter',
-              { mountedTools, modelErrorRetried: true },
-            );
-          }
-          return fail(`子循环模型错误(已自动重试一次,仍失败):${msg2}`, 'model-error', {
-            mountedTools,
-            modelErrorRetried: true,
-          });
-        }
-      } else {
-        return fail(`子循环模型错误:${errMsg}`, 'model-error', { mountedTools });
-      }
+      return fail(
+        modelErrorRetried
+          ? `子循环模型错误(已自动重试一次,仍失败):${errMsg}`
+          : `子循环模型错误:${errMsg}`,
+        'model-error',
+        { mountedTools, ...(modelErrorRetried ? { modelErrorRetried: true } : {}) },
+      );
     }
-    clearTimeout(timer);
+    deadline.dispose();
 
     let report = loopResult.text ?? '';
     let stepsCount = loopResult.stepsCount;
@@ -586,12 +716,7 @@ export class SubagentEngine {
     if (loopResult.stepsExhausted || tailIsToolCall || (budgetHit && !report.trim())) {
       try {
         // 收敛消息同剥 reasoning(orchestrator 闸3 同款:SDK responseMessages 保留全部步思考)
-        let convMsgs = [...baseMessages, ...loopResult.responseMessages];
-        if (reasoningStripEnabled()) {
-          const r = stripReasoningParts(convMsgs);
-          reasoningStripped += r.stripped;
-          convMsgs = r.messages;
-        }
+        let convMsgs = [...baseMessages, ...responseMessages];
         const wrap = await model.invokeStep({
           system: `${SUBAGENT_SYSTEM_PROMPT}
 
@@ -620,7 +745,7 @@ export class SubagentEngine {
 
     // transcript 落盘保持无损原文(reasoning 不剥):它是只增观测记录,不回传模型,
     // 剥离只发生在「进模型」的两处(prepareStep / 强制收敛)—— 事实源无损原则
-    const transcriptMessages = [...baseMessages, ...loopResult.responseMessages];
+    const transcriptMessages = [...baseMessages, ...(loopResult.responseMessages || [])];
     if (this.cfg.appendTranscript) {
       try {
         this.cfg.appendTranscript({
@@ -665,6 +790,7 @@ export class SubagentEngine {
       report,
       meta: {
         subTaskId,
+        traceId: subTaskId,
         durationMs: Date.now() - startedAt,
         stepsCount,
         finishReason: loopResult.finishReason,

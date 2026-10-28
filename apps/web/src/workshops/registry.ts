@@ -131,6 +131,10 @@ const DEPS_TOOL_OVERRIDES: Record<string, string[]> = {
   email: ['email_list', 'email_read', 'email_send'],
   tomato_writer: [],
   github_mcp: [],
+  // deepwiki:只挂只读工具,create_wiki(写)不挂;避免 wildcard 把写工具也带进来
+  deepwiki: ['mcp_deepwiki_ask_question', 'mcp_deepwiki_read_wiki'],
+  // exa:没有对应 MCP 服务器,检索走 search_exa(API);wildcard 永不匹配,显式映射为空避免噪音
+  exa: [],
 };
 
 export function resolveWorkshopActiveTools(id: WorkshopId): string[] | undefined {

@@ -138,18 +138,18 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
 });
 
 describe('resolveWorkshopActiveTools · 工坊专属(D 层)', () => {
-  it('oss_radar:github_scan + GitHub MCP 只读精确名 3 个 + DeepWiki 整组(deps)', () => {
+  it('oss_radar:github_scan + GitHub MCP 只读精确名 3 个 + DeepWiki 只读工具 2 个(deps)', () => {
     const radar = resolveWorkshopActiveTools('oss_radar')!;
     expect(radar).toContain('github_scan');
     expect(radar).toContain('mcp_github_mcp_search_issues');
     expect(radar).toContain('mcp_github_mcp_get_issue');
     expect(radar).toContain('mcp_github_mcp_list_commits');
-    expect(radar).toContain('mcp_deepwiki_*');
-    expect(radar).toContain('mcp_exa_*');
-    // 只读红线:写操作类工具一律不进(建 Issue/PR、评论、fork)。
+    expect(radar).toContain('mcp_deepwiki_ask_question');
+    expect(radar).toContain('mcp_deepwiki_read_wiki');
+    // 只读红线:写操作类工具一律不进(建 Issue/PR、评论、fork、DeepWiki create_wiki)。
     // browser_navigate 2026-10-23 起随 research 档进白名单(纯导航+蒸馏读取,
     // 已声明 readOnly);写操作禁令不变。
-    for (const banned of ['mcp_github_mcp_create_issue', 'mcp_github_mcp_create_pull_request', 'sandbox_run_command', 'git_apply_patch', 'browser_click', 'browser_input']) {
+    for (const banned of ['mcp_github_mcp_create_issue', 'mcp_github_mcp_create_pull_request', 'mcp_deepwiki_create_wiki', 'sandbox_run_command', 'git_apply_patch', 'browser_click', 'browser_input']) {
       expect(radar, `雷达白名单不得含 ${banned}`).not.toContain(banned);
     }
   });

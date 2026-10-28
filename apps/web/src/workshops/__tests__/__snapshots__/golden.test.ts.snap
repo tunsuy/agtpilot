@@ -656,6 +656,11 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'edge-hollow-
 3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
+工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
+- GitHub 扫描优先 github_scan(聚合);MCP 精确工具仅在需要定向查询特定仓库/Issue 时使用
+- DeepWiki 仅对筛选后的 2~3 个候选仓库深挖,不要对每个候选都调
+- 子 agent 只用于肥调研(多项目/多角度);单点查询直接用主循环工具
+
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
 肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。
@@ -725,6 +730,11 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'edge-target-
 3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
+工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
+- GitHub 扫描优先 github_scan(聚合);MCP 精确工具仅在需要定向查询特定仓库/Issue 时使用
+- DeepWiki 仅对筛选后的 2~3 个候选仓库深挖,不要对每个候选都调
+- 子 agent 只用于肥调研(多项目/多角度);单点查询直接用主循环工具
+
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
 肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。
@@ -792,6 +802,11 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'filled' 1`] 
 2. DeepWiki(若已连接 mcp_deepwiki_* 工具):对候选仓库提问,快速理解架构、贡献流程与测试方式,判断上手成本
 3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
+
+工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
+- GitHub 扫描优先 github_scan(聚合);MCP 精确工具仅在需要定向查询特定仓库/Issue 时使用
+- DeepWiki 仅对筛选后的 2~3 个候选仓库深挖,不要对每个候选都调
+- 子 agent 只用于肥调研(多项目/多角度);单点查询直接用主循环工具
 
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
@@ -970,7 +985,106 @@ B站风格:横屏 16:9、信息密度优先——开头 15 秒内说清「这期
 - 医疗/财经/法律类内容只做科普框架,注明「不构成专业建议」
 - 不得使用低俗擦边、恐吓营销、诱导点击话术
 
-全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页B站「真机唤起」→ 手机 App 上传、人工核对后发布。",
+全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页B站「真机唤起」→ 手机 App 上传、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "B站短视频脚本工坊 · 3 分钟",
 }
 `;
@@ -1006,7 +1120,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'video_douyin' · 'edge-clam
 - 医疗/财经/法律类内容只做科普框架,注明「不构成专业建议」
 - 不得使用低俗擦边、恐吓营销、诱导点击话术
 
-全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页抖音「真机唤起」→ 手机 App 上传、人工核对后发布。",
+全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页抖音「真机唤起」→ 手机 App 上传、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "抖音短视频脚本工坊 · ",
 }
 `;
@@ -1040,7 +1253,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'video_douyin' · 'edge-mate
 
 【参考资料】
 以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
-【资料1：行业研报】(materialId=art_m1)",
+【资料1：行业研报】(materialId=art_m1)
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "抖音短视频脚本工坊 · 60 秒",
 }
 `;
@@ -1070,7 +1382,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'video_douyin' · 'filled' 1
 - 医疗/财经/法律类内容只做科普框架,注明「不构成专业建议」
 - 不得使用低俗擦边、恐吓营销、诱导点击话术
 
-全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页抖音「真机唤起」→ 手机 App 上传、人工核对后发布。",
+全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页抖音「真机唤起」→ 手机 App 上传、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "抖音短视频脚本工坊 · 60 秒",
 }
 `;
@@ -1092,6 +1503,8 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'wechat_mp' · 'edge-hollow-
 必填,不超过 120 字(公众号摘要上限);概括核心观点,让读者决定是否点开
 【正文】
 Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众号排版风格:段落短、信息密度高;不要用 AI 语气——像工程师写技术博客那样直说:结论直接陈述,不硬造比喻,不把观点包装成金句警句,术语随用随讲而不是每个都教科书式定义;比喻只在真贴切时偶尔用一次,不逐段配比喻
+结构契约(成稿前先在思考里列出 H2 大纲,大纲确定后再写正文;大纲不输出):正文至少 3 个二级标题,按「问题/背景 → 分析 → 方案或案例 → 总结」推进;每节有明确的信息增量,不允许过渡段、套话段或纯总结段;二级标题用陈述句,不用问句堆砌
+反 AI 语气与去 AI 化自查遵循文末【去 AI 化自查 · 26 种痕迹清单】
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -1099,8 +1512,112 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 不得编造数据、事实或引用;不确定的信息要么不写,要么明确标注存疑
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
+- 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
+- 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
+- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
-全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。",
+成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
+
+全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "公众号文章工坊 · 深度长文",
 }
 `;
@@ -1115,6 +1632,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'wechat_mp' · 'edge-materia
 - 资料是素材不是结构:通读全部资料提炼一条叙事主线,按主线重新组织文章,严禁按资料的章节顺序逐节搬运;
 - 知识点全覆盖:「深度长文」风格下,资料的每个技术/信息主题都要在正文有落点,按字数预算分配详略;其他风格可按篇幅选最重要的主题;
 - 只删证据壳不删知识点:资料里的源码路径、行号、函数名、行数统计不进正文,换成"这个机制是什么、怎么工作、为什么这么设计、代价是什么";数字与结论照留;
+- 动笔前必须先用 read_reference_material 把每一条资料完整读完,在思考里列出 3~5 个核心知识点与一条叙事主线,再组织成文章;严禁按资料章节顺序逐节搬运
 - 成稿末尾注明资料来源性质(如"基于两项目源码树的对照整理"),不编造出处。
 文章风格:深度长文
 排版主题:classic-green(投草稿箱时把该值作为 wechat_mp_create_draft 的 theme 参数传入)
@@ -1127,6 +1645,8 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'wechat_mp' · 'edge-materia
 必填,不超过 120 字(公众号摘要上限);概括核心观点,让读者决定是否点开
 【正文】
 Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众号排版风格:段落短、信息密度高;不要用 AI 语气——像工程师写技术博客那样直说:结论直接陈述,不硬造比喻,不把观点包装成金句警句,术语随用随讲而不是每个都教科书式定义;比喻只在真贴切时偶尔用一次,不逐段配比喻
+结构契约(成稿前先在思考里列出 H2 大纲,大纲确定后再写正文;大纲不输出):正文至少 3 个二级标题,按「问题/背景 → 分析 → 方案或案例 → 总结」推进;每节有明确的信息增量,不允许过渡段、套话段或纯总结段;二级标题用陈述句,不用问句堆砌
+反 AI 语气与去 AI 化自查遵循文末【去 AI 化自查 · 26 种痕迹清单】
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -1134,12 +1654,116 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 不得编造数据、事实或引用;不确定的信息要么不写,要么明确标注存疑
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
+- 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
+- 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
+- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
+
+成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
 
 全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。
 
 【参考资料】
 以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
-【资料1：行业研报】(materialId=art_m1)",
+【资料1：行业研报】(materialId=art_m1)
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "公众号文章工坊 · 深度长文",
 }
 `;
@@ -1161,6 +1785,8 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'wechat_mp' · 'edge-topic-p
 必填,不超过 120 字(公众号摘要上限);概括核心观点,让读者决定是否点开
 【正文】
 Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众号排版风格:段落短、信息密度高;不要用 AI 语气——像工程师写技术博客那样直说:结论直接陈述,不硬造比喻,不把观点包装成金句警句,术语随用随讲而不是每个都教科书式定义;比喻只在真贴切时偶尔用一次,不逐段配比喻
+结构契约(成稿前先在思考里列出 H2 大纲,大纲确定后再写正文;大纲不输出):正文至少 3 个二级标题,按「问题/背景 → 分析 → 方案或案例 → 总结」推进;每节有明确的信息增量,不允许过渡段、套话段或纯总结段;二级标题用陈述句,不用问句堆砌
+反 AI 语气与去 AI 化自查遵循文末【去 AI 化自查 · 26 种痕迹清单】
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -1168,12 +1794,116 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 不得编造数据、事实或引用;不确定的信息要么不写,要么明确标注存疑
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
+- 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
+- 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
+- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
+
+成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
 
 全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。
 
 【参考资料】
 以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
-【资料1：行业研报】(materialId=art_m1)",
+【资料1：行业研报】(materialId=art_m1)
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "公众号文章工坊 · 深度长文",
 }
 `;
@@ -1203,6 +1933,8 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'wechat_mp' · 'filled' 1`] 
 必填,不超过 120 字(公众号摘要上限);概括核心观点,让读者决定是否点开
 【正文】
 Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众号排版风格:段落短、信息密度高;不要用 AI 语气——像工程师写技术博客那样直说:结论直接陈述,不硬造比喻,不把观点包装成金句警句,术语随用随讲而不是每个都教科书式定义;比喻只在真贴切时偶尔用一次,不逐段配比喻
+结构契约(成稿前先在思考里列出 H2 大纲,大纲确定后再写正文;大纲不输出):正文至少 3 个二级标题,按「问题/背景 → 分析 → 方案或案例 → 总结」推进;每节有明确的信息增量,不允许过渡段、套话段或纯总结段;二级标题用陈述句,不用问句堆砌
+反 AI 语气与去 AI 化自查遵循文末【去 AI 化自查 · 26 种痕迹清单】
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -1210,8 +1942,112 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 不得编造数据、事实或引用;不确定的信息要么不写,要么明确标注存疑
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
+- 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
+- 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
+- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
-全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。",
+成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
+
+全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "公众号文章工坊 · 深度长文",
 }
 `;
@@ -1299,7 +2135,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'weibo' · 'edge-clamp' 1`] 
 - 不得使用营销号式煽动对立、诱导转发抽奖话术
 - 种草安利需注明利益相关(如有),主观评价注明是个人感受
 
-全部完成后提醒我:复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。",
+全部完成后提醒我:复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "微博内容工坊 · ",
 }
 `;
@@ -1328,7 +2263,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'weibo' · 'edge-material-mo
 
 【参考资料】
 以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
-【资料1：行业研报】(materialId=art_m1)",
+【资料1：行业研报】(materialId=art_m1)
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "微博内容工坊 · 热点点评",
 }
 `;
@@ -1353,7 +2387,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'weibo' · 'filled' 1`] = `
 - 不得使用营销号式煽动对立、诱导转发抽奖话术
 - 种草安利需注明利益相关(如有),主观评价注明是个人感受
 
-全部完成后提醒我:复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。",
+全部完成后提醒我:复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "微博内容工坊 · 热点点评",
 }
 `;
@@ -1379,7 +2512,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-clamp' 1`] = 
 【封面文案】
 封面主文案一句话(对应发布页封面文字,12 字以内优先)
 【正文】
-300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;不要用 AI 语气,像真人分享一样写
+300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;像真人分享一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 【标签】
 8-10 个,以 # 开头,空格分隔,单行,大中小热度混搭
 
@@ -1390,7 +2523,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-clamp' 1`] = 
 - 不得使用诱导互动、水军引流话术
 - 主观评价需注明是个人感受
 
-全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "小红书内容工坊 · 未知风格",
 }
 `;
@@ -1410,7 +2642,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-hollow-profil
 【封面文案】
 封面主文案一句话(对应发布页封面文字,12 字以内优先)
 【正文】
-300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;不要用 AI 语气,像真人分享一样写
+300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;像真人分享一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 【标签】
 8-10 个,以 # 开头,空格分隔,单行,大中小热度混搭
 
@@ -1421,7 +2653,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-hollow-profil
 - 不得使用诱导互动、水军引流话术
 - 主观评价需注明是个人感受
 
-全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "小红书内容工坊 · 种草推荐",
 }
 `;
@@ -1441,7 +2772,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-material-mode
 【封面文案】
 封面主文案一句话(对应发布页封面文字,12 字以内优先)
 【正文】
-300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;不要用 AI 语气,像真人分享一样写
+300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;像真人分享一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 【标签】
 8-10 个,以 # 开头,空格分隔,单行,大中小热度混搭
 
@@ -1456,7 +2787,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-material-mode
 
 【参考资料】
 以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
-【资料1：行业研报】(materialId=art_m1)",
+【资料1：行业研报】(materialId=art_m1)
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "小红书内容工坊 · 种草推荐",
 }
 `;
@@ -1482,7 +2912,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-zero' 1`] = `
 【封面文案】
 封面主文案一句话(对应发布页封面文字,12 字以内优先)
 【正文】
-300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;不要用 AI 语气,像真人分享一样写
+300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;像真人分享一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 【标签】
 8-10 个,以 # 开头,空格分隔,单行,大中小热度混搭
 
@@ -1493,7 +2923,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-zero' 1`] = `
 - 不得使用诱导互动、水军引流话术
 - 主观评价需注明是个人感受
 
-全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "小红书内容工坊 · ",
 }
 `;
@@ -1521,7 +3050,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'filled' 1`] = `
 【封面文案】
 封面主文案一句话(对应发布页封面文字,12 字以内优先)
 【正文】
-300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;不要用 AI 语气,像真人分享一样写
+300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;像真人分享一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 【标签】
 8-10 个,以 # 开头,空格分隔,单行,大中小热度混搭
 
@@ -1532,7 +3061,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'filled' 1`] = `
 - 不得使用诱导互动、水军引流话术
 - 主观评价需注明是个人感受
 
-全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "小红书内容工坊 · 种草推荐",
 }
 `;
@@ -1552,7 +3180,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'zhihu' · 'edge-hollow-prof
 【摘要】
 必填,不超过 120 字;概括核心论点,让读者决定是否点开
 【正文】
-Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;不要用 AI 语气,像真人在知乎上写作一样写
+Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;像真人在知乎上写作一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -1561,7 +3189,106 @@ Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深�
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 不做夸大诱导;知乎社区规范对营销式内容有明确处罚规则
 
-全部完成后提醒我:文章卡片上点「存入知乎草稿」即可把这篇成品填进知乎专栏编辑器——经我审批确认后停在草稿箱(每日有上限),发布由我在知乎草稿箱人工完成;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:文章卡片上点「存入知乎草稿」即可把这篇成品填进知乎专栏编辑器——经我审批确认后停在草稿箱(每日有上限),发布由我在知乎草稿箱人工完成;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "知乎专栏工坊 · 技术长文",
 }
 `;
@@ -1581,7 +3308,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'zhihu' · 'edge-material-mo
 【摘要】
 必填,不超过 120 字;概括核心论点,让读者决定是否点开
 【正文】
-Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;不要用 AI 语气,像真人在知乎上写作一样写
+Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;像真人在知乎上写作一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -1594,7 +3321,106 @@ Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深�
 
 【参考资料】
 以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
-【资料1：行业研报】(materialId=art_m1)",
+【资料1：行业研报】(materialId=art_m1)
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "知乎专栏工坊 · 专业干货",
 }
 `;
@@ -1622,7 +3448,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'zhihu' · 'filled' 1`] = `
 【摘要】
 必填,不超过 120 字;概括核心论点,让读者决定是否点开
 【正文】
-Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;不要用 AI 语气,像真人在知乎上写作一样写
+Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;像真人在知乎上写作一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -1631,7 +3457,106 @@ Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深�
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 不做夸大诱导;知乎社区规范对营销式内容有明确处罚规则
 
-全部完成后提醒我:文章卡片上点「存入知乎草稿」即可把这篇成品填进知乎专栏编辑器——经我审批确认后停在草稿箱(每日有上限),发布由我在知乎草稿箱人工完成;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:文章卡片上点「存入知乎草稿」即可把这篇成品填进知乎专栏编辑器——经我审批确认后停在草稿箱(每日有上限),发布由我在知乎草稿箱人工完成;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "知乎专栏工坊 · 技术长文",
 }
 `;
@@ -1839,6 +3764,11 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'oss_radar' 1`] 
 3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
+工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
+- GitHub 扫描优先 github_scan(聚合);MCP 精确工具仅在需要定向查询特定仓库/Issue 时使用
+- DeepWiki 仅对筛选后的 2~3 个候选仓库深挖,不要对每个候选都调
+- 子 agent 只用于肥调研(多项目/多角度);单点查询直接用主循环工具
+
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
 肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。
@@ -1958,7 +3888,106 @@ B站风格:横屏 16:9、信息密度优先——开头 15 秒内说清「这期
 - 医疗/财经/法律类内容只做科普框架,注明「不构成专业建议」
 - 不得使用低俗擦边、恐吓营销、诱导点击话术
 
-全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页B站「真机唤起」→ 手机 App 上传、人工核对后发布。",
+全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页B站「真机唤起」→ 手机 App 上传、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "B站短视频脚本工坊 · 60 秒",
 }
 `;
@@ -1994,7 +4023,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'video_douyin' 1
 - 医疗/财经/法律类内容只做科普框架,注明「不构成专业建议」
 - 不得使用低俗擦边、恐吓营销、诱导点击话术
 
-全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页抖音「真机唤起」→ 手机 App 上传、人工核对后发布。",
+全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页抖音「真机唤起」→ 手机 App 上传、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "抖音短视频脚本工坊 · 60 秒",
 }
 `;
@@ -2022,6 +4150,8 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'wechat_mp' 1`] 
 必填,不超过 120 字(公众号摘要上限);概括核心观点,让读者决定是否点开
 【正文】
 Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众号排版风格:段落短、信息密度高;不要用 AI 语气——像工程师写技术博客那样直说:结论直接陈述,不硬造比喻,不把观点包装成金句警句,术语随用随讲而不是每个都教科书式定义;比喻只在真贴切时偶尔用一次,不逐段配比喻
+结构契约(成稿前先在思考里列出 H2 大纲,大纲确定后再写正文;大纲不输出):正文至少 3 个二级标题,按「问题/背景 → 分析 → 方案或案例 → 总结」推进;每节有明确的信息增量,不允许过渡段、套话段或纯总结段;二级标题用陈述句,不用问句堆砌
+反 AI 语气与去 AI 化自查遵循文末【去 AI 化自查 · 26 种痕迹清单】
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -2029,8 +4159,112 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 不得编造数据、事实或引用;不确定的信息要么不写,要么明确标注存疑
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
+- 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
+- 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
+- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
-全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。",
+成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
+
+全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "公众号文章工坊 · 深度长文",
 }
 `;
@@ -2088,7 +4322,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'weibo' 1`] = `
 - 不得使用营销号式煽动对立、诱导转发抽奖话术
 - 种草安利需注明利益相关(如有),主观评价注明是个人感受
 
-全部完成后提醒我:复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。",
+全部完成后提醒我:复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "微博内容工坊 · 热点点评",
 }
 `;
@@ -2114,7 +4447,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'xhs' 1`] = `
 【封面文案】
 封面主文案一句话(对应发布页封面文字,12 字以内优先)
 【正文】
-300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;不要用 AI 语气,像真人分享一样写
+300-600 字,小红书风格:第一人称、短段落、适度 emoji、有真实信息增量,结尾带一个互动提问;像真人分享一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 【标签】
 8-10 个,以 # 开头,空格分隔,单行,大中小热度混搭
 
@@ -2125,7 +4458,106 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'xhs' 1`] = `
 - 不得使用诱导互动、水军引流话术
 - 主观评价需注明是个人感受
 
-全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "小红书内容工坊 · 种草推荐",
 }
 `;
@@ -2151,7 +4583,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'zhihu' 1`] = `
 【摘要】
 必填,不超过 120 字;概括核心论点,让读者决定是否点开
 【正文】
-Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;不要用 AI 语气,像真人在知乎上写作一样写
+Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深、允许适度个人观点但须讲清依据;存草稿时工具会把 Markdown 自动转成富文本排版填进知乎编辑器(标题/加粗/列表是真格式,记号不会出现在草稿里),正文按 Markdown 正常写即可;表格等复杂格式由我接管后调整;像真人在知乎上写作一样写,动笔前先读文末【去 AI 化自查 · 26 种痕迹清单】,按里面的写法约束成稿
 
 篇与篇之间用单独一行的 --- 分隔(三个连字符,行内无其他字符)。
 
@@ -2160,7 +4592,106 @@ Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深�
 - 不得撰写医疗、金融等领域的违规断言;主观判断须注明是个人观点
 - 不做夸大诱导;知乎社区规范对营销式内容有明确处罚规则
 
-全部完成后提醒我:文章卡片上点「存入知乎草稿」即可把这篇成品填进知乎专栏编辑器——经我审批确认后停在草稿箱(每日有上限),发布由我在知乎草稿箱人工完成;标题不满意可让你重拟,不用给我候选清单。",
+全部完成后提醒我:文章卡片上点「存入知乎草稿」即可把这篇成品填进知乎专栏编辑器——经我审批确认后停在草稿箱(每日有上限),发布由我在知乎草稿箱人工完成;标题不满意可让你重拟,不用给我候选清单。
+
+【去 AI 化自查 · 26 种痕迹清单】
+# Humanizer · 去 AI 化写作自查
+
+## 用途
+
+对已生成的文本进行去 AI 化检查与改写，消除 AI 写作痕迹，让内容读起来像人写的。  
+适用于公众号、小红书、知乎、微博、视频脚本等所有内容工坊的成稿后自查。
+
+## 工作流
+
+1. **标记**：按 26 种痕迹清单逐项检查文本，标出所有发现的 AI 痕迹（按强度排序）
+2. **草拟**：不固定原文结构，重新起草去 AI 版本
+3. **自查**：检查草稿是否还有 AI 痕迹，修正
+4. **输出**：输出最终版本
+
+## 26 种 AI 痕迹清单
+
+### A. Staging instead of stating（编排而非陈述）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 1 | **Not X but Y** | "It's not just X, it's Y" / "This doesn't mean X. It means Y." | 直接陈述观点 |
+| 2 | **一句话收尾** | "That is the real win." / "This shows the importance of..." | 删掉重复或解释的收尾 |
+| 3 | **听起来深刻的格言** | "At its core, what matters is..." / "Symmetry is the language of trust" | 替换为具体主张 |
+| 4 | **Staged run-up** | "Let's dive in" / "Honestly? It depends..." | 删掉 run-up，直接陈述 |
+| 5 | **和无人争辩** | "This isn't mainly about..." / "A tempting approach would be..." | 删掉未提出的反对意见 |
+
+### B. Rhythm by rule（规则化节奏）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 6 | **强制三连** | "innovation, inspiration, and insights" | 用意义需要的数量 |
+| 7 | **重复句首** | "She noted... She noted... She filed..." | 合并或改变主语 |
+| 8 | **破折号泛滥** (弱) | "institutions—not the people—yet this continues—" | 用句号/逗号/冒号/括号 |
+| 9 | **堆叠限定词** (弱) | "could potentially possibly be argued" | 只保留来源支持的限定词 |
+| 10 | **连字符对泛滥** (弱) | "the report is high-quality" | 名词前保留，其余去掉 |
+| 11 | **被动语态/缺失主语** (弱) | "No configuration file needed" | 有助时点名执行者 |
+
+### C. Inflation and borrowed authority（夸大与借用权威）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 12 | **AI 高频词** | delve / testament / landscape / showcasing / pivotal | 用普通词 |
+| 13 | **夸大意义** | "marking a pivotal moment" / "continues to thrive" / "The future looks bright" | 保留事实，去掉意义；以最后一个具体事实结尾 |
+| 14 | **模糊关联** | "associated with the leadership of" / "in connection with" | 陈述来源给出的关系 |
+| 15 | **浅层 -ing 从句** | "symbolizing... reflecting... showcasing..." | 只保留来源支持的内容 |
+| 16 | **销售语言** | "nestled within the breathtaking region" | 陈述事物是什么 |
+| 17 | **借用权威** | "Experts believe..." / "cited in NYT, BBC, FT" | 点名真实来源和其说法，或删掉 |
+| 18 | **避免 is/are/has** | "serves as... features... boasts" | "is... has" |
+
+### D. Formatting by rule（规则化格式）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 19 | **粗体装饰** | "**OKRs**, **KPIs**" / "**Performance:** Performance improved" | 去掉粗体；把标签列表转成散文 |
+| 20 | **装饰性标题** | "Strategic Negotiations And Partnerships" / "🚀 Launch Phase:" | 句首大写；去掉 emoji 和箭头；命名章节内容 |
+| 21 | **花引号** (弱) | \`said "the project"\` | \`said "the project"\` |
+
+### E. Leftovers from chat and draft（聊天与草稿残留）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 22 | **聊天残留** | "Great question! ... I hope this helps!" | 删掉包装，保留内容 |
+| 23 | **知识局限免责声明** | "While details are limited in available sources, it appears..." | 陈述来源显示的内容，或删掉 |
+| 24 | **标题重复** | "## Performance" + "Speed matters." | 让标题发挥作用 |
+| 25 | **写文档而非主题** | "This function was added to replace..." / "compiled from..." | 描述主题；仅当读者无法看到时才陈述惯例 |
+
+### F. Writing for the wrong reader（为错误的读者写作）
+
+| # | 痕迹 | Before | After |
+|---|------|--------|-------|
+| 26 | **重复解释读者已知的内容** | 回复中先走一遍诊断再证明计划有效，然后才给决定 | 以决定开头；诊断和证明留给后续工单 |
+
+## 强制检查清单
+
+成稿后逐项自查，出现任一条即重写该段：
+
+- [ ] 没有 "Not X but Y" 句式
+- [ ] 没有一句话收尾或戏剧性片段
+- [ ] 没有 "At its core..." / "Let's dive in" / "Honestly?" 等 staged run-up
+- [ ] 没有和无人争辩的句式
+- [ ] 没有强制三连
+- [ ] 没有重复句首
+- [ ] 没有破折号泛滥
+- [ ] 没有堆叠限定词
+- [ ] 没有 AI 高频词（delve, testament, landscape, showcasing, pivotal, leverage, foster, underscore）
+- [ ] 没有夸大意义（pivotal moment, continues to thrive, future looks bright）
+- [ ] 没有模糊关联（associated with, in connection with）
+- [ ] 没有浅层 -ing 从句（symbolizing, reflecting, showcasing）
+- [ ] 没有销售语言（nestled, breathtaking, vibrant）
+- [ ] 没有借用权威（Experts believe, studies show）
+- [ ] 没有避免 is/are/has（serves as, features, boasts）
+- [ ] 没有粗体装饰
+- [ ] 没有装饰性标题（emoji、箭头、全大写）
+- [ ] 没有聊天残留（Great question, I hope this helps）
+- [ ] 没有知识局限免责声明
+- [ ] 没有标题重复
+- [ ] 没有重复解释读者已知的内容",
   "title": "知乎专栏工坊 · 专业干货",
 }
 `;

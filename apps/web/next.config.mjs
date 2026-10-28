@@ -4,10 +4,12 @@ const nextConfig = {
   webpack: (config, { isServer }) => {
     // 工坊提示词模板:src/workshops 下的 .md 原样内联为字符串
     // (表单实时预览在客户端同步渲染,模板必须进客户端 bundle;
-    //  vitest 侧有对应的 load 插件,两处 include 范围保持一致)
+    //  vitest 侧有对应的 load 插件,两处 include 范围保持一致)。
+    // 仓库根 skills/ 是工坊内置清单(humanizer):同样构建期内联,
+    //  与 apps/web/skills(运行时 COPY 的 script-skill 目录)是两回事
     config.module.rules.push({
       test: /\.md$/,
-      include: /[\\/]src[\\/]workshops[\\/]/,
+      include: [/[\\/]src[\\/]workshops[\\/]/, /[\\/]skills[\\/]humanizer[\\/]/],
       type: 'asset/source',
     });
     if (isServer) {

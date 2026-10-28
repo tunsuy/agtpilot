@@ -10,6 +10,7 @@
 import promptMain from './prompt.main.md';
 import promptWeekly from './prompt.xhs_weekly_topics.md';
 import { buildMaterialsSection, parseMaterials, type WorkshopMaterial } from '../shared/materials';
+import { buildHumanizerSection } from '../shared/humanizer';
 import { renderTemplate } from '../engine';
 import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
 import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
@@ -45,7 +46,7 @@ export function buildXhsWorkshopPrompt({ topic, style, count, profile, materials
       // 勾了交付物 → 以资料为素材直接编写;未勾 → 调研热点选题
       materialMode: !t && mats.length > 0,
       hotResearchMode: !t && mats.length === 0,
-    }) + buildMaterialsSection(mats)
+    }) + buildMaterialsSection(mats) + buildHumanizerSection()
   );
 }
 

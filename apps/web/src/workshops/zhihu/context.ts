@@ -13,6 +13,7 @@ import { renderTemplate } from '../engine';
 import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profile';
 import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
 import { buildMaterialsSection, parseMaterials, type WorkshopMaterial } from '../shared/materials';
+import { buildHumanizerSection } from '../shared/humanizer';
 
 export const ZHIHU_ARTICLE_STYLES = ['专业干货', '深度分析', '热点解读', '经验分享'] as const;
 
@@ -54,6 +55,6 @@ export function buildZhihuWorkshopPrompt({ topic, style, count, profile, materia
       // 勾了交付物 → 以资料为素材直接编写;未勾 → 调研热点选题
       materialMode: !t && mats.length > 0,
       hotResearchMode: !t && mats.length === 0,
-    }) + buildMaterialsSection(mats)
+    }) + buildMaterialsSection(mats) + buildHumanizerSection()
   );
 }

@@ -12,6 +12,7 @@ import { buildProfileSection, type ScenarioProfile } from '@/lib/scenario-profil
 import { WECHAT_MD_THEMES, DEFAULT_WECHAT_MD_THEME_ID } from '@/lib/wechat-md-themes';
 import { TOPIC_RESEARCH_SOURCES } from '../shared/sources';
 import { buildMaterialsSection, parseMaterials, type WorkshopMaterial } from '../shared/materials';
+import { buildHumanizerSection } from '../shared/humanizer';
 
 export const WECHAT_MP_ARTICLE_STYLES = ['深度长文', '干货教程', '热点解读', '观点评论'] as const;
 
@@ -129,6 +130,6 @@ export function buildWechatMpWorkshopPrompt({ topic, style, count, theme, profil
       styleRefTools: buildStyleRefToolHint(),
       // 字数预算按风格分档(见上方 wordBudget 注释)
       wordBudget,
-    }) + buildMaterialsSection(mats)
+    }) + buildMaterialsSection(mats) + buildHumanizerSection()
   );
 }

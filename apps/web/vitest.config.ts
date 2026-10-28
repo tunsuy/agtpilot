@@ -3,15 +3,20 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 /**
- * src/workshops 下的 .md 提示词模板原样读入(默认导出 = 文件全文)。
- * 与 next.config.mjs 的 asset/source 规则语义一致:同一个模板文件在
+ * .md 提示词模板原样读入(默认导出 = 文件全文)。覆盖两处:
+ * - src/workshops:工坊提示词模板;
+ * - 仓库根 skills/humanizer:工坊内置去 AI 化清单(shared/humanizer.ts 注入)。
+ * 与 next.config.mjs 的 asset/source 规则语义一致:同一个 .md 文件在
  * webpack(客户端预览)与 vitest(golden 快照)里拿到的字节相同。
  */
 function workshopMdPlugin(): Plugin {
   return {
     name: 'workshop-md-raw',
     load(id) {
-      if (id.endsWith('.md') && /[\\/]src[\\/]workshops[\\/]/.test(id)) {
+      if (
+        id.endsWith('.md') &&
+        (/[\\/]src[\\/]workshops[\\/]/.test(id) || /[\\/]skills[\\/]humanizer[\\/]/.test(id))
+      ) {
         return `export default ${JSON.stringify(fs.readFileSync(id, 'utf8'))}`;
       }
       return null;

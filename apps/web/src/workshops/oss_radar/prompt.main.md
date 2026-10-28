@@ -24,6 +24,15 @@
 3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
+工具使用优先级(严格遵守,避免重复调用白烧 token):
+- 搜索:优先 search_web;search_exa 仅在需要语义匹配(概念/论文/技术名)时使用;search_tavily 仅在 search_web 结果不足或需要 AI 摘要时使用;三者不要在一轮内全部调用
+- 网页抓取:优先 browser_navigate(零 Key、本地蒸馏);browser_firecrawl_scrape 仅在 navigate 提取失败或需要更干净的正文时使用
+- GitHub:优先 github_scan(聚合,一次拿仓库+issue);mcp_github_mcp_search_issues / get_issue / list_commits 仅在需要定向查询特定仓库或 Issue 时使用,不要与 github_scan 重复扫同一范围
+- Exa:优先 search_exa;仅当 search_exa 不可用时才用 mcp_exa_* 工具
+- DeepWiki:对已确定的候选仓库提问,不要对每个候选都调;先筛出 2~3 个候选再深挖
+- 子 agent:肥调研(多项目/多角度)派 research_subagent;单点查询直接用主循环工具,不要为单个链接派子 agent
+- MCP 万能代理 mcp_call:只在工具未挂载或中途新授权时使用,已挂载的工具直接调用,不要通过 mcp_call 重复调用
+
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
 肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。

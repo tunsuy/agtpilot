@@ -21,6 +21,8 @@ export const DEFAULT_READONLY_WHITELIST: readonly string[] = [
   'search_web',
   'search_exa',
   'search_tavily',
+  // plugin-github-scan(只读聚合扫描,无需凭证,服务端缓存 15 分钟;子 agent 广域调研主力)
+  'github_scan',
   // plugin-browser(navigate 2026-10-23 起声明 readOnly:纯导航+蒸馏读取;
   // 子 agent 读文档/范文需要它,firecrawl 需要 Key 缺失时由 filterToolsByEnv 摘除)
   'browser_navigate',

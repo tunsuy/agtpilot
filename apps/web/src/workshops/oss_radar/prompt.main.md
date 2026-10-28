@@ -24,14 +24,10 @@
 3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
-工具使用优先级(严格遵守,避免重复调用白烧 token):
-- 搜索:优先 search_web;search_exa 仅在需要语义匹配(概念/论文/技术名)时使用;search_tavily 仅在 search_web 结果不足或需要 AI 摘要时使用;三者不要在一轮内全部调用
-- 网页抓取:优先 browser_navigate(零 Key、本地蒸馏);browser_firecrawl_scrape 仅在 navigate 提取失败或需要更干净的正文时使用
-- GitHub:优先 github_scan(聚合,一次拿仓库+issue);mcp_github_mcp_search_issues / get_issue / list_commits 仅在需要定向查询特定仓库或 Issue 时使用,不要与 github_scan 重复扫同一范围
-- Exa:优先 search_exa;仅当 search_exa 不可用时才用 mcp_exa_* 工具
-- DeepWiki:对已确定的候选仓库提问,不要对每个候选都调;先筛出 2~3 个候选再深挖
-- 子 agent:肥调研(多项目/多角度)派 research_subagent;单点查询直接用主循环工具,不要为单个链接派子 agent
-- MCP 万能代理 mcp_call:只在工具未挂载或中途新授权时使用,已挂载的工具直接调用,不要通过 mcp_call 重复调用
+工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
+- GitHub 扫描优先 github_scan(聚合);MCP 精确工具仅在需要定向查询特定仓库/Issue 时使用
+- DeepWiki 仅对筛选后的 2~3 个候选仓库深挖,不要对每个候选都调
+- 子 agent 只用于肥调研(多项目/多角度);单点查询直接用主循环工具
 
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 

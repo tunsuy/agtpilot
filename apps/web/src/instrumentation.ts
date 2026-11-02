@@ -16,6 +16,16 @@ export async function register() {
       // (进程重启恢复 / 限频跨天续传 / 章节失败冷却重试);与 cron 调度器并列
       const { ensureFanqieSyncSweeper } = await import('@/lib/fanqie-sync');
       ensureFanqieSyncSweeper();
+      // 运营流水历史回灌(ops ledger):首次启动把存量 mission 补写进
+      // <dataDir>/ops/events.jsonl,看板上线首日即有趋势。标记文件防重入,
+      // best-effort 全捕获,不拖垮启动
+      try {
+        const { backfillOpsFromMissions } = await import('@/lib/ops-ledger');
+        const written = backfillOpsFromMissions();
+        if (written > 0) console.log(`[Instrumentation] Ops ledger backfilled ${written} events.`);
+      } catch (err) {
+        console.error('[Instrumentation] Failed to backfill ops ledger:', err);
+      }
       // 程序运行日志(runtime.log)在此落首条:数据目录一旦可写,后续所有
       // 生命周期/错误事件都有档可查(容器重建后凭这行确认日志链路活着)
       const { logRuntime } = await import('@/lib/runtime-log');

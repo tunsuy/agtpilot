@@ -7,6 +7,8 @@ import WeChat from 'next-auth/providers/wechat';
 import { consumeVerifiedCode } from './lib/wechat-store';
 import { isMockAuthAllowed } from './lib/auth-mock';
 import { deriveStableUserId } from './lib/auth-identity';
+import { isOpsAdmin } from './lib/ops-admin';
+import { recordUserLogin } from './lib/ops-ledger';
 
 const configuredProviders: any[] = [];
 
@@ -179,7 +181,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     jwt({ token, user, account }) {
       if (user) {
         token.id = deriveStableUserId(user, account);
-        token.role = (user as any).role || 'user';
+        // 运营管理员:env AGTPILOT_OPS_ADMINS 命中即 admin(压过 mock 缺省
+        // role);OpsView 入口显隐读它,API 路由另有服务端双重校验
+        token.role = isOpsAdmin(token.id as string) ? 'admin' : (user as any).role || 'user';
         token.tier = (user as any).tier || 'Pro';
         token.tokensUsed = (user as any).tokensUsed ?? 3500;
         token.tokensLimit = (user as any).tokensLimit ?? 100000;
@@ -195,6 +199,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         (session.user as any).tokensLimit = token.tokensLimit;
       }
       return session;
+    },
+  },
+  events: {
+    // 运营流水:登录事件(总用户/昵称邮箱的唯一来源 —— UserScopedData 不存
+    // 这些)。best-effort:记录失败静默,绝不让登录本身失败。
+    signIn({ user, account }) {
+      try {
+        recordUserLogin({
+          userId: deriveStableUserId(user, account),
+          name: (user as any)?.name ?? null,
+          email: (user as any)?.email ?? null,
+          provider: account?.provider,
+        });
+      } catch {
+        // ignore
+      }
     },
   },
 });

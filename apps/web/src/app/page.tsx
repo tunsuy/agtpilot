@@ -51,6 +51,10 @@ const DevicesView = dynamic(
   () => import('../components/DevicesView').then((m) => m.DevicesView),
   { ssr: false }
 );
+const OpsView = dynamic(
+  () => import('../components/OpsView').then((m) => m.OpsView),
+  { ssr: false, loading: ViewLoading }
+);
 const AuthModal = dynamic(
   () => import('../components/AuthModal').then((m) => m.AuthModal),
   { ssr: false }
@@ -95,7 +99,7 @@ import type { CronScenario } from '../lib/cron-scenario';
 export default function Workspace() {
   const [mounted, setMounted] = useState(false);
   const { isMobile, mounted: mobileReady } = useIsMobile();
-  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices' | 'ops'>('home');
   // 移动端专属状态：底部 tab + 全屏覆盖层（复用桌面视图做"更多"入口）
   const [mobileTab, setMobileTab] = useState<MobileTab>('home');
   const [mobileOverlay, setMobileOverlay] = useState<'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'workshops' | null>(null);
@@ -1565,13 +1569,15 @@ export default function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sseEpoch, reconcileSse]);
 
-  const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices') => {
+  const handleViewChange = (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices' | 'ops') => {
     // 首页允许所有人浏览概览，其余页面（工作台、工坊、连接器、记忆库、技能、巡航、交付库、长期目标）必须登录
     if (view !== 'home' && sessionStatus !== 'loading' && !session?.user) {
       setAuthModalTab('login');
       setAuthModalOpen(true);
       return;
     }
+    // 运营看板:admin 专属入口(前端兜底;数据出口 /api/ops/* 另有服务端双重校验)
+    if (view === 'ops' && (session?.user as any)?.role !== 'admin') return;
     setActiveView(view);
   };
 
@@ -1798,6 +1804,7 @@ export default function Workspace() {
           onViewChange={handleViewChange}
           currentMission={currentMission}
           connectedCount={connectedCount}
+          isAdmin={(session?.user as any)?.role === 'admin'}
           memoryCount={memories.length}
           skillCount={skillCounts.cards + skillCounts.installed}
           patrolCount={cronJobs.filter((j) => j.status === 'active').length}
@@ -1995,6 +2002,12 @@ export default function Workspace() {
                 focusTaskId={runnerFocusTaskId}
                 onFocusHandled={() => setRunnerFocusTaskId(null)}
               />
+            </main>
+          )}
+
+          {activeView === 'ops' && (session?.user as any)?.role === 'admin' && (
+            <main className="min-h-[calc(100vh-3.5rem)] overflow-y-auto pb-16 md:pb-0">
+              <OpsView />
             </main>
           )}
         </div>

@@ -22,6 +22,7 @@ import {
 } from './mission-efficiency';
 import { buildTaskSystemPrompt } from './task-system-prompt';
 import { logRuntime } from './runtime-log';
+import { deriveOpsSource, recordMissionFinished, recordMissionStarted, recordUsage } from './ops-ledger';
 
 export interface AgentBackendState {
   missions: Mission[];
@@ -323,6 +324,15 @@ class AgentBackend {
               });
             }
             saveUserMission(user.userId, m);
+            // 运营流水入账:重启清扫 → interrupted(与回灌共用进程级去重,
+            // 首次启动 sweep 与 backfill 对同一任务只会记一条)
+            recordMissionFinished({
+              missionId: m.id,
+              userId: user.userId,
+              outcome: 'interrupted',
+              durationMs: 0,
+              stepCount: Array.isArray(m.steps) ? m.steps.length : 0,
+            });
             swept++;
           }
         }
@@ -415,6 +425,13 @@ class AgentBackend {
       const mission = this.state.missions.find((m) => m.id === taskId);
       if (!mission) return;
       mission.usage = accumulateMissionUsage(mission.usage, { promptTokens, completionTokens });
+      // 运营流水入账:逐步增量记账(与 mission.usage 总账同源,天然无双计)
+      recordUsage({
+        missionId: mission.id,
+        userId: mission.userId,
+        promptTokens,
+        completionTokens,
+      });
       this.broadcast({
         type: 'mission_usage',
         data: { taskId: mission.id, usage: mission.usage, userId: mission.userId },
@@ -434,6 +451,14 @@ class AgentBackend {
       mission.usage = accumulateMissionUsage(mission.usage, {
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
+      });
+      // 运营流水入账:子代理用量并入(sub 标记,成本归因到父任务)
+      recordUsage({
+        missionId: mission.id,
+        userId: mission.userId,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        sub: true,
       });
       this.broadcast({
         type: 'mission_usage',
@@ -964,6 +989,14 @@ class AgentBackend {
             // 进度按真实完成比例呈现（未执行的看板步骤不计入完成）
             const doneCount = mission.steps.filter((st) => st.status === 'DONE').length;
             mission.progress = Math.round((doneCount / (mission.steps.length || 1)) * 100);
+            // 运营流水入账(best-effort,进程级 Set 去重防多路回声双记)
+            recordMissionFinished({
+              missionId: mission.id,
+              userId: mission.userId,
+              outcome: 'done',
+              durationMs: Date.now() - (mission.startedAt || Date.now()),
+              stepCount: mission.steps.length,
+            });
 
             // 内容工坊成品自动落交付库:知乎/公众号/小红书的成稿历来只渲染成对话流
             // 里的包卡片(CockpitView 解析),不写 mission.artifact —— 而「交付物」库
@@ -1098,6 +1131,14 @@ class AgentBackend {
             id: `step_err_${Date.now()}`,
             title: `执行异常: ${errorMsg}`,
             status: 'FAILED',
+          });
+          // 运营流水入账:执行异常 → failed(失败率分子)
+          recordMissionFinished({
+            missionId: mission.id,
+            userId: mission.userId,
+            outcome: 'failed',
+            durationMs: Date.now() - (mission.startedAt || Date.now()),
+            stepCount: mission.steps.length,
           });
           this.broadcast({ type: 'mission_updated', data: mission });
 
@@ -1554,6 +1595,14 @@ class AgentBackend {
         status: 'FAILED',
         duration: '0ms',
       });
+      // 运营流水入账:用户主动终止 → aborted(不算失败)
+      recordMissionFinished({
+        missionId: mission.id,
+        userId: mission.userId,
+        outcome: 'aborted',
+        durationMs: Date.now() - (mission.startedAt || Date.now()),
+        stepCount: mission.steps.length,
+      });
       this.broadcast({ type: 'mission_updated', data: mission });
       this.addTerminalLog('system', `[Mission Aborted] ID: ${missionId} has been terminated.`, mission.userId);
     }
@@ -1580,6 +1629,14 @@ class AgentBackend {
           title: '会话已重置，任务已终止 (Session Reset)',
           status: 'FAILED',
         });
+        // 运营流水入账:会话重置批量终止 → aborted
+        recordMissionFinished({
+          missionId: m.id,
+          userId: m.userId,
+          outcome: 'aborted',
+          durationMs: Date.now() - (m.startedAt || Date.now()),
+          stepCount: m.steps.length,
+        });
         this.broadcast({ type: 'mission_updated', data: m });
       }
     });
@@ -1590,7 +1647,7 @@ class AgentBackend {
 
   public async runMission(
     goal: string,
-    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; materialRefs?: Array<{ id: string; title: string }>; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string; cronJobId?: string; skillPacks?: string[] } = {}
+    options: { title?: string; userId?: string; missionId?: string; skipUserStep?: boolean; workshopId?: string; materialRefs?: Array<{ id: string; title: string }>; unattended?: boolean; delivery?: import('@/workshops/types').DeliveryContract; parentMissionId?: string; cronJobId?: string; skillPacks?: string[]; source?: string } = {}
   ): Promise<Mission> {
     await this.ensureRuntime();
 
@@ -1799,6 +1856,14 @@ class AgentBackend {
       // 用户提问气泡出现的同时智能体头像与思考指示即刻可见
       ensureLiveStep(targetMission);
       this.broadcast({ type: 'mission_created', data: targetMission });
+      // 运营流水入账:新任务创建的唯一站点(续聊不重复记 started)
+      recordMissionStarted({
+        missionId,
+        userId: options.userId,
+        source: deriveOpsSource(options),
+        workshopId: options.workshopId,
+        cronJobId: options.cronJobId,
+      });
       logRuntime('INFO', missionId, `mission started: ${goal.slice(0, 60).replace(/\s+/g, ' ')}`);
       this.addTerminalLog('system', `[Mission Started] ID: ${missionId} | Goal: ${goal}`, options.userId);
     }

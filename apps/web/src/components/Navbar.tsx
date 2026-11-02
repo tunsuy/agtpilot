@@ -18,15 +18,18 @@ import {
   MonitorSmartphone,
   Unplug,
   Wand2,
+  BarChart3,
 } from 'lucide-react';
 import { Mission, ApprovalRequest, User } from '../types/agent';
 import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
-  activeView: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices';
-  onViewChange: (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices') => void;
+  activeView: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices' | 'ops';
+  onViewChange: (view: 'home' | 'cockpit' | 'workshops' | 'goals' | 'connectors' | 'memories' | 'skills' | 'patrol' | 'deliverables' | 'devices' | 'ops') => void;
   currentMission: Mission | null;
   connectedCount: number;
+  /** 运营管理员(session.user.role==='admin'):控制「运营」标签显隐(入口级,数据另有服务端门禁) */
+  isAdmin?: boolean;
   memoryCount?: number;
   /** 技能中心角标(技能卡 + 已引用生态技能包) */
   skillCount?: number;
@@ -48,6 +51,7 @@ export function Navbar({
   onViewChange,
   currentMission,
   connectedCount,
+  isAdmin = false,
   memoryCount = 0,
   skillCount = 0,
   patrolCount = 0,
@@ -263,6 +267,23 @@ export function Navbar({
           <MonitorSmartphone className="h-3.5 w-3.5" />
           <span>设备</span>
         </button>
+
+        {/* 运营看板:仅 admin 可见(env AGTPILOT_OPS_ADMINS / mock Demo);
+            入口显隐是 UI 级,数据出口 /api/ops/* 另有服务端双重校验 */}
+        {isAdmin && (
+          <button
+            onClick={() => onViewChange('ops')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+              activeView === 'ops'
+                ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+                : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
+            }`}
+            title="运营看板(用户活跃 / 用量趋势 / 质量成本)"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            <span>运营</span>
+          </button>
+        )}
       </nav>
 
       {/* Right Controls */}

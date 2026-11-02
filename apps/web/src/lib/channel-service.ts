@@ -304,6 +304,8 @@ class ChannelManager {
         // IM 通道看不到网页问题卡(首版),按无人值守处理:不挂 ask_user,
         // 模糊需求走模型自行拍板,不让用户隔着 IM 干等 5 分钟超时
         unattended: true,
+        // 运营流水渠道口径:IM 通道派发的任务记 source='channel'
+        source: 'channel',
       });
       store.saveConversation({
         channel: msg.channel,

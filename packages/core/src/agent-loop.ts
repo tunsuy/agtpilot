@@ -17,8 +17,16 @@ import type {
 } from './contracts';
 import { reasoningStripEnabled, stripReasoningParts } from './reasoning';
 
+/**
+ * 本外壳实际消费的最小模型面:只调 runAgentLoop(循环内不再碰网关的
+ * 单步调用/偏好/预算方法)。比 ModelGateway 窄 —— 父 agent(orchestrator)
+ * 传全量网关、子 agent(plugin-subagent)传窄接口 SubagentModel 都结构满足。
+ */
+export interface LoopGateway
+  extends Pick<ModelGateway, 'runAgentLoop'> {}
+
 export interface RunAgentLoopOptions extends Omit<AgentLoopOptions, 'prepareStep'> {
-  gateway: ModelGateway;
+  gateway: LoopGateway;
   prepareStep?: AgentLoopPrepareStep;
   /** 缺省 true：循环内与收尾装配都剥离 reasoning */
   stripReasoning?: boolean;

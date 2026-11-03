@@ -252,7 +252,7 @@ export function apply(ctx: Context, config: SubagentPluginConfig = {}) {
       },
       required: ['trace_id'],
     },
-    execute: (args: any) => {
+    execute: async (args: any) => {
       const traceId = String(args?.trace_id ?? '');
       const events = service.engine.getTrace(traceId);
       if (!events) {

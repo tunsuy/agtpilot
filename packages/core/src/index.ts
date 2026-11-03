@@ -82,7 +82,7 @@ export { stripReasoningParts, reasoningStripEnabled } from './reasoning';
 export type { ReasoningMessageLike, StripReasoningResult } from './reasoning';
 export { ToolGate } from './tool-gate';
 export { runAgentLoopWithHooks } from './agent-loop';
-export type { RunAgentLoopOptions, RunAgentLoopResult } from './agent-loop';
+export type { LoopGateway, RunAgentLoopOptions, RunAgentLoopResult } from './agent-loop';
 export { runPreparePipeline } from './prepare-pipeline';
 export type {
   PrepareStepContext,

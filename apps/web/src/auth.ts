@@ -9,6 +9,7 @@ import { isMockAuthAllowed } from './lib/auth-mock';
 import { deriveStableUserId } from './lib/auth-identity';
 import { isOpsAdmin } from './lib/ops-admin';
 import { recordUserLogin } from './lib/ops-ledger';
+import { registerCredentialUser, verifyCredentialUser } from './lib/auth-credentials';
 
 const configuredProviders: any[] = [];
 
@@ -55,6 +56,8 @@ configuredProviders.push(
     credentials: {
       email: { label: 'Email', type: 'email' },
       password: { label: 'Password', type: 'password' },
+      name: { label: 'Name', type: 'text' },
+      mode: { label: 'Mode', type: 'text' },
       isDemo: { label: 'Demo', type: 'text' },
       socialProvider: { label: 'SocialProvider', type: 'text' },
       socialName: { label: 'SocialName', type: 'text' },
@@ -149,23 +152,37 @@ configuredProviders.push(
         }
       }
 
-      const email = credentials?.email as string;
-      const password = credentials?.password as string;
+      const email = String(credentials?.email ?? '').trim().toLowerCase();
+      const password = String(credentials?.password ?? '');
+      if (!email || !password) return null;
 
-      if (!email || !password) {
-        return null;
+      if (credentials?.mode === 'register') {
+        const registered = registerCredentialUser(
+          email,
+          password,
+          String(credentials?.name ?? email.split('@')[0]),
+        );
+        if (!registered) return null;
+        return {
+          id: 'usr_' + Buffer.from(registered.email).toString('hex').slice(0, 16),
+          name: registered.name,
+          email: registered.email,
+          role: 'user',
+          tier: 'Pro',
+          tokensUsed: 0,
+          tokensLimit: 100000,
+        };
       }
 
-      // 稳定确定性的用户 ID，避免每次用同个邮箱登录变成不同用户
-      const safeId = 'usr_' + Buffer.from(email.toLowerCase().trim()).toString('hex').slice(0, 16);
-
+      const verified = verifyCredentialUser(email, password);
+      if (!verified) return null;
       return {
-        id: safeId,
-        name: email.split('@')[0],
-        email,
+        id: 'usr_' + Buffer.from(verified.email).toString('hex').slice(0, 16),
+        name: verified.name,
+        email: verified.email,
         role: 'user',
         tier: 'Pro',
-        tokensUsed: 3500,
+        tokensUsed: 0,
         tokensLimit: 100000,
       };
     },

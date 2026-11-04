@@ -200,11 +200,16 @@ export function AuthModal({
         email: email.trim(),
         password,
         name: tab === 'register' ? name.trim() : undefined,
+        mode: tab === 'register' ? 'register' : 'login',
         redirect: false,
       });
 
       if (res?.error) {
-        setError('登录失败：邮箱或密码错误');
+        setError(
+          tab === 'register'
+            ? '注册失败：邮箱已被占用，或密码需至少 12 位'
+            : '登录失败：邮箱或密码错误',
+        );
       } else {
         onClose();
         window.location.reload();
@@ -547,8 +552,8 @@ export function AuthModal({
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <label className="text-[11px] font-medium text-zinc-700 block">登录密码</label>
-                    {tab === 'login' && (
-                      <span className="text-[10px] text-zinc-400">支持任意模拟密码</span>
+                    {tab === 'register' && (
+                      <span className="text-[10px] text-zinc-400">至少 12 位</span>
                     )}
                   </div>
                   <div className="relative">
@@ -556,6 +561,9 @@ export function AuthModal({
                     <input
                       type={showPassword ? 'text' : 'password'}
                       required
+                      minLength={tab === 'register' ? 12 : undefined}
+                      maxLength={1024}
+                      autoComplete={tab === 'register' ? 'new-password' : 'current-password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"

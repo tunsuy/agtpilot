@@ -38,11 +38,12 @@ afterAll(() => {
 });
 
 describe('sandbox 配置与 exposeAllowlist 门控', () => {
-  it('默认配置为空(零暴露/零自定义绑定/fence off)', () => {
+  it('默认配置为空(零暴露/零自定义绑定/fence 未设;运行时解析为 best_effort)', () => {
     const cfg = us.getSandboxConfig('sbx-user-a');
     expect(cfg.exposeAllowlist || []).toEqual([]);
     expect(cfg.credentialBindings || {}).toEqual({});
-    expect(cfg.fence === undefined || cfg.fence === 'off').toBe(true);
+    // user-store 未写 fence 时为 undefined;agent-backend 解析缺省 DEFAULT_FENCE_MODE=best_effort
+    expect(cfg.fence).toBeUndefined();
   });
 
   it('saveSandboxConfig 往返持久化', () => {

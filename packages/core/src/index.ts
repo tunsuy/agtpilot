@@ -128,12 +128,19 @@ export { classifyBrowserFailure } from './browser-failure';
 export type { BrowserFailureKind, BrowserFailureGuide } from './browser-failure';
 export {
   DEFAULT_CREDENTIAL_BINDINGS,
+  DEFAULT_FENCE_MODE,
   buildChildEnv,
   resolveCredentialRequest,
   decideFence,
   buildBwrapArgs,
+  guardCommandSensitivePaths,
 } from './sandbox-fence';
-export type { SandboxSessionPolicy, CredentialDecision, FenceDecision } from './sandbox-fence';
+export type {
+  SandboxSessionPolicy,
+  CredentialDecision,
+  FenceDecision,
+  CommandPathGuardResult,
+} from './sandbox-fence';
 export { AgentService } from './agent-service';
 export { OrchestratorService, DEFAULT_SYSTEM_PROMPT, isCutOffToolCall, isCutOffAnswer } from './orchestrator';
 export type { TaskOptions, TaskResult, TaskEfficiency } from './task-types';

@@ -2281,18 +2281,18 @@ class AgentBackend {
           // 沙箱控制策略(taskSandbox,docs/design/sandbox-control-hardening.md §4.4):
           // - exposeEnv: 仅用户显式 opt-in 白名单 ∩ 实际注入的 taskEnv 键(默认零 Key 进子进程);
           // - credentialBindings: core 默认绑定 ∪ 用户自定义(提案批准后热更新的落点);
-          // - fence: 用户配置 → AGTPILOT_SANDBOX_FENCE → off(向后兼容)。
+          // - fence: 用户配置 → AGTPILOT_SANDBOX_FENCE → DEFAULT_FENCE_MODE(best_effort)。
           // 该对象为活引用:权限提案批准后经 onPermissionResolved 原地修改,in-flight 任务即时生效。
           try {
             const { getSandboxConfig } = await import('@/lib/user-store');
-            const { DEFAULT_CREDENTIAL_BINDINGS } = await import('@agtpilot/core');
+            const { DEFAULT_CREDENTIAL_BINDINGS, DEFAULT_FENCE_MODE } = await import('@agtpilot/core');
             const sbxCfg = getSandboxConfig(uid);
             const envFence = process.env.AGTPILOT_SANDBOX_FENCE;
             const fence: 'off' | 'best_effort' | 'hard_requirement' =
               sbxCfg.fence ||
               (envFence === 'best_effort' || envFence === 'hard_requirement' || envFence === 'off'
                 ? envFence
-                : 'off');
+                : DEFAULT_FENCE_MODE);
             taskSandbox = {
               exposeEnv: (sbxCfg.exposeAllowlist || []).filter((k) => Boolean(taskEnv && k in taskEnv)),
               credentialBindings: { ...DEFAULT_CREDENTIAL_BINDINGS, ...(sbxCfg.credentialBindings || {}) },
@@ -2306,8 +2306,8 @@ class AgentBackend {
               );
             }
           } catch (e: any) {
-            this.addTerminalLog('stderr', `[Sandbox] 沙箱策略构建异常(降级为默认零暴露): ${e?.message || e}`);
-            taskSandbox = { exposeEnv: [], fence: 'off', net: 'allow' };
+            this.addTerminalLog('stderr', `[Sandbox] 沙箱策略构建异常(降级为默认零暴露+best_effort): ${e?.message || e}`);
+            taskSandbox = { exposeEnv: [], fence: 'best_effort', net: 'allow' };
           }
         }
 

@@ -18,11 +18,19 @@ export interface SandboxSessionPolicy {
   exposeEnv?: string[];
   /** 凭据-端点绑定: envVar → 允许发往的 host 列表(默认绑定与用户自定义合并后下发) */
   credentialBindings?: Record<string, string[]>;
-  /** 内核围栏模式: off(默认,逻辑围栏) / best_effort(bwrap 缺失降级继续) / hard_requirement(bwrap 缺失拒绝执行) */
+  /**
+   * 内核围栏模式:
+   * - best_effort(解析缺省):有 bwrap 则窄挂载包裹,缺失则降级 + 敏感路径预检;
+   * - hard_requirement:无 bwrap 拒绝执行;
+   * - off:显式关闭内核围栏(仅逻辑预检,不推荐)。
+   */
   fence?: 'off' | 'best_effort' | 'hard_requirement';
   /** 出站网络: allow(默认) / deny(fence 生效时 bwrap --unshare-net) */
   net?: 'allow' | 'deny';
 }
+
+/** 任务未显式配置时的围栏缺省(agent-backend / decideFence 共用) */
+export const DEFAULT_FENCE_MODE: NonNullable<SandboxSessionPolicy['fence']> = 'best_effort';
 
 /**
  * 既有连接器 envVar → 官方 API 端点的默认凭据绑定。
@@ -115,15 +123,16 @@ export interface FenceDecision {
 
 /**
  * 围栏模式决策(OpenShell best_effort / hard_requirement 同名语义):
- * off → 逻辑围栏(路径围栏 + 环境白名单);bwrap 可用则包裹。
+ * 缺省 / best_effort → 有 bwrap 则包裹,否则降级;off → 永不包裹;hard_requirement → 无 bwrap 拒绝。
  */
 export function decideFence(
   mode: SandboxSessionPolicy['fence'] | undefined,
   bwrapAvailable: boolean,
 ): FenceDecision {
-  if (!mode || mode === 'off') return { wrap: false, degraded: false, blocked: false };
+  const resolved = mode ?? DEFAULT_FENCE_MODE;
+  if (resolved === 'off') return { wrap: false, degraded: false, blocked: false };
   if (bwrapAvailable) return { wrap: true, degraded: false, blocked: false };
-  if (mode === 'best_effort') {
+  if (resolved === 'best_effort') {
     return {
       wrap: false,
       degraded: true,
@@ -140,22 +149,77 @@ export function decideFence(
 }
 
 /**
+ * 窄只读挂载集:能跑常见 /usr 工具 + TLS/DNS,刻意不挂整盘根,
+ * 避免 `cat ~/.env` / 宿主 HOME / USER_DATA_DIR 对子进程可见。
+ * --ro-bind-try 缺路径不失败(跨发行版 / mac 测试桩兼容)。
+ */
+const BWRAP_RO_BINDS: ReadonlyArray<readonly [string, string]> = [
+  ['/usr', '/usr'],
+  ['/bin', '/bin'],
+  ['/sbin', '/sbin'],
+  ['/lib', '/lib'],
+  ['/lib64', '/lib64'],
+  ['/etc/ssl', '/etc/ssl'],
+  ['/etc/ca-certificates', '/etc/ca-certificates'],
+  ['/etc/resolv.conf', '/etc/resolv.conf'],
+  ['/etc/hosts', '/etc/hosts'],
+  ['/etc/nsswitch.conf', '/etc/nsswitch.conf'],
+  ['/etc/passwd', '/etc/passwd'],
+  ['/etc/group', '/etc/group'],
+];
+
+/**
  * 生成 bwrap 参数(「--」之前的部分;调用方追加 `-- <command...>`):
- * 只读根 + 可写 workspace(bind 顺序在 ro-bind 之后以覆盖)+ tmpfs /tmp +
- * --die-with-parent(父进程死亡即杀沙箱)+ 可选 --unshare-net。
+ * 窄只读系统挂载 + 可写 workspace + tmpfs /tmp + --die-with-parent + 可选 --unshare-net。
+ * 不再 `--ro-bind / /`(整盘只读仍可掏宿主连接配置)。
  */
 export function buildBwrapArgs(opts: {
   workspaceRoot: string;
   net?: 'allow' | 'deny';
 }): string[] {
-  const args = [
-    '--ro-bind-try', '/', '/',
-    '--dev', '/dev',
-    '--proc', '/proc',
-    '--tmpfs', '/tmp',
-    '--die-with-parent',
-  ];
+  const args: string[] = [];
+  for (const [src, dest] of BWRAP_RO_BINDS) {
+    args.push('--ro-bind-try', src, dest);
+  }
+  args.push('--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--die-with-parent');
   if (opts.net === 'deny') args.push('--unshare-net');
   args.push('--bind', opts.workspaceRoot, opts.workspaceRoot);
   return args;
+}
+
+export type CommandPathGuardResult =
+  | { ok: true }
+  | { ok: false; code: 'sensitive_path_blocked'; message: string; match: string };
+
+/**
+ * 无 bwrap / 围栏降级时的逻辑读盘预检(托底,不冒充根治)。
+ * 拦截命令串里指向宿主敏感绝对路径、家目录密钥、云元数据、进程 environ 的字面量;
+ * workspace 相对路径(如 `cat .env`)放行 —— 那是任务工作区内的项目文件。
+ */
+const SENSITIVE_COMMAND_PATTERNS: ReadonlyArray<{ re: RegExp; label: string }> = [
+  { re: /(?:^|[\s"'`=(])(?:~|\$HOME|\$\{HOME\})\s*\/\s*\.ssh\b/i, label: '~/.ssh' },
+  { re: /(?:^|[\s"'`=(])(?:~|\$HOME|\$\{HOME\})\s*\/[^\s"'`]*\.env\b/i, label: 'home .env' },
+  { re: /(?:^|[\s"'`=(])\/(?:home|Users|root)\/[^\s"'`]*\.env\b/i, label: 'absolute home .env' },
+  { re: /(?:^|[\s"'`=(])\/etc\/(?:shadow|sudoers)(?:\.d)?\b/i, label: '/etc/shadow|sudoers' },
+  { re: /169\.254\.169\.254/, label: 'cloud metadata 169.254.169.254' },
+  { re: /\/proc\/(?:self|\d+)\/environ\b/, label: '/proc/*/environ' },
+  { re: /(?:^|[\s"'`=(])\/(?:etc|var|opt|usr\/local)\/[^\s"'`]*(?:\.env|credential|secrets?(?:\.json)?|token)/i, label: 'sensitive absolute config' },
+  { re: /\.secret_key\b/, label: '.secret_key' },
+  { re: /\bUSER_DATA_DIR\b/, label: 'USER_DATA_DIR' },
+  { re: /(?:^|[\s"'`=(])\/(?:home|Users|root)\/[^\s"'`]*\/\.(?:aws|config\/gcloud|docker)\/[^\s"'`]*/i, label: 'cloud/cli credential dir' },
+];
+
+export function guardCommandSensitivePaths(command: string): CommandPathGuardResult {
+  const cmd = String(command || '');
+  for (const { re, label } of SENSITIVE_COMMAND_PATTERNS) {
+    if (re.test(cmd)) {
+      return {
+        ok: false,
+        code: 'sensitive_path_blocked',
+        match: label,
+        message: `命令疑似访问敏感路径(${label}),已拒绝执行。请改用 workspace 内路径与 sandbox_read_file。`,
+      };
+    }
+  }
+  return { ok: true };
 }

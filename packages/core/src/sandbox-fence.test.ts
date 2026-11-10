@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_CREDENTIAL_BINDINGS,
+  DEFAULT_FENCE_MODE,
   buildChildEnv,
   resolveCredentialRequest,
   decideFence,
   buildBwrapArgs,
+  guardCommandSensitivePaths,
 } from './sandbox-fence';
 
 const HOST_ENV = {
@@ -94,9 +96,14 @@ describe('resolveCredentialRequest(端点绑定)', () => {
 });
 
 describe('decideFence(best_effort / hard_requirement 矩阵)', () => {
+  it('缺省 = best_effort(有 bwrap 则包裹)', () => {
+    expect(DEFAULT_FENCE_MODE).toBe('best_effort');
+    expect(decideFence(undefined, true)).toMatchObject({ wrap: true, degraded: false, blocked: false });
+  });
+
   it('off → 不包裹不降级', () => {
     expect(decideFence('off', true)).toEqual({ wrap: false, degraded: false, blocked: false });
-    expect(decideFence(undefined, true).wrap).toBe(false);
+    expect(decideFence('off', false)).toEqual({ wrap: false, degraded: false, blocked: false });
   });
 
   it('best_effort + bwrap 可用 → 包裹', () => {
@@ -121,14 +128,18 @@ describe('decideFence(best_effort / hard_requirement 矩阵)', () => {
   });
 });
 
-describe('buildBwrapArgs', () => {
-  it('只读根 + 可写 workspace + tmpfs /tmp + die-with-parent', () => {
+describe('buildBwrapArgs(窄挂载,不整盘只读根)', () => {
+  it('挂 /usr 等最小只读集 + 可写 workspace,不挂整盘 /', () => {
     const args = buildBwrapArgs({ workspaceRoot: '/srv/app' });
-    expect(args).toContain('--ro-bind-try');
+    const joined = args.join(' ');
+    expect(joined).toContain('--ro-bind-try /usr /usr');
+    expect(joined).toContain('--ro-bind-try /etc/resolv.conf /etc/resolv.conf');
+    expect(joined).toContain('--tmpfs /tmp');
+    expect(joined).toContain('--bind /srv/app /srv/app');
     expect(args).toContain('--die-with-parent');
-    expect(args.join(' ')).toContain('--tmpfs /tmp');
-    expect(args.join(' ')).toContain('--bind /srv/app /srv/app');
     expect(args).not.toContain('--unshare-net');
+    // 关键:不再整盘 --ro-bind-try / /
+    expect(joined).not.toMatch(/--ro-bind-try\s+\/\s+\//);
   });
 
   it('net=deny 时加 --unshare-net', () => {
@@ -136,10 +147,39 @@ describe('buildBwrapArgs', () => {
     expect(args).toContain('--unshare-net');
   });
 
-  it('workspace 绑定排在只读根之后(覆盖生效)', () => {
+  it('workspace 绑定排在只读挂载之后', () => {
     const args = buildBwrapArgs({ workspaceRoot: '/srv/app' });
     const roIdx = args.indexOf('--ro-bind-try');
     const bindIdx = args.indexOf('--bind');
     expect(bindIdx).toBeGreaterThan(roIdx);
+  });
+});
+
+describe('guardCommandSensitivePaths(降级读盘预检)', () => {
+  it('workspace 相对路径放行(含项目 .env)', () => {
+    expect(guardCommandSensitivePaths('cat .env').ok).toBe(true);
+    expect(guardCommandSensitivePaths('ls -la ./config').ok).toBe(true);
+    expect(guardCommandSensitivePaths('pnpm test').ok).toBe(true);
+  });
+
+  it('家目录 / 绝对敏感路径 / 云元数据 / environ → 拒绝', () => {
+    const blocked = [
+      'cat ~/.ssh/id_rsa',
+      'cat $HOME/.env',
+      'cat /Users/tunsuy/.env',
+      'cat /home/ubuntu/.env.local',
+      'curl http://169.254.169.254/latest/meta-data/',
+      'cat /proc/1/environ',
+      'cat /proc/self/environ',
+      'cat /etc/shadow',
+      'cat /var/secrets/token',
+      'echo $USER_DATA_DIR',
+      'cat /Users/x/.aws/credentials',
+    ];
+    for (const cmd of blocked) {
+      const r = guardCommandSensitivePaths(cmd);
+      expect(r.ok, cmd).toBe(false);
+      if (!r.ok) expect(r.code).toBe('sensitive_path_blocked');
+    }
   });
 });

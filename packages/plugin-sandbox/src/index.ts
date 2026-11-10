@@ -4,6 +4,7 @@ import {
   buildChildEnv,
   decideFence,
   buildBwrapArgs,
+  guardCommandSensitivePaths,
   resolveCredentialRequest,
   guardUrlHost,
   DEFAULT_CREDENTIAL_BINDINGS,
@@ -100,7 +101,8 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
   // 1. 命令执行原子能力 (sandbox_run_command)
   ctx.agent.registerTool({
     name: 'sandbox_run_command',
-    description: '在宿主机的工作目录中执行 Shell 命令，返回标准输出、标准错误和退出码。隔离层级：默认 local（路径围栏+环境白名单，无系统级隔离）；fence 配置开启且宿主机有 bwrap 时为 bwrap 内核围栏（只读根+可写工作区）；Python 代码可改用 sandbox_run_code 走 E2B 云端 MicroVM 隔离。高危工具，触发安全审批拦截。',
+    description:
+      '在工作区执行 Shell 命令，返回标准输出、标准错误和退出码。隔离层级：默认 best_effort——有 bwrap 时为窄挂载内核围栏（只读 /usr 等最小系统集 + 可写 workspace，不挂整盘根）；无 bwrap 时降级为逻辑围栏并拦截敏感绝对路径字面量。显式 fence=off 才关闭内核围栏。Python 可改用 sandbox_run_code 走 E2B。高危工具，触发安全审批拦截。',
     dangerLevel: 'high',
     parameters: {
       type: 'object',
@@ -141,6 +143,25 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
         });
       }
       const fenceLabel = fence.wrap ? 'bwrap' : fence.degraded ? 'degraded (bwrap 不可用)' : 'off';
+
+      // 无 bwrap 包裹时逻辑读盘预检(托底);有窄挂载时也做字面量拦截,错误更可读
+      const pathGuard = guardCommandSensitivePaths(String(command));
+      if (!pathGuard.ok) {
+        emitDeny(session, {
+          tool: 'sandbox_run_command',
+          reason: pathGuard.code,
+          match: pathGuard.match,
+          command: String(command),
+          detail: pathGuard.message,
+        });
+        return {
+          success: false,
+          command,
+          code: pathGuard.code,
+          error: pathGuard.message,
+          fence: fenceLabel,
+        };
+      }
 
       try {
         const env = childEnv(session);
@@ -264,8 +285,7 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
         }
       }
 
-      // 本地临时目录执行（注意：非系统级隔离，与宿主共享文件系统；fence 配置开启且
-      // 宿主机有 bwrap 时以只读根内核围栏包裹，可写区仅 workspace）
+      // 本地临时目录执行:有 bwrap 时窄挂载包裹(可写区仅 workspace);无则逻辑预检托底
       const fileExt = language === 'python' ? '.py' : language === 'typescript' ? '.ts' : '.mjs';
       const tempFileName = `snippet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${fileExt}`;
       const tempFilePath = path.join(tempSandboxDir, tempFileName);
@@ -283,6 +303,24 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
         });
       }
       const fenceLabel = fence.wrap ? 'bwrap' : fence.degraded ? 'degraded (bwrap 不可用)' : 'off';
+
+      // 代码串敏感路径预检(无/有 bwrap 都做:窄挂载外的路径会失败,字面量先拒更清晰)
+      const codeGuard = guardCommandSensitivePaths(String(code));
+      if (!codeGuard.ok) {
+        emitDeny(session, {
+          tool: 'sandbox_run_code',
+          reason: codeGuard.code,
+          match: codeGuard.match,
+          detail: codeGuard.message,
+        });
+        return {
+          success: false,
+          language,
+          code: codeGuard.code,
+          error: codeGuard.message,
+          fence: fenceLabel,
+        };
+      }
 
       try {
         await fs.writeFile(tempFilePath, code, 'utf-8');

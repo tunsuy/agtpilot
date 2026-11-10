@@ -131,7 +131,8 @@ export interface BrowserAuditEntry {
  * 沙箱控制用户级配置(docs/design/sandbox-control-hardening.md §5):
  * - exposeAllowlist: 允许进子进程环境的 session.env 键(用户显式 opt-in,默认空 = 零暴露);
  * - credentialBindings: 自定义凭据-端点绑定(与 core DEFAULT_CREDENTIAL_BINDINGS 合并后下发);
- * - fence: 内核围栏模式(off / best_effort / hard_requirement,需宿主机 bwrap)。
+ * - fence: 内核围栏模式(off / best_effort / hard_requirement,需宿主机 bwrap);
+ *   未配置时由 agent-backend 解析为 DEFAULT_FENCE_MODE(best_effort)。
  */
 export interface SandboxConfigRecord {
   exposeAllowlist?: string[];

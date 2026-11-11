@@ -5,6 +5,7 @@ import {
   issueNoFromUrl,
   handoffPackFor,
   newRunnerTaskId,
+  buildAiOnboardingPrompt,
 } from '../runner-dispatch';
 import type { OssOpportunity } from '../../workshops/oss_radar/opportunities';
 
@@ -651,5 +652,40 @@ describe('summarizeRunnerTask · followUp / viaFork / baseBranch 透传(跟进 U
     const plain = summarizeRunnerTask(rec({}));
     expect('viaFork' in plain).toBe(false);
     expect('baseBranch' in plain).toBe(false);
+  });
+});
+
+describe('buildAiOnboardingPrompt(AI 接入提示词,纯函数)', () => {
+  const prompt = buildAiOnboardingPrompt({ serverUrl: 'https://agtpilot.example.com', code: 'ABCD1234' });
+
+  it('serverUrl 与配对码原样注入(复制即用)', () => {
+    expect(prompt).toContain('agtpilot-runner pair --server https://agtpilot.example.com --code ABCD1234');
+  });
+
+  it('五步齐全:环境检查 → 安装 → 配对 → 常驻守护 → 验证汇报', () => {
+    expect(prompt).toContain('node -v ≥ 20');
+    expect(prompt).toContain('npm i -g @agtpilot/runner');
+    expect(prompt).toContain('LaunchAgent');
+    expect(prompt).toContain('systemd');
+    expect(prompt).toContain('agtpilot-runner status');
+    expect(prompt).toContain('心跳 ok');
+  });
+
+  it('安全红线话术:密钥不外泄 / 401 不重试改请重新配对 / 不绕审批门', () => {
+    expect(prompt).toContain('deviceSecret 绝不打印');
+    expect(prompt).toContain('401');
+    expect(prompt).toContain('不要重试');
+    expect(prompt).toContain('--dangerously-skip-permissions');
+  });
+
+  it('配对码短命提示:立即执行 + 过期重新生成', () => {
+    expect(prompt).toContain('5 分钟过期');
+    expect(prompt).toContain('重新生成');
+  });
+
+  it('无模板占位符残留', () => {
+    expect(prompt).not.toContain('${');
+    expect(prompt).not.toContain('{code}');
+    expect(prompt).not.toContain('{serverUrl}');
   });
 });

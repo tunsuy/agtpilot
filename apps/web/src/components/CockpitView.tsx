@@ -89,6 +89,7 @@ import {
   ConnectorApp,
 } from '../types/agent';
 import { QuestionCard } from './QuestionCard';
+import { formatListTime, formatFullDateTime } from '../lib/time-format';
 
 /**
  * 跳动的已耗时徽标（叶子组件自持 1s 定时器，只重渲染自身）：
@@ -590,8 +591,8 @@ export function CockpitView({
                           </span>
                         )}
                       </span>
-                      <span>
-                        {new Date(m.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      <span title={formatFullDateTime(m.startedAt)}>
+                        {formatListTime(m.startedAt)}
                       </span>
                     </div>
                     </button>

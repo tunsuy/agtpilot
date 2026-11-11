@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { GoalItem, GoalMilestone } from '../types/agent';
 import { SkillPackPicker } from './SkillPackPicker';
+import { formatListTime } from '../lib/time-format';
 
 interface GoalsViewProps {
   goals: GoalItem[];
@@ -750,7 +751,7 @@ export function GoalsView({
                                     )}
                                     {isDone && ms.completedAt && (
                                       <span className="text-[10px] text-zinc-400 font-mono">
-                                        已于 {new Date(ms.completedAt).toLocaleDateString()} 达成
+                                        已于 {formatListTime(ms.completedAt)} 达成
                                       </span>
                                     )}
                                   </div>

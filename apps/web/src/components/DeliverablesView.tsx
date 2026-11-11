@@ -30,6 +30,7 @@ import { ArtifactState, Mission } from '../types/agent';
 import { XiaohongshuPreviewCard } from './XiaohongshuPreviewCard';
 import { OssOpportunityList, parseOssDeliverable } from './workshops/OssOpportunityCard';
 import { shareToApp } from '../utils/nativeBridge';
+import { formatListTime } from '../lib/time-format';
 
 interface DeliverablesViewProps {
   artifact: ArtifactState | null;
@@ -508,10 +509,7 @@ export function DeliverablesView({
                           {item.missionTitle || '自主会话'}
                         </span>
                         <span>
-                          {new Date(item.timestamp).toLocaleDateString([], {
-                            month: 'numeric',
-                            day: 'numeric',
-                          })}
+                          {formatListTime(item.timestamp)}
                         </span>
                       </div>
                     </button>

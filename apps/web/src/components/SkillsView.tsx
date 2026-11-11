@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
+import { formatListTime } from '../lib/time-format';
 
 // ---- 类型(与 /api/skills* 响应同型) ----
 
@@ -458,7 +459,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                   </div>
                   <div className="pt-3 mt-3 border-t border-zinc-100 flex items-center justify-between text-[10px] text-zinc-400">
                     <span className="font-mono">
-                      {new Date(c.updatedAt).toLocaleDateString()} · 命中 {c.hitCount} 次
+                      {formatListTime(c.updatedAt)} · 命中 {c.hitCount} 次
                     </span>
                     <button
                       onClick={() => setDeleteCardTarget(c)}
@@ -532,7 +533,7 @@ export function SkillsView({ onCountsChange }: SkillsViewProps) {
                   </div>
                   <div className="pt-3 mt-3 border-t border-zinc-100 flex items-center justify-between text-[10px] text-zinc-400">
                     <span className="font-mono">
-                      {p.importedAt ? new Date(p.importedAt).toLocaleDateString() : '—'}
+                      {p.importedAt ? formatListTime(p.importedAt) : '—'}
                       {p.fileCount !== undefined && ` · ${p.fileCount} 文件`}
                     </span>
                     <button

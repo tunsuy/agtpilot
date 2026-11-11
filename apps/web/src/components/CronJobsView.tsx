@@ -25,6 +25,7 @@ import { buildXhsWeeklyTopicsPrompt } from '@/workshops/xhs/context';
 import { buildOssRadarPrompt } from '@/workshops/oss_radar/context';
 import type { CronScenario } from '@/lib/cron-scenario';
 import { SkillPackPicker } from './SkillPackPicker';
+import { formatListTime } from '@/lib/time-format';
 
 interface CronJobsViewProps {
   jobs: CronJobItem[];
@@ -63,12 +64,6 @@ const RUN_STATUS_META: Record<string, { text: string; dot: string }> = {
   DONE: { text: '已完成', dot: 'bg-emerald-500' },
   INTERRUPTED: { text: '已中断', dot: 'bg-zinc-400' },
 };
-
-function formatRunTime(ts: number): string {
-  const d = new Date(ts);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
 
 export function CronJobsView({
   jobs,
@@ -442,7 +437,7 @@ export function CronJobsView({
                                   <span
                                     className={`h-1.5 w-1.5 rounded-full shrink-0 ${failed ? 'bg-red-500' : meta.dot}`}
                                   />
-                                  <span className="font-mono text-zinc-400 shrink-0">{formatRunTime(r.startedAt)}</span>
+                                  <span className="font-mono text-zinc-400 shrink-0">{formatListTime(r.startedAt)}</span>
                                   <span className={`truncate min-w-0 ${failed ? 'text-red-500' : 'text-zinc-500'}`}>
                                     {runTitle || job.name}
                                   </span>

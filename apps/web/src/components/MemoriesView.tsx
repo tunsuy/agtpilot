@@ -16,6 +16,7 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { MemoryItem } from '../types/agent';
+import { formatListTime } from '../lib/time-format';
 
 interface MemoriesViewProps {
   memories: MemoryItem[];
@@ -271,7 +272,7 @@ export function MemoriesView({
 
               <div className="pt-3 mt-4 border-t border-zinc-100 flex items-center justify-between text-[10px] text-zinc-400">
                 <span className="font-mono">
-                  {new Date(item.updatedAt).toLocaleDateString()}
+                  {formatListTime(item.updatedAt)}
                   {item.hitCount !== undefined && ` · 命中 ${item.hitCount} 次`}
                 </span>
 

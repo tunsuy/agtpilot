@@ -524,6 +524,9 @@ class AgentBackend {
         // step 存在 —— 模型生成期间时间线不再"静止"，打字机卡片自此就位。
         const mission = this.resolveMissionFromEvent(event);
         if (!mission) break;
+        // 终态护栏:任务已 DONE/停止后,来自残留/重叠流的 step_started 不得
+        // 再拉起新的 RUNNING live step(否则已结束的会话又冒出「正在思考…」)
+        if (mission.status !== 'ACTIVE') break;
         this.flushDeltas(mission.id);
         ensureLiveStep(mission, event.payload?.stepNumber, event.payload?.reason);
         this.broadcast({ type: 'mission_updated', data: mission });
@@ -537,6 +540,13 @@ class AgentBackend {
         // mission_updated，SSE 单连接有序，前端两种流不会交错错位。
         const mission = this.resolveMissionFromEvent(event);
         if (!mission || !event.payload?.delta) break;
+        // 终态护栏:任务已 DONE/停止后仍到达的增量(abort 后模型流未真正掐断、
+        // 或重叠续轮)一律丢弃。否则 applyDelta 会因「当前无 RUNNING live step」
+        // 又 ensureLiveStep 造出一个新的「深度思考中…」,导致会话同时显示
+        // 「失败」与「思考仍在流」的矛盾画面(生产实测 2026-11-11)。
+        if (mission.status !== 'ACTIVE') {
+          break;
+        }
         const kind = event.payload.kind === 'reasoning' ? 'reasoning' : 'text';
         applyDelta(mission, String(event.payload.delta), kind);
         this.queueDelta(mission.id, String(event.payload.delta), kind, mission.userId);
@@ -1540,6 +1550,18 @@ class AgentBackend {
     // 清掉未广播的流式增量缓冲（残段丢弃，任务即将终止）
     this.flushDeltas(missionId);
 
+    // 观测:显式留痕终止请求与当时任务状态。尤其 status 已是 DONE 时本函数
+    // 只断流、不补 step_abort_ 尾巴(见下方 status!=='DONE' 分支),历史上因此
+    // 「无痕」,生产排障时无法判断是否被 stop。先落一条再无脑 abort。
+    {
+      const traceMission = this.state.missions.find((m) => m.id === missionId);
+      this.addTerminalLog(
+        'system',
+        `[Mission Stop] 收到终止请求 mission=${missionId} status=${traceMission?.status ?? 'unknown'}`,
+        traceMission?.userId
+      );
+    }
+
     // 排队的追加消息一并清空:用户主动终止语义强于排队发送,不清会在
     // 轮末兜底里诈尸(队列残留触发无人消费的续聊派发);排队气泡转正
     // 显示(灰 → 正常),不再挂「排队中」
@@ -1627,6 +1649,15 @@ class AgentBackend {
   }
 
   public stopAllMissions() {
+    // 观测:批量终止前留痕(会话重置/登出等场景),便于排障区分「用户停止」与
+    // 「重置级联」
+    {
+      const active = [...this.state.missions].filter((m) => m.status !== 'DONE').map((m) => m.id);
+      this.addTerminalLog(
+        'system',
+        `[Mission Stop] 批量终止在飞任务 ${active.length} 个: ${active.slice(0, 10).join(', ') || '(无)'}`
+      );
+    }
     for (const [id, controller] of this.activeAbortControllers.entries()) {
       controller.abort();
     }
@@ -1887,6 +1918,31 @@ class AgentBackend {
     }
 
     const abortController = new AbortController();
+    // 观测埋点:中止来源追溯。生产实测(2026-11-11):某轮被判「任务已被主动
+    // 终止 (Cancelled)」,却既无 /api/agent/stop 请求、也无 step_abort_ 痕迹,
+    // 无从判断谁 abort 了本轮。给本轮 abort 打一次调用栈:任何路径(用户停止 /
+    // 会话重置 / 内部提前收尾)的首次 abort 都留痕到任务终端 + runtime.log,
+    // 下次再现可直接按栈定位触发点。
+    try {
+      const rawAbort = abortController.abort.bind(abortController);
+      abortController.abort = ((reason?: any) => {
+        if (!abortController.signal.aborted) {
+          const frames = String(new Error().stack || '')
+            .split('\n')
+            .slice(1, 5)
+            .map((s) => s.trim())
+            .join(' <- ');
+          this.addTerminalLog(
+            'stderr',
+            `[Mission Abort] 中断来源追溯: ${frames.slice(0, 400)}`,
+            targetMission.userId
+          );
+        }
+        return rawAbort(reason);
+      }) as AbortController['abort'];
+    } catch {
+      // 埋点失败不影响主流程
+    }
     this.activeAbortControllers.set(targetMission.id, abortController);
 
     // 本轮登记的运行时把手:finally 里按身份比对删除,防止旧轮收尾时

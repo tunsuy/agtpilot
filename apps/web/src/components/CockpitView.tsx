@@ -217,8 +217,14 @@ export function CockpitView({
   // 本地 runner 任务(会话 ↔ 设备任务互跳):会话卡 chip 显示该会话派出的最新任务状态。
   // 只在能跳转(onOpenRunnerTask 提供设备页入口)时才轮询,避免无谓请求
   const [runnerTasks, setRunnerTasks] = useState<RunnerTaskSummary[]>([]);
+  // onOpenRunnerTask 常以内联箭头由父组件传入(每次渲染换新引用)。若直接把它
+  // 放进轮询 effect 依赖,父组件因 SSE 逐 token 频繁重渲染会让本 effect 反复
+  // 重订阅并立即 fetch,形成每秒数次的 /api/runner/tasks/mine 请求风暴
+  // (生产实测:任务运行期间 3~4 次/秒)。改为只依赖「是否具备跳转能力」这一
+  // 稳定布尔量,轮询节奏恢复 10s 一次;跳转回调用法在渲染处就近读取最新 prop。
+  const hasRunnerNav = Boolean(onOpenRunnerTask);
   useEffect(() => {
-    if (!onOpenRunnerTask) return;
+    if (!hasRunnerNav) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -235,7 +241,7 @@ export function CockpitView({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [onOpenRunnerTask]);
+  }, [hasRunnerNav]);
   const runnerTaskForMission = (missionId: string): RunnerTaskSummary | null =>
     runnerTasks.find((t) => t.missionId === missionId) ?? null;
   // 后台子任务(带 parentMissionId)不占活动列表顶层坑位:父会话行下挂

@@ -506,3 +506,31 @@ export function partitionApprovalsByMission<T extends { missionId?: string }>(
   }
   return { visible, hidden };
 }
+
+/**
+ * 「AI 接入提示词」(配对码面板一键复制文案,纯函数 vitest 直测):
+ * 用户整段粘给本机 AI 助手(如 Claude Code),由 AI 照单完成
+ * 安装 → 配对 → 常驻守护 → 验证汇报。serverUrl/配对码随文案注入
+ * ——配对码一次性短命,故内置「装完立即执行 / 过期停下重新生成」话术;
+ * 文案不含任何密钥材料,并显式写入三条安全红线(deviceSecret 不外泄、
+ * 401 不重试改请重新配对、不改 runner 代码/不绕审批门)。
+ * 守护形态按平台给足参数(macOS LaunchAgent / Linux systemd),
+ * 与真实部署判例同构:开机自启 + 崩溃自动拉起 + 手动 stop 不复活。
+ */
+export function buildAiOnboardingPrompt(opts: { serverUrl: string; code: string }): string {
+  const { serverUrl, code } = opts;
+  return `请把这台电脑接入我的 AgtPilot 平台,作为本地 Runner 设备(领取开源贡献任务、调起本地 Claude Code 执行;push/PR 一律回平台审批)。严格按以下步骤执行,任何一步失败就停下并告诉我原因:
+
+1) 环境检查:node -v ≥ 20(缺则先装);git 可用;gh(GitHub CLI)建议已装并登录(缺了只影响经 fork 派发的任务,如实告诉我即可)。
+2) 安装:npm i -g @agtpilot/runner,然后 which agtpilot-runner 确认已在 PATH。
+3) 配对(配对码一次性、约 5 分钟过期,装完立即执行本步;若报过期/已核销,停下让我在平台「设备」页重新生成):
+   agtpilot-runner pair --server ${serverUrl} --code ${code}
+   成功后凭据写入 ~/.agtpilot/runner/credentials.json(0600)。红线:deviceSecret 绝不打印、不外传、不写入任何文件/提交。
+4) 常驻守护(要求:开机自启 + 崩溃自动拉起 + 手动 stop 后不复活):
+   - macOS:写 LaunchAgent ~/Library/LaunchAgents/cn.agtpilot.runner.plist:ProgramArguments=[node 绝对路径, agtpilot-runner 绝对路径, start];EnvironmentVariables.PATH 必须含 node/git/gh 所在目录;RunAtLoad=true;KeepAlive={SuccessfulExit:false};ThrottleInterval=10;stdout/stderr 落 ~/.agtpilot/runner/launchd.log;然后 launchctl bootstrap gui/$(id -u) <plist 路径> 加载。
+   - Linux:写 systemd 服务 agtpilot-runner.service:ExecStart 用绝对路径;Restart=always;RestartSec=5;StartLimitIntervalSec=600;StartLimitBurst=5;daemon-reload 后 enable --now。
+   - 其他平台或没把握:先 nohup agtpilot-runner start >> ~/.agtpilot/runner/runner.log 2>&1 & 跑起来,并告诉我怎么做成常驻。
+5) 验证与汇报:agtpilot-runner status 应显示「实例: 运行中」;日志连续出现「心跳 ok」(5s 一拍)。向我汇报:设备 id、serverUrl、runner 版本、心跳状态;我会在平台「设备」页按设备名(=本机 hostname)核对在线。
+
+故障处置:配对/心跳 401 = 密钥无效或已被吊销(runner 会按设计自毁本地凭据),不要重试,直接让我重新配对;serverUrl 不可达时 curl 验证并把错误原样给我。不要修改 runner 代码、不要绕过审批门、不要给 claude 加 --dangerously-skip-permissions。`;
+}

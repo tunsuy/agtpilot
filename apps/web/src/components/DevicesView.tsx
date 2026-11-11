@@ -18,6 +18,7 @@ import {
   Send,
   Zap,
   GitPullRequest,
+  Bot,
 } from 'lucide-react';
 import {
   isRunnerTaskActive,
@@ -28,6 +29,7 @@ import {
   RUNNER_RETRYABLE_HINT,
   tasksForDevice,
   formatRunnerLocalUsage,
+  buildAiOnboardingPrompt,
   type RunnerTaskEventView,
   type RunnerTaskSummary,
 } from '../lib/runner-dispatch';
@@ -613,9 +615,11 @@ export function DevicesView({
     setTimeout(() => setCopied(null), 1500);
   };
 
+  const serverOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://<部署地址>';
   const pairCommand = pairCode
-    ? `agtpilot-runner pair --server ${typeof window !== 'undefined' ? window.location.origin : 'https://<部署地址>'} --code ${pairCode.code}`
+    ? `agtpilot-runner pair --server ${serverOrigin} --code ${pairCode.code}`
     : '';
+  const aiPrompt = pairCode ? buildAiOnboardingPrompt({ serverUrl: serverOrigin, code: pairCode.code }) : '';
   const countdown = pairCode ? Math.max(0, Math.ceil((pairCode.expiresAt - Date.now()) / 1000)) : 0;
 
   return (
@@ -674,6 +678,31 @@ export function DevicesView({
               在你自己的电脑上先安装 <code className="font-mono bg-white border border-zinc-200 rounded px-1">npm i -g @agtpilot/runner</code>
               (发布前为仓内开发者路径),再粘贴执行上面的配对命令。配对时请在下方列表核对设备名,防配对码钓鱼。
             </p>
+            {/* AI 接入提示词:复制给 Claude Code 等 AI 助手,由其照单完成安装→配对→常驻→验证 */}
+            <div className="border-t border-zinc-200 pt-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => copyText(aiPrompt, 'ai')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs font-medium text-zinc-700 hover:bg-zinc-50 transition flex-shrink-0"
+                  title="复制 AI 接入提示词(含配对码与部署地址)"
+                >
+                  {copied === 'ai' ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Bot className="h-3.5 w-3.5 text-zinc-600" />}
+                  {copied === 'ai' ? '已复制' : '复制 AI 接入提示词'}
+                </button>
+                <span className="text-[11px] text-zinc-400 leading-snug">
+                  粘给 Claude Code 等 AI 助手,让它把这台机器接入平台(含 {countdown}s 后过期的配对码)
+                </span>
+              </div>
+              <details className="group">
+                <summary className="text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-600 transition list-none flex items-center gap-1">
+                  <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
+                  预览提示词内容
+                </summary>
+                <pre className="mt-2 text-[10px] leading-relaxed bg-white border border-zinc-200 rounded-lg p-3 font-mono text-zinc-600 whitespace-pre-wrap max-h-64 overflow-auto select-all">
+                  {aiPrompt}
+                </pre>
+              </details>
+            </div>
           </div>
         )}
 

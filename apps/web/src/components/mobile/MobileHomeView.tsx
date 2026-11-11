@@ -95,8 +95,10 @@ export function MobileHomeView({
       onRequireLogin();
       return;
     }
-    // 无 prefill 宿主:仅非空时发送(提交可能续聊现有任务,空选择器不得误清继承值)
-    onRunMission(text, undefined, undefined, undefined, selectedPacks.length ? selectedPacks : undefined);
+    // 移动端首页发起始终新建会话:第 3 参传 null(handleRun 仅在 undefined 时
+    // 才回落 activeMissionId,传 null 强制新建,避免误续聊最近会话)。
+    // 技能包仅在选择时发送,空则不发键。
+    onRunMission(text, undefined, null, undefined, selectedPacks.length ? selectedPacks : undefined);
     setDraft('');
     setSelectedPacks([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';

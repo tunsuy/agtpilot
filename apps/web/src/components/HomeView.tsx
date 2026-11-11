@@ -129,9 +129,10 @@ export function HomeView({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!promptText.trim()) return;
-    // 技能包只在非空时发送:首页提交可能续聊现有任务(handleRun 回落
-    // activeMissionId),显式 [] 会误清任务记录里继承的引用
-    onRunMission(promptText.trim(), undefined, undefined, undefined, selectedPacks.length ? selectedPacks : undefined);
+    // 首页发起始终新建会话:第 3 参传 null(handleRun 仅在 undefined 时才回落
+    // activeMissionId,传 null 强制新建,避免在最近一个会话里误续聊)。
+    // 技能包仅在选择时发送,空则不发键(新建会话无继承可言)。
+    onRunMission(promptText.trim(), undefined, null, undefined, selectedPacks.length ? selectedPacks : undefined);
     setPromptText('');
     setSelectedPacks([]);
   };
@@ -261,7 +262,7 @@ export function HomeView({
             <button
               key={i}
               type="button"
-              onClick={() => onRunMission(tpl.prompt, tpl.title)}
+              onClick={() => onRunMission(tpl.prompt, tpl.title, null)}
               className="px-2.5 py-1 rounded-full bg-white hover:bg-zinc-100 border border-zinc-200/80 text-zinc-600 hover:text-zinc-900 text-[11px] font-medium transition shadow-2xs flex items-center gap-1 active:scale-95"
             >
               <span>{tpl.title}</span>
@@ -466,7 +467,7 @@ export function HomeView({
             return (
               <div
                 key={i}
-                onClick={() => onRunMission(tpl.prompt, tpl.title)}
+                onClick={() => onRunMission(tpl.prompt, tpl.title, null)}
                 className="group p-4 rounded-xl border border-zinc-200/80 bg-white hover:border-zinc-300 hover:shadow-xs transition cursor-pointer flex flex-col justify-between space-y-3"
               >
                 <div>

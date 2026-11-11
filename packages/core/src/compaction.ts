@@ -52,8 +52,44 @@ export const COMPACT_RECENT_TOKEN_BUDGET = Math.max(
 /** 近期保护窗口 · 最少条数：即使超预算也保底保留（最小可用上下文 + 工具配对），
  *  受条数上限钳制 */
 export const COMPACT_RECENT_MIN_MESSAGES = Math.max(2, Number(process.env.AGTPILOT_COMPACT_RECENT_MIN) || 4);
-/** 单条工具结果进入纪要摘要时的截断长度（字符） */
-export const COMPACT_DIGEST_ENTRY_LIMIT = 600;
+/**
+ * 蒸馏流水（喂给摘要器的原料）的总预算（估算 tokens，CJK 1 字≈1 token）。
+ * 对齐 Claude Code 的压缩设计：不把单条工具结果砍成几百字残篇再摘要，
+ * 而是「在预算内喂完整正文，只在总量超预算时才按条公平分摊上限」。
+ * 只要流水没超预算（单条 4~5k 字符工具结果是常态），摘要器看到的就是全文，
+ * 摘要才能覆盖全部结论；超预算才降级为每条仍 >= ENTRY_MIN 的截断。
+ * 默认 20k tokens：足够覆盖一般会话的中段流水，又不会把摘要器自身窗口顶爆。
+ * AGTPILOT_COMPACT_DIGEST_TOKENS 可调。
+ */
+export const COMPACT_DIGEST_TOKEN_BUDGET = Math.max(
+  4000,
+  Number(process.env.AGTPILOT_COMPACT_DIGEST_TOKENS) || 20_000
+);
+/** 超预算时单条流水的保底字符窗口（远高于旧版固定 600，保留绝大部分正文） */
+export const COMPACT_DIGEST_ENTRY_MIN = 1_500;
+/** 单条流水在超预算公平分摊时的上限（字符），防止个别巨型结果独占预算 */
+export const COMPACT_DIGEST_ENTRY_LIMIT = Math.max(
+  COMPACT_DIGEST_ENTRY_MIN,
+  Number(process.env.AGTPILOT_COMPACT_DIGEST_ENTRY_CHARS) || 12_000
+);
+/** 落盘指针（buildSpillPointer 生成）的引用标记：全量正文在磁盘上，可按 ref 续读 */
+const SPILL_REF_RE = /引用 ref=([^\s,，)。；;"'`]+)/;
+
+/**
+ * 把流水条目组装成蒸馏原料：总量在预算内 → 原样拼接（完整正文，不截断）；
+ * 超预算 → 按条数公平分摊字符额度，每条落在 [ENTRY_MIN, ENTRY_LIMIT]，远高于
+ * 旧版固定 600 字残篇。这是「喂完整内容、只在总量超限时才节流」的核心。
+ */
+function buildDigest(entries: string[], budgetTokens: number): string {
+  if (entries.length === 0) return '';
+  const full = entries.join('\n');
+  if (estimateTextTokens(full) <= budgetTokens) return full;
+  const per = Math.min(
+    COMPACT_DIGEST_ENTRY_LIMIT,
+    Math.max(COMPACT_DIGEST_ENTRY_MIN, Math.floor(budgetTokens / entries.length))
+  );
+  return entries.map((e) => truncateText(e, per)).join('\n');
+}
 /** 窗口外 assistant 纯文本的原样豁免上限（字符）：超过进纪要流水（§9.8 角色分治，
  *  user 消息不受此限——意图与约束永远原样保留） */
 export const ASSISTANT_TEXT_KEEP_CHARS = Math.max(
@@ -162,16 +198,26 @@ export async function compactConversationMessages(
       }
       // 台账记一条：调用参数摘要 + 结果状态（kept 的调用原文仍留在上下文,不必记）。
       // 并行调用共享一条 tool 消息 → 逐分片记账（分片 id 关联回 assistant 的调用参数）
-      for (const part of toolResultParts(m.content)) {
+      const parts = toolResultParts(m.content);
+      for (const part of parts) {
         const meta = part.toolCallId ? callMetaById.get(part.toolCallId) : undefined;
-        const status = part.outputText.trim() ? `返回 ${part.outputText.length} 字符` : '空返回';
+        const spillRef = part.outputText.match(SPILL_REF_RE)?.[1];
+        const status = part.outputText.trim()
+          ? `返回 ${part.outputText.length} 字符${spillRef ? `（全文已落盘 ref=${spillRef},可续读）` : ''}`
+          : '空返回';
         const entry = `「${truncateText(meta?.argsText || '', 80)}」→ ${status}`;
         const ledgerTool = meta?.tool ?? '(未知工具)';
         const entries = ledgerByTool.get(ledgerTool);
         if (entries) entries.push(entry);
         else ledgerByTool.set(ledgerTool, [entry]);
       }
-      digestEntries.push(`[工具结果] ${truncateText(text, COMPACT_DIGEST_ENTRY_LIMIT)}`);
+      // 完整正文进流水（总量超预算才由 buildDigest 公平节流）；落盘指针保留 ref，
+      // 让摘要器知道全量可续读，而不是误判“状态未知/需重取”。
+      const resultText = parts.map((p) => p.outputText).join('\n');
+      const digestRef = resultText.match(SPILL_REF_RE)?.[1];
+      digestEntries.push(
+        `[工具结果]${digestRef ? `（全文已落盘 ref=${digestRef},可 read_tool_output 续读）` : ''} ${resultText}`
+      );
       hasDroppable = true;
     } else if (m.role === 'assistant' && isToolCallMessage(m)) {
       const parts = (m.content as any[]) ?? [];
@@ -202,9 +248,9 @@ export async function compactConversationMessages(
     } else if (m.role === 'assistant' && digestLongText && text.length > ASSISTANT_TEXT_KEEP_CHARS) {
       // 窗口外的 assistant 长文本（交付物/播报/长结论）不再终身豁免（§9.8 角色分治）：
       // 跨轮续聊把 conversationMessages 全额重放,纯文本免疫让很早以前的交付正文
-      // 在之后每一步都全额重付。交付物本体已由工坊字段/文件落盘,上下文里留
-      // 截断要点即可。user 消息（无论多长）仍原样保留——意图与约束是任务输入。
-      digestEntries.push(`[历史回复] ${truncateText(text, COMPACT_DIGEST_ENTRY_LIMIT)}`);
+      // 在之后每一步都全额重付。交付物本体已由工坊字段/文件落盘,上下文里保留完整
+      // 正文参与蒸馏即可(超预算时 buildDigest 才节流)。user 消息（无论多长）仍原样保留。
+      digestEntries.push(`[历史回复] ${text}`);
       hasDroppable = true;
     } else {
       // user 消息与短 assistant 文本体积小、信息密度高，原样保留
@@ -215,7 +261,7 @@ export async function compactConversationMessages(
 
   options.onProgress?.({ totalTokens, entries: digestEntries.length });
 
-  const digest = digestEntries.join('\n');
+  const digest = buildDigest(digestEntries, COMPACT_DIGEST_TOKEN_BUDGET);
   let summary = '';
   try {
     summary = await options.summarize(digest);

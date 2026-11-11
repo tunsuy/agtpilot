@@ -947,7 +947,11 @@ export class OrchestratorService extends Service {
         if (!model) return '';
         const result: ModelStepResult = await model.invokeStep({
           system:
-            '你是会话压缩器。把以下历史工具调用与结果流水蒸馏成简洁的结构化纪要，供后续对话作为上下文使用。格式：\n【已确立事实】\n【关键结论与数据】\n【重要链接】\n【未决事项】\n只保留对继续当前任务有信息量的内容，忽略重复与失败细节，总长不超过 800 字。',
+            '你是会话压缩器。把以下历史工具调用与结果流水蒸馏成结构化纪要，供后续对话作为上下文使用。要求：\n' +
+            '1) 完整覆盖被压缩的历史，保留精确标识（文件名、路径、URL、命令、报错码、数值、版本号、ID），不要笼统概括；\n' +
+            '2) 记录关键结论与数据，忽略重复步骤与无信息量的细节；\n' +
+            '3) 若某条结果标注「全文已落盘 ref=…」，在纪要中保留该 ref 与内容要点，后续可 read_tool_output 续读，不要写成“需重新获取”；\n' +
+            '格式：\n【已确立事实】\n【关键结论与数据】\n【重要链接与引用】\n【未决事项】\n总长不超过 800 字。',
           messages: [{ role: 'user', content: digest }] as any,
           disableTools: true,
           configOverride: options.configOverride,

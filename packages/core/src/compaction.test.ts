@@ -311,6 +311,77 @@ describe('compactConversationMessages', () => {
   });
 });
 
+describe('蒸馏原料保真(对齐 Claude Code:喂完整正文,超预算才节流)', () => {
+  function digestOf(messages: Array<{ role: string; content: any }>, ops: Record<string, any> = {}) {
+    let captured = '';
+    const p = compactConversationMessages(messages, {
+      summarize: async (d) => {
+        captured = d;
+        return '纪要';
+      },
+      thresholdTokens: 100,
+      ...ops,
+    });
+    return p.then((r) => ({ result: r, digest: captured }));
+  }
+
+  it('单条 5k 字符工具结果在预算内完整进入蒸馏原料(不再砍成 600 字残篇)', async () => {
+    const marker = 'MARKER_BEYOND_600_TAIL';
+    const big = 'A'.repeat(5000) + marker;
+    const messages = [
+      mk('user', '最初的任务意图'),
+      mk('assistant', [{ type: 'tool-call', toolCallId: 'b1', toolName: 'read_doc', input: { path: 'x' } }]),
+      mk('tool', [{ type: 'tool-result', toolCallId: 'b1', output: big }]),
+      ...longToolHistory(12).slice(1, -1),
+      mk('assistant', '最终答复'),
+    ];
+    const { result, digest } = await digestOf(messages);
+    expect(result).not.toBeNull();
+    // 整段正文都进了原料:远超 600 的长前缀与结尾 marker 都在
+    expect(digest).toContain('A'.repeat(4500));
+    expect(digest).toContain(marker);
+  });
+
+  it('总量超预算时按条公平分摊,每条仍保留 >600 字符正文(远高于旧版残篇)', async () => {
+    // 单条巨型 CJK 结果(3 万 token)直接把流水顶过 20k 预算
+    const keepAt1000 = 'KEEP_AT_1000_BEYOND_OLD_600';
+    const big = 'x'.repeat(1000) + keepAt1000 + '长'.repeat(30000);
+    const messages = [
+      mk('user', '最初的任务意图'),
+      mk('assistant', [{ type: 'tool-call', toolCallId: 'g1', toolName: 'read_big', input: {} }]),
+      mk('tool', [{ type: 'tool-result', toolCallId: 'g1', output: big }]),
+      ...longToolHistory(8).slice(1, -1),
+      mk('assistant', '最终答复'),
+    ];
+    const { digest } = await digestOf(messages);
+    // 第 1000 字符处的内容在超预算降级后依然保留(证明分摊窗口 > 600 字符)
+    expect(digest).toContain(keepAt1000);
+    // 但总量确实被节流(没有把 3 万 CJK 全量塞进去)
+    expect(digest.length).toBeLessThan(big.length);
+  });
+
+  it('落盘指针的 ref 在蒸馏原料与台账中都如实标注(不误判为需重取)', async () => {
+    const pointer =
+      '头部预览\n…[原输出共 50000 字符,过长,全量已保存(引用 ref=call-abc123)。以上仅为头尾预览]…\n尾部预览';
+    const messages = [
+      mk('user', '最初的任务意图'),
+      mk('assistant', [{ type: 'tool-call', toolCallId: 's1', toolName: 'sandbox_exec', input: { cmd: 'big' } }]),
+      mk('tool', [{ type: 'tool-result', toolCallId: 's1', output: pointer }]),
+      ...longToolHistory(12).slice(1, -1),
+      mk('assistant', '最终答复'),
+    ];
+    const { result, digest } = await digestOf(messages);
+    // 蒸馏原料带 ref + 续读指引
+    expect(digest).toContain('ref=call-abc123');
+    expect(digest).toContain('可 read_tool_output 续读');
+    // 台账也标注全文已落盘可续读
+    const digestMsg = result!.find(
+      (m) => typeof m.content === 'string' && m.content.startsWith('【历史会话纪要】')
+    ) as { content: string };
+    expect(digestMsg.content).toContain('全文已落盘 ref=call-abc123');
+  });
+});
+
 describe('续聊入口蒸馏开关(闸0 env 助手)', () => {
   afterEach(() => {
     delete process.env.AGTPILOT_CONTINUATION_COMPACT;

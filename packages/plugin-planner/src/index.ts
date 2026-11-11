@@ -100,6 +100,20 @@ export class PlannerService extends Service implements PlannerNotifier {
   }
 
   /**
+   * 看板仍未完成的步骤（pending / in_progress）。
+   * 内核收尾时用做「计划闭环校验」：模型给出最终答复但看板仍有未完成步骤时，
+   * 不静默收尾（生产实例生成「任务看似完成却中途退出」的体验）。
+   * 无看板或全部完结 → 空数组。
+   */
+  getOpenTasks(taskKey?: string): Array<{ id: string; title: string; status: 'pending' | 'in_progress' }> {
+    const plan = this.planFor(taskKey);
+    if (!plan) return [];
+    return plan.tasks
+      .filter((t) => t.status === 'pending' || t.status === 'in_progress')
+      .map((t) => ({ id: t.id, title: t.title, status: t.status as 'pending' | 'in_progress' }));
+  }
+
+  /**
    * 看板滞后提醒（由 core Orchestrator 在滞后达阈值时调用）：看板进度由
    * 模型显式申报维护（planner_update_task 与实际工具调用同批发出 ——
    * Claude Code TodoWrite / Codex update_plan 同款契约，2026-10 切换，

@@ -985,7 +985,25 @@ class AgentBackend {
               });
             }
 
-            mission.status = 'DONE';
+            const openTasks = Array.isArray(event.payload?.openTasks) ? event.payload.openTasks : [];
+            const planUnfinished = openTasks.length > 0;
+
+            if (planUnfinished) {
+              // 计划未闭环：不置 DONE，保持任务激活并提示剩余步骤
+              //（生产实例 mission_..._62lt6：step_4 仍 PENDING 却因模型给出最终答复而落 DONE，
+              // 用户体感「任务中途退出」。本处改为 INTERRUPTED + 动态提示，回复「继续」可续跑。）
+              mission.status = 'INTERRUPTED';
+              const openTitles = openTasks
+              .map((t: { id: string; title: string }) => `「${t.title}」(${t.id})`)
+              .join('、');
+              this.addTerminalLog(
+                'system',
+                `[看板] 任务未全部完成，还剩 ${openTasks.length} 步：${openTitles}。回复「继续」可接着执行剩余步骤，也可直接输入新指令。`,
+                mission.userId
+              );
+            } else {
+              mission.status = 'DONE';
+            }
             // 进度按真实完成比例呈现（未执行的看板步骤不计入完成）
             const doneCount = mission.steps.filter((st) => st.status === 'DONE').length;
             mission.progress = Math.round((doneCount / (mission.steps.length || 1)) * 100);

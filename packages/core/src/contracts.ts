@@ -158,6 +158,10 @@ export interface ModelGateway {
 export interface PlannerNotifier {
   /** 无看板 / 无进行中步骤（全完结或全失败）→ null；否则返回注入提醒文本 */
   boardLagNotice(taskKey: string, idleRounds: number): string | null;
+  /** 看板仍未完成的步骤（pending / in_progress）；无看板或全部完结 → 空数组。
+   * 供内核收尾时做计划闭环校验，避免「模型已给出最终答复、看板仍有未完成步骤」
+   * 时静默标 DONE。 */
+  getOpenTasks(taskKey?: string): Array<{ id: string; title: string; status: 'pending' | 'in_progress' }>;
 }
 
 // ---- 工具契约 ----

@@ -796,6 +796,23 @@ export class OrchestratorService extends Service {
       }
 
       const efficiency = buildEfficiency(stepsCount);
+
+      // 计划闭环校验（生产实例 mission_..._62lt6：step_4 仍 PENDING 却因模型给出最终答复
+      // 而整体落 DONE，用户体感「任务中途退出」）。非强制总结路径下，若 planner 看板仍有
+      // 未完成步骤，随 done 事件上报，由前端保持任务激活并提示剩余步骤，而非直接标 DONE。
+      let planUnfinished = false;
+      let openTasks: Array<{ id: string; title: string; status: 'pending' | 'in_progress' }> = [];
+      if (!needsWrapUp) {
+        try {
+          const plannerSvc = this.ctx.reflect.get('planner') as PlannerNotifier | undefined;
+          openTasks = plannerSvc?.getOpenTasks(taskId) ?? [];
+          planUnfinished = openTasks.length > 0;
+        } catch {
+          openTasks = [];
+          planUnfinished = false;
+        }
+      }
+
       broadcast({
         type: 'done',
         payload: {
@@ -805,6 +822,7 @@ export class OrchestratorService extends Service {
           stepsExhausted: Boolean(loopResult.stepsExhausted),
           outputTruncated: cutOff,
           efficiency,
+          ...(planUnfinished ? { planUnfinished: true, openTasks } : {}),
         },
         timestamp: Date.now(),
       });

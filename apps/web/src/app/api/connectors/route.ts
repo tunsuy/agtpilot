@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
         modelName,
         reasoningEffortEnvVar,
         reasoningEffort,
+        extraEnvs,
       } = body;
       if (!ALLOWED_ENV_VARS.has(envVar)) {
         return NextResponse.json(
@@ -102,6 +103,14 @@ export async function POST(req: NextRequest) {
       ) {
         // '' = 清除连接器级配置(saveUserConnector 删键)→ 回落全局 env / 厂商缺省
         saveUserConnector(userId, reasoningEffortEnvVar, reasoningEffort.trim());
+      }
+      // 额外非凭证配置（自建 E2B 的 API 地址/域名/流量地址/模板）：按白名单逐键保存，
+      // '' = 清除该项（删除连接器级配置，回落到全局 env 或 SDK 默认）。
+      if (extraEnvs && typeof extraEnvs === 'object') {
+        for (const [key, val] of Object.entries(extraEnvs)) {
+          if (!ALLOWED_ENV_VARS.has(key) || typeof val !== 'string') continue;
+          saveUserConnector(userId, key, val.trim());
+        }
       }
       const userConfigs = getUserConnectors(userId);
       return NextResponse.json({

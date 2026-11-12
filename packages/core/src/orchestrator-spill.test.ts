@@ -108,7 +108,7 @@ describe('工具输出 spill-to-file · 内核截断点', () => {
     const pointer = String(h.seenByModel[0]);
     expect(pointer.length).toBeLessThan(6 * 1024);
     expect(pointer).toContain(`ref=${info.callId}`);
-    expect(pointer).toContain('read_tool_output');
+    expect(pointer).toContain('doc_read(source="tool_output"');
     expect(pointer).toContain(`原输出共 ${BIG} 字符`);
     expect(pointer.startsWith('HEAD_')).toBe(true);
     expect(pointer.endsWith('_TAIL')).toBe(true);
@@ -128,7 +128,7 @@ describe('工具输出 spill-to-file · 内核截断点', () => {
     const result = await h.run();
     const toolMsg = (result.messages || []).find((m) => m.role === 'tool');
     const out = (toolMsg?.content as any[])[0].output;
-    expect(String(out)).toContain('read_tool_output');
+    expect(String(out)).toContain('doc_read(source="tool_output"');
     expect(String(out).length).toBeLessThan(6 * 1024); // 落盘/跨轮重发的都是小指针
   });
 
@@ -142,7 +142,7 @@ describe('工具输出 spill-to-file · 内核截断点', () => {
     expect(result.success).toBe(true);
     const out = String(h.seenByModel[0]);
     expect(out).toContain('输出过长已截断');
-    expect(out).not.toContain('read_tool_output');
+    expect(out).not.toContain('doc_read(source="tool_output"');
     expect(h.broadcastResults[0].spilled).toBeUndefined();
     expect(result.efficiency?.spilledOutputs).toBeUndefined();
     expect(result.efficiency && 'spilledOutputs' in result.efficiency).toBe(false);
@@ -184,7 +184,7 @@ describe('工具输出 spill-to-file · 内核截断点', () => {
     const h = buildHarness({ spill: (info) => info.callId, toolName: 'sandbox_exec' });
     await h.run();
     const pointer = String(h.seenByModel[0]);
-    expect(pointer).toContain('read_tool_output');
+    expect(pointer).toContain('doc_read(source="tool_output"');
     expect(pointer.endsWith('_TAIL')).toBe(true);
     // 尾优先(30/70):尾部保留量 > 头部
     const headLen = pointer.indexOf('\n…[原输出共');

@@ -3,7 +3,7 @@
  *
  * 定位:像 PPT 工坊的技能一样是工坊内置能力——清单内容在渲染任务 prompt 时
  * 自动拼进末尾,对工坊用户完全不可见,不占用任何用户侧 skill 选择通道
- * (sanitizeSkillPackRefs / buildReferencedPacksBlock / skill_pack_read 均不涉及)。
+ * (sanitizeSkillPackRefs / buildReferencedPacksBlock / doc_read 均不涉及)。
  * 文件在仓库根 skills/humanizer/SKILL.md,与 apps/web 的 script-skill 目录
  * (apps/web/skills,运行时 COPY)是两回事——这里是构建期内联,不进 Docker 镜像。
  *

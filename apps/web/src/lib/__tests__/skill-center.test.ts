@@ -4,7 +4,7 @@
  * - 最小 tar 解析:正常提取、目录条目、软链/硬链拒绝、路径穿越拒绝、限额
  * - 用户安装域:清单 / 解除引用(围栏 + 台账)/ 技能卡删除(台账 + 审计)
  * - 引用导入:riskAck 强制、仓库名校验、mock fetch 全链路、同名冲突、来源记录
- * - 任务侧接线:显式引用注入块 / 引用收敛 / skill_pack_read 工具(围栏 + 二进制拒绝)
+ * - 任务侧接线:显式引用注入块 / 引用收敛 / doc_read(source="skill_pack") 工具(围栏 + 二进制拒绝)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
@@ -48,7 +48,7 @@ import {
   fetchMarketSkillDetail,
   buildReferencedPacksBlock,
   sanitizeSkillPackRefs,
-  buildUserSkillPackTools,
+  readSkillPackFile,
   REFERENCED_PACK_MAX,
   REFERENCED_PACK_CHARS,
   IMPORT_MAX_FILES,
@@ -1055,7 +1055,7 @@ describe('importSkillPack · SkillHub 链路', () => {
 
 // ---- 任务侧接线 ----
 
-describe('显式引用注入块 / 引用收敛 / skill_pack_read 工具', () => {
+describe('显式引用注入块 / 引用收敛 / doc_read(source="skill_pack") 工具', () => {
   it('无引用或全部解析不到 → 空串(零开销)', () => {
     expect(buildReferencedPacksBlock('u11', undefined)).toBe('');
     expect(buildReferencedPacksBlock('u11', [])).toBe('');
@@ -1092,13 +1092,13 @@ describe('显式引用注入块 / 引用收敛 / skill_pack_read 工具', () => 
     expect(block).not.toContain(`pack-${REFERENCED_PACK_MAX + 1}`);
   });
 
-  it('超长 SKILL.md → 截断到预算并附指向 skill_pack_read 的截断标记', () => {
+  it('超长 SKILL.md → 截断到预算并附指向 doc_read(source="skill_pack") 的截断标记', () => {
     const dir = seedInstalledPack('u16', 'big-skill', 'big-skill');
     const long = 'x'.repeat(REFERENCED_PACK_CHARS + 5000);
     fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: big-skill\n---\n${long}`);
     const block = buildReferencedPacksBlock('u16', ['big-skill']);
     expect(block).toContain('全文已截断');
-    expect(block).toContain('skill_pack_read');
+    expect(block).toContain('doc_read(source="skill_pack")');
     expect(block).not.toContain('x'.repeat(REFERENCED_PACK_CHARS + 1));
   });
 
@@ -1115,31 +1115,28 @@ describe('显式引用注入块 / 引用收敛 / skill_pack_read 工具', () => 
     expect(sanitizeSkillPackRefs('u18', many)).toHaveLength(REFERENCED_PACK_MAX);
   });
 
-  it('skill_pack_read:读 SKILL.md / 子文件;未装包、越界路径、不存在文件都真实报错', async () => {
+  it('doc_read(source=skill_pack) 读取实现:读 SKILL.md / 子文件;未装包、越界路径、不存在文件都真实报错', async () => {
     seedInstalledPack('u12', 'demo-skill', 'demo-skill');
-    const [tool] = buildUserSkillPackTools('u12');
-    expect(tool.name).toBe('skill_pack_read');
 
-    const ok = await tool.execute({ pack: 'demo-skill' });
+    const ok = readSkillPackFile('u12', 'demo-skill');
     expect(ok).toMatchObject({ success: true, file: 'SKILL.md' });
     expect(ok.content).toContain('测试包');
 
-    const noPack = await tool.execute({ pack: '不存在的包' });
+    const noPack = readSkillPackFile('u12', '不存在的包');
     expect(noPack).toMatchObject({ success: false });
     expect(noPack.installed).toEqual(['demo-skill']);
 
-    const escape = await tool.execute({ pack: 'demo-skill', file: '../../../etc/passwd' });
+    const escape = readSkillPackFile('u12', 'demo-skill', '../../../etc/passwd');
     expect(escape).toMatchObject({ success: false });
 
-    const missing = await tool.execute({ pack: 'demo-skill', file: 'nope.md' });
+    const missing = readSkillPackFile('u12', 'demo-skill', 'nope.md');
     expect(missing).toMatchObject({ success: false, error: expect.stringContaining('不存在') });
   });
 
-  it('skill_pack_read:二进制文件拒绝', async () => {
+  it('doc_read(source=skill_pack) 读取实现:二进制文件拒绝', async () => {
     const dir = seedInstalledPack('u13', 'demo-skill', 'demo-skill');
     fs.writeFileSync(path.join(dir, 'blob.bin'), Buffer.from([0x00, 0x01, 0x02]));
-    const [tool] = buildUserSkillPackTools('u13');
-    const res = await tool.execute({ pack: 'demo-skill', file: 'blob.bin' });
+    const res = readSkillPackFile('u13', 'demo-skill', 'blob.bin');
     expect(res).toMatchObject({ success: false, error: expect.stringContaining('二进制') });
   });
 });

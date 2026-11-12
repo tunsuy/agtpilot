@@ -90,7 +90,7 @@ export interface SubagentRunMeta {
   reasoningPartsStripped?: number;
   /**
    * 本次实际挂载给子 agent 的工具名清单(2026-10-26 生产实例观测盲区:子 agent
-   * 只挂 browser_navigate/search_web 的事实埋在 60 万 token 灰烬里才能考古)。
+   * 只挂 browser_navigate/search 的事实埋在 60 万 token 灰烬里才能考古)。
    * 主循环拿到失败结果时第一时间能对上「任务描述点名的工具 vs 实际工具面」。
    */
   mountedTools?: string[];
@@ -207,7 +207,7 @@ export interface SubagentEngineConfig {
    * web 多用户架构下用户 MCP 工具走「任务级 taskTools 注入」只喂主循环,
    * 从不进全局注册表 —— 而本引擎默认只读全局注册表,子 agent 因此结构性
    * 看不见用户 MCP 工具(任务描述点名 mcp_github_mcp_*,子 agent 实际只有
-   * browser_navigate/search_web,被迫裸撞反爬墙)。宿主注入本回调返回该用户
+   * browser_navigate/search,被迫裸撞反爬墙)。宿主注入本回调返回该用户
    * 当前已连接的 MCP 工具定义(plugin-mcp getUserTools),引擎在白名单过滤前
    * 并入工具池;返回值(含空数组)/回调异常均回退纯全局注册表,不击穿契约。
    */
@@ -258,7 +258,7 @@ export function buildTaskPrompt(args: SubagentRunArgs): string {
   if (schema) parts.push(`期望报告结构:\n${schema}`);
   // 工具降级预案(①c,2026-10-26 生产实例):子任务描述点名的工具(如某 MCP
   // 连接器)未必已挂载 —— 点名了但不可用时,立即改用你实际拥有的工具
-  // (search_web / browser_navigate 等)完成调研,并在报告末尾注明工具替代情况,
+  // (search / browser_navigate 等)完成调研,并在报告末尾注明工具替代情况,
   // 不要空转等待或反复尝试不可用的工具。
   parts.push(
     '完成后直接输出最终报告(结论先行、附来源),不要粘贴原始检索内容。' +
@@ -267,9 +267,10 @@ export function buildTaskPrompt(args: SubagentRunArgs): string {
   return parts.join('\n\n');
 }
 
-/** 任务文本里点名的工具标识(mcp_/browser_/search_/sandbox_/git_/rag_/memory_/cron_/skill_ 前缀) */
+/** 任务文本里点名的工具标识(前缀族 mcp_/browser_/sandbox_/git_/rag_/memory_/cron_/desktop_/skill_,
+ *  以及无下划线的整名工具 search/planner/memory/notify/ppt/doc_read 等) */
 const REFERENCED_TOOL_RE =
-  /\b(?:mcp|browser|search|sandbox|git|rag|memory|cron|skill)_[a-zA-Z0-9_]+\*?/g;
+  /\b(?:mcp|browser|sandbox|git|rag|memory|cron|desktop|search|skill)_[a-zA-Z0-9_]+\*?|\b(?:doc_read|rag_query|git_inspect|cron_task|desktop_inspect|desktop_action|search|planner|memory|notify|ppt)\b/g;
 
 /** 抽取任务描述中提到的工具名(去重,保持出现序) */
 export function referencedToolNames(text: string): string[] {
@@ -289,7 +290,7 @@ export function referencedToolNames(text: string): string[] {
  * 工具面告知:任务点名但实际未挂载的工具,开跑前就明确告诉子 agent。
  * 子 agent 看不到「不存在工具的 schema」,只会在步内反复尝试/空转;提前
  * 一句话把「点名 ≠ 可用」讲清楚,省的是整段无效步数(2026-10-26 生产实例:
- * 任务点名 mcp_github_mcp_*,子 agent 只有 browser_navigate/search_web)。
+ * 任务点名 mcp_github_mcp_*,子 agent 只有 browser_navigate/search)。
  */
 export function buildToolSurfaceNotice(mountedTools: readonly string[], missing: readonly string[]): string {
   if (missing.length === 0) return '';
@@ -342,7 +343,7 @@ export class SubagentEngine {
       if (this.maxTaskFailures > 0 && fails >= this.maxTaskFailures) {
         return {
           ok: false,
-          error: `本任务内子 agent 已连续失败 ${fails} 次,熔断停派(防死循环重派白烧 token)。请不要再重派同类子任务,改用主循环直接检索(search_web / browser_firecrawl_scrape),或基于已有资料继续。`,
+          error: `本任务内子 agent 已连续失败 ${fails} 次,熔断停派(防死循环重派白烧 token)。请不要再重派同类子任务,改用主循环直接检索(search / browser_firecrawl_scrape),或基于已有资料继续。`,
           meta: {
             subTaskId,
             traceId: subTaskId,
@@ -499,7 +500,7 @@ export class SubagentEngine {
         `实际挂载 0`,
       ].join(' → ');
       return fail(
-        `无可用只读白名单工具(${funnel})。子 agent 无法派发:请检查连接器授权/依赖 Key/工具 readOnly 声明或工坊白名单;不要再原样重派同一子任务,改用主循环自身工具(search_web / browser_navigate 等)完成调研,或修正上述工具面后重试。`,
+        `无可用只读白名单工具(${funnel})。子 agent 无法派发:请检查连接器授权/依赖 Key/工具 readOnly 声明或工坊白名单;不要再原样重派同一子任务,改用主循环自身工具(search / browser_navigate 等)完成调研,或修正上述工具面后重试。`,
         'internal-error',
         { mountedTools: [] },
       );

@@ -154,7 +154,7 @@ describe('reasoning 剥离 · 三道闸', () => {
         role: 'assistant' as const,
         content: [
           reasoningPart('历史'),
-          { type: 'tool-call' as const, toolCallId: 'c1', toolName: 'search_web', input: {} },
+          { type: 'tool-call' as const, toolCallId: 'c1', toolName: 'search', input: {} },
         ],
       },
       { role: 'tool' as const, content: [{ type: 'tool-result', toolCallId: 'c1', output: 'ok' }] },
@@ -163,7 +163,7 @@ describe('reasoning 剥离 · 三道闸', () => {
     const result = await h.run();
     const assistantMsg = (result.messages || []).find((m) => m.role === 'assistant');
     expect(assistantMsg?.content).toEqual([
-      { type: 'tool-call', toolCallId: 'c1', toolName: 'search_web', input: {} },
+      { type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: {} },
     ]);
     const toolMsg = (result.messages || []).find((m) => m.role === 'tool');
     expect(toolMsg).toBeDefined(); // tool 结果仍在,配对未破

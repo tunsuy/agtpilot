@@ -33,6 +33,10 @@ export interface ConnectorApp {
   noCredential?: boolean;
   /** 配置弹窗内的补充说明（凭证格式/前置条件等） */
   configHint?: string;
+  /** 额外可配置环境变量（非凭证类，如自建 E2B 控制面地址/模板） */
+  extraEnvVars?: Array<{ envVar: string; label: string; placeholder?: string; hint?: string }>;
+  /** 额外配置项当前值回显 */
+  extraEnvValues?: Record<string, string>;
 }
 
 /** MCP 连接器（一键授权/粘贴凭证/免凭证直连）状态信息 */
@@ -144,7 +148,7 @@ export interface Mission {
    * 用户显式引用的技能包名列表(技能中心「引用」安装的生态技能包;canonical
    * name)。派发时经 /api/agent/run 白名单收敛落库;续聊轮不带显式引用时继承
    * 本字段,带显式引用(含空数组=清空)时覆盖并回写。非空 = 注入 SKILL.md
-   * 全文块 + 挂载 skill_pack_read;旧任务无此字段(零迁移,不注入不挂载)。
+   * 全文块 + 挂载 doc_read(source="skill_pack");旧任务无此字段(零迁移,不注入不挂载)。
    */
   skillPacks?: string[];
   /**

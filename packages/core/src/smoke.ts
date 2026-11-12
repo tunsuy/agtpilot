@@ -31,7 +31,7 @@ async function main() {
     runAgentLoop: async (opts: any) => {
       const tools = opts.tools as Array<{ name: string; execute: (args: any) => Promise<any> }>;
       const find = (n: string) => tools.find((t) => t.name === n)!;
-      const seq = ['tool_a', 'tool_b', 'tool_a', 'tool_b', 'tool_a', 'tool_b', 'tool_a', 'tool_b', 'sandbox_run_command'];
+      const seq = ['tool_a', 'tool_b', 'tool_a', 'tool_b', 'tool_a', 'tool_b', 'tool_a', 'tool_b', 'sandbox_exec'];
       const responseMessages: any[] = [];
       let loopMessages: any[] = [...opts.messages];
       while (round < seq.length) {
@@ -52,7 +52,7 @@ async function main() {
         }
         const name = seq[round];
         const out = await find(name).execute({});
-        if (name === 'sandbox_run_command') {
+        if (name === 'sandbox_exec') {
           longOutputTruncated = typeof out === 'string' && out.includes('中间省略');
           longOutputKeepsTail = typeof out === 'string' && out.includes('TAIL_SENTINEL');
           longOutputKeepsHead = typeof out === 'string' && out.includes('HEAD_SENTINEL');
@@ -87,7 +87,7 @@ async function main() {
     boardLagNotice: (_taskId: string, idleRounds: number) => {
       lagNotices++;
       lastIdleRounds = idleRounds;
-      return `看板已 ${idleRounds} 轮未随进度更新，请在同批工具调用里附带 planner_update_task 同步进度`;
+      return `看板已 ${idleRounds} 轮未随进度更新，请在同批工具调用里附带 planner 同步进度`;
     },
   };
   ctx.reflect.provide('planner', stubPlanner);
@@ -109,7 +109,7 @@ async function main() {
   } as ToolDefinition);
   // 超长输出工具（sandbox_ 前缀 → 尾优先头尾混合截断）：头部与尾部各埋哨兵
   ctx.agent.registerTool({
-    name: 'sandbox_run_command',
+    name: 'sandbox_exec',
     description: 'run',
     parameters: { type: 'object', properties: {} },
     execute: async () =>

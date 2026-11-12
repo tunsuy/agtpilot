@@ -2,7 +2,7 @@
 
 - 日期: 2026-10-20
 - 状态: ✅ 已实施(本文与代码一致,可当行为参考)
-- 前置阅读: `docs/design/tool-output-spill.md`(read_reference_material 的分页语义)、`apps/web/src/workshops/shared/materials.ts` 头注(数据流总览)
+- 前置阅读: `docs/design/tool-output-spill.md`(doc_read(source="reference") 的分页语义)、`apps/web/src/workshops/shared/materials.ts` 头注(数据流总览)
 
 ## 1. 背景与决策
 
@@ -13,7 +13,7 @@
 
 ## 2. 形态
 
-引用命名空间从 `art_*` 扩成两种,prompt 侧语义完全一致(只带 id+标题,正文由 `read_reference_material` 工具按需分页拉取,8000 字/段 + offset 续读):
+引用命名空间从 `art_*` 扩成两种,prompt 侧语义完全一致(只带 id+标题,正文由 `doc_read(source="reference")` 按需分页拉取,14000 字/段 + offset 续读):
 
 | 来源 | id 形态 | 正文位置 |
 |---|---|---|

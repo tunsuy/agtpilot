@@ -106,16 +106,16 @@ agtpilot/
 | `@agtpilot/protocol` | AG-UI / Generative UI 事件 schema | — |
 | `plugin-model` | `ModelGateway` 实现、模型解析、预算 | — |
 | `plugin-router` | 模型能级与预算 | `router_select_tier`、`router_get_budget_status` |
-| `plugin-planner` | 任务规划 | `planner_create_plan`、`planner_update_task` |
+| `plugin-planner` | 任务规划 | `planner`（action: create / update_task） |
 | `plugin-browser` | 持久化浏览与抓取 | `browser_navigate/click/screenshot`、Stagehand `act/observe`、Firecrawl 抓取 |
-| `plugin-sandbox` | 围栏内执行 | `sandbox_run_code/run_command/read_file/write_file/list_dir/http_request` |
-| `plugin-search` | 网络搜索 | `search_web`、`search_exa`、`search_tavily` |
-| `plugin-rag` | 检索 | `rag_index_document`、`rag_search`、`rag_list_indexed` |
-| `plugin-memory` | 长期记忆 | `memory_store`、`memory_recall`、`memory_list` |
+| `plugin-sandbox` | 围栏内执行 | `sandbox_exec` / `sandbox_file` / `sandbox_session` / `sandbox_http_request` |
+| `plugin-search` | 网络搜索 | `search`（engine: auto / exa / tavily） |
+| `plugin-rag` | 检索 | `rag_query`（search / list_indexed）、`rag_index_document` |
+| `plugin-memory` | 长期记忆 | —（由应用层暴露为 `memory`：store / recall / list + `read_memory` / `read_mission`） |
 | `plugin-mcp` | MCP 工具注册表与连接器 | —（工具暴露在应用层） |
-| `plugin-git` | 代码与版本控制 | `git_status/diff`、检查点、补丁、`codebase_search_symbols` |
-| `plugin-cron` | 调度引擎 | —（由应用层暴露为 `cron_schedule_task`） |
-| `plugin-notify` | 通知 | `notify_send_desktop`、`notify_send_webhook` |
+| `plugin-git` | 代码与版本控制 | `git_inspect`（status / diff）、检查点、补丁 |
+| `plugin-cron` | 调度引擎 | —（由应用层暴露为 `cron_task`） |
+| `plugin-notify` | 通知 | `notify`（channel: desktop / feishu / dingtalk / wecom / slack / custom） |
 | `plugin-desktop` | 桌面自动化 | 剪贴板读写、打开应用、截屏、系统信息 |
 | `plugin-observability` | 可观测性 | `observability_get_trace`、`observability_get_metrics` |
 | `plugin-artifact` | 交付物 | `artifact_render` |

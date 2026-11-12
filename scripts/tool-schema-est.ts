@@ -5,7 +5,7 @@
  * 消费方:
  * - 第 1 段 scripts/tool-schema-measure.mts(全局注册表 → tool-registry-measure.json)
  * - 第 2 段 apps/web vitest tool-schema-cost.measure.test.ts(工坊白名单挂载面 +
- *   用户级 taskTools 表面:记忆五件套/read_tool_output/ask 桥/cron/连接器桥/
+ *   用户级 taskTools 表面:记忆五件套/doc_read/ask 桥/cron/连接器桥/
  *   交付字段/TOOL_PROVIDER 固定工具——这些不进全局注册表,只能在这里现场构建测量)
  *
  * 估算口径:CJK(含全角标点)字符 ×1.0 + 其余字符 ÷4,向上取整

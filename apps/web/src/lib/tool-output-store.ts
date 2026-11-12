@@ -3,7 +3,7 @@
  *
  * 编排器统一截断点经 TaskOptions.spillToolOutput 回调把超过 TOOL_OUTPUT_LIMIT
  * 的工具结果全量写到这里,模型收到「4KB 头尾预览 + 指针」,截掉的部分用
- * read_tool_output(callId, offset) 窗口续读 —— 从「截断即永久丢失」变可恢复
+ * doc_read(source="tool_output", callId, offset) 窗口续读 —— 从「截断即永久丢失」变可恢复
  * (对齐仓内既有范式:read_mission/read_memory 的 L0 摘要 + L2 按需拉取)。
  *
  * 布局(对齐 context-store v2):
@@ -22,7 +22,6 @@
  */
 import fs from 'fs';
 import path from 'path';
-import type { ToolDefinition } from '@agtpilot/core';
 import { getDataDir } from './user-store';
 import { isV2Enabled, safeName, userDirV2 } from './user-store-v2';
 
@@ -236,42 +235,5 @@ export function cleanupTaskToolOutputs(userId: string, taskId: string): void {
 }
 
 /**
- * 续读工具(仿 read_mission/read_reference_material 形态)。
- * baseline: true —— 内核路由基线自动并入:工坊白名单/关键词路由退化场景
- * 也必须挂载,否则指针文案里的 read_tool_output 指引指向不存在的工具。
+ * 续读实现被 doc_read(source=tool_output) 取代;此文件只保留存储与读取原语。
  */
-export function buildToolOutputTools(userId: string): ToolDefinition[] {
-  return [
-    {
-      name: 'read_tool_output',
-      description:
-        '续读被全量保存的超长工具输出(只读):工具输出过长时你收到的是「头尾预览+指针」,' +
-        '指针标记里有 ref=<callId> 与原始大小。传入 callId 与可选 offset 窗口续读' +
-        `(默认单次 ${TOOL_OUTPUT_READ_LIMIT} 字符,返回 totalChars/nextOffset)。` +
-        '只能读你自己任务产生的输出;保存有有效期,过期会明确报错(届时重新执行原工具获取)。',
-      dangerLevel: 'low',
-      readOnly: true, // 只读并行门控:纯读自己分区的落盘文件,无副作用
-      baseline: true,
-      parameters: {
-        type: 'object',
-        properties: {
-          callId: {
-            type: 'string',
-            description: '输出引用 id(截断指针标记中 ref= 后面的 call_xxx)',
-          },
-          offset: {
-            type: 'number',
-            description: '起始字符位置(默认 0;上次返回 nextOffset 时用它继续)',
-          },
-          limit: {
-            type: 'number',
-            description: `本次读取字符数(默认 ${TOOL_OUTPUT_READ_LIMIT})`,
-          },
-        },
-        required: ['callId'],
-      },
-      execute: async ({ callId, offset, limit }: any) =>
-        readToolOutput(userId, String(callId || ''), Number(offset) || 0, Number(limit) || TOOL_OUTPUT_READ_LIMIT),
-    },
-  ];
-}

@@ -228,7 +228,7 @@ describe('splitStepsIntoBlocks · 「已完成 0 项任务活动」空壳组修�
     const { blocks } = splitStepsIntoBlocks([
       userStep('u1', '问题'),
       meta,
-      toolStep('t1', 'search_web'),
+      toolStep('t1', 'search'),
       finalAnswer('a1', '答'),
     ]);
     expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant']);
@@ -261,7 +261,7 @@ describe('splitStepsIntoBlocks · 思考轮收尾不消失(思考中→已完成
     const { blocks } = splitStepsIntoBlocks([
       userStep('u1', '问题'),
       think,
-      toolStep('t1', 'search_web'),
+      toolStep('t1', 'search'),
       finalAnswer('a1', '答'),
     ]);
     expect(blocks.map((b) => b.type)).toEqual(['user', 'assistant', 'tools', 'assistant']);
@@ -274,7 +274,7 @@ describe('splitStepsIntoBlocks · 思考轮收尾不消失(思考中→已完成
     const { blocks } = splitStepsIntoBlocks([
       userStep('u1', '问题'),
       think1,
-      toolStep('t1', 'search_web'),
+      toolStep('t1', 'search'),
       think2,
       toolStep('t2', 'browser_open'),
     ]);
@@ -287,7 +287,7 @@ describe('splitStepsIntoBlocks · 思考轮收尾不消失(思考中→已完成
     const { blocks } = splitStepsIntoBlocks([
       userStep('u1', '问题'),
       textOnly,
-      toolStep('t1', 'search_web'),
+      toolStep('t1', 'search'),
       finalAnswer('a1', '答'),
     ]);
     expect(blocks.map((b) => b.type)).toEqual(['user', 'tools', 'assistant']);
@@ -296,7 +296,7 @@ describe('splitStepsIntoBlocks · 思考轮收尾不消失(思考中→已完成
 
   it('空思考轮(无 reasoning 无正文)仍归活动块为隐藏行', () => {
     const emptyThink = step({ id: 'th1', role: 'assistant', messageKind: 'progress', status: 'DONE', title: '已完成一轮推理' });
-    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), emptyThink, toolStep('t1', 'search_web')]);
+    const { blocks } = splitStepsIntoBlocks([userStep('u1', '问题'), emptyThink, toolStep('t1', 'search')]);
     expect(blocks.map((b) => b.type)).toEqual(['user', 'tools']);
   });
 });
@@ -523,10 +523,10 @@ describe('findFinalAnswerIndex · 整轮折叠边界(收起不完整修复)', ()
 });
 
 describe('turnCreatesPlan · 看板卡钉挂轮判定', () => {
-  it('过程块含 planner_create_plan 的轮次 → 钉挂看板卡', () => {
+  it('过程块含 planner 的轮次 → 钉挂看板卡', () => {
     const { blocks } = splitStepsIntoBlocks([
       userStep('u1', '调研并产出报告'),
-      toolStep('t1', 'planner_create_plan'),
+      toolStep('t1', 'planner'),
       toolStep('t2', 'web_search'),
       finalAnswer('a1', '报告'),
     ]);
@@ -549,7 +549,7 @@ describe('turnCreatesPlan · 看板卡钉挂轮判定', () => {
   it('续聊轮不含创建动作 → 不钉挂(卡片位置不漂移,状态靠 mission.plan 刷新)', () => {
     const { blocks } = splitStepsIntoBlocks([
       userStep('u1', '调研'),
-      toolStep('t1', 'planner_create_plan'),
+      toolStep('t1', 'planner'),
       toolStep('t2', 'web_search'),
       finalAnswer('a1', '中期结论'),
       userStep('u2', '继续'),
@@ -594,7 +594,7 @@ describe('splitStepsIntoBlocks · 后台任务通知块(step_bg_ / bgNotice)', (
     const { blocks } = splitStepsIntoBlocks([
       toolStep('t1', 'web_search'),
       bgStep('mission_c1'),
-      toolStep('t2', 'sandbox_run_command'),
+      toolStep('t2', 'sandbox_exec'),
     ]);
     expect(blocks.map((b) => b.type)).toEqual(['tools', 'notice', 'tools']);
   });

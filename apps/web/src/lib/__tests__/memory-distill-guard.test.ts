@@ -141,7 +141,7 @@ describe('distillAgentExperience · 环境状态防绝对断言(生产实例:Fir
         output: '未配置 FIRECRAWL_API_KEY',
       },
       { tool: 'browser_navigate', role: 'tool', status: 'DONE', output: '已打开 openai.com' },
-      { tool: 'search_web', role: 'tool', status: 'DONE', output: 'ok' },
+      { tool: 'search', role: 'tool', status: 'DONE', output: 'ok' },
     ],
   };
 
@@ -181,7 +181,7 @@ describe('distillAgentExperience · 环境状态防绝对断言(生产实例:Fir
     await distillAgentExperience(ctx, {
       userId: 'usr_test',
       goal: 'g',
-      mission: { id: 'm6', steps: [{ tool: 'search_web', role: 'tool', status: 'DONE', output: 'ok' }] },
+      mission: { id: 'm6', steps: [{ tool: 'search', role: 'tool', status: 'DONE', output: 'ok' }] },
       missionId: 'm6',
     });
     expect(calls.length).toBe(0);

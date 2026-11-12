@@ -2,7 +2,7 @@
  * 工坊参考资料(交付物复用):把平时会话的交付物作为资料带进工坊任务。
  *
  * 设计:prompt 里只带引用 id + 标题(不进正文),Agent 动笔前用
- * read_reference_material 工具(见 lib/reference-materials.ts)按需拉取全文。
+ * doc_read(source="reference")(见 lib/reference-materials.ts)按需拉取全文。
  * 相对内联拼接:prompt 不膨胀、长文不截断、params 体积恒定。
  * 数据流:表单用 collectWorkshopMaterials(missions)(交付物,只列有可读正文的)
  * 与 uploadMaterialOptions(本地上传,GET /api/workshops/materials)混排列出可选项 →
@@ -46,7 +46,7 @@ export const MATERIAL_UPLOAD_ACCEPT = [...MATERIAL_TEXT_EXTS, '.pdf', '.docx'].j
 /**
  * 从任务列表汇总可选交付物(与 DeliverablesView 同口径:任务 artifact 去重)。
  * 只列有可读正文的交付物:file 类型(pptx 等二进制,正文在服务端文件库)
- * read_reference_material 解析不了,不进可选项 —— 文本抽取支持后再放开。
+ * doc_read(source="reference") 解析不了,不进可选项 —— 文本抽取支持后再放开。
  */
 export function collectWorkshopMaterials(
   missions: Array<{
@@ -112,7 +112,7 @@ export function parseMaterials(v: unknown): WorkshopMaterial[] {
 /**
  * 本地上传文件 → 选择器条目(2026-10-20「上传文件」:参考资料第二来源)。
  * 与交付物条目混排、共享 MATERIAL_COUNT_LIMIT;id 即 uploadId(upl_*),
- * 正文由 read_reference_material 工具从上传库解析(pdf/docx 为上传时抽取的文本)。
+ * 正文由 doc_read(source="reference") 从上传库解析(pdf/docx 为上传时抽取的文本)。
  */
 export function uploadMaterialOptions(
   uploads: Array<{ id: string; title: string; fileName?: string; kind?: string; createdAt: number }>
@@ -130,7 +130,7 @@ export function uploadMaterialOptions(
 
 /**
  * 拼进 prompt 末尾的参考资料段:只列引用 id + 标题,并指令 Agent 动笔前
- * 先用 read_reference_material 全部读一遍。空数组返回空字符串(调用方直接
+ * 先用 doc_read(source="reference") 全部读一遍。空数组返回空字符串(调用方直接
  * 拼接即可,无资料时 prompt 与原来逐字节一致)。
  */
 export function buildMaterialsSection(materials: WorkshopMaterial[]): string {
@@ -139,8 +139,8 @@ export function buildMaterialsSection(materials: WorkshopMaterial[]): string {
   return (
     `\n\n【参考资料】\n` +
     `以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):` +
-    `动笔前必须用 read_reference_material ` +
-    `工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。\n` +
+    `动笔前必须用 doc_read(source="reference") ` +
+    `把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。\n` +
     lines.join('\n')
   );
 }

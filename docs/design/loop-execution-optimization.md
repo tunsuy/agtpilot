@@ -23,7 +23,7 @@
 
 ## 二、发现与改造项(按优先级)
 
-### P1 · search_web 结果质量差,引发连锁刮取
+### P1 · search 结果质量差,引发连锁刮取
 
 **现象**:google-news 引擎返回的 snippet 全是占位文案「来自 Google News 实时资讯」,
 URL 是 200+ 字符的 `news.google.com/rss/articles/CBMi...` base64 跳转码——搜索几乎不提供信息量。
@@ -33,7 +33,7 @@ URL 是 200+ 字符的 `news.google.com/rss/articles/CBMi...` base64 跳转码�
 - 热点日报:8 轮串行搜索全靠 google-news,之后仍需逐个浏览
 
 **改造**:
-- [x] search_web 换/补有真实摘要的引擎(已完成,2026-10-11):
+- [x] search 换/补有真实摘要的引擎(已完成,2026-10-11):
   - Bing 国际区(mkt=en-US)为英文主力:真实标题+摘要+`/ck/a` 链接解码为真实出版权 URL
   - Google News RSS 为中文主力:标题(自带信息量)+ `<source>` 来源名 + pubDate 组成摘要,
     替换原「来自 Google News 实时资讯」占位文案
@@ -123,14 +123,14 @@ plugin-model 有 `getUsage()`,但 apps/web 层零消费——不落库、不展�
 
 ### P5 · 缺 key 的连接器照样挂载、照样被调
 
-**现象**:`browser_firecrawl_scrape`(13ms 秒败)、`search_tavily`、`search_exa` 无 key 仍挂载;
+**现象**:`browser_firecrawl_scrape`(13ms 秒败)、`search`、`search` 无 key 仍挂载;
 种草任务 40% 有效率主要由它们贡献。auto-distill 记忆已存「Firecrawl/Tavily 缺 Key」,
 模型下次仍照调——记忆没有传导到工具可见性。
 
 **改造**:
 - [x] 缺 key 的工具不挂载(已完成,2026-10-11):
   - `ToolDefinition` 新增 `requiredEnv?: string[]` 声明(Key 环境变量名,任一存在
-    即已配置):`search_exa`/`search_tavily`(plugin-search,config 带 Key 时
+    即已配置):`search`/`search`(plugin-search,config 带 Key 时
     不声明)与 `browser_firecrawl_scrape`(plugin-browser)接入;执行内的
     Key 检查保留为兜底
   - core 新增 `filterToolsByEnv(纯函数)`:编排器挂载前按
@@ -139,14 +139,14 @@ plugin-model 有 `getUsage()`,但 apps/web 层零消费——不落库、不展�
   - 剔除只发生在 runTask 内,下游路由/loopTools/效率统计全部只见过滤后
     目录;用户个人空间配了 Key 的任务不受影响(anyOf 语义)
 - [x] 「缺 key」事实传导到工具目录(已完成,2026-10-11,短期形态):
-  - 被剔除清单注入系统提示尾部:「【工具可用性】search_exa(EXA_API_KEY)…
+  - 被剔除清单注入系统提示尾部:「【工具可用性】search(EXA_API_KEY)…
     本次未挂载,不要尝试调用,直接使用已挂载的替代工具;确需启用提示用户
     在个人空间配置 Key 后重新发起」—— 决策点直接告知,替代 auto-distill
     记忆「存了缺 Key 但下次仍照调」的断链;长期形态(回退弧/目录动态标注)
     待 persistent-state-governance 演进
   - 测试:routing.test.ts 新增 6 例(剔除/taskEnv 隔离/process.env/anyOf)
     + plugin-search.test.ts 3 例(声明联动:个人空间有 EXA Key 时
-    search_exa 挂载、search_tavily 剔除)
+    search 挂载、search 剔除)
 
 ### P6 · 独立检索未并行,串行单工具轮次
 
@@ -157,7 +157,7 @@ plugin-model 有 `getUsage()`,但 apps/web 层零消费——不落库、不展�
 - [x] 系统提示加「独立检索可并行发起」指引(已完成,2026-10-11):
   - Web 提示词抽成纯函数 `lib/task-system-prompt.ts`(便于测试与调优),
     规则 6 从泛化的「独立调用并行发出」升级为具体操作指引:
-    把主题拆成多个不同角度的关键词/信息源(多角度 search_web +
+    把主题拆成多个不同角度的关键词/信息源(多角度 search +
     已授权 MCP 检索工具),**一轮批量发起全部搜索,结果齐了再汇总
     决定下一步**;每轮只发一个查询会成倍浪费往返与上下文重发;
     浏览多个互不依赖的网页同理

@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  buildReferenceTools,
-  resolveReferenceMaterial,
-  REFERENCE_CONTENT_LIMIT,
-  TOOL_PROVIDER,
-} from '../reference-materials';
+import { resolveReferenceMaterial, REFERENCE_CONTENT_LIMIT } from '../reference-materials';
+import { buildDocReadTools } from '../doc-read';
 
 const seedMissions = [
   {
@@ -28,7 +24,6 @@ vi.mock('../user-store', () => ({
 // 上传库替身(真库落盘逻辑在 material-uploads.test.ts 覆盖;这里只测解析分支)
 const UPL_ID = 'upl_lz4k1a2b3c_0123456789abcdef';
 // 夹具长度跟随分页上限自适应:恒超一页 1000 字符,坐实 truncated/分页断言
-// (写死 9000 曾在 LIMIT 8000→14000 调整时失去「超长」前提)
 const UPL_LEN = REFERENCE_CONTENT_LIMIT + 1000;
 vi.mock('../material-uploads', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../material-uploads')>();
@@ -39,14 +34,6 @@ vi.mock('../material-uploads', async (importOriginal) => {
     readMaterialText: (uid: string, id: string) =>
       uid === 'u1' && id === UPL_ID ? 'y'.repeat(UPL_LEN) : null,
   };
-});
-
-describe('TOOL_PROVIDER 描述符', () => {
-  it('id 为 reference,依赖 uid,build 闭包使用 uid', () => {
-    expect(TOOL_PROVIDER.id).toBe('reference');
-    expect(TOOL_PROVIDER.deps).toEqual(['uid']);
-    expect(String(TOOL_PROVIDER.build)).toContain('uid');
-  });
 });
 
 describe('resolveReferenceMaterial', () => {
@@ -67,35 +54,39 @@ describe('resolveReferenceMaterial', () => {
   });
 });
 
-describe('read_reference_material 工具', () => {
+describe('doc_read · source=reference', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
   it('元信息正确(只读/low/参数)', () => {
-    const [tool] = buildReferenceTools('u1');
-    expect(tool.name).toBe('read_reference_material');
+    const [tool] = buildDocReadTools('u1');
+    expect(tool.name).toBe('doc_read');
     expect(tool.readOnly).toBe(true);
     expect(tool.dangerLevel).toBe('low');
   });
   it('命中返回正文,超长截断并给 nextOffset', async () => {
-    const [tool] = buildReferenceTools('u1');
-    const r1: any = await (tool.execute as any)({ materialId: 'art_m1' });
+    const [tool] = buildDocReadTools('u1');
+    const r1: any = await (tool.execute as any)({ source: 'reference', materialId: 'art_m1' });
     expect(r1.success).toBe(true);
     expect(r1.content).toBe('核心结论AAA');
     expect(r1.truncated).toBe(false);
-    const r2: any = await (tool.execute as any)({ materialId: 'art_m2' });
+    const r2: any = await (tool.execute as any)({ source: 'reference', materialId: 'art_m2' });
     expect(r2.success).toBe(true);
     expect(r2.content).toHaveLength(REFERENCE_CONTENT_LIMIT);
     expect(r2.truncated).toBe(true);
     expect(r2.nextOffset).toBe(REFERENCE_CONTENT_LIMIT);
-    const r3: any = await (tool.execute as any)({ materialId: 'art_m2', offset: REFERENCE_CONTENT_LIMIT });
+    const r3: any = await (tool.execute as any)({
+      source: 'reference',
+      materialId: 'art_m2',
+      offset: REFERENCE_CONTENT_LIMIT,
+    });
     expect(r3.success).toBe(true);
     expect(r3.content).toHaveLength(100);
     expect(r3.truncated).toBe(false);
   });
   it(' miss 返回 success:false + 降级提示', async () => {
-    const [tool] = buildReferenceTools('u1');
-    const r: any = await (tool.execute as any)({ materialId: 'art_missing' });
+    const [tool] = buildDocReadTools('u1');
+    const r: any = await (tool.execute as any)({ source: 'reference', materialId: 'art_missing' });
     expect(r.success).toBe(false);
     expect(r.error).toContain('降级');
   });
@@ -118,29 +109,35 @@ describe('resolveReferenceMaterial · upl_ 上传文件分支(2026-10-20)', () =
   });
 });
 
-describe('read_reference_material 工具 · 上传资料分页', () => {
+describe('doc_read · source=reference · 上传资料分页', () => {
   it('execute 按 offset 分段,首段 truncated + nextOffset 指路', async () => {
-    const tools = buildReferenceTools('u1');
-    const tool = tools.find((t) => t.name === 'read_reference_material')!;
-    const r1: any = await tool.execute!({ materialId: UPL_ID } as any, {} as any);
+    const tools = buildDocReadTools('u1');
+    const tool = tools.find((t) => t.name === 'doc_read')!;
+    const r1: any = await tool.execute!({ source: 'reference', materialId: UPL_ID } as any, {} as any);
     expect(r1.success).toBe(true);
     expect(r1.content).toHaveLength(REFERENCE_CONTENT_LIMIT);
     expect(r1.truncated).toBe(true);
     expect(r1.nextOffset).toBe(REFERENCE_CONTENT_LIMIT);
-    const r2: any = await tool.execute!({ materialId: UPL_ID, offset: REFERENCE_CONTENT_LIMIT } as any, {} as any);
+    const r2: any = await tool.execute!(
+      { source: 'reference', materialId: UPL_ID, offset: REFERENCE_CONTENT_LIMIT } as any,
+      {} as any,
+    );
     expect(r2.content).toHaveLength(UPL_LEN - REFERENCE_CONTENT_LIMIT);
     expect(r2.truncated).toBe(false);
   });
   it('解析失败给降级话术(上传文件已删除场景)', async () => {
-    const tools = buildReferenceTools('u1');
-    const tool = tools.find((t) => t.name === 'read_reference_material')!;
-    const r: any = await tool.execute!({ materialId: 'upl_gone0_ffffffffffffffff' } as any, {} as any);
+    const tools = buildDocReadTools('u1');
+    const tool = tools.find((t) => t.name === 'doc_read')!;
+    const r: any = await tool.execute!(
+      { source: 'reference', materialId: 'upl_gone0_ffffffffffffffff' } as any,
+      {} as any,
+    );
     expect(r.success).toBe(false);
     expect(String(r.error)).toContain('降级路径');
   });
   it('工具描述覆盖两种来源(交付物 + 上传文件)', () => {
-    const tools = buildReferenceTools('u1');
-    const tool = tools.find((t) => t.name === 'read_reference_material')!;
+    const tools = buildDocReadTools('u1');
+    const tool = tools.find((t) => t.name === 'doc_read')!;
     expect(tool.description).toContain('art_');
     expect(tool.description).toContain('upl_');
     expect(tool.description).toContain('PDF/Word');

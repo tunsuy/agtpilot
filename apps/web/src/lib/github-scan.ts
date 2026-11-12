@@ -299,7 +299,7 @@ export async function scanGithub(input: GhScanInput): Promise<GhScanResult> {
     ...(repos.length === 0
       ? {
           error:
-            'GitHub 仓库检索全部失败(常见:未认证 API 限速或网络不可达)。降级路径:用 search_web 检索 GitHub Trending 与具体仓库页,或基于自身知识给候选并注明「链接与状态未经实时核验」',
+            'GitHub 仓库检索全部失败(常见:未认证 API 限速或网络不可达)。降级路径:用 search 检索 GitHub Trending 与具体仓库页,或基于自身知识给候选并注明「链接与状态未经实时核验」',
         }
       : {}),
   };
@@ -309,7 +309,7 @@ export async function scanGithub(input: GhScanInput): Promise<GhScanResult> {
 }
 
 const GH_TOOL_FALLBACK_HINT =
-  '降级路径:用 search_web 检索 GitHub Trending/仓库页,或换一组 topics 重试';
+  '降级路径:用 search 检索 GitHub Trending/仓库页,或换一组 topics 重试';
 
 /** 工具薄壳:开源贡献调研专用取数(只读、无需凭证、服务端缓存 15 分钟) */
 export function buildGithubScanTools(): ToolDefinition[] {
@@ -321,7 +321,7 @@ export function buildGithubScanTools(): ToolDefinition[] {
         '返回按 star 排序的候选仓库(star/语言/最近推送/topic)与每个仓库的开放 good first issue(标题/链接/创建时间/评论数,已过滤无人认领)。' +
         '适合贡献机会调研的机械取数部分;筛选判断(匹配技术栈、评估上手成本)由你完成。' +
         'topics 用 GitHub topic 词(如 ai / llm / agent / rag / devtool,最多 5 个)。' +
-        'GitHub API 未认证限速 10 次/分钟,返回里的 searchRateRemaining 是剩余额度,额度不足时减少扫描或改用 search_web。',
+        'GitHub API 未认证限速 10 次/分钟,返回里的 searchRateRemaining 是剩余额度,额度不足时减少扫描或改用 search。',
       dangerLevel: 'low',
       readOnly: true, // 只读并行门控:纯拉取公共 API,无副作用
       parameters: {

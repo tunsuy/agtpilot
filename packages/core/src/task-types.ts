@@ -72,7 +72,7 @@ export interface TaskOptions {
    * 工具结果序列化后超过 TOOL_OUTPUT_LIMIT 时,内核先经本回调尝试把全量原文
    * 写入调用方管理的存储(web 层 = 用户上下文目录 v2/<userId>/tool-output/)。
    * 返回非空字符串(= 存储引用 id)时模型收到「头尾预览 + 指针」而非纯截断,
-   * 被截部分可经 read_tool_output(callId, offset) 续读(可恢复);
+   * 被截部分可经 doc_read(source="tool_output", callId, offset) 续读(可恢复);
    * 无回调 / 返回 null / 抛错 → 回退现行头尾截断,绝不因落盘失败工具调用。
    * 内核侧受 AGTPILOT_TOOL_SPILL=0 保险丝门控(关闭时不调用本回调)。
    * CLI/runner 不注入 = 行为与上线前一致。

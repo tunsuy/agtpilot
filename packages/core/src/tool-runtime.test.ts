@@ -4,7 +4,7 @@ import { ToolRuntime } from './tool-runtime';
 
 function tool(overrides: Partial<ToolDefinition> & Record<string, any> = {}): ToolDefinition {
   return {
-    name: 'search_web',
+    name: 'search',
     description: 'search',
     parameters: { type: 'object', properties: {} },
     readOnly: true,
@@ -101,7 +101,7 @@ describe('ToolRuntime', () => {
 
     const spilled = await runtime.execute(t, { q: 1 }, session);
     expect(String(spilled.output)).toContain('全量已保存');
-    expect(String(spilled.output)).toContain('read_tool_output');
+    expect(String(spilled.output)).toContain('doc_read(source="tool_output"');
     expect(spilled.spilled).toMatchObject({ originalChars: 20000 });
     expect(runtime.getStats().spilledOutputs).toBe(1);
 

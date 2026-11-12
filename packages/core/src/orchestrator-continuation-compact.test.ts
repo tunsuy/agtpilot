@@ -27,12 +27,12 @@ const mkTool = (id: string, output: string) => ({
 function longHistory() {
   return [
     { role: 'user' as const, content: '初始任务' },
-    mkTc('c1', 'search_web'),
+    mkTc('c1', 'search'),
     mkTool('c1', BIG),
     mkTc('c2', 'read_page'),
     mkTool('c2', BIG),
     { role: 'assistant' as const, content: '中间结论' },
-    mkTc('c3', 'search_web'),
+    mkTc('c3', 'search'),
     mkTool('c3', 'ok'),
     { role: 'assistant' as const, content: '上一轮最终答复' },
   ];
@@ -114,7 +114,7 @@ describe('续聊轮入口强制蒸馏(闸0)', () => {
     expect(digest).toContain('蒸馏纪要');
     // 台账不经蒸馏,系统精确统计(工具名/次数/参数摘要)
     expect(digest).toContain('【工具调用台账】');
-    expect(digest).toContain('search_web');
+    expect(digest).toContain('search');
     // 巨型正文整体消失(蒸馏路径不保留原文流水)
     expect(h.captured.some((m) => ser(m).includes('x'.repeat(1000)))).toBe(false);
     // 新消息永远是最后一条,原样保留

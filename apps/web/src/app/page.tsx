@@ -628,6 +628,8 @@ export default function Workspace() {
       /** 思考深度(low|medium|high);'' = 清除连接器级配置回落全局。value 留空时凭证不动 */
       reasoningEffort?: string;
       reasoningEffortEnvVar?: string;
+      /** 额外非凭证配置（自建 E2B 控制面地址/域名/流量地址/模板）；'' = 清除 */
+      extraEnvs?: Record<string, string>;
     }
   ) => {
     try {
@@ -642,6 +644,7 @@ export default function Workspace() {
             modelNameEnvVar: extra.modelNameEnvVar,
             reasoningEffort: extra.reasoningEffort,
             reasoningEffortEnvVar: extra.reasoningEffortEnvVar,
+            extraEnvs: extra.extraEnvs,
           }
         : { envVar, value };
 

@@ -98,7 +98,7 @@ export function buildWorkshopRun(
  * 白名单任务不参与关键词路由,挂载面从「正则磁铁拖进 80~100 个」收敛到声明集。
  * 未声明白名单的工坊(理论上不存在,防御)返回 undefined → 走原路由。
  */
-const SEARCH_WEB_TOOLS = ['search_web', 'search_exa', 'search_tavily'];
+const SEARCH_WEB_TOOLS = ['search'];
 /** 调研增强件:并行子 agent + 网页正文抓取(零 Key 本地浏览器 + Firecrawl)+ 参考资料库(research 档)。
  *  browser_navigate 2026-10-23 补入:Firecrawl 缺 Key 时整组是壳,主/子 agent
  *  双双陷入「想读网页却无工具」死路(公众号风格参照生产实例)——本地持久化
@@ -107,9 +107,8 @@ const RESEARCH_TOOLS = [
   'research_subagent',
   'browser_navigate',
   'browser_firecrawl_scrape',
-  'read_reference_material',
-];
-// 2026-10-19 降载:原 full 档(直挂 mcp_newsnow_*/mcp_zhihu_*/mcp_twitterapi_io_*
+  'doc_read',
+];// 2026-10-19 降载:原 full 档(直挂 mcp_newsnow_*/mcp_zhihu_*/mcp_twitterapi_io_*
 // 社媒热榜通配)移除 —— 社媒 MCP 一律走 C 层 deps 映射(单一事实源),
 // invest/edu 等无社媒 deps 的工坊不再每步白背 2~8k token schema。
 
@@ -133,7 +132,7 @@ const DEPS_TOOL_OVERRIDES: Record<string, string[]> = {
   github_mcp: [],
   // deepwiki:只挂只读工具,create_wiki(写)不挂;避免 wildcard 把写工具也带进来
   deepwiki: ['mcp_deepwiki_ask_question', 'mcp_deepwiki_read_wiki'],
-  // exa:没有对应 MCP 服务器,检索走 search_exa(API);wildcard 永不匹配,显式映射为空避免噪音
+  // exa:没有对应 MCP 服务器,检索走 search(API);wildcard 永不匹配,显式映射为空避免噪音
   exa: [],
 };
 

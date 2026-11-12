@@ -29,7 +29,7 @@
   name: 'research_subagent',
   description: '派发一个只读检索子 agent 完成广域调研:多路搜索/网页阅读/资料汇总。
                 适用:需要翻大量资料才能得出结论、且各路检索相互独立的任务。
-                不适用:单点查询(直接用 search_web)、写操作、需要审批的动作。
+                不适用:单点查询(直接用 search)、写操作、需要审批的动作。
                 返回:提炼后的结论报告(含来源引用),不含原始检索内容。',
   dangerLevel: 'low',
   readOnly: true,          // 关键:走 ToolGate.runReadonly,
@@ -99,12 +99,14 @@ export interface SubagentModel {
 
 | 默认白名单(现有已声明 readOnly 的工具) | 来源 |
 |---|---|
-| `search_web` / `search_exa` / `search_tavily` | plugin-search:296,396,431(后两者带 requiredEnv,缺 Key 自动不挂) |
+| `search`(engine=auto/exa/tavily) | plugin-search(合并自原 search_web/search_exa/search_tavily;engine=exa/tavily 需 Key,缺失时执行期诚实报错) |
 | `browser_firecrawl_scrape` | plugin-browser:550(browser 组唯一只读,不触共享浏览器会话) |
-| `rag_search` / `rag_list_indexed` | plugin-rag:231,255 |
-| `sandbox_read_file` / `sandbox_list_dir` | plugin-sandbox:407,511 |
-| `git_status` / `git_diff` / `codebase_search_symbols` | plugin-git:34,59,224 |
-| `memory_recall` / `memory_list` | plugin-memory:158,191 |
+| `rag_query`(search / list_indexed) | plugin-rag(合并自原 rag_search/rag_list_indexed;rag_index_document 写入口不在名单) |
+| `sandbox_file`(read/list action) | plugin-sandbox(合并后统一文件面;文件工具不再拆读/写/列) |
+| `doc_read`(source=reference / tool_output) | web 宿主 `apps/web/src/lib/doc-read.ts`(任务级 `resolveUserTools` 注入,不进全局注册表;skill_pack 源不向子 agent 放行) |
+| `git_inspect`(status / diff) | plugin-git(合并自原 git_status/git_diff;apply_patch 等写工具不在名单) |
+
+> 宿主的 `memory` / `cron_task` / `planner` / `ppt` / `notify` 等 taskTools 不进默认名单:它们是按任务注入的用户级工具,未声明 `readOnly`,子 agent 结构性不可见。
 
 - **MCP 工具(2026-10-14 起按「双钥匙」条件放行)**:plugin-mcp 注册时对每个工具做**只读自动分类(default-deny,`classify.ts` 的 `classifyToolReadOnly`)**,三级优先:① 服务器 `annotations` 有实质 hint(`readOnlyHint`/`destructiveHint` 任一为 boolean)→ 完全交给注解判定(`readOnlyHint === true && destructiveHint !== true` 才只读,即原 `mcpToolReadOnly`),启发式不介入;② 注解完全沉默 → 按工具名首词素做动词启发(明确只读动词开头且全名不含破坏性动词才判只读);③ 拿不准 = 拒绝(不带 `readOnly`)。判只读才带 `readOnly: true` 与 `readOnlyBasis`(`annotation`/`heuristic`,审计用),`dangerLevel` 维持 medium、主循环审批语义不变。分类在连接拿到 tools/list 时算一次、随连接缓存,重连自动重判——**不再依赖人工逐台配凭证跑测量脚本**。此启发式只补「机器钥匙」信号,仍须与人工钥匙(`subagentOpen` 目录标记)取交集:行情/写操作类服务器在目录层就 `false`,根本轮不到工具级分类,故误判最坏后果 = 某检索工具没被开进子 agent(可用逃生口或补注解救回),不会把写操作放进无人值守子 agent。子 agent 侧:工具进入内部工具集需同时满足 ① 服务器名在 `AGTPILOT_SUBAGENT_MCP_SERVERS` 白名单(人工钥匙;**内置默认 = 工坊调研链的检索类连接器** `github_mcp,huggingface,openalex,alphaxiv,deepwiki`,负责人 2026-10-14 要求默认带上;行情类依红线不入默认;`off` = 全关)② 注册表 `readOnly === true`(机器钥匙,来自服务器注解)。另设逃生口 `AGTPILOT_SUBAGENT_MCP_ALLOW_TOOLS`(工具名前缀):用于无注解服务器,命中前缀不要求 readOnly 声明;**内置默认 `mcp_deepwiki_,mcp_newsnow_`,以 2026-10-14 `scripts/annotations-report.mjs` 实测记录为背书**(deepwiki 全部 3 工具、newsnow 全部 1 工具确认为只读;huggingface 官方 4/4 带只读注解,走双钥匙直通)。普通白名单里写 `mcp_` 名字一律无效。注解是服务器自报提示而非契约(MCP 官方立场),故双钥匙 AND 是硬要求;逃生口的新增项必须先跑实测脚本留档。**人工钥匙的目录化(2026-10-14)**:web 宿主不再依赖 env 静态名单——连接器目录 `McpServerDef.subagentOpen`(必填 boolean)由开发侧在目录条目处评审标记(版本化、可审计、新连接器不表态过不了编译),宿主经 `resolveMcpServers(userId)` 把「该用户已连接 ∩ 已标记」的服务器名单在每次派发时动态注入(用户新配连接器即生效,无需改 env/重启);env `AGTPILOT_SUBAGENT_MCP_SERVERS` 显式设置(含 `off`)时宿主不注入,env 语义优先。标记原则:检索/查询类且性质只读 → true;写操作/现实副作用/按量计费未评审 → false;行情数字类整类 false(红线:报告依据数字必须主循环直拉)——`mcp-connectors-subagent.test.ts` 锁死清单 + Finance 整类回归。
 - **工坊白名单对齐(2026-10-17 增补,负责人点题「子agent的工具绑定逻辑也要跟主agent一样」)**:主循环带显式白名单(`TaskOptions.activeTools`,工坊四层声明)时,编排器把它原样透传进 `ToolSession.activeTools`(orchestrator.ts 会话合成处;core orchestrator-session.test.ts 锁透传),Runner 在只读候选解析后、`filterToolsByEnv` 之前取「候选 ∩ 白名单」——匹配复用 core `resolveExplicitTools`,与主循环语义逐字一致:精确名 / `前缀*` 通配 / baseline 自动并入 / 零命中静默跳过。效果:主循环整台禁入的 MCP(如雷达的 github_mcp,子 agent 默认双钥匙本可放行其只读件)子循环同样禁入;工坊 B 组裁剪(如 novel 不要热榜)对子 agent 同样生效。缺省(闲聊/关键词路由任务)= 不交集,维持本节双层白名单原语义;交集为空 → 拒绝派发,错误信息如实说明。测试:runner.test.ts「3.6 工坊白名单对齐」6 例。
@@ -114,7 +116,7 @@ export interface SubagentModel {
 - **prepareStep 管线**:父子共用 `runPreparePipeline` 形状。父链 = 路由扩容 → 压缩 → 看板/治理/后台/用户消息 → 发送前预算护栏;子链 = reasoning 剥离 → token 预算闸。共享管线机制,策略各自装配。
 - **运行控制机制**:墙钟用 `createDeadline`(超时 abort + dispose),token 闸用 `createTokenBudgetMiddleware`(超限收工具 + 注入提示),模型错误重试用 `runWithRetry`(可中止退避 + 只重试一次)。三者都在 `packages/core/src/run-control.ts`,父子可按 spec 选用。
 - **轨迹**:子 agent 每次运行生成 `traceId`(默认等于 `subTaskId`)，轨迹事件存内存；宿主可通过 `SubagentEngine.getTrace(traceId)` 或 `read_subagent_trace` 工具按需读取，不进入 SSE 主流。
-- **工具面告知(2026-10-26)**:候选解析完成后,Runner 从任务描述中抽取点名的工具标识(`mcp_`/`browser_`/`search_`/`sandbox_`/`git_`/`rag_`/`memory_`/`cron_`/`skill_` 前缀,支持 `*` 通配),与 `mountedTools` 比对;有点名但未挂载的工具时,在首条 user 消息追加【工具面】段——明确列出「点名但不可用」与「实际可用」,要求改用可用工具并在报告注明替代情况。子 agent 看不到不存在的工具 schema,提前一句话可省掉整段无效步数(2026-10-26 生产实例:任务点名 `mcp_github_mcp_*`,子 agent 只有 `browser_navigate`/`search_web`)。
+- **工具面告知(2026-10-26)**:候选解析完成后,Runner 从任务描述中抽取点名的工具标识(`mcp_`/`browser_`/`search_`/`sandbox_`/`git_`/`rag_`/`memory_`/`cron_`/`skill_` 前缀,支持 `*` 通配),与 `mountedTools` 比对;有点名但未挂载的工具时,在首条 user 消息追加【工具面】段——明确列出「点名但不可用」与「实际可用」,要求改用可用工具并在报告注明替代情况。子 agent 看不到不存在的工具 schema,提前一句话可省掉整段无效步数(2026-10-26 生产实例:任务点名 `mcp_github_mcp_*`,子 agent 只有 `browser_navigate`/`search`)。
 - **零挂载诊断(2026-10-26)**:`mounted.length === 0` 时,错误信息按三层漏斗如实带回「只读候选数 → 工坊白名单交集后数 → 缺 Key 剔除名单 → 实际挂载 0」,并明确要求主循环不要原样重派、改用主循环工具;失败 meta 同样带 `mountedTools: []`。
 - 父/子共用同一套熔断与连续失败守卫;子 agent 的额外约束是 §4.4 的三重预算闸与只读挂载计划。
 

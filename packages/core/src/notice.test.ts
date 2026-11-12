@@ -65,7 +65,7 @@ describe('appendUserMessage', () => {
   it('排队消息以【用户追加消息】前缀的 user 消息追加到末尾', () => {
     const messages = [
       { role: 'user', content: '查一下 ai 最新发展' },
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'search_web', input: {} }] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'search', input: {} }] },
       { role: 'tool', content: '搜索结果…' },
     ];
     // 上层已把多条排队消息合并成一条(\n\n 拼接,对齐 Claude Code)

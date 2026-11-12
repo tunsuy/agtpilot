@@ -6,7 +6,7 @@
  * 布局与 artifact_files 同款(文件本体 + 同名 .json manifest,原子写 tmp+rename)。
  *
  * 与交付物同一条读取链路:prompt 里只带引用 id(upl_*)+ 标题,Agent 用
- * read_reference_material 工具按需拉全文(lib/reference-materials.ts 认 upl_ 前缀
+ * doc_read(source="reference") 按需拉全文(lib/reference-materials.ts 认 upl_ 前缀
  * 落到这里),分段续读/条数上限等语义与 art_* 完全一致。
  *
  * 文件类型三档(白名单外拒收,如实报错):

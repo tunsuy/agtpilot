@@ -1058,7 +1058,7 @@ export function CockpitView({
                           turnStreaming ? 'border-blue-300/70' : 'border-zinc-200/80'
                         }`}
                       >
-                        {/* 任务看板卡:看板在本轮立起来(planner_create_plan 落在
+                        {/* 任务看板卡:看板在本轮立起来(planner 落在
                             本轮过程块)即在本轮钉挂 —— 看板按提示词先于执行创建,
                             顶部即其真实时间线位置。不参与整轮过程折叠:受控进展
                             播报开始吐正文后过程区会收起,看板进度不能跟着消失;

@@ -208,7 +208,7 @@ oss_radar / invest / edu / follow_builders / 小红书选题:多路异构检索(
 | Manus 要点 | 本仓状态 | 关键证据 |
 |---|---|---|
 | 文件系统当记忆 | ✅ 大半已做,缺「自动 offload」 | `context_file` 笔记区五动作、大输出存文件留摘要+路径(`apps/web/src/lib/memory-service.ts:1185-1240`);L0 清单只注入 path+大小(:893-897);浏览器 4000 字符窗口 + nextOffset 续读(`plugin-browser/src/index.ts:150-160,590-601`);工具输出 16KB 头尾截断(`core/src/text.ts:45-63`) |
-| todo.md 复述 | ❌ 没做(四项中唯一完全空白) | 看板只存进程内存 + 广播前端;`prepareStep` 每步做路由/压缩/治理/steering/检查点/看板滞后催促,**但不注入完整看板状态**;模型唯一可见点是 `planner_create_plan` 的一次性返回值,无 get_plan 类查询工具 |
+| todo.md 复述 | ❌ 没做(四项中唯一完全空白) | 看板只存进程内存 + 广播前端;`prepareStep` 每步做路由/压缩/治理/steering/检查点/看板滞后催促,**但不注入完整看板状态**;模型唯一可见点是 `planner` 的一次性返回值,无 get_plan 类查询工具 |
 | KV-cache 友好 | ⚠️ 部分做 | 已做:工具 tokens < 上下文 10% 时全量挂载、前缀恒定(`routing.ts:82-83`);任务内**只扩不缩**、注释明说为 provider 前缀缓存(`routing.ts:109-131`、`orchestrator.ts:324-329,389-399`);时间戳刻意日粒度(`task-system-prompt.ts:17-25`)。未做:activeTools 是**移除式**而非 Manus「保留定义 + tool_choice 屏蔽」(`plugin-model/src/index.ts:104-117`);动态内容(时间戳、userMemoryPrompt)嵌在前缀中部,记忆一更新整段前缀缓存失效 |
 | 保留失败动作 | ✅ 已显式做 | isError 检测 + 失败调用 keepCall=0.8/keepResult=0.95(`plugin-compaction/src/classify.ts:61,77-79`);keep 白名单调用+结果**原样保留**不进纪要(`core/src/compaction.ts:39-43,73-84`);连续失败守卫注入换思路提示且保留真实报错(`orchestrator.ts:255-272`) |
 

@@ -216,7 +216,7 @@ export async function compactConversationMessages(
       const resultText = parts.map((p) => p.outputText).join('\n');
       const digestRef = resultText.match(SPILL_REF_RE)?.[1];
       digestEntries.push(
-        `[工具结果]${digestRef ? `（全文已落盘 ref=${digestRef},可 read_tool_output 续读）` : ''} ${resultText}`
+        `[工具结果]${digestRef ? `（全文已落盘 ref=${digestRef},可 doc_read(source="tool_output", callId="${digestRef}") 续读）` : ''} ${resultText}`
       );
       hasDroppable = true;
     } else if (m.role === 'assistant' && isToolCallMessage(m)) {

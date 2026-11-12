@@ -19,8 +19,8 @@ function makeMission(id = 'mission_test'): Mission {
 describe('upsertToolStep · callId 路径', () => {
   it('双广播(编排器带 args / 插件层平铺)合并为一步,入参保持干净', () => {
     const m = makeMission();
-    upsertToolStep(m, { tool: 'search_web', args: { query: '自驾', maxResults: 6 }, callId: 'call_a' });
-    upsertToolStep(m, { tool: 'search_web', callId: 'call_a' }); // 插件层平铺事件:无 args 字段
+    upsertToolStep(m, { tool: 'search', args: { query: '自驾', maxResults: 6 }, callId: 'call_a' });
+    upsertToolStep(m, { tool: 'search', callId: 'call_a' }); // 插件层平铺事件:无 args 字段
     expect(m.steps).toHaveLength(1);
     expect(m.steps[0].callId).toBe('call_a');
     expect(m.steps[0].args).toEqual({ query: '自驾', maxResults: 6 });
@@ -38,12 +38,12 @@ describe('upsertToolStep · callId 路径', () => {
   it('同轮并行的两个不同调用各自成步,交错到达不互相吞并', () => {
     const m = makeMission();
     // 生产实例的交错序列:search → zhihu → search(dup) → zhihu(dup)
-    upsertToolStep(m, { tool: 'search_web', args: { query: '自驾' }, callId: 'call_1' });
+    upsertToolStep(m, { tool: 'search', args: { query: '自驾' }, callId: 'call_1' });
     upsertToolStep(m, { tool: 'mcp_zhihu', args: { query: '对比' }, callId: 'call_2' });
-    upsertToolStep(m, { tool: 'search_web', callId: 'call_1' });
+    upsertToolStep(m, { tool: 'search', callId: 'call_1' });
     upsertToolStep(m, { tool: 'mcp_zhihu', callId: 'call_2' });
     expect(m.steps).toHaveLength(2); // 旧实现在此翻倍成 4 步
-    expect(m.steps.map((s) => s.tool)).toEqual(['search_web', 'mcp_zhihu']);
+    expect(m.steps.map((s) => s.tool)).toEqual(['search', 'mcp_zhihu']);
     expect(m.steps.every((s) => s.status === 'RUNNING')).toBe(true);
   });
 });
@@ -82,10 +82,10 @@ describe('settleToolStep · callId 路径', () => {
 
   it('同 callId 重复收尾幂等:不二次改时长/状态', () => {
     const m = makeMission();
-    upsertToolStep(m, { tool: 'search_web', args: { query: 'x' }, callId: 'call_1' });
-    settleToolStep(m, { tool: 'search_web', output: { a: 1 }, callId: 'call_1' });
+    upsertToolStep(m, { tool: 'search', args: { query: 'x' }, callId: 'call_1' });
+    settleToolStep(m, { tool: 'search', output: { a: 1 }, callId: 'call_1' });
     const dur = m.steps[0].duration;
-    const changed = settleToolStep(m, { tool: 'search_web', output: { b: 2 }, callId: 'call_1' });
+    const changed = settleToolStep(m, { tool: 'search', output: { b: 2 }, callId: 'call_1' });
     expect(changed).toBe(false);
     expect(m.steps[0].duration).toBe(dur);
     expect(m.steps[0].output).toEqual({ a: 1 });
@@ -107,17 +107,17 @@ describe('settleToolStep · callId 路径', () => {
 describe('无 callId 兜底(旧事件源,行为不变)', () => {
   it('tool_call:末位同名 RUNNING 去重,无匹配新建;payload 整包当入参', () => {
     const m = makeMission();
-    upsertToolStep(m, { tool: 'search_web', payload: { tool: 'search_web', query: 'q' } });
-    upsertToolStep(m, { tool: 'search_web', payload: { tool: 'search_web', query: 'q2' } });
+    upsertToolStep(m, { tool: 'search', payload: { tool: 'search', query: 'q' } });
+    upsertToolStep(m, { tool: 'search', payload: { tool: 'search', query: 'q2' } });
     expect(m.steps).toHaveLength(1);
-    expect(m.steps[0].args).toEqual({ tool: 'search_web', query: 'q2' });
+    expect(m.steps[0].args).toEqual({ tool: 'search', query: 'q2' });
     upsertToolStep(m, { tool: 'mcp_zhihu', args: { query: 'z' } });
     expect(m.steps).toHaveLength(2);
   });
 
   it('tool_result:倒查最后一个 RUNNING 同名步骤收尾', () => {
     const m = makeMission();
-    upsertToolStep(m, { tool: 'search_web', payload: { tool: 'search_web', query: 'q' } });
+    upsertToolStep(m, { tool: 'search', payload: { tool: 'search', query: 'q' } });
     upsertToolStep(m, { tool: 'mcp_zhihu', args: {} });
     const changed = settleToolStep(m, { tool: 'mcp_zhihu', output: { r: 1 } });
     expect(changed).toBe(true);
@@ -130,13 +130,13 @@ describe('生产实例复现(2026-10-14 交错双广播序列)', () => {
   it('2 个物理调用 × 双广播交错 → 恰好 2 步、结果各归其位、无孤儿「执行中」', () => {
     const m = makeMission();
     // 17:03:00 实录事件序:编排器 search → 编排器 zhihu → 插件 search(平铺) → 插件 zhihu(带 args)
-    upsertToolStep(m, { tool: 'search_web', args: { query: '自驾', maxResults: 6 }, callId: 'call_s' });
+    upsertToolStep(m, { tool: 'search', args: { query: '自驾', maxResults: 6 }, callId: 'call_s' });
     upsertToolStep(m, { tool: 'mcp_zhihu', args: { query: '对比', count: 8 }, callId: 'call_z' });
-    upsertToolStep(m, { tool: 'search_web', callId: 'call_s' });
+    upsertToolStep(m, { tool: 'search', callId: 'call_s' });
     upsertToolStep(m, { tool: 'mcp_zhihu', args: { query: '对比', count: 8 }, callId: 'call_z' });
     // 结果:search 487ms 真结果归 call_s;zhihu 16KB 真结果归 call_z;
     // 路过的无关 tool_result(旧序里会误关孤儿)不再产生任何影响
-    settleToolStep(m, { tool: 'search_web', output: { success: true, query: '自驾' }, callId: 'call_s' });
+    settleToolStep(m, { tool: 'search', output: { success: true, query: '自驾' }, callId: 'call_s' });
     settleToolStep(m, { tool: 'mcp_zhihu', output: { content: ['<result 16KB>'] }, callId: 'call_z' });
     settleToolStep(m, { tool: 'mcp_zhihu', output: null, callId: 'call_无关' });
 

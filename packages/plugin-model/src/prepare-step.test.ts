@@ -9,7 +9,7 @@ import { adaptPrepareStepResult } from './index';
  * 非空声明全部不在工具表时仍维持现状(不得误发收工具语义)。
  */
 
-const toolsMap = { search_web: {}, rag_search: {} };
+const toolsMap = { search: {}, rag_query: {} };
 
 describe('adaptPrepareStepResult', () => {
   it('显式空数组 activeTools: [] → 原样透传(预算闸收敛信号,bug 修复本体)', () => {
@@ -27,10 +27,10 @@ describe('adaptPrepareStepResult', () => {
 
   it('非空 activeTools 按本次调用工具表过滤(不在表内的名字剔除)', () => {
     const out = adaptPrepareStepResult(
-      { activeTools: ['search_web', 'not_mounted', 'rag_search'] },
+      { activeTools: ['search', 'not_mounted', 'rag_query'] },
       toolsMap,
     );
-    expect(out!.activeTools).toEqual(['search_web', 'rag_search']);
+    expect(out!.activeTools).toEqual(['search', 'rag_query']);
   });
 
   it('非空声明但全部不在工具表 → 不输出 activeTools(维持现状,不误发收工具语义)', () => {

@@ -77,9 +77,9 @@ const BOARD_LAG_THRESHOLD = 2;
 /** 缺省系统提示（CLI 单用户路径；Web 层传入自己的产品化提示） */
 export const DEFAULT_SYSTEM_PROMPT =
   '你是一个专业高效的自主执行智能体。你可以根据用户需求灵活调用已接入的原子工具来完成任务。\n' +
-  '涉及多个异构动作的复杂任务，先用 planner_create_plan 建立任务看板再开始执行；简单任务直接执行，不要建看板。\n' +
+  '涉及多个异构动作的复杂任务，先用 planner 建立任务看板再开始执行；简单任务直接执行，不要建看板。\n' +
   '当缺少某个平台的专用工具或连接器未授权时，优先使用可用的网页浏览类工具直接在网页上完成操作作为兜底，而不是放弃任务。\n' +
-  '多个互相独立的工具调用请在同一轮并行发起。独立检索尤其如此：把主题拆成多个不同角度的关键词/信息源，一轮批量发出全部搜索，等结果齐了再汇总决定下一步 —— 每轮只发一个查询会成倍浪费模型往返与上下文重发；浏览多个互不依赖的网页同理。看板状态由你维护：步骤完成的当轮在与实际工具调用同一批里调用 planner_update_task 标记 completed（附一句话成果），开始新步骤时同批标记 in_progress；严禁为汇报进度单独花一轮。\n' +
+  '多个互相独立的工具调用请在同一轮并行发起。独立检索尤其如此：把主题拆成多个不同角度的关键词/信息源，一轮批量发出全部搜索，等结果齐了再汇总决定下一步 —— 每轮只发一个查询会成倍浪费模型往返与上下文重发；浏览多个互不依赖的网页同理。看板状态由你维护：步骤完成的当轮在与实际工具调用同一批里调用 planner 标记 completed（附一句话成果），开始新步骤时同批标记 in_progress；严禁为汇报进度单独花一轮。\n' +
   '若挂载了 ask_user 工具：需求存在多种合理解读且不同解读导致明显不同的交付方向时，先弹问题卡（2-4 个具体选项、标注推荐项）等用户回答，不要逐个方向试探消耗轮次；能自行查证的细节与不影响方向的琐事自行拍板，同一任务提问不超过 2 次。\n' +
   '若挂载了 confirm_plan 工具：大任务（多步执行/外部副作用/高成本）建好看板后、动手前把计划概要与任务清单弹给用户确认，approved 后开工、有修改意见按意见改完直接执行；每任务至多一次，小任务与闲聊严禁调用。';
 
@@ -352,12 +352,12 @@ export class OrchestratorService extends Service {
           sandbox: options.taskSandbox,
           ...(options.activeTools ? { activeTools: options.activeTools } : {}),
         });
-        // 看板滞后检测：planner_ 系执行本身就是显式申报；真实工具成功才计推进
-        if (/^planner_/.test(toolDef.name)) {
+        // 看板滞后检测：planner 系执行本身就是显式申报；真实工具成功才计推进
+        if (toolDef.name === 'planner' || /^planner_/.test(toolDef.name)) {
           boardLagRounds = 0;
         } else if (
           result.status === 'ok' &&
-          !/^(memory_|router_|observability_)/.test(toolDef.name)
+          !(toolDef.name === 'memory' || /^(memory_|router_|observability_)/.test(toolDef.name))
         ) {
           roundRealToolSuccess = true;
         }
@@ -950,7 +950,7 @@ export class OrchestratorService extends Service {
             '你是会话压缩器。把以下历史工具调用与结果流水蒸馏成结构化纪要，供后续对话作为上下文使用。要求：\n' +
             '1) 完整覆盖被压缩的历史，保留精确标识（文件名、路径、URL、命令、报错码、数值、版本号、ID），不要笼统概括；\n' +
             '2) 记录关键结论与数据，忽略重复步骤与无信息量的细节；\n' +
-            '3) 若某条结果标注「全文已落盘 ref=…」，在纪要中保留该 ref 与内容要点，后续可 read_tool_output 续读，不要写成“需重新获取”；\n' +
+            '3) 若某条结果标注「全文已落盘 ref=…」，在纪要中保留该 ref 与内容要点，后续可 doc_read(source="tool_output", callId=…) 续读，不要写成“需重新获取”；\n' +
             '格式：\n【已确立事实】\n【关键结论与数据】\n【重要链接与引用】\n【未决事项】\n总长不超过 800 字。',
           messages: [{ role: 'user', content: digest }] as any,
           disableTools: true,

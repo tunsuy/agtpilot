@@ -113,7 +113,7 @@ function extractRepo(token: string): string | null {
  * 明确改写发现模式:只查这些 repo 的 open Issue,不话题广扫、不擅自换成别的项目。
  * 指定 = 用户已选定项目 → 项目级尽调(star/活跃度/口碑/架构)整段跳过,
  * 只留 Issue 级核验(生产实测 mission ar27n:「照常核验」措辞驱动模型对已指定
- * 仓库跑了 list_commits+deepwiki+search_web 三发项目级尽调,42k 字符原始 JSON
+ * 仓库跑了 list_commits+deepwiki+search 三发项目级尽调,42k 字符原始 JSON
  * 进主上下文后被逐轮重放 ≈12 万 tokens)。
  */
 export function buildTargetReposSection(repos: string[]): string | null {

@@ -74,7 +74,7 @@ Agent 调 artifact_render 工具(code/html/markdown/chart 四类)
 
 ### 候选 A:ppt-master(github.com/hugohe3/ppt-master,MIT,~58k star)
 
-- 形态:平台无关的 Agent Skill 工作流(SKILL.md + Python 脚本),要求 agent 能读写文件、执行命令、多轮对话——**agtpilot 的 sandbox_run_command + 文件工具满足,可脱离 Claude Code 接入**。
+- 形态:平台无关的 Agent Skill 工作流(SKILL.md + Python 脚本),要求 agent 能读写文件、执行命令、多轮对话——**agtpilot 的 sandbox_exec + sandbox_file 满足,可脱离 Claude Code 接入**。
 - 产出:**原生 DrawingML 可编辑 .pptx**(真形状/图表/表格/动画/演讲者备注)+ SVG 预览;输入 PDF/DOCX/URL/Markdown/纯文本/纯主题;支持用户自有 .pptx 转模板。
 - 环境:Python 3.10+ + `pip install -r requirements.txt`;容器已内置 python3 venv(A股连接器,606c8fb),扩一个 venv 即可;可选 Pandoc、生图 API key(.env)。
 - ⚠️ 许可注意:主仓 MIT;可选 PDF 转换依赖 PyMuPDF 为 AGPL-3.0——只装必选依赖、不启用 PDF 转换可规避,或在沙箱内进程隔离使用(不链接进主程序)。
@@ -135,15 +135,15 @@ PPT 能力以**工坊卡片**形态落地(与公众号/小红书/邮件分诊同
 1. **S1:PPT 工坊壳 + bento 路线**(§4.3,约 1 天)——✅ **已完成(2026-10-11,未提交)**:
    - 工坊壳:`registry.ts` 新增 `ppt` 卡片(office/sky/Presentation)、`forms/PptWorkshopForm.tsx`(主题/材料/用途/风格/页数,输出形态 pptx 置灰预告)、`run.ts` case、`WorkshopsView` FORMS 登记;
    - Prompt 契约:`lib/ppt-workshop.ts`(skill 工作流七步 + 内容红线 + 降级路线;BENTO_SKILL_DIR=/opt/skills/qiaomu-bento-ppt);
-   - 交付工具:`lib/ppt-deck.ts` `ppt_check_env` / `ppt_publish_deck`(服务端读工作区 .bento.html 直挂 ArtifactService type=html,8MB 上限,围栏同 plugin-sandbox;杜绝模型回显 600KB HTML),agent-backend 任务级注入;
+   - 交付工具:`lib/ppt-deck.ts` `ppt`(action=check_env/publish_deck/publish_pptx;服务端读工作区 .bento.html 直挂 ArtifactService type=html,8MB 上限,围栏同 plugin-sandbox;杜绝模型回显 600KB HTML),agent-backend 任务级注入;
    - html 产物渲染:CockpitView / DeliverablesView 新增 iframe srcDoc 沙箱放映分支(allow-scripts 无 same-origin)+ .html 下载 + 交付库「演示页」过滤与图标;
    - 镜像:Dockerfile 重型依赖层新增 skill 层(node fetch 固定 commit 55c63c8 tarball → /opt/skills,层尾 locate 自检,7.8MB);
    - 自测:tsc 全绿;vitest 297/297 通过(新增 ppt-workshop 9 例 + ppt-deck 12 例);bento build 本地冒烟(640KB 产物 0 error/warning,0.2s);Dockerfile 层命令逐字复现通过。
 2. **S2:ppt-master 路线**(约 1 天)——✅ **已完成(2026-10-11,未提交,与 S1 同批待验收)**:
    - 协议扩展:`packages/protocol` `ArtifactData.type` 加 `'file'` + `fileMeta?`(fileId/fileName/mime/sizeBytes),二进制不进 mission JSON;前端 `ArtifactState` 同步;
    - 服务端文件库:`lib/artifact-files.ts`(`getDataDir()/artifact_files/<uid>/`,userId/fileId 双消毒 + 路径围栏、tmp+rename 原子写、manifest sidecar、32MB 上限);下载路由 `GET /api/artifacts/file?fileId=`(auth() 登录鉴权,只取本人分区,RFC 5987 中文文件名);
-   - 交付工具:`lib/ppt-deck.ts` 新增 `ppt_publish_pptx`(围栏 .pptx、zip 魔数校验、体积上限、入库后以 type=file + fileMeta 挂 ArtifactService,content 只放人类可读摘要),agent-backend 注入 storeFile 闭包(绑定 uid);
-   - Prompt 契约:`lib/ppt-workshop.ts` 新增 pptx 分支——ppt-master **Quick Generate**(全程无交互,不生成 spec/lock)12 步:环境自检 → attribution_guard 门禁 → 读规范 → `init --dir ppt`(关键:默认 PROJECTS_ROOT 在镜像只读区,--dir 指回沙箱工作区)→ import-sources → 大纲先行 → text_measure calibrate(Noto Sans CJK SC)→ 逐页手写 SVG(ppt169 1280×720)→ notes 拆分 → 终检零 error → `svg_to_pptx.py --quick-generate --with-notes` 导出 → ppt_publish_pptx 发布;附加红线(禁 finalize_svg/音频视频/装依赖)+ 降级路线(环境缺失回退 bento);
+   - 交付工具:`lib/ppt-deck.ts` 新增 `ppt`(围栏 .pptx、zip 魔数校验、体积上限、入库后以 type=file + fileMeta 挂 ArtifactService,content 只放人类可读摘要),agent-backend 注入 storeFile 闭包(绑定 uid);
+   - Prompt 契约:`lib/ppt-workshop.ts` 新增 pptx 分支——ppt-master **Quick Generate**(全程无交互,不生成 spec/lock)12 步:环境自检 → attribution_guard 门禁 → 读规范 → `init --dir ppt`(关键:默认 PROJECTS_ROOT 在镜像只读区,--dir 指回沙箱工作区)→ import-sources → 大纲先行 → text_measure calibrate(Noto Sans CJK SC)→ 逐页手写 SVG(ppt169 1280×720)→ notes 拆分 → 终检零 error → `svg_to_pptx.py --quick-generate --with-notes` 导出 → ppt 发布;附加红线(禁 finalize_svg/音频视频/装依赖)+ 降级路线(环境缺失回退 bento);
    - 表单/渲染:PptWorkshopForm 输出形态双 chip 解锁(output 状态化、hint 随行);CockpitView / DeliverablesView 新增 file 产物下载卡片(文件名/体积/一键下载)+ 交付库「文件」过滤;registry 卡片文案更新为双路线;
    - 镜像:Dockerfile 新增 ppt-master 层——codeload tarball 固定 commit b4efe3d、`--strip-components=3 --wildcards` 直解 skill 子树到 /opt/skills/ppt-master、裁 templates/sounds(13MB,工坊禁音频)、独立 venv /opt/ppt-master 只装核心六件(PyYAML/python-pptx/XlsxWriter/skia-pathops/uharfbuzz/Pillow,**排除 AGPL 的 PyMuPDF**)、apt fonts-noto-cjk(中文度量)、层尾 attribution_guard + import 双门禁;venv 不进 PATH(避免与 A股 venv 冲突),契约命令显式绝对路径;
    - 自测:tsc 全绿;vitest **311/311**(新增 artifact-files 6 例、ppt-deck +4、ppt-workshop +4);本机全链路冒烟(venv + 真 skill):guard → init --dir → 手写 SVG → 终检 0 error → notes 拆分 → 导出 16.7KB 真 .pptx(python-pptx 复读 1 slide 通过);Dockerfile 层命令用真实 tarball 逐字复现(布局/裁 sounds 66MB/双门禁全过)。

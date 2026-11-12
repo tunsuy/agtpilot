@@ -115,7 +115,7 @@ export class PlannerService extends Service implements PlannerNotifier {
 
   /**
    * 看板滞后提醒（由 core Orchestrator 在滞后达阈值时调用）：看板进度由
-   * 模型显式申报维护（planner_update_task 与实际工具调用同批发出 ——
+   * 模型显式申报维护（planner 与实际工具调用同批发出 ——
    * Claude Code TodoWrite / Codex update_plan 同款契约，2026-10 切换，
    * 取代旧的「工具成功自动推进」推断：推断猜不准语义事件，纯写作步骤
    * 永远推不动、并行轮跳步、审批冻结期整条冻结）。模型忘了申报时，这里
@@ -129,7 +129,7 @@ export class PlannerService extends Service implements PlannerNotifier {
     if (!current) return null; // 无进行中步骤(全完结/全失败):没有可同步的进度
     return (
       `看板已 ${idleRounds} 轮未随进度更新：当前步骤「${current.title}」仍为进行中，但真实工具已连续执行成功。` +
-      '请在本轮工具调用【同一批】里附带 planner_update_task 同步看板：已完成的步骤标 completed 并附一句话成果，新开始的步骤标 in_progress。' +
+      '请在本轮工具调用【同一批】里附带 planner 同步看板：已完成的步骤标 completed 并附一句话成果，新开始的步骤标 in_progress。' +
       '不要为汇报单独花一轮。'
     );
   }
@@ -155,19 +155,23 @@ export class PlannerService extends Service implements PlannerNotifier {
 export function apply(ctx: Context) {
   const plannerService = new PlannerService(ctx);
 
-  // 1. 创建结构化任务看板 (planner_create_plan) —— 基线工具：路由启用时也始终挂载
+  // 任务看板统一入口 (planner) —— 基线工具:路由启用时也始终挂载
+  // action=create 建/重建看板;action=update_task 更新步骤状态
   ctx.agent.registerTool({
-    name: 'planner_create_plan',
+    name: 'planner',
     baseline: true,
     description:
-      '任务涉及多个异构动作（如"检索 + 浏览网页 + 生成图表"）或用户一条消息提出多个事项时调用，在开始执行第一个动作【之前】为执行过程建立可视化的任务看板 —— 看板要在动手前立起来，不要执行到一半才补建。' +
-      '简单任务（单次搜索、单次问答、两步以内的操作）【不要】建看板，直接执行即可。' +
-      '步骤数量按真实必要动作数拆解，严禁为凑数拆步骤。' +
-      '执行中发现原计划不成立（检索为空/路径失败）或用户目标变化时，可再次调用以重建看板 —— 同一任务重建会自动替换旧看板。',
+      '任务看板唯一入口。action=create:任务涉及多个异构动作(如"检索 + 浏览网页 + 生成图表")或用户一条消息提出多个事项时,在开始执行第一个动作【之前】建立可视化任务看板;执行中发现原计划不成立(检索为空/路径失败)或用户目标变化时,用 create 重建(同任务自动替换旧看板)。简单任务(单次搜索、单次问答、两步以内)【不要】建看板,直接执行;步骤数按真实必要动作拆解,严禁凑数。' +
+      'action=update_task:看板进度常规更新 —— 步骤完成时【立即】标记 completed(附一句话成果),开始新步骤时标记 in_progress,一次保持恰好一个 in_progress;更新永远与当轮实际工具调用【同一批】并行发出,严禁为汇报单独花一轮。',
     parameters: {
       type: 'object',
       properties: {
-        goal: { type: 'string', description: '本次复杂任务的最终总目标' },
+        action: {
+          type: 'string',
+          enum: ['create', 'update_task'],
+          description: 'create = 建立/重建任务看板;update_task = 更新步骤状态',
+        },
+        goal: { type: 'string', description: 'action=create:本次复杂任务的最终总目标' },
         tasks: {
           type: 'array',
           items: {
@@ -179,56 +183,53 @@ export function apply(ctx: Context) {
             },
             required: ['title'],
           },
-          description: '按真实必要动作数拆解的步骤列表（宁少勿多）',
+          description: 'action=create:按真实必要动作数拆解的步骤列表(宁少勿多)',
         },
-      },
-      required: ['goal', 'tasks'],
-    },
-    execute: async ({ goal, tasks }, session?: any) => {
-      const plan = plannerService.createPlan(goal, tasks, session?.taskId);
-      return {
-        success: true,
-        planId: plan.id,
-        tasksCount: plan.tasks.length,
-        currentTaskId: plan.currentTaskId,
-        message: `已创建包含 ${plan.tasks.length} 个步骤的任务看板。看板状态由你维护：步骤完成的当轮在与实际工具调用同一批里调用 planner_update_task 标记 completed（附一句话成果），开始新步骤时同批标记 in_progress —— 不要为汇报单独花一轮。`,
-      };
-    },
-  });
-
-  // 2. 看板状态更新 (planner_update_task) —— 常规进度通道；基线工具
-  ctx.agent.registerTool({
-    name: 'planner_update_task',
-    baseline: true,
-    description:
-      '看板进度的常规更新通道：一个步骤完成时【立即】标记 completed（附一句话成果），开始新步骤时标记 in_progress，一次保持恰好一个 in_progress、做完即勾不攒批。' +
-      '更新永远与当轮的实际工具调用【同一批】并行发出，严禁为汇报单独花一轮（这是步数膨胀的老路）。' +
-      '计划需要整体改向或重排步骤时，直接用 planner_create_plan 重建看板（同任务自动替换），不要用本工具逐条搬移状态。',
-    parameters: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string', description: '要更新的任务 ID (如: step_1)' },
+        taskId: { type: 'string', description: 'action=update_task:要更新的任务 ID (如: step_1)' },
         status: {
           type: 'string',
           enum: ['pending', 'in_progress', 'completed', 'failed'],
-          description: '新的任务状态',
+          description: 'action=update_task:新的任务状态',
         },
-        result: { type: 'string', description: '可选，该步骤取得的阶段性产出或关键发现摘要' },
+        result: { type: 'string', description: 'action=update_task:可选,该步骤取得的阶段性产出或关键发现摘要' },
       },
-      required: ['taskId', 'status'],
+      required: ['action'],
     },
-    execute: async ({ taskId, status, result }, session?: any) => {
-      const plan = plannerService.updateTask(taskId, status as any, result, session?.taskId);
-      if (!plan) {
-        return { success: false, error: `未找到指定任务 ID [${taskId}] 或尚未初始化规划看板。` };
+    execute: async (args: any, session?: any) => {
+      if (args?.action === 'create') {
+        const goal = String(args.goal || '');
+        const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+        if (!goal || tasks.length === 0) {
+          return { success: false, error: 'action=create 需要 goal 与 tasks' };
+        }
+        const plan = plannerService.createPlan(goal, tasks, session?.taskId);
+        return {
+          success: true,
+          planId: plan.id,
+          tasksCount: plan.tasks.length,
+          currentTaskId: plan.currentTaskId,
+          message: `已创建包含 ${plan.tasks.length} 个步骤的任务看板。看板状态由你维护:步骤完成的当轮在与实际工具调用同一批里调用 planner(action="update_task") 标记 completed(附一句话成果),开始新步骤时同批标记 in_progress —— 不要为汇报单独花一轮。`,
+        };
       }
-      return {
-        success: true,
-        taskId,
-        status,
-        currentActiveTaskId: plan.currentTaskId,
-        message: `步骤 [${taskId}] 状态已更新为 [${status}]。`,
-      };
+      if (args?.action === 'update_task') {
+        const taskId = String(args.taskId || '');
+        const status = String(args.status || '');
+        if (!taskId || !status) {
+          return { success: false, error: 'action=update_task 需要 taskId 与 status' };
+        }
+        const plan = plannerService.updateTask(taskId, status as any, args.result, session?.taskId);
+        if (!plan) {
+          return { success: false, error: `未找到指定任务 ID [${taskId}] 或尚未初始化规划看板。` };
+        }
+        return {
+          success: true,
+          taskId,
+          status,
+          currentActiveTaskId: plan.currentTaskId,
+          message: `步骤 [${taskId}] 状态已更新为 [${status}]。`,
+        };
+      }
+      return { success: false, error: `action 无效: ${String(args?.action)}（可选 create / update_task）` };
     },
   });
 }

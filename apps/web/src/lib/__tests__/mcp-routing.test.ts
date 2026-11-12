@@ -54,9 +54,9 @@ const mkTool = (name: string, extra: Partial<RoutableTool> = {}): RoutableTool =
 
 /** 模拟生产任务目录形态：基线插件工具 + 用户已连 MCP 服务器的工具（10 个 > 102 token 阈值） */
 const CATALOG: RoutableTool[] = [
-  mkTool('search_web'),
+  mkTool('search'),
   mkTool('browser_navigate'),
-  mkTool('memory_store', { baseline: true }),
+  mkTool('memory', { baseline: true }),
   mkTool('mcp_zhihu_hot_hot_list'),
   mkTool('mcp_zhihu_search_search'),
   mkTool('mcp_zhihu_global_search'),
@@ -107,7 +107,7 @@ describe('MCP 工具路由：服务器粒度挂载', () => {
     expect(result).not.toContain('mcp_twitterapi_io_search_tweets');
     expect(result).not.toContain('mcp_deepwiki_ask_question');
     // 路由开启时基线工具仍常驻
-    expect(result).toContain('memory_store');
+    expect(result).toContain('memory');
   });
 
   it('提示词只提「MCP 工具/连接器」不点名数据源 → 挂连接管理工具，不挂数据工具', () => {
@@ -208,9 +208,9 @@ describe('中途授权桥：baseline 常驻', () => {
     forceRouting();
     // bridge 工具是任务级注入的 —— 这里把 mcp_call 放进目录，模拟 agent-backend 注入后的形态
     const withBridge = [...CATALOG, mkTool('mcp_call', { baseline: true })];
-    const searchRoute: ToolRoute = { id: 'search', prefixes: ['search_'], test: /(搜索|检索|search)/i };
+    const searchRoute: ToolRoute = { id: 'search', prefixes: ['search'], test: /(搜索|检索|search)/i };
     const result = selectActiveTools('帮我搜索一下', withBridge, [...pluginMcpRoutes(), ...userRoutes(UID), searchRoute]);
-    expect(result).toContain('search_web');
+    expect(result).toContain('search');
     expect(result).toContain('mcp_call'); // baseline：不随路由关键词缺席
     expect(result).not.toContain('browser_navigate'); // 未命中的组正常被裁剪
   });

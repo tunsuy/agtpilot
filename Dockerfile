@@ -48,7 +48,7 @@ ENV PATH="/opt/a-stock/bin:${PATH}"
 # 固定 commit 55c63c8(与仓内 upstream.lock.json 校验的内置快照一致)。
 # node:20-slim 无 git/curl,用 node 内置 fetch 下载 GitHub tarball 后解包;
 # 层尾跑 skill 自带的 locate 自检,确保 shell/规范快照齐备才算构建成功。
-# Agent 经 sandbox_run_command 以绝对路径调用(ppt-workshop.ts 契约)。
+# Agent 经 sandbox_exec 以绝对路径调用(ppt-workshop.ts 契约)。
 RUN node -e "fetch('https://codeload.github.com/joeseesun/qiaomu-bento-ppt/tar.gz/55c63c836f42bc9175757d077428c395cd93effe').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()}).then(b=>require('node:fs').writeFileSync('/tmp/bento-skill.tgz',Buffer.from(b)))" && \
     mkdir -p /opt/skills/qiaomu-bento-ppt && \
     tar -xzf /tmp/bento-skill.tgz -C /opt/skills/qiaomu-bento-ppt --strip-components=1 && \

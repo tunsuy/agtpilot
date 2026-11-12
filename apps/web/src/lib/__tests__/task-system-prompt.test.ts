@@ -71,7 +71,7 @@ describe('buildTaskSystemPrompt', () => {
     expect(s).toContain('严禁为汇报进度单独花一轮');
     // 旧合同反向断言:服务器自动推进的承诺不再出现
     expect(s).not.toContain('自动推进');
-    expect(s).not.toContain('【不要】调用 planner_update_task');
+    expect(s).not.toContain('【不要】调用 planner');
   });
 
   it('受控进展播报:开题确认 + 阶段报告两点位,正文通道,无逐工具碎语(原「安静执行」升级)', () => {

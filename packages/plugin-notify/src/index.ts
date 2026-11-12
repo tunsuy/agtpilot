@@ -101,57 +101,46 @@ export function apply(ctx: Context) {
   // 工具路由自注册：prompt 命中通知/推送类关键词时挂载本插件工具组
   ctx.agent.registerToolRoute({
     id: 'notify',
-    prefixes: ['notify_'],
+    prefixes: ['notify', 'notify_'],
     test: /(通知|推送|提醒|webhook|notify)/i,
   });
 
   const notifyService = new NotifyService(ctx);
 
-  // 1. notify_send_desktop: 发送操作系统原生桌面弹窗通知
+  // 1. notify:桌面原生弹窗(channel=desktop)或企业 IM 群机器人(feishu/dingtalk/wecom/slack/custom)
   ctx.agent.registerTool({
-    name: 'notify_send_desktop',
-    description: '当长任务完成、定时巡检发现重要事件或需要提醒用户时，在操作系统桌面发送原生系统级弹窗通知。',
-    parameters: {
-      type: 'object',
-      properties: {
-        title: { type: 'string', description: '通知标题 (如: "GitHub AI 趋势巡检报告已生成")' },
-        message: { type: 'string', description: '通知详细摘要正文' },
-      },
-      required: ['title', 'message'],
-    },
-    execute: async ({ title, message }) => {
-      const ok = await notifyService.sendDesktopNotification(title, message);
-      return {
-        success: ok,
-        message: ok
-          ? `桌面原生通知已成功弹出: [${title}]`
-          : `桌面通知弹出失败（当前平台: ${process.platform}，仅 macOS 支持；或系统通知服务不可用）`,
-      };
-    },
-  });
-
-  // 2. notify_send_webhook: 向飞书/企微/钉钉/Slack 发送告警与卡片
-  ctx.agent.registerTool({
-    name: 'notify_send_webhook',
-    description: '向企业即时通信群聊（飞书、钉钉、企业微信、Slack 或自定义 Webhook）推送图文卡片消息或定时巡检报告。',
+    name: 'notify',
+    description:
+      '发送用户通知。channel=desktop:在操作系统桌面发送原生系统级弹窗(仅 macOS;适用于长任务完成、定时巡检发现重要事件)。' +
+      'channel=feishu/dingtalk/wecom/slack/custom:向企业即时通信群机器人推送图文卡片消息或定时巡检报告(webhookUrl 缺省时读取当前用户连接器页配置的 {渠道}_WEBHOOK_URL)。',
     parameters: {
       type: 'object',
       properties: {
         channel: {
           type: 'string',
-          enum: ['feishu', 'dingtalk', 'wecom', 'slack', 'custom'],
-          description: '目标即时通信平台',
+          enum: ['desktop', 'feishu', 'dingtalk', 'wecom', 'slack', 'custom'],
+          description: 'desktop = 系统桌面弹窗;其余为企业 IM 群机器人渠道',
         },
         webhookUrl: {
           type: 'string',
-          description: '机器人的 Webhook 入口 URL（若未传则读取当前用户在连接器页配置的 {渠道}_WEBHOOK_URL，如 FEISHU_WEBHOOK_URL / SLACK_WEBHOOK_URL）',
+          description: 'channel 为企业 IM 时的机器人 Webhook URL（缺省读取连接器配置的 {渠道}_WEBHOOK_URL）',
         },
-        title: { type: 'string', description: '消息卡片标题' },
-        content: { type: 'string', description: 'Markdown 格式的消息正文或报告' },
+        title: { type: 'string', description: '通知标题 / 消息卡片标题' },
+        content: { type: 'string', description: '通知摘要正文（企业 IM 渠道支持 Markdown）' },
       },
       required: ['channel', 'title', 'content'],
     },
     execute: async ({ channel, webhookUrl, title, content }, session?: any) => {
+      if (channel === 'desktop') {
+        const ok = await notifyService.sendDesktopNotification(title, content);
+        return {
+          success: ok,
+          channel,
+          message: ok
+            ? `桌面原生通知已成功弹出: [${title}]`
+            : `桌面通知弹出失败（当前平台: ${process.platform}，仅 macOS 支持；或系统通知服务不可用）`,
+        };
+      }
       const resolved = resolveWebhookUrl(channel, webhookUrl, session?.env);
       if (!resolved.url) {
         return {
@@ -161,7 +150,6 @@ export function apply(ctx: Context) {
           error: `未找到 [${channel}] 的 Webhook 地址：请先在「连接器」页面配置 ${resolved.missingEnvKey}，或在调用参数中直接传入 webhookUrl。`,
         };
       }
-
       const result = await notifyService.sendWebhook(channel, resolved.url, title, content);
       return {
         success: result.ok,

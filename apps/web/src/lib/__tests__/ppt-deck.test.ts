@@ -44,7 +44,7 @@ describe('resolveDeckPath · 工作区围栏(与 plugin-sandbox 同语义)', () 
   });
 });
 
-describe('buildPptDeckTools · ppt_publish_deck', () => {
+describe('buildPptDeckTools · ppt', () => {
   async function withTempWorkspace(fn: (ws: string) => Promise<void>) {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), 'ppt-deck-test-'));
     try {
@@ -74,8 +74,8 @@ describe('buildPptDeckTools · ppt_publish_deck', () => {
       const html = '<!doctype html><html><body><script id="bento-doc" type="application/json">{}</script></body></html>';
       await fs.writeFile(path.join(ws, 'ppt', 'deck.bento.html'), html, 'utf8');
       const { tools, created } = makeDeps(ws);
-      const publish = tools.find((t) => t.name === 'ppt_publish_deck')!;
-      const res: any = await publish.execute({ path: 'ppt/deck.bento.html', title: 'Q3 汇报' }, { taskId: 'task_9' } as any);
+      const publish = tools.find((t) => t.name === 'ppt')!;
+      const res: any = await publish.execute({ action: 'publish_deck', path: 'ppt/deck.bento.html', title: 'Q3 汇报' }, { taskId: 'task_9' } as any);
       expect(res.success).toBe(true);
       expect(res.bento).toBe(true);
       expect(res.sizeKB).toBeGreaterThanOrEqual(0);
@@ -91,8 +91,8 @@ describe('buildPptDeckTools · ppt_publish_deck', () => {
     await withTempWorkspace(async (ws) => {
       await fs.writeFile(path.join(ws, '产品发布.bento.html'), '<html><body>x</body></html>', 'utf8');
       const { tools, created } = makeDeps(ws);
-      const publish = tools.find((t) => t.name === 'ppt_publish_deck')!;
-      const res: any = await publish.execute({ path: '产品发布.bento.html' }, { taskId: "task_t", step: 0 });
+      const publish = tools.find((t) => t.name === 'ppt')!;
+      const res: any = await publish.execute({ action: 'publish_deck', path: '产品发布.bento.html' }, { taskId: "task_t", step: 0 });
       expect(res.success).toBe(true);
       expect(created[0].data.title).toBe('产品发布');
       expect(created[0].data.description).toContain('离线');
@@ -103,17 +103,17 @@ describe('buildPptDeckTools · ppt_publish_deck', () => {
     await withTempWorkspace(async (ws) => {
       await fs.writeFile(path.join(ws, 'empty.html'), '', 'utf8');
       const { tools } = makeDeps(ws);
-      const publish = tools.find((t) => t.name === 'ppt_publish_deck')!;
+      const publish = tools.find((t) => t.name === 'ppt')!;
 
-      const escape: any = await publish.execute({ path: '../../etc/x.html' }, { taskId: "task_t", step: 0 });
+      const escape: any = await publish.execute({ action: 'publish_deck', path: '../../etc/x.html' }, { taskId: "task_t", step: 0 });
       expect(escape.success).toBe(false);
       expect(escape.error).toContain('越界');
 
-      const missing: any = await publish.execute({ path: 'nope.html' }, { taskId: "task_t", step: 0 });
+      const missing: any = await publish.execute({ action: 'publish_deck', path: 'nope.html' }, { taskId: "task_t", step: 0 });
       expect(missing.success).toBe(false);
       expect(missing.error).toContain('不存在');
 
-      const empty: any = await publish.execute({ path: 'empty.html' }, { taskId: "task_t", step: 0 });
+      const empty: any = await publish.execute({ action: 'publish_deck', path: 'empty.html' }, { taskId: "task_t", step: 0 });
       expect(empty.success).toBe(false);
       expect(empty.error).toContain('为空');
 
@@ -122,11 +122,11 @@ describe('buildPptDeckTools · ppt_publish_deck', () => {
     });
   });
 
-  it('ppt_check_env:skill 缺失时 ready=false 且给出降级路线指引(不抛异常)', async () => {
+  it('ppt:skill 缺失时 ready=false 且给出降级路线指引(不抛异常)', async () => {
     await withTempWorkspace(async (ws) => {
       const { tools } = makeDeps(ws);
-      const check = tools.find((t) => t.name === 'ppt_check_env')!;
-      const res: any = await check.execute({}, { taskId: "task_t", step: 0 });
+      const check = tools.find((t) => t.name === 'ppt')!;
+      const res: any = await check.execute({ action: 'check_env' }, { taskId: "task_t", step: 0 });
       expect(res.success).toBe(true);
       expect(res.ready).toBe(false);
       expect(res.skillScript).toBe(false);
@@ -134,7 +134,7 @@ describe('buildPptDeckTools · ppt_publish_deck', () => {
     });
   });
 
-  it('ppt_check_env:注入伪 skill 目录(脚本+shell 齐备)时 skillScript/skillShell 均 true', async () => {
+  it('ppt:注入伪 skill 目录(脚本+shell 齐备)时 skillScript/skillShell 均 true', async () => {
     await withTempWorkspace(async (ws) => {
       const skillDir = path.join(ws, 'skill');
       await fs.mkdir(path.join(skillDir, 'scripts'), { recursive: true });
@@ -142,8 +142,8 @@ describe('buildPptDeckTools · ppt_publish_deck', () => {
       await fs.writeFile(path.join(skillDir, 'scripts', 'bento_deck.py'), '# stub', 'utf8');
       await fs.writeFile(path.join(skillDir, 'assets', 'bento', 'Bento_Slides.bento.html'), '<html></html>', 'utf8');
       const { tools } = makeDeps(ws, { skillDir });
-      const check = tools.find((t) => t.name === 'ppt_check_env')!;
-      const res: any = await check.execute({}, { taskId: "task_t", step: 0 });
+      const check = tools.find((t) => t.name === 'ppt')!;
+      const res: any = await check.execute({ action: 'check_env' }, { taskId: "task_t", step: 0 });
       expect(res.skillScript).toBe(true);
       expect(res.skillShell).toBe(true);
       // ready 还取决于宿主 python3;两种结果都必须给出明确 message,不允许抛错
@@ -152,14 +152,14 @@ describe('buildPptDeckTools · ppt_publish_deck', () => {
     });
   });
 
-  it('工具契约:三枚工具均 low 危(只读探测 + 围栏内读文件),命名符合 ppt_ 前缀', () => {
+  it('工具契约:单枚统一入口 ppt、low 危(只读探测 + 围栏内读文件)', () => {
     const tools = buildPptDeckTools({ createArtifact: vi.fn() as any });
-    expect(tools.map((t) => t.name)).toEqual(['ppt_check_env', 'ppt_publish_deck', 'ppt_publish_pptx']);
+    expect(tools.map((t) => t.name)).toEqual(['ppt']);
     for (const t of tools) expect(t.dangerLevel).toBe('low');
   });
 });
 
-describe('buildPptDeckTools · ppt_publish_pptx', () => {
+describe('buildPptDeckTools · ppt', () => {
   async function withTempWorkspace(fn: (ws: string) => Promise<void>) {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), 'ppt-pptx-test-'));
     try {
@@ -201,9 +201,9 @@ describe('buildPptDeckTools · ppt_publish_pptx', () => {
       const rel = 'ppt/deck_20261011/exports/deck_20261011_142324.pptx';
       await fs.writeFile(path.join(ws, rel), fakePptx(2048));
       const { tools, created, stored } = makeDeps(ws);
-      const publish = tools.find((t) => t.name === 'ppt_publish_pptx')!;
+      const publish = tools.find((t) => t.name === 'ppt')!;
       const res: any = await publish.execute(
-        { path: rel, title: 'Q3 业务汇报' },
+        { action: 'publish_pptx', path: rel, title: 'Q3 业务汇报' },
         { taskId: 'task_pptx', step: 0 }
       );
       expect(res.success).toBe(true);
@@ -234,16 +234,16 @@ describe('buildPptDeckTools · ppt_publish_pptx', () => {
     await withTempWorkspace(async (ws) => {
       await fs.writeFile(path.join(ws, '产品发布.pptx'), fakePptx());
       const { tools, created } = makeDeps(ws);
-      const publish = tools.find((t) => t.name === 'ppt_publish_pptx')!;
-      const res: any = await publish.execute({ path: '产品发布.pptx' }, { taskId: 'task_t', step: 0 });
+      const publish = tools.find((t) => t.name === 'ppt')!;
+      const res: any = await publish.execute({ action: 'publish_pptx', path: '产品发布.pptx' }, { taskId: 'task_t', step: 0 });
       expect(res.success).toBe(true);
       expect(created[0].data.title).toBe('产品发布');
       expect(created[0].data.fileMeta.fileName).toBe('产品发布.pptx');
 
-      const noStore = makeDeps(ws, { storeFile: undefined }).tools.find((t) => t.name === 'ppt_publish_pptx')!;
-      const degraded: any = await noStore.execute({ path: '产品发布.pptx' }, { taskId: 'task_t', step: 0 });
+      const noStore = makeDeps(ws, { storeFile: undefined }).tools.find((t) => t.name === 'ppt')!;
+      const degraded: any = await noStore.execute({ action: 'publish_pptx', path: '产品发布.pptx' }, { taskId: 'task_t', step: 0 });
       expect(degraded.success).toBe(false);
-      expect(degraded.error).toContain('ppt_publish_deck');
+      expect(degraded.error).toContain('ppt');
     });
   });
 
@@ -252,21 +252,21 @@ describe('buildPptDeckTools · ppt_publish_pptx', () => {
       await fs.writeFile(path.join(ws, 'empty.pptx'), '');
       await fs.writeFile(path.join(ws, 'fake.pptx'), 'not-a-zip-file');
       const { tools, created } = makeDeps(ws);
-      const publish = tools.find((t) => t.name === 'ppt_publish_pptx')!;
+      const publish = tools.find((t) => t.name === 'ppt')!;
 
-      const escape: any = await publish.execute({ path: '../../etc/x.pptx' }, { taskId: 'task_t', step: 0 });
+      const escape: any = await publish.execute({ action: 'publish_pptx', path: '../../etc/x.pptx' }, { taskId: 'task_t', step: 0 });
       expect(escape.success).toBe(false);
       expect(escape.error).toContain('越界');
 
-      const missing: any = await publish.execute({ path: 'nope.pptx' }, { taskId: 'task_t', step: 0 });
+      const missing: any = await publish.execute({ action: 'publish_pptx', path: 'nope.pptx' }, { taskId: 'task_t', step: 0 });
       expect(missing.success).toBe(false);
       expect(missing.error).toContain('不存在');
 
-      const empty: any = await publish.execute({ path: 'empty.pptx' }, { taskId: 'task_t', step: 0 });
+      const empty: any = await publish.execute({ action: 'publish_pptx', path: 'empty.pptx' }, { taskId: 'task_t', step: 0 });
       expect(empty.success).toBe(false);
       expect(empty.error).toContain('为空');
 
-      const notZip: any = await publish.execute({ path: 'fake.pptx' }, { taskId: 'task_t', step: 0 });
+      const notZip: any = await publish.execute({ action: 'publish_pptx', path: 'fake.pptx' }, { taskId: 'task_t', step: 0 });
       expect(notZip.success).toBe(false);
       expect(notZip.error).toContain('魔数');
 

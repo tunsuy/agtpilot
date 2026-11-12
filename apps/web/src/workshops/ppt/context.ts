@@ -4,12 +4,12 @@
  * 与办公工坊(weekly/email_triage 包)同一模式:UI 收集结构化选项 → 生成 Prompt →
  * 作为新任务交给 Agent 执行。产出双路线(方案见 docs/design/univer-office-integration-plan.md §4):
  * - bento(网页演示页):镜像预装 qiaomu-bento-ppt skill(MIT,纯 Python 标准库),
- *   Agent 经 sandbox_run_command/sandbox_write_file 构建单文件 .bento.html,
- *   再用 ppt_publish_deck 工具(ppt-deck.ts)服务端读文件挂上中央画布 —— 严禁让模型
+ *   Agent 经 sandbox_exec/sandbox_file 构建单文件 .bento.html,
+ *   再用 ppt 工具(ppt-deck.ts)服务端读文件挂上中央画布 —— 严禁让模型
  *   把 ~600KB 的 HTML 壳回显进 artifact_render content(撑爆上下文);
  * - pptx(S2,ppt-master 路线):镜像预装 ppt-master skill(MIT)+ 独立 venv,
  *   Agent 按 Quick Generate profile(全程无交互)手写 SVG → 质检 → 导出原生
- *   可编辑 .pptx,用 ppt_publish_pptx 收进服务端文件库(type=file,前端下载卡片)。
+ *   可编辑 .pptx,用 ppt 收进服务端文件库(type=file,前端下载卡片)。
  *
  * 模板拆分:选项/材料段两路线共用(prompt.options.md 单源);两条路线各自一个模板
  * 文件,「内容红线」段在两文件中重复出现 —— 改动时两处同步(golden 快照锁双路线)。

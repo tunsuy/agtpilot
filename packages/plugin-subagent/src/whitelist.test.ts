@@ -19,10 +19,12 @@ function mkTool(name: string, extra: Partial<ToolDefinition> = {}): ToolDefiniti
 
 describe('resolveReadonlyTools 双层过滤(spec §4.3 / §9.5)', () => {
   const registry = [
-    mkTool('search_web', { readOnly: true }),
-    mkTool('rag_search', { readOnly: true }),
+    mkTool('search', { readOnly: true }),
+    mkTool('rag_query', { readOnly: true }),
     mkTool('sandbox_exec'), // 未声明 readOnly → 保守视为写
-    mkTool('sandbox_write_file', { readOnly: false }),
+    mkTool('sandbox_file', { readOnly: false }),
+    // web 宿主只读文档(2026-11 起进默认名单;定义经 resolveUserTools 任务级注入)
+    mkTool('doc_read', { readOnly: true }),
     // 2026-10-23 起 navigate 声明 readOnly 且进默认名单(子 agent 读文档需要);
     // browser_click 代表「声明 readOnly 但不在名单」的工具
     mkTool('browser_navigate', { readOnly: true }),
@@ -32,17 +34,22 @@ describe('resolveReadonlyTools 双层过滤(spec §4.3 / §9.5)', () => {
 
   it('默认名单 ∩ 注册表 readOnly 硬校验,保持注册表顺序', () => {
     const out = resolveReadonlyTools(registry);
-    expect(out.map((t) => t.name)).toEqual(['search_web', 'rag_search', 'browser_navigate']);
+    expect(out.map((t) => t.name)).toEqual(['search', 'rag_query', 'doc_read', 'browser_navigate']);
+  });
+
+  it('doc_read 未声明 readOnly 时同样被剔除(白名单条目不是免死金牌)', () => {
+    const bare = [mkTool('doc_read')];
+    expect(resolveReadonlyTools(bare, ['doc_read'])).toEqual([]);
   });
 
   it('未声明 readOnly 的工具即使在配置名单里也剔除', () => {
-    const out = resolveReadonlyTools(registry, ['sandbox_exec', 'search_web', 'browser_navigate']);
-    expect(out.map((t) => t.name)).toEqual(['search_web', 'browser_navigate']);
+    const out = resolveReadonlyTools(registry, ['sandbox_exec', 'search', 'browser_navigate']);
+    expect(out.map((t) => t.name)).toEqual(['search', 'browser_navigate']);
     expect(out.some((t) => t.name === 'sandbox_exec')).toBe(false);
   });
 
   it('research_subagent 自身无条件剔除(防递归,配置名单也压不进来)', () => {
-    const out = resolveReadonlyTools(registry, [SELF_TOOL_NAME, 'search_web']);
+    const out = resolveReadonlyTools(registry, [SELF_TOOL_NAME, 'search']);
     expect(out.some((t) => t.name === SELF_TOOL_NAME)).toBe(false);
     expect(DEFAULT_READONLY_WHITELIST).not.toContain(SELF_TOOL_NAME);
   });
@@ -59,7 +66,7 @@ describe('resolveReadonlyTools 双层过滤(spec §4.3 / §9.5)', () => {
 
 describe('resolveReadonlyTools · MCP 双钥匙(spec §4.3,2026-10-14)', () => {
   const reg = [
-    mkTool('search_web', { readOnly: true }),
+    mkTool('search', { readOnly: true }),
     mkTool('mcp_deepwiki_ask_question', { readOnly: true }), // 服务器声明只读(annotations)
     mkTool('mcp_deepwiki_create_wiki'), // 同服务器的写工具(无只读声明)
     mkTool('mcp_github_mcp_search_repositories', { readOnly: true }), // 服务器不在白名单
@@ -68,12 +75,12 @@ describe('resolveReadonlyTools · MCP 双钥匙(spec §4.3,2026-10-14)', () => {
 
   it('默认(白名单全空)= 不放行任何 MCP 工具,内置只读工具不受影响', () => {
     const out = resolveReadonlyTools(reg);
-    expect(out.map((t) => t.name)).toEqual(['search_web']);
+    expect(out.map((t) => t.name)).toEqual(['search']);
   });
 
   it('双钥匙:白名单服务器 ∩ readOnly 声明 → 放行;同服务器写工具不放行', () => {
     const out = resolveReadonlyTools(reg, { mcpServers: ['deepwiki'] });
-    expect(out.map((t) => t.name)).toEqual(['search_web', 'mcp_deepwiki_ask_question']);
+    expect(out.map((t) => t.name)).toEqual(['search', 'mcp_deepwiki_ask_question']);
   });
 
   it('只满足一把钥匙不放行:readOnly 但服务器不在白名单', () => {
@@ -83,14 +90,14 @@ describe('resolveReadonlyTools · MCP 双钥匙(spec §4.3,2026-10-14)', () => {
 
   it('普通白名单里的 mcp_ 名字无效(MCP 只能经双钥匙/逃生口)', () => {
     const out = resolveReadonlyTools(reg, {
-      whitelist: ['search_web', 'mcp_deepwiki_ask_question'],
+      whitelist: ['search', 'mcp_deepwiki_ask_question'],
     });
     expect(out.some((t) => t.name.startsWith('mcp_'))).toBe(false);
   });
 
   it('逃生口:人工前缀放行无注解服务器的工具(不需要 readOnly),不影响其他 MCP', () => {
     const out = resolveReadonlyTools(reg, { mcpAllowTools: ['mcp_newsnow_'] });
-    expect(out.map((t) => t.name)).toEqual(['search_web', 'mcp_newsnow_fetch_hot']);
+    expect(out.map((t) => t.name)).toEqual(['search', 'mcp_newsnow_fetch_hot']);
   });
 
   it('双钥匙与逃生口可叠加', () => {
@@ -99,7 +106,7 @@ describe('resolveReadonlyTools · MCP 双钥匙(spec §4.3,2026-10-14)', () => {
       mcpAllowTools: ['mcp_newsnow_'],
     });
     expect(out.map((t) => t.name)).toEqual([
-      'search_web',
+      'search',
       'mcp_github_mcp_search_repositories',
       'mcp_newsnow_fetch_hot',
     ]);

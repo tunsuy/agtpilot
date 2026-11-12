@@ -41,7 +41,7 @@ import { getGovernanceBus } from './governance-bus';
  * 1. TF-IDF 加权余弦召回(词袋向量,按用户语料算 IDF;可平滑替换为 embedding);
  * 2. 按任务相关性排序 + 体积上限的 prompt 注入(用户 rule 全文注入特权保留,
  *    但受总字符预算封顶,超限降级 L0 摘要并显式标记;Agent 经验独立分块注入);
- * 3. 用户级 memory_store/recall/list 工具(经 runTask 的 taskTools 挂载,
+ * 3. 用户级 memory/recall/list 工具(经 runTask 的 taskTools 挂载,
  *    多用户互不可见;原被同名覆盖的 plugin-memory 全局版已整包删除);
  * 4. 命中反馈与衰减:recall/注入时累计 hitCount,长期零命中的自动记忆降权,
  *    前端标记「疑似过时」;
@@ -938,7 +938,7 @@ export function buildMemoryPromptBlock(userId: string, goal: string): string {
         ...userSel.full.map(formatMemoryLine),
         ...(userSel.l0.length > 0
           ? [
-              `(${userMems.length - userSel.full.length} 条未全文注入,摘要如下;需要全文用 read_memory(id),完整清单用 memory_list:)`,
+              `(${userMems.length - userSel.full.length} 条未全文注入,摘要如下;需要全文用 read_memory(id),完整清单用 memory(action="list"))`,
               ...l0Lines(userSel.l0),
             ]
           : []),
@@ -988,7 +988,7 @@ function formatMemoryLine(m: UserMemory): string {
 // ---- 用户级记忆工具(taskTools 挂载;原同名覆盖的 plugin-memory 已整包删除) ----
 
 /**
- * 构建绑定到指定用户的 memory_store/recall/list + read_memory/read_mission +
+ * 构建绑定到指定用户的 memory/recall/list + read_memory/read_mission +
  * context_file 工具。经 runTask 的 taskTools 注入(核心层同名任务级工具优先于
  * 全局注册),读写全部落在 user-store 的该用户空间 —— 多用户部署时互不可见。
  * read_memory/read_mission = 两级注入的 L2 按需加载入口(P2);
@@ -1045,101 +1045,111 @@ export function buildUserMemoryTools(userId: string): any[] {
       actor: 'agent',
       op: existing ? 'update' : 'add',
       memoryId: record.id,
-      detail: `memory_store 工具 [${record.category}] ${record.title}`,
+      detail: `memory 工具 [${record.category}] ${record.title}`,
     });
     return { record, isUpdate: Boolean(existing) };
   };
 
   return [
     {
-      name: 'memory_store',
+      name: 'memory',
       description:
-        '长期记住用户的习惯偏好、技术栈规范、专属业务知识,或本次任务中发现的环境事实/工具用法教训。存储后的记忆会持久化到当前用户的记忆库并在未来的跨会话任务中永久生效。',
+        '用户长期记忆库统一入口。action=store:记住用户的习惯偏好、技术栈规范、专属业务知识,或本次任务中发现的环境事实/工具用法教训(持久化并在未来跨会话任务中永久生效);action=recall:执行任务前按关键词检索记忆库,主动获取过去沉淀的用户偏好、项目知识与 Agent 执行经验;action=list:列出记忆库中所有活跃条目清单(不含已删除/已取代)。',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: '记忆简短标题 (例如: "代码风格偏好", "沙箱环境事实", "XX站点抓取技巧")' },
-          content: { type: 'string', description: '要牢记的核心知识点或偏好细节' },
+          action: {
+            type: 'string',
+            enum: ['store', 'recall', 'list'],
+            description: 'store = 写入记忆;recall = 关键词检索;list = 列出清单',
+          },
+          title: { type: 'string', description: 'action=store:记忆简短标题 (例如: "代码风格偏好", "沙箱环境事实")' },
+          content: { type: 'string', description: 'action=store:要牢记的核心知识点或偏好细节' },
           category: {
             type: 'string',
             enum: ['preference', 'project', 'fact', 'rule'],
-            description: '记忆类型：preference (偏好/流程策略), project (项目背景), fact (关键事实/环境事实), rule (执行红线与规则)',
+            description: 'action=store/recall:记忆类型 preference(偏好/流程策略) / project(项目背景) / fact(关键事实/环境事实) / rule(执行红线与规则);recall 时可选',
           },
           subject: {
             type: 'string',
             enum: ['user', 'agent'],
-            description: '记忆主体：user = 关于用户本人的偏好与背景(默认)；agent = Agent 自己执行任务时学到环境/工具/流程经验(踩坑教训、有效路径)',
+            description: 'action=store/recall:记忆主体 user(用户偏好与背景,默认) / agent(Agent 执行任务学到的环境/工具/流程经验)',
           },
+          query: { type: 'string', description: 'action=recall:检索关键词 (如: "部署习惯", "前端规范", "沙箱环境")' },
         },
-        required: ['title', 'content'],
+        required: ['action'],
       },
-      execute: async ({ title, content, category, subject }: any) => {
-        const subj: MemorySubject = subject === 'agent' ? 'agent' : 'user';
-        const { record, isUpdate } = store(
-          String(title),
-          String(content),
-          (category as MemoryCategory) || 'fact',
-          subj
-        );
-        return {
-          success: true,
-          memoryId: record.id,
-          title: record.title,
-          category: record.category,
-          subject: record.subject,
-          updated: isUpdate,
-          message: isUpdate
-            ? `已有同名记忆 [${record.title}]，已更新其内容。`
-            : `已成功将${subj === 'agent' ? ' Agent 执行经验' : '记忆'} [${record.title}] 固化到当前用户的长期记忆库中。`,
-        };
-      },
-    },
-    {
-      name: 'memory_recall',
-      description: '在执行任务前检索当前用户的长期记忆库,主动获取过去沉淀的用户偏好、项目知识与 Agent 执行经验。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '检索关键词 (如: "部署习惯", "前端规范", "沙箱环境")' },
-          category: {
-            type: 'string',
-            enum: ['preference', 'project', 'fact', 'rule'],
-            description: '可选,限定检索的记忆类型',
-          },
-          subject: {
-            type: 'string',
-            enum: ['user', 'agent'],
-            description: '可选,限定记忆主体：user = 用户偏好与背景；agent = Agent 执行经验',
-          },
-        },
-        required: ['query'],
-      },
-      execute: async ({ query, category, subject }: any) => {
-        const results = recallUserMemories(
-          userId,
-          String(query || ''),
-          category as MemoryCategory | undefined,
-          subject === 'agent' || subject === 'user' ? (subject as MemorySubject) : undefined
-        );
-        // 被召回 = 一次命中(供衰减统计)
-        noteMemoryHits(userId, results.map((r) => r.id));
-        // 检索轨迹:工具召回同样落盘(与注入轨迹同一文件,回答「召回了什么」)
-        appendRetrievalTrace(userId, {
-          kind: 'memory-recall',
-          query: capText(String(query || ''), 120),
-          selected: results.slice(0, 20).map((r) => ({ id: r.id, title: capText(r.title, 40) })),
-        });
-        return {
-          success: true,
-          query,
-          count: results.length,
-          memories: results.map((r) => ({
-            title: r.title,
-            content: r.content,
-            category: r.category,
-            subject: r.subject || 'user',
-          })),
-        };
+      execute: async (args: any) => {
+        const action = String(args?.action || '');
+        if (action === 'store') {
+          const title = String(args?.title || '');
+          const content = String(args?.content || '');
+          if (!title || !content) return { success: false, error: 'action=store 需要 title 与 content' };
+          const subj: MemorySubject = args?.subject === 'agent' ? 'agent' : 'user';
+          const { record, isUpdate } = store(
+            title,
+            content,
+            (args?.category as MemoryCategory) || 'fact',
+            subj
+          );
+          return {
+            success: true,
+            memoryId: record.id,
+            title: record.title,
+            category: record.category,
+            subject: record.subject,
+            updated: isUpdate,
+            message: isUpdate
+              ? `已有同名记忆 [${record.title}]，已更新其内容。`
+              : `已成功将${subj === 'agent' ? ' Agent 执行经验' : '记忆'} [${record.title}] 固化到当前用户的长期记忆库中。`,
+          };
+        }
+        if (action === 'recall') {
+          const query = String(args?.query || '');
+          if (!query) return { success: false, error: 'action=recall 需要 query' };
+          const results = recallUserMemories(
+            userId,
+            query,
+            args?.category as MemoryCategory | undefined,
+            args?.subject === 'agent' || args?.subject === 'user' ? (args.subject as MemorySubject) : undefined
+          );
+          // 被召回 = 一次命中(供衰减统计)
+          noteMemoryHits(userId, results.map((r) => r.id));
+          // 检索轨迹:工具召回同样落盘(与注入轨迹同一文件,回答「召回了什么」)
+          appendRetrievalTrace(userId, {
+            kind: 'memory-recall',
+            query: capText(query, 120),
+            selected: results.slice(0, 20).map((r) => ({ id: r.id, title: capText(r.title, 40) })),
+          });
+          return {
+            success: true,
+            query,
+            count: results.length,
+            memories: results.map((r) => ({
+              title: r.title,
+              content: r.content,
+              category: r.category,
+              subject: r.subject || 'user',
+            })),
+          };
+        }
+        if (action === 'list') {
+          const list = listActiveMemories(userId).sort((a, b) => b.updatedAt - a.updatedAt);
+          return {
+            success: true,
+            total: list.length,
+            memories: list.map((m) => ({
+              id: m.id,
+              title: m.title,
+              category: m.category,
+              subject: m.subject || 'user',
+              actionability: m.governance?.actionability || 'fact',
+              needsReview: Boolean(m.governance?.reviewFlag),
+              updatedAt: new Date(m.updatedAt).toISOString(),
+            })),
+          };
+        }
+        return { success: false, error: `action 无效: ${action}（可选 store / recall / list）` };
       },
     },
     {
@@ -1149,7 +1159,7 @@ export function buildUserMemoryTools(userId: string): any[] {
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: '记忆 id(来自注入的 L0 摘要清单或 memory_list/memory_recall 结果)' },
+          id: { type: 'string', description: '记忆 id(来自注入的 L0 摘要清单或 memory/memory 结果)' },
         },
         required: ['id'],
       },
@@ -1229,27 +1239,6 @@ export function buildUserMemoryTools(userId: string): any[] {
             })),
             efficiency: m.efficiency,
           },
-        };
-      },
-    },
-    {
-      name: 'memory_list',
-      description: '列出当前用户长期记忆库中所有已记录的用户偏好与 Agent 执行经验清单(不含已删除/已取代条目)。',
-      parameters: { type: 'object', properties: {} },
-      execute: async () => {
-        const list = listActiveMemories(userId).sort((a, b) => b.updatedAt - a.updatedAt);
-        return {
-          success: true,
-          total: list.length,
-          memories: list.map((m) => ({
-            id: m.id,
-            title: m.title,
-            category: m.category,
-            subject: m.subject || 'user',
-            actionability: m.governance?.actionability || 'fact',
-            needsReview: Boolean(m.governance?.reviewFlag),
-            updatedAt: new Date(m.updatedAt).toISOString(),
-          })),
         };
       },
     },

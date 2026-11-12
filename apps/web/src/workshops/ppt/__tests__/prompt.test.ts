@@ -24,13 +24,13 @@ describe('buildPptWorkshopPrompt · skill 工作流契约', () => {
     expect(prompt).toContain('qiaomu-bento-ppt-intro.json');
   });
 
-  it('发布走 ppt_publish_deck,严禁大 HTML 回显进 artifact_render', () => {
+  it('发布走 ppt,严禁大 HTML 回显进 artifact_render', () => {
     const prompt = buildPptWorkshopPrompt({ topic: 'x', purpose: 'report', style: 'business', pages: 12 });
-    expect(prompt).toContain('ppt_publish_deck');
+    expect(prompt).toContain('ppt');
     expect(prompt).toContain('ppt/deck.bento.html');
     expect(prompt).toContain('严禁把 .bento.html 内容粘贴进 artifact_render');
     // 环境自检 + 降级路线(本地开发无 skill 时仍可出片)
-    expect(prompt).toContain('ppt_check_env');
+    expect(prompt).toContain('ppt');
     expect(prompt).toContain('降级路线');
     expect(prompt).toContain('type=html');
   });
@@ -105,9 +105,9 @@ describe('buildPptWorkshopPrompt · 用户选项映射', () => {
     expect(prompt).toContain('--stage early');
   });
 
-  it('pptx 选项:发布走 ppt_publish_pptx,严禁二进制回显;SVG 画布契约进 prompt', () => {
+  it('pptx 选项:发布走 ppt,严禁二进制回显;SVG 画布契约进 prompt', () => {
     const prompt = buildPptWorkshopPrompt({ topic: 'x', purpose: 'report', style: 'business', pages: 12, output: 'pptx' });
-    expect(prompt).toContain('ppt_publish_pptx');
+    expect(prompt).toContain('ppt');
     expect(prompt).toContain('严禁用 artifact_render 回显 .pptx 内容或 base64');
     expect(prompt).toContain('viewBox="0 0 1280 720"');
     expect(prompt).toContain('data-pptx-page-role');
@@ -123,8 +123,8 @@ describe('buildPptWorkshopPrompt · 用户选项映射', () => {
     expect(prompt).toContain('不装任何新依赖');
     // 环境缺失降级:先探测 bento,再走网页演示页流程
     expect(prompt).toContain('降级路线');
-    expect(prompt).toContain('ppt_check_env');
-    expect(prompt).toContain('ppt_publish_deck');
+    expect(prompt).toContain('ppt');
+    expect(prompt).toContain('ppt');
     expect(prompt).toContain(BENTO_SKILL_DIR);
     // 内容红线两条路线共用
     expect(prompt).toContain('内容红线');
@@ -152,7 +152,7 @@ describe('buildPptWorkshopPrompt · 用户选项映射', () => {
   it('bento 选项(默认):不携带 ppt-master 契约,保持原网页演示页流程', () => {
     const prompt = buildPptWorkshopPrompt({ topic: 'x', purpose: 'report', style: 'business', pages: 12 });
     expect(prompt).not.toContain(PPT_MASTER_SKILL_DIR);
-    expect(prompt).not.toContain('ppt_publish_pptx');
+    expect(prompt).not.toContain('publish_pptx');
     expect(prompt).toContain('【PPT 演示稿工坊 · 网页演示页(bento)】');
     const explicit = buildPptWorkshopPrompt({ topic: 'x', purpose: 'report', style: 'business', pages: 12, output: 'bento' });
     expect(explicit).toContain('【PPT 演示稿工坊 · 网页演示页(bento)】');

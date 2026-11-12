@@ -96,7 +96,7 @@ function headTailSplit(text: string, toolName: string, limit: number) {
 /**
  * 落盘成功后的指针消息:头尾预览 + 全量保存声明 + 续读指引。
  * 红线(业界共识):不静默截断 —— 必须告知原始大小与如何继续获取,
- * 否则模型基于残缺数据自信作答。截断部分经 read_tool_output(callId, offset)
+ * 否则模型基于残缺数据自信作答。截断部分经 doc_read(source="tool_output", callId, offset)
  * 可恢复(= Manus「丢正文保引用」的可恢复压缩形态)。
  */
 export function buildSpillPointer(
@@ -110,7 +110,7 @@ export function buildSpillPointer(
     `${head}\n` +
     `…[原输出共 ${text.length} 字符,过长,全量已保存(引用 ref=${callId})。` +
     `以上仅为头尾预览(头 ${headLen} + 尾 ${tailLen} 字符)。` +
-    `需要中间或指定位置内容:调用 read_tool_output(callId="${callId}", offset=起始字符位置) 窗口续读;` +
+    `需要中间或指定位置内容:调用 doc_read(source="tool_output", callId="${callId}", offset=起始字符位置) 窗口续读;` +
     `或用更精确参数缩小范围重查,不要整体重取]…\n` +
     `${tail}`
   );

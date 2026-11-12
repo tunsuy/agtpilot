@@ -11,13 +11,13 @@ const step = (partial: Partial<MissionStep>): MissionStep => ({
 
 describe('narrateStep 工具映射', () => {
   it('搜索工具带 query 内联到叙述', () => {
-    const n = narrateStep(step({ tool: 'search_web', args: { query: 'AI Agent 演进' } }));
+    const n = narrateStep(step({ tool: 'search', args: { query: 'AI Agent 演进' } }));
     expect(n?.kind).toBe('search');
     expect(n?.label).toBe('搜索「AI Agent 演进」');
   });
 
   it('搜索工具无 query 兜底', () => {
-    const n = narrateStep(step({ tool: 'search_tavily', args: {} }));
+    const n = narrateStep(step({ tool: 'search', args: {} }));
     expect(n?.label).toBe('搜索资料');
   });
 
@@ -35,10 +35,14 @@ describe('narrateStep 工具映射', () => {
     expect(n?.detail?.length).toBeLessThanOrEqual(61);
   });
 
-  it('sandbox 三件套分别叙述命令/文件/目录', () => {
-    expect(narrateStep(step({ tool: 'sandbox_run_command', args: { command: 'pip list' } }))?.label).toBe('运行命令');
-    expect(narrateStep(step({ tool: 'sandbox_read_file', args: { path: '/tmp/a.md' } }))?.label).toBe('读取文件');
-    expect(narrateStep(step({ tool: 'sandbox_list_dir', args: { path: '/tmp' } }))?.label).toBe('查看目录');
+  it('sandbox_exec / sandbox_file 按参数叙述命令、代码与文件动作', () => {
+    expect(narrateStep(step({ tool: 'sandbox_exec', args: { runtime: 'shell', command: 'pip list' } }))?.label).toBe('运行命令');
+    expect(
+      narrateStep(step({ tool: 'sandbox_exec', args: { runtime: 'python', target: 'e2b', code: 'print(1)' } }))?.label,
+    ).toBe('运行 Python (E2B)');
+    expect(narrateStep(step({ tool: 'sandbox_file', args: { action: 'read', path: '/tmp/a.md' } }))?.label).toBe('读取文件');
+    expect(narrateStep(step({ tool: 'sandbox_file', args: { action: 'list', path: '/tmp' } }))?.label).toBe('查看目录');
+    expect(narrateStep(step({ tool: 'sandbox_file', args: { action: 'write', path: '/tmp/a.md' } }))?.label).toBe('写入文件');
   });
 
   it('artifact_render 带文档标题', () => {
@@ -54,15 +58,15 @@ describe('narrateStep 工具映射', () => {
     expect(narrateStep(step({ tool: 'wechat_mp_create_draft' }))?.label).toBe('写入公众号草稿箱');
   });
 
-  it('planner_create_plan 带 goal 细节(看板创建行不再孤零零)', () => {
-    const n = narrateStep(step({ tool: 'planner_create_plan', args: { goal: '产出 3 条核验过的贡献机会' } }));
+  it('planner 带 goal 细节(看板创建行不再孤零零)', () => {
+    const n = narrateStep(step({ tool: 'planner', args: { goal: '产出 3 条核验过的贡献机会' } }));
     expect(n?.kind).toBe('planner');
     expect(n?.label).toBe('创建任务看板');
     expect(n?.detail).toBe('产出 3 条核验过的贡献机会');
   });
 
-  it('planner_update_task 不叙述(看板记账是内部簿记,状态由计划卡呈现,活动流不刷「推进任务看板」)', () => {
-    expect(narrateStep(step({ tool: 'planner_update_task', args: { taskId: 't1', status: 'completed' } }))).toBeNull();
+  it('planner 不叙述(看板记账是内部簿记,状态由计划卡呈现,活动流不刷「推进任务看板」)', () => {
+    expect(narrateStep(step({ tool: 'planner', args: { taskId: 't1', status: 'completed' } }))).toBeNull();
   });
 
   it('mcp_ 前缀归连接器,兜底归执行任务', () => {

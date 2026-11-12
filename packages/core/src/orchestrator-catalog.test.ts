@@ -27,7 +27,7 @@ function buildHarness(opts: {
   const orch = new OrchestratorService(ctx);
 
   ctx.agent.registerTool({
-    name: 'memory_store',
+    name: 'memory',
     description: '把重要结论写入长期记忆,后续任务可检索复用,支持标签与正文两段式',
     baseline: true,
     parameters: { type: 'object', properties: {} },
@@ -122,7 +122,7 @@ describe('层0 目录卡片 · 注入面', () => {
     // 卡片行剥掉 [MCP连接器: demo] 标签(分组头已带)
     expect(o.system).not.toContain('- mcp_demo_alpha: [MCP连接器');
     // 初始挂载面 = 零命中 lean(baseline) + load_tools 尾部追加;MCP schema 缺席
-    expect(o.activeTools).toEqual(['memory_store', 'load_tools']);
+    expect(o.activeTools).toEqual(['memory', 'load_tools']);
     expect(o.tools.map((t: any) => t.name)).toContain('load_tools');
     // 效率统计口径:toolsTotal 不含任务级合成的 load_tools
     expect((r as any).efficiency?.toolsTotal).toBe(3);
@@ -144,12 +144,12 @@ describe('层0 目录卡片 · 注入面', () => {
   });
 
   it('工坊白名单任务:确定性挂载照旧,不注入目录与 load_tools', async () => {
-    const h = buildHarness({ activeTools: ['memory_store'] });
+    const h = buildHarness({ activeTools: ['memory'] });
     await h.run();
     const o = h.loopOpts[0];
     expect(o.system).not.toContain('【按需工具目录】');
     expect(o.tools.map((t: any) => t.name)).not.toContain('load_tools');
-    expect(o.activeTools).toEqual(['memory_store']);
+    expect(o.activeTools).toEqual(['memory']);
   });
 
   it('闲聊短路档:只挂 baseline,不注入目录', async () => {
@@ -157,7 +157,7 @@ describe('层0 目录卡片 · 注入面', () => {
     await h.run();
     const o = h.loopOpts[0];
     expect(o.system).not.toContain('【按需工具目录】');
-    expect(o.activeTools).toEqual(['memory_store']);
+    expect(o.activeTools).toEqual(['memory']);
   });
 
   it('全量挂载档(阈值门未过):人人有 schema,无需目录', async () => {
@@ -187,7 +187,7 @@ describe('层0 目录卡片 · 注入面', () => {
     const o = h.loopOpts[0];
     expect(o.system).not.toContain('【按需工具目录】');
     expect(o.tools.map((t: any) => t.name)).not.toContain('load_tools');
-    expect(o.activeTools).toEqual(['memory_store']);
+    expect(o.activeTools).toEqual(['memory']);
   });
 });
 
@@ -209,7 +209,7 @@ describe('层0 目录卡片 · 点菜流程', () => {
     expect(parsed.success).toBe(false); // 含目录外名字 → 如实报不成功
 
     // 下一步挂载面并入点名工具(与 widen 同一次写回)
-    expect(adjust1.activeTools).toEqual(['memory_store', 'load_tools', 'mcp_demo_alpha']);
+    expect(adjust1.activeTools).toEqual(['memory', 'load_tools', 'mcp_demo_alpha']);
     // 已扩容后的后续步:无新增不写回(adjust 为空时 prepareStep 返回 undefined)
     expect(adjust2).toBeUndefined();
 
@@ -236,7 +236,7 @@ describe('层0 目录卡片 · 点菜流程', () => {
     expect(second.alreadyMounted).toEqual(['mcp_demo_alpha']);
     const adjust = await o.prepareStep({ stepNumber: 2, messages: [] });
     expect(adjust.activeTools).toEqual([
-      'memory_store',
+      'memory',
       'load_tools',
       'mcp_demo_alpha',
       'mcp_demo_beta',
@@ -251,7 +251,7 @@ describe('层0 目录卡片 · 点菜流程', () => {
     new AgentService(ctx);
     const orch = new OrchestratorService(ctx);
     ctx.agent.registerTool({
-      name: 'memory_store',
+      name: 'memory',
       description: '记忆存储工具,把重要结论写入长期记忆供后续任务检索复用,支持标签分类与全文检索两种召回方式',
       baseline: true,
       parameters: { type: 'object', properties: {} },

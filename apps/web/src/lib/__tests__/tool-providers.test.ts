@@ -22,7 +22,7 @@ const t = (name: string) => ({ name } as ToolDefinition);
 const DEP_VOCAB = new Set<ToolProviderDep>(['uid', 'browser', 'artifact']);
 
 describe('TOOL_PROVIDERS 注册表元数据', () => {
-  it('九个提供方全部注册,顺序稳定(与旧硬编码块的语义顺序一致 + reference 引用工具)', () => {
+  it('八个提供方全部注册,顺序稳定(与旧硬编码块的语义顺序一致;参考资料并入 doc_read 手动挂载)', () => {
     expect(TOOL_PROVIDERS.map((p) => p.id)).toEqual([
       'ppt',
       'wechat_mp',
@@ -32,7 +32,6 @@ describe('TOOL_PROVIDERS 注册表元数据', () => {
       'github_scan',
       'xhs',
       'zhihu',
-      'reference',
     ]);
   });
 

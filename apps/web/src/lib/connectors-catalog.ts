@@ -37,6 +37,13 @@ export interface ConnectorInfo {
   noCredential?: boolean;
   /** 配置弹窗内的补充说明（凭证格式/前置条件等） */
   configHint?: string;
+  /**
+   * 额外可配置环境变量（非凭证类，如自建 E2B 的控制面地址/模板）：
+   * 配置弹窗按声明渲染输入框，走 saveConnectorConfig 的 extraEnvs 批量保存。
+   */
+  extraEnvVars?: Array<{ envVar: string; label: string; placeholder?: string; hint?: string }>;
+  /** 额外配置项的当前值回显（仅非敏感字段） */
+  extraEnvValues?: Record<string, string>;
 }
 
 const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefaultModel'>> = [
@@ -87,8 +94,36 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     category: 'AI & MicroVM',
     envVar: 'E2B_API_KEY',
     websiteUrl: 'https://e2b.dev/dashboard?tab=keys',
-    configHint: '打开 E2B 控制台登录，在 API Keys 页复制 Key 粘贴到下方（有免费额度）。',
-    description: 'Firecracker isolated microVM for secure multi-language code execution.',
+    configHint:
+      '官方云服务：打开 E2B 控制台复制 Key 即可。自建 E2B（Firecracker 自托管）时，粘贴自建实例签发的 Key，并在下方填写控制面地址与模板；Key 留空表示只改自建配置。',
+    description:
+      'Firecracker isolated microVM for secure multi-language code execution（支持自建 E2B：任务级会话复用、心跳续期、暂停恢复、产物直连下载）。',
+    extraEnvVars: [
+      {
+        envVar: 'E2B_API_URL',
+        label: '控制面 API 地址',
+        placeholder: 'http://e2b-api.internal:3000',
+        hint: '自建实例的 API 入口，优先于域名推导；留空 = 官方 https://api.e2b.app',
+      },
+      {
+        envVar: 'E2B_DOMAIN',
+        label: '控制面域名',
+        placeholder: 'e2b.example.com',
+        hint: '只填域名时 SDK 推导 api.<域名> 与 <端口>-<sandboxId>.<域名>（HTTPS）',
+      },
+      {
+        envVar: 'E2B_SANDBOX_URL',
+        label: 'Sandbox 流量地址',
+        placeholder: 'http://sandbox.e2b.internal',
+        hint: '文件直连下载/端口暴露使用的 traffic 域名；留空随控制面推导',
+      },
+      {
+        envVar: 'E2B_TEMPLATE',
+        label: '模板名 / ID',
+        placeholder: 'code-interpreter-v1',
+        hint: '自建实例里已 e2b template build 的模板；留空用默认模板',
+      },
+    ],
   },
   {
     id: 'github',
@@ -106,7 +141,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'SLACK_WEBHOOK_URL',
     platformType: 'both',
     websiteUrl: 'https://api.slack.com/messaging/webhooks',
-    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 推送到 Slack 频道。',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify 推送到 Slack 频道。',
   },
   {
     id: 'feishu',
@@ -116,7 +151,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'FEISHU_WEBHOOK_URL',
     platformType: 'both',
     websiteUrl: 'https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot',
-    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以卡片推送到飞书群。',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify 以卡片推送到飞书群。',
   },
   {
     id: 'dingtalk',
@@ -126,7 +161,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'DINGTALK_WEBHOOK_URL',
     platformType: 'both',
     websiteUrl: 'https://open.dingtalk.com/document/robots/custom-robot-access',
-    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以 Markdown 推送到钉钉群（群设置 → 智能群助手 → 添加自定义机器人获取地址）。',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify 以 Markdown 推送到钉钉群（群设置 → 智能群助手 → 添加自定义机器人获取地址）。',
   },
   {
     id: 'wecom',
@@ -136,7 +171,7 @@ const CONNECTOR_DEFS: Array<Omit<ConnectorInfo, 'status' | 'keyMasked' | 'isDefa
     envVar: 'WECOM_WEBHOOK_URL',
     platformType: 'both',
     websiteUrl: 'https://developer.work.weixin.qq.com/document/path/99110',
-    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify_send_webhook 以 Markdown 推送到企业微信群（群聊 → 右键群机器人 → 添加获取地址）。',
+    description: '群机器人 Webhook：任务完成、定时巡检与告警经 notify 以 Markdown 推送到企业微信群（群聊 → 右键群机器人 → 添加获取地址）。',
   },
   {
     id: 'email_smtp',
@@ -242,9 +277,13 @@ export function getActiveModelId(): string {
 /** 允许用户写入的凭证键白名单（防止 POST 任意 envVar 键名注入配置） */
 export const ALLOWED_ENV_VARS = new Set<string>(
   CONNECTOR_DEFS.flatMap((d) =>
-    [d.envVar, d.baseUrlEnvVar, d.modelNameEnvVar, d.reasoningEffortEnvVar].filter(
-      (v): v is string => Boolean(v)
-    )
+    [
+      d.envVar,
+      d.baseUrlEnvVar,
+      d.modelNameEnvVar,
+      d.reasoningEffortEnvVar,
+      ...(d.extraEnvVars || []).map((f) => f.envVar),
+    ].filter((v): v is string => Boolean(v))
   )
 );
 
@@ -282,6 +321,15 @@ export function getConnectorStatusList(userId?: string): ConnectorInfo[] {
         ? rawEffort
         : undefined;
 
+    // 额外非敏感配置回显（自建 E2B 的 API 地址/域名/模板等）
+    const extraEnvValues = def.extraEnvVars
+      ? Object.fromEntries(
+          def.extraEnvVars
+            .map((field) => [field.envVar, lookup(field.envVar)] as const)
+            .filter(([, value]) => Boolean(value))
+        )
+      : undefined;
+
     return {
       ...def,
       status: isSet ? 'connected' : 'unconfigured',
@@ -290,6 +338,7 @@ export function getConnectorStatusList(userId?: string): ConnectorInfo[] {
       baseUrl,
       customModelName,
       reasoningEffort,
+      ...(extraEnvValues && Object.keys(extraEnvValues).length > 0 ? { extraEnvValues } : {}),
     };
   });
 }

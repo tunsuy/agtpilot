@@ -66,14 +66,14 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
   it('research 档(内容/调研工坊):search 三件套 + 调研增强件,社媒热榜不再 B 层直挂', () => {
     for (const id of ['xhs', 'wechat_mp', 'zhihu', 'weibo', 'video_douyin', 'video_bilibili', 'follow_builders', 'invest', 'edu'] as WorkshopId[]) {
       const tools = resolveWorkshopActiveTools(id)!;
-      expect(tools, id).toContain('search_web');
-      expect(tools, id).toContain('search_exa');
-      expect(tools, id).toContain('search_tavily');
+      expect(tools, id).toContain('search');
+      expect(tools, id).toContain('search');
+      expect(tools, id).toContain('search');
       expect(tools, id).toContain('research_subagent');
       // 正文抓取双通道(2026-10-23 起):本地浏览器蒸馏(零 Key 真腿)+ Firecrawl(缺 Key 时摘除)
       expect(tools, id).toContain('browser_navigate');
       expect(tools, id).toContain('browser_firecrawl_scrape');
-      expect(tools, id).toContain('read_reference_material');
+      expect(tools, id).toContain('doc_read');
     }
   });
 
@@ -107,7 +107,7 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
 
   it('research 档(oss_radar):search 三件套 + 调研件(含 browser_navigate 正文真腿),不挂社媒热榜', () => {
     const radar = resolveWorkshopActiveTools('oss_radar')!;
-    expect(radar).toContain('search_web');
+    expect(radar).toContain('search');
     expect(radar).toContain('research_subagent');
     expect(radar).toContain('browser_navigate');
     expect(radar).toContain('browser_firecrawl_scrape');
@@ -119,7 +119,7 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
   it('web 档(novel/ppt):仅 search 三件套(正文抓取件不随 web 档)', () => {
     for (const id of ['novel', 'ppt'] as WorkshopId[]) {
       const tools = resolveWorkshopActiveTools(id)!;
-      expect(tools, id).toContain('search_web');
+      expect(tools, id).toContain('search');
       expect(tools, id).not.toContain('research_subagent');
       expect(tools, id).not.toContain('browser_navigate');
       expect(tools, id).not.toContain('browser_firecrawl_scrape');
@@ -130,7 +130,7 @@ describe('resolveWorkshopActiveTools · 检索组口径(B 层)', () => {
   it('none 档(email_triage/weekly):不挂任何检索组', () => {
     for (const id of ['email_triage', 'weekly'] as WorkshopId[]) {
       const tools = resolveWorkshopActiveTools(id)!;
-      expect(tools, id).not.toContain('search_web');
+      expect(tools, id).not.toContain('search');
       expect(tools, id).not.toContain('research_subagent');
       expect(tools.some((t) => t.startsWith('mcp_newsnow')), id).toBe(false);
     }
@@ -149,7 +149,7 @@ describe('resolveWorkshopActiveTools · 工坊专属(D 层)', () => {
     // 只读红线:写操作类工具一律不进(建 Issue/PR、评论、fork、DeepWiki create_wiki)。
     // browser_navigate 2026-10-23 起随 research 档进白名单(纯导航+蒸馏读取,
     // 已声明 readOnly);写操作禁令不变。
-    for (const banned of ['mcp_github_mcp_create_issue', 'mcp_github_mcp_create_pull_request', 'mcp_deepwiki_create_wiki', 'sandbox_run_command', 'git_apply_patch', 'browser_click', 'browser_input']) {
+    for (const banned of ['mcp_github_mcp_create_issue', 'mcp_github_mcp_create_pull_request', 'mcp_deepwiki_create_wiki', 'sandbox_exec', 'git_apply_patch', 'browser_click', 'browser_input']) {
       expect(radar, `雷达白名单不得含 ${banned}`).not.toContain(banned);
     }
   });
@@ -179,11 +179,11 @@ describe('resolveWorkshopActiveTools · 工坊专属(D 层)', () => {
     const ppt = resolveWorkshopActiveTools('ppt')!;
     expect(ppt).toEqual(
       expect.arrayContaining([
-        'ppt_check_env',
-        'ppt_publish_deck',
-        'ppt_publish_pptx',
-        'sandbox_run_command',
-        'sandbox_write_file',
+        'ppt',
+        'ppt',
+        'ppt',
+        'sandbox_exec',
+        'sandbox_file',
       ])
     );
     // 除 ppt 外任何工坊不得挂 sandbox(73 万事件的执行组放大器)

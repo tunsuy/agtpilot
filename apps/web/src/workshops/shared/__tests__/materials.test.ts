@@ -100,7 +100,7 @@ describe('buildMaterialsSection', () => {
     ]);
     expect(s).toContain('【参考资料】');
     expect(s).toContain('【资料1：研报】(materialId=art_1)');
-    expect(s).toContain('read_reference_material');
+    expect(s).toContain('doc_read(source="reference")');
     expect(s).not.toContain('核心结论');
   });
 });
@@ -163,7 +163,7 @@ describe('buildMaterialsSection 措辞泛化(交付物 + 本地上传)', () => {
     expect(s).toContain('【参考资料】');
     expect(s).toContain('本地上传文件');
     expect(s).toContain('PDF/Word 已抽取为文本');
-    expect(s).toContain('read_reference_material');
+    expect(s).toContain('doc_read(source="reference")');
     expect(s).toContain('【资料1：研报】(materialId=art_1)');
     expect(s).toContain('【资料2：产品手册】(materialId=upl_a1_0123456789abcdef)');
   });

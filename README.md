@@ -103,17 +103,17 @@ agtpilot/
 | `@agtpilot/app-kit` | Composition root, loads kernel + all official plugins | — |
 | `@agtpilot/protocol` | AG-UI / Generative UI event schema | — |
 | `plugin-model` | `ModelGateway` implementation, provider resolution, budgets | — |
-| `plugin-planner` | Task planning | `planner_create_plan`, `planner_update_task` |
+| `plugin-planner` | Task planning | `planner` (action: create / update_task) |
 | `plugin-browser` | Persistent browsing & scraping | `browser_navigate/click/screenshot`, Stagehand `act/observe`, Firecrawl scrape |
-| `plugin-sandbox` | Fenced execution | `sandbox_run_code/run_command/read_file/write_file/list_dir/http_request` |
-| `plugin-search` | Web search | `search_web`, `search_exa`, `search_tavily` |
-| `plugin-rag` | Retrieval | `rag_index_document`, `rag_search`, `rag_list_indexed` |
+| `plugin-sandbox` | Fenced execution | `sandbox_exec` / `sandbox_file` / `sandbox_session` / `sandbox_http_request` |
+| `plugin-search` | Web search | `search` (engine: auto / exa / tavily) |
+| `plugin-rag` | Retrieval | `rag_query` (search / list_indexed), `rag_index_document` |
 | `plugin-mcp` | MCP tool registry & connectors | — (tool exposure is app-level) |
-| `plugin-git` | Code & version control | `git_status/diff`, checkpoints, patches |
-| `plugin-cron` | Scheduling engine | — (exposed as `cron_schedule_task` by the apps) |
+| `plugin-git` | Code & version control | `git_inspect` (status / diff), checkpoints, patches |
+| `plugin-cron` | Scheduling engine | — (exposed as `cron_task` by the apps) |
 | `plugin-channel` | IM channel engine (WeChat MP / personal / QQ OneBot) | — (binding & dispatch are app-level, see `apps/web/src/lib/channel-service.ts`) |
-| `plugin-notify` | Notifications | `notify_send_desktop`, `notify_send_webhook` |
-| `plugin-desktop` | Desktop automation | clipboard read/write, open app, screenshot, system info |
+| `plugin-notify` | Notifications | `notify` (channel: desktop / feishu / dingtalk / wecom / slack / custom) |
+| `plugin-desktop` | Desktop automation | `desktop_inspect` (screenshot / clipboard_read), `desktop_action` (clipboard_write / open_application), `desktop_system_info` |
 | `plugin-artifact` | Deliverables | `artifact_render` |
 
 ---

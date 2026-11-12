@@ -532,6 +532,10 @@ importers:
       '@e2b/code-interpreter':
         specifier: ^2.8.0
         version: 2.8.0
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.6.4)(jiti@1.21.7)(supports-color@7.2.0)(tsx@4.23.15)(yaml@2.9.1)
 
   packages/plugin-search:
     dependencies:

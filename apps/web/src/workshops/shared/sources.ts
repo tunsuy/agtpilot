@@ -15,5 +15,5 @@
 export const TOPIC_RESEARCH_SOURCES = `- 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明`;

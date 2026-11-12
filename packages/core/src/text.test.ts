@@ -31,21 +31,21 @@ describe('truncateToolOutput', () => {
   const long = 'A'.repeat(300) + 'M'.repeat(1000) + 'B'.repeat(300);
 
   it('内容类输出头优先（头 70% / 尾 30%）', () => {
-    const out = truncateToolOutput(long, 'search_web', 200);
+    const out = truncateToolOutput(long, 'search', 200);
     expect(out.startsWith('A'.repeat(140))).toBe(true);
     expect(out.endsWith('B'.repeat(60))).toBe(true);
     expect(out).toContain('中间省略');
   });
 
   it('命令/日志类输出（sandbox_/git_ 前缀）尾优先（头 30% / 尾 70%）', () => {
-    const out = truncateToolOutput(long, 'sandbox_run_command', 200);
+    const out = truncateToolOutput(long, 'sandbox_exec', 200);
     expect(out.startsWith('A'.repeat(60))).toBe(true);
     expect(out.endsWith('B'.repeat(140))).toBe(true);
     expect(out).toContain('尾优先');
   });
 
   it('标记原始长度与省略量，供模型决定是否缩小范围续读', () => {
-    const out = truncateToolOutput(long, 'search_web', 200);
+    const out = truncateToolOutput(long, 'search', 200);
     expect(out).toContain('原始 1600 字符');
     expect(out).toContain('中间省略 1400 字符');
   });

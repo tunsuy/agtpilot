@@ -51,7 +51,7 @@
 | 机制 | 位置 | 范围 |
 |---|---|---|
 | `read_memory` / `read_mission` | `memory-service.ts:1101/1143`(context-store v2 P2) | 记忆 L0 摘要注入 + 全文按需从 `v2/<userId>/missions/` 拉 |
-| `read_reference_material` | `apps/web/src/lib/reference-materials.ts` | 工坊参考资料:prompt 只带引用 id+标题,8000 字上限 + offset 续读(art_* 交付物 / upl_* 本地上传双来源,见 material-uploads.md) |
+| `doc_read(source="reference")` | `apps/web/src/lib/doc-read.ts` | 工坊参考资料:prompt 只带引用 id+标题,14000 字上限 + offset 续读(art_* 交付物 / upl_* 本地上传双来源,见 material-uploads.md) |
 | `context_file` / agent-notes | context-store v2 P3 | Agent 主动写文件(对标 Claude memory tool),非框架兜底 |
 
 **通用工具输出路径没有任何 spill**:只有 16KB 截断(§1.1)与浏览器 4000 字窗口(§1.3)。
@@ -114,7 +114,7 @@ if (serialized.length > TOOL_OUTPUT_LIMIT) {
 ```
 <头尾混合预览,复用 truncateToolOutput 语义、限额 SPILL_PREVIEW_LIMIT=4KB>
 …[原输出共 123456 字符,已全量保存(引用 ref=call_1760...abc)。以上仅为头尾预览。
-需要中间或指定位置内容:调用 read_tool_output(callId="call_1760...abc", offset=N) 窗口读取;
+需要中间或指定位置内容:调用 doc_read(source="tool_output", callId="call_1760...abc", offset=N) 窗口读取;
 或用更精确参数缩小范围重查,不要整体重取]…
 ```
 
@@ -123,16 +123,17 @@ if (serialized.length > TOOL_OUTPUT_LIMIT) {
 `COMPACT_DIGEST_ENTRY_LIMIT=600` 的蒸馏截断损失面,压缩后指针仍可续读
 (= Manus「可恢复压缩」:丢正文保引用)。
 
-### 4.4 续读工具 read_tool_output(仿 read_mission/read_reference_material)
+### 4.4 续读工具 doc_read(source="tool_output")
 
-注册于 `tool-output-store.ts`,web 层随有 userId 的任务挂载(与 read_mission 同处接线):
+注册于 `tool-output-store.ts`(读取实现),工具面由 `doc-read.ts` 统一暴露;
+web 层随有 userId 的任务挂载(与 read_mission 同处接线):
 
 ```
-read_tool_output(callId: string, offset?: number, limit?: number)
+doc_read(source="tool_output", callId: string, offset?: number, limit?: number)
 → { success, tool, totalChars, offset, content, nextOffset?, note? }
 ```
 
-- 默认 `limit=8000`(对齐 REFERENCE_CONTENT_LIMIT),返回窗口 + 剩余量 + nextOffset;
+- 默认 `limit=8000`(对齐 tool-output 续读默认值),返回窗口 + 剩余量 + nextOffset;
 - callId 只允许来自本 userId 的 tool-output 目录(跨用户读取 = not-found,不泄漏存在性);
 - 文件已过期/被清理 → `{success:false, message:'该输出已过期清理,如需请重新执行原工具获取'}`
   —— 诚实报错,不装有;

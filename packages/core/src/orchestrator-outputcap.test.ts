@@ -110,7 +110,7 @@ describe('ToolDefinition.outputCap · 内核截断点', () => {
     expect(h.spillCalls[0].fullText).toHaveLength(5000); // 落盘是全量,不因 cap 缩水
     const pointer = String(h.seenByModel[0]);
     expect(pointer).toContain(`ref=${h.spillCalls[0].callId}`);
-    expect(pointer).toContain('read_tool_output');
+    expect(pointer).toContain('doc_read(source="tool_output"');
     expect(h.broadcastResults[0].spilled).toMatchObject({ originalChars: 5000 });
   });
 

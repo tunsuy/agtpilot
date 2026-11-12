@@ -1,12 +1,12 @@
 /**
  * PPT 工坊 · 演示稿交付工具(任务级注入,同 buildWechatMpTools 模式)
  *
- * - ppt_check_env:探测镜像内 qiaomu-bento-ppt skill 与 python3 是否就绪 ——
+ * - ppt:探测镜像内 qiaomu-bento-ppt skill 与 python3 是否就绪 ——
  *   Agent 据此决定走正式构建路线还是降级路线(本地开发环境无 skill);
- * - ppt_publish_deck:把沙箱工作区里构建好的 .bento.html 直接读文件挂上中央画布
+ * - ppt:把沙箱工作区里构建好的 .bento.html 直接读文件挂上中央画布
  *   (ArtifactService,type=html)。服务端读文件发布是关键设计:.bento.html 内联
  *   官方 shell 后约 600KB+,绝不能让模型经 artifact_render 回显内容(撑爆上下文);
- * - ppt_publish_pptx(S2,ppt-master 路线):把工作区内导出的 .pptx 收进服务端
+ * - ppt(S2,ppt-master 路线):把工作区内导出的 .pptx 收进服务端
  *   文件库(artifact-files.ts,按用户隔离),再以 type='file' 产物挂画布 ——
  *   二进制不进 mission JSON,前端凭 fileMeta.fileId 走 /api/artifacts/file 下载。
  *
@@ -75,7 +75,7 @@ export interface PptDeckToolDeps {
   ) => { id: string; title: string };
   /**
    * 二进制文件入库(S2):agent-backend 注入 artifact-files.saveArtifactFile
-   * 的用户级包装(闭包内已绑定 userId)。缺失时 ppt_publish_pptx 拒发并说明原因。
+   * 的用户级包装(闭包内已绑定 userId)。缺失时 ppt 拒发并说明原因。
    */
   storeFile?: (input: {
     fileName: string;
@@ -89,7 +89,7 @@ export function buildPptDeckTools(deps: PptDeckToolDeps): ToolDefinition[] {
   const skillDir = deps.skillDir || BENTO_SKILL_DIR;
 
   const checkEnv: ToolDefinition = {
-    name: 'ppt_check_env',
+    name: 'ppt',
     description:
       'PPT 工坊环境自检:探测 bento 演示稿 skill(qiaomu-bento-ppt)与 python3 是否就绪。制作网页演示页前必须先调用本工具——ready=true 时走 skill 构建路线(bento_deck.py build);skill 缺失时按工坊 Prompt 的「降级路线」自行编写自包含 HTML 演示页。只读探测,无副作用。',
     dangerLevel: 'low',
@@ -118,14 +118,14 @@ export function buildPptDeckTools(deps: PptDeckToolDeps): ToolDefinition[] {
         python3,
         workspaceRoot,
         message: ready
-          ? `环境就绪:skill(${skillDir})与 ${python3} 可用,按工坊流程用 sandbox_run_command 构建 deck,完成后调用 ppt_publish_deck 发布。`
+          ? `环境就绪:skill(${skillDir})与 ${python3} 可用,按工坊流程用 sandbox_exec 构建 deck,完成后调用 ppt(action="publish_deck") 发布。`
           : '环境不完整(skill 或 python3 缺失,常见于本地开发环境):请按工坊 Prompt 的「降级路线」自行编写自包含 HTML 演示页并用 artifact_render(type=html)发布。',
       };
     },
   };
 
   const publishDeck: ToolDefinition = {
-    name: 'ppt_publish_deck',
+    name: 'ppt',
     description:
       '把沙箱工作区内构建完成的演示页 HTML 文件(通常是 bento_deck.py 产出的 .bento.html,约 600KB 单文件)读取并发布到用户中央画布(type=html,实时广播、随任务持久化,可下载离线放映)。服务端直接读文件,不经过模型上下文——严禁改用 artifact_render 粘贴 HTML 内容。path 为工作区内相对路径(如 ppt/deck.bento.html);仅接受 .html/.htm,超过 8MB 拒绝。',
     dangerLevel: 'low',
@@ -192,7 +192,7 @@ export function buildPptDeckTools(deps: PptDeckToolDeps): ToolDefinition[] {
   };
 
   const publishPptx: ToolDefinition = {
-    name: 'ppt_publish_pptx',
+    name: 'ppt',
     description:
       '把沙箱工作区内导出的 .pptx 文件(ppt-master svg_to_pptx.py 产物,通常在项目 exports/ 目录)收进服务端文件库并发布到用户中央画布(type=file,随任务持久化,前端出下载卡片)。服务端直接读二进制文件,不经过模型上下文——严禁用 artifact_render 回显或 base64 粘贴 .pptx 内容。path 为工作区内相对路径(如 ppt/deck_20261011/exports/deck.pptx);仅接受 .pptx,超过 32MB 拒绝。',
     dangerLevel: 'low',
@@ -212,7 +212,7 @@ export function buildPptDeckTools(deps: PptDeckToolDeps): ToolDefinition[] {
       if (!deps.storeFile) {
         return {
           success: false,
-          error: '当前部署未挂文件库(storeFile 缺失),无法发布 .pptx;可降级用 ppt_publish_deck 发布网页演示页。',
+          error: '当前部署未挂文件库(storeFile 缺失),无法发布 .pptx;可降级用 ppt 发布网页演示页。',
         };
       }
       const resolved = resolveDeckPath(workspaceRoot, args?.path, PPTX_EXT_RE);
@@ -281,7 +281,44 @@ export function buildPptDeckTools(deps: PptDeckToolDeps): ToolDefinition[] {
     },
   };
 
-  return [checkEnv, publishDeck, publishPptx];
+  return [
+    {
+      name: 'ppt',
+      description:
+        'PPT 工坊统一入口。action=check_env:环境自检(探测 bento 演示稿 skill 与 python3 是否就绪,只读无副作用;制作演示页前必须先调用——ready=true 时走 skill 构建路线(bento_deck.py build),skill 缺失时按工坊 Prompt 的「降级路线」自行编写自包含 HTML 演示页);' +
+        'action=publish_deck:把工作区内构建完成的演示页 HTML(通常是 .bento.html,约 600KB 单文件)发布到用户中央画布(type=html,实时广播、随任务持久化);' +
+        'action=publish_pptx:把工作区内导出的 .pptx(ppt-master svg_to_pptx.py 产物)收进服务端文件库并发布到中央画布(type=file)。' +
+        'publish 系列由服务端直接读文件,不经过模型上下文——严禁改用 artifact_render 粘贴内容。',
+      dangerLevel: 'low',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['check_env', 'publish_deck', 'publish_pptx'],
+            description: '操作类型',
+          },
+          path: {
+            type: 'string',
+            description: 'action=publish_deck/publish_pptx:工作区内相对路径(如 ppt/deck.bento.html 或 ppt/exports/deck.pptx)',
+          },
+          title: { type: 'string', description: 'action=publish_*:可选,产物标题;缺省用文件名' },
+          description: { type: 'string', description: 'action=publish_*:可选,产物说明(页数/风格/验证结果摘要)' },
+        },
+        required: ['action'],
+      },
+      execute: async (args: any, session?: any) => {
+        const action = String(args?.action || '');
+        if (action === 'check_env') return checkEnv.execute!(args, session);
+        if (action === 'publish_deck') return publishDeck.execute!(args, session);
+        if (action === 'publish_pptx') return publishPptx.execute!(args, session);
+        return {
+          success: false,
+          error: `action 无效: ${action}（可选 check_env / publish_deck / publish_pptx）`,
+        };
+      },
+    },
+  ];
 }
 
 /** 工具提供方注册表条目(tool-providers.ts);artifact 闭包由 agent-backend 接线 */

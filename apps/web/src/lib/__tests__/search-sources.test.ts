@@ -17,7 +17,7 @@ const searchStep = (over: {
 }): MissionStep =>
   step({
     role: 'tool',
-    tool: 'search_web',
+    tool: 'search',
     status: 'DONE',
     ...over,
   } as Partial<MissionStep>);

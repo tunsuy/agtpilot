@@ -5,7 +5,7 @@
  * 但换来的 token 从未被任何后端工具消费（授权了也是假连接），已于本批次移除：
  * - Notion → 改用官方托管 MCP 一键授权（见 lib/mcp-connectors.ts notion_mcp）
  * - GitHub → 标记「即将支持」，待真实 API 工具落地
- * - Slack  → 降级为纯 Webhook 通知（notify_send_webhook 真实消费）
+ * - Slack  → 降级为纯 Webhook 通知（notify 真实消费）
  * MCP 连接器的 OAuth（RFC 9728/8414/7591 + PKCE）在 lib/mcp-oauth-provider.ts，与此文件无关。
  */
 

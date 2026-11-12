@@ -100,7 +100,7 @@ describe('buildXhsWorkshopPrompt · 材料模式(勾交付物 + 空主题)', () 
     const prompt = buildXhsWorkshopPrompt({ style: '干货教程', count: 1, materials });
     expect(prompt).toContain('主题:未指定,不需要调研热点选题');
     expect(prompt).toContain('【参考资料】列出的交付物为核心素材直接编写');
-    expect(prompt).toContain('read_reference_material');
+    expect(prompt).toContain('doc_read(source="reference")');
     expect(prompt).toContain('「干货教程」');
     // 热点调研分支不出现
     expect(prompt).not.toContain('请先调研热点选题');

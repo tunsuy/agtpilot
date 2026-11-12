@@ -3,7 +3,7 @@ import type { MissionStep } from '../types/agent';
 /**
  * 搜索来源引用(ChatGPT 式):最终答复上方渲染可跳转的来源卡(favicon +
  * 域名),点击新开标签直达原始网页。来源从本轮检索步骤的结构化输出里取 ——
- * search_web 的 tool_result 本就是 { results: [{title, url, snippet}] }。
+ * search 的 tool_result 本就是 { results: [{title, url, snippet}] }。
  *
  * 归属口径:每条最终答复只引用【上一条最终答复之后】的搜索结果(逐轮归属,
  * 多轮会话里追问「再查一下」不会把上一轮的来源又挂一遍)。内联 [n] 角标

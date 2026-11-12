@@ -112,9 +112,9 @@ describe('compactConversationMessages', () => {
     it('空返回在台账中显式标注（和有效返回可区分,JSON 壳不算内容）', async () => {
       const messages = [
         mk('user', '最初的任务意图'),
-        mk('assistant', [{ type: 'tool-call', toolCallId: 'e1', toolName: 'search_web', input: { query: '空结果查询' } }]),
+        mk('assistant', [{ type: 'tool-call', toolCallId: 'e1', toolName: 'search', input: { query: '空结果查询' } }]),
         mk('tool', [{ type: 'tool-result', toolCallId: 'e1', output: '' }]),
-        mk('assistant', [{ type: 'tool-call', toolCallId: 'e2', toolName: 'search_web', input: { query: '有结果查询' } }]),
+        mk('assistant', [{ type: 'tool-call', toolCallId: 'e2', toolName: 'search', input: { query: '有结果查询' } }]),
         mk('tool', [{ type: 'tool-result', toolCallId: 'e2', output: '找到 3 条结果的内容' }]),
         ...longToolHistory(20).slice(1, -1),
         mk('assistant', '最终答复'),
@@ -373,7 +373,7 @@ describe('蒸馏原料保真(对齐 Claude Code:喂完整正文,超预算才节�
     const { result, digest } = await digestOf(messages);
     // 蒸馏原料带 ref + 续读指引
     expect(digest).toContain('ref=call-abc123');
-    expect(digest).toContain('可 read_tool_output 续读');
+    expect(digest).toContain('doc_read(source="tool_output"');
     // 台账也标注全文已落盘可续读
     const digestMsg = result!.find(
       (m) => typeof m.content === 'string' && m.content.startsWith('【历史会话纪要】')

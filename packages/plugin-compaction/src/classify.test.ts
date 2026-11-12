@@ -23,12 +23,12 @@ describe('plugin-compaction', () => {
     expect(byTool.get('sandbox_exec')).toBe('keep');
   });
 
-  it('read_reference_material 物证豁免:14k+ 大结果原样 keep,不进蒸馏(2026-10-23 双花事故)', async () => {
+  it('doc_read 物证豁免:14k+ 大结果原样 keep,不进蒸馏(2026-10-23 双花事故)', async () => {
     const msgs = [
       { role: 'user', content: '按参考资料写文章' },
       {
         role: 'assistant',
-        content: [{ type: 'tool-call', toolCallId: 'm1', toolName: 'read_reference_material', input: { materialId: 'upl_1', offset: 0 } }],
+        content: [{ type: 'tool-call', toolCallId: 'm1', toolName: 'doc_read', input: { source: 'reference', materialId: 'upl_1', offset: 0 } }],
       },
       { role: 'tool', content: [{ toolCallId: 'm1', output: 'x'.repeat(14000) }] },
       { role: 'user', content: '继续' },
@@ -59,6 +59,6 @@ describe('plugin-compaction', () => {
 
   it('MATERIAL_RESULT_TOOLS 大小写不敏感匹配(注册名恒小写,防漂移)', () => {
     expect(MATERIAL_RESULT_TOOLS.size).toBe(1);
-    expect(MATERIAL_RESULT_TOOLS.has('read_reference_material')).toBe(true);
+    expect(MATERIAL_RESULT_TOOLS.has('doc_read')).toBe(true);
   });
 });

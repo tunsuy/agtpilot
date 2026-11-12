@@ -653,7 +653,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'edge-hollow-
 调研路径(已连接哪个用哪个,按顺序降级,发生降级须在清单末尾注明):
 1. GitHub 首选固定工具 github_scan:topics 传关注方向对应话题(如 agent / llm / rag / devtool),一次调用即可拿到按 star 排序的活跃候选仓库与未认领的 good first issue(star 数/最近推送/Issue 链接都已核验,直接用于筛选);返回里的 degraded 说明与 searchRateRemaining 额度要尊重,额度不足就到此为止。已连接 mcp_github_mcp_* 工具时可用 MCP 补充检索(help wanted 标签、特定仓库深入查询),不要自己写代码调 GitHub API
 2. DeepWiki(若已连接 mcp_deepwiki_* 工具):对候选仓库提问,快速理解架构、贡献流程与测试方式,判断上手成本
-3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
+3. 网页搜索工具(search,engine 缺省 auto 自动路由与降级):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
 工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
@@ -663,7 +663,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'edge-hollow-
 
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
-肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。
+肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search 或 MCP,不要派子 agent。
 
 检索纪律(直调与写给子 agent 的任务同样遵守;原始 JSON 进了主上下文,后面每一轮都要为它重复付费):
 - 筛选阶段的 Issue 检索只要元数据:number / title / labels / state / updated_at / comments 足够,不要取 body;perPage ≤ 10
@@ -727,7 +727,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'edge-target-
 调研路径(已连接哪个用哪个,按顺序降级,发生降级须在清单末尾注明):
 1. GitHub 首选固定工具 github_scan:topics 传关注方向对应话题(如 agent / llm / rag / devtool),一次调用即可拿到按 star 排序的活跃候选仓库与未认领的 good first issue(star 数/最近推送/Issue 链接都已核验,直接用于筛选);返回里的 degraded 说明与 searchRateRemaining 额度要尊重,额度不足就到此为止。已连接 mcp_github_mcp_* 工具时可用 MCP 补充检索(help wanted 标签、特定仓库深入查询),不要自己写代码调 GitHub API
 2. DeepWiki(若已连接 mcp_deepwiki_* 工具):对候选仓库提问,快速理解架构、贡献流程与测试方式,判断上手成本
-3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
+3. 网页搜索工具(search,engine 缺省 auto 自动路由与降级):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
 工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
@@ -737,7 +737,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'edge-target-
 
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
-肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。
+肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search 或 MCP,不要派子 agent。
 
 检索纪律(直调与写给子 agent 的任务同样遵守;原始 JSON 进了主上下文,后面每一轮都要为它重复付费):
 - 筛选阶段的 Issue 检索只要元数据:number / title / labels / state / updated_at / comments 足够,不要取 body;perPage ≤ 10
@@ -800,7 +800,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'filled' 1`] 
 调研路径(已连接哪个用哪个,按顺序降级,发生降级须在清单末尾注明):
 1. GitHub 首选固定工具 github_scan:topics 传关注方向对应话题(如 agent / llm / rag / devtool),一次调用即可拿到按 star 排序的活跃候选仓库与未认领的 good first issue(star 数/最近推送/Issue 链接都已核验,直接用于筛选);返回里的 degraded 说明与 searchRateRemaining 额度要尊重,额度不足就到此为止。已连接 mcp_github_mcp_* 工具时可用 MCP 补充检索(help wanted 标签、特定仓库深入查询),不要自己写代码调 GitHub API
 2. DeepWiki(若已连接 mcp_deepwiki_* 工具):对候选仓库提问,快速理解架构、贡献流程与测试方式,判断上手成本
-3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
+3. 网页搜索工具(search,engine 缺省 auto 自动路由与降级):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
 工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
@@ -810,7 +810,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'oss_radar' · 'filled' 1`] 
 
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
-肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。
+肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search 或 MCP,不要派子 agent。
 
 检索纪律(直调与写给子 agent 的任务同样遵守;原始 JSON 进了主上下文,后面每一轮都要为它重复付费):
 - 筛选阶段的 Issue 检索只要元数据:number / title / labels / state / updated_at / comments 足够,不要取 body;perPage ≤ 10
@@ -869,14 +869,14 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'ppt' · 'edge-clamp' 1`] = 
 
 **任务意图声明:本次是 Generate PPTX 路线的 Quick Generate(快速生成)—— 全程无交互:不向我提问、不等任何确认、不生成 design_spec.md / spec_lock.md、不走 Strategist/Confirm UI;所有未指明的选择由你直接决定。**
 
-1. **环境自检**(sandbox_run_command):
+1. **环境自检**(sandbox_exec,runtime="shell",target="local"):
    test -f /opt/skills/ppt-master/SKILL.md && /opt/ppt-master/bin/python3 -c "import yaml, pptx, pathops, uharfbuzz" && echo PPT-MASTER-READY
    失败(skill 或依赖缺失,常见于本地开发环境)→ 跳到末尾「降级路线」。
 2. **完整性门禁**:/opt/ppt-master/bin/python3 /opt/skills/ppt-master/scripts/attribution_guard.py —— 非零退出立即停止,不得检查/修复/绕过。
 3. **读规范**:cat /opt/skills/ppt-master/SKILL.md、/opt/skills/ppt-master/workflows/profiles/quick-generate.md(本次的执行权威)、/opt/skills/ppt-master/references/canvas-formats.md、/opt/skills/ppt-master/references/shared-standards-core.md;需要图表/图标时再读 /opt/skills/ppt-master/templates/charts/chart-vocabulary.md 与 /opt/skills/ppt-master/templates/icons/README.md。严禁凭记忆发明字段与流程。
 4. **初始化项目**(在任务输出目录下):
    /opt/ppt-master/bin/python3 /opt/skills/ppt-master/scripts/project_manager.py init deck --quick-generate --dir ppt
-   记下打印的项目路径(形如 ppt/deck_<日期>),后续命令的 <project_path> 都用它。若我提供了材料,先把材料原文写入 ppt/source-material.md(sandbox_write_file),再执行:
+   记下打印的项目路径(形如 ppt/deck_<日期>),后续命令的 <project_path> 都用它。若我提供了材料,先把材料原文写入 ppt/source-material.md(sandbox_file,action="write"),再执行:
    /opt/ppt-master/bin/python3 /opt/skills/ppt-master/scripts/project_manager.py import-sources <project_path> ppt/source-material.md
 5. **大纲先行**:把逐页 roster(每页:核心信息一句话 + 版式方向 + 密度 anchor/dense/breathing)简短输出到对话并落 <project_path>/deck-plan.md;无需停下等我确认,直接继续。
 6. **文字度量校准**(排版前必做,防止文字溢出画布):
@@ -895,7 +895,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'ppt' · 'edge-clamp' 1`] = 
 10. **导出 PPTX**:
     /opt/ppt-master/bin/python3 /opt/skills/ppt-master/scripts/svg_to_pptx.py <project_path> --quick-generate --with-notes
     产物在 <project_path>/exports/*.pptx(原生 DrawingML,可编辑)。禁止运行 finalize_svg.py;禁止生成 narration/音频/视频。
-11. **发布产物**:调用 ppt_publish_pptx 工具(path 传 exports/ 下 .pptx 的工作区相对路径,title 传演示稿标题,description 传页数/画布/质检摘要)。严禁用 artifact_render 回显 .pptx 内容或 base64 —— 二进制必须走 ppt_publish_pptx 由服务端读文件入库。
+11. **发布产物**:调用 ppt 工具(path 传 exports/ 下 .pptx 的工作区相对路径,title 传演示稿标题,description 传页数/画布/质检摘要)。严禁用 artifact_render 回显 .pptx 内容或 base64 —— 二进制必须走 ppt 由服务端读文件入库。
 12. **交付说明**:页数、画布与字体、质检结果(error/warning 处置)、下载方式(画布文件卡片一键下载 .pptx,PowerPoint/WPS/Keynote 可直接编辑)、missing evidence(未人工在 Office 里打开核验时如实标注,不得写成「已验证」)。
 
 内容红线:
@@ -910,7 +910,7 @@ pptx 路线附加红线:
 - 不调用生图/搜图/联网接口,不生成音频视频;
 - 中途上下文丢失就从头重跑 Quick,不做跨运行拼接。
 
-降级路线(仅当第 1 步环境自检失败时):改走网页演示页(bento)路线 —— 调用 ppt_check_env,按其结果执行 bento 构建(规范与命令见 /opt/skills/qiaomu-bento-ppt,流程同「网页演示页」形态的制作流程 2~7 步,发布用 ppt_publish_deck),并在交付说明中注明「ppt-master 环境缺失,本次降级为网页演示页」。若 bento 也缺失,自行编写自包含 HTML 演示页用 artifact_render(type=html)发布。",
+降级路线(仅当第 1 步环境自检失败时):改走网页演示页(bento)路线 —— 调用 ppt,按其结果执行 bento 构建(规范与命令见 /opt/skills/qiaomu-bento-ppt,流程同「网页演示页」形态的制作流程 2~7 步,发布用 ppt),并在交付说明中注明「ppt-master 环境缺失,本次降级为网页演示页」。若 bento 也缺失,自行编写自包含 HTML 演示页用 artifact_render(type=html)发布。",
   "title": "PPT 演示稿 · 演示页",
 }
 `;
@@ -931,22 +931,22 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'ppt' · 'filled' 1`] = `
 
 制作流程(qiaomu-bento-ppt skill 已预装在 /opt/skills/qiaomu-bento-ppt,纯 Python 标准库脚本,构建全程无需联网):
 
-1. **环境自检**:调用 ppt_check_env 工具。ready=true 走下面正式路线;skill 缺失(本地开发环境)直接跳到末尾「降级路线」。
-2. **读规范(严禁凭记忆发明字段)**:用 sandbox_run_command 阅读 skill 内置资料——
+1. **环境自检**:调用 ppt 工具。ready=true 走下面正式路线;skill 缺失(本地开发环境)直接跳到末尾「降级路线」。
+2. **读规范(严禁凭记忆发明字段)**:用 sandbox_exec(runtime="shell",target="local") 阅读 skill 内置资料——
    - cat /opt/skills/qiaomu-bento-ppt/SKILL.md
    - cat /opt/skills/qiaomu-bento-ppt/references/upstream/bento-format.md(重点:BentoDoc 顶层结构、Elements、Format invariants、Minimal valid document)
    - cat /opt/skills/qiaomu-bento-ppt/examples/qiaomu-bento-ppt-intro.json(成品 deck.json 范例)
-3. **大纲先行**:先把逐页大纲(每页:任务/核心信息/视觉主语/notes 要点)简短输出到对话,再落 ppt/deck-plan.md(sandbox_write_file);工坊表单已收集我的意图,无需停下等我确认大纲,直接继续。
-4. **起草 deck.json**(sandbox_write_file 写入 ppt/deck.json):
+3. **大纲先行**:先把逐页大纲(每页:任务/核心信息/视觉主语/notes 要点)简短输出到对话,再落 ppt/deck-plan.md(sandbox_file,action="write");工坊表单已收集我的意图,无需停下等我确认大纲,直接继续。
+4. **起草 deck.json**(sandbox_file,action="write" 写入 ppt/deck.json):
    - format "bento/slides"、size 1280×720;新建文档不带 collab/template/readonly 字段,不手写 docId(构建时 --new-document 生成);
    - theme 按风格要求:一套主色、最多两套字体;
    - 内容映射:数字→chart(option 必须是纯 JSON,bar/line 数据用纯数字,禁止函数 formatter)、规格/对比→table、关键数字→countUp、流程→path、同一对象跨页变化→morph(稳定 id);
    - 每页一个视觉主语,画面与正文不复读同一句话;每页写 speaker notes;
    - 离线承诺:严禁外链图片/字体/媒体,插图用 shape/svg 自绘或纯文字排版。
-5. **构建与验证**(sandbox_run_command,在任务输出目录下):
+5. **构建与验证**(sandbox_exec,runtime="shell",target="local",在任务输出目录下):
    python3 /opt/skills/qiaomu-bento-ppt/scripts/bento_deck.py build ppt/deck.json --output ppt/deck.bento.html --new-document --report ppt/reports/deck-validation.json
    再读 ppt/reports/deck-validation.json:有 error 必须修复后重新 build;有 warning(文字越界/关键文字过小/空 notes 等)逐项修复,确实无法消除的在交付说明中解释。
-6. **发布产物**:调用 ppt_publish_deck 工具(path 传 ppt/deck.bento.html,title 传演示稿标题)。严禁把 .bento.html 内容粘贴进 artifact_render —— 文件约 600KB+,必须走 ppt_publish_deck 由服务端读文件挂画布。
+6. **发布产物**:调用 ppt 工具(path 传 ppt/deck.bento.html,title 传演示稿标题)。严禁把 .bento.html 内容粘贴进 artifact_render —— 文件约 600KB+,必须走 ppt 由服务端读文件挂画布。
 7. **交付说明**:页数、风格、验证结果(errors/warnings 处置)、放映方式(中央画布直接放映;可下载 .bento.html 双击离线打开,浏览器内即可继续编辑与演示)、missing evidence(未做真实浏览器人工核验时如实标注,不得写成「已验证」)。
 
 内容红线:
@@ -955,7 +955,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'ppt' · 'filled' 1`] = `
 - 大纲先行再排版,不得跳过 deck-plan 直接生成成品;
 - 交付物必须保持单文件离线可用,不引入任何外链资源。
 
-降级路线(仅当 ppt_check_env 报告 skill 缺失时):自行编写一个自包含 HTML 演示页(内联 style/script、16:9 分页、键盘 ←→ 翻页、页码指示、无外链资源),用 artifact_render(type=html)发布,并在交付说明中注明「bento skill 缺失,本次为降级产物」。",
+降级路线(仅当 ppt 报告 skill 缺失时):自行编写一个自包含 HTML 演示页(内联 style/script、16:9 分页、键盘 ←→ 翻页、页码指示、无外链资源),用 artifact_render(type=html)发布,并在交付说明中注明「bento skill 缺失,本次为降级产物」。",
   "title": "PPT 演示稿 · 汇报提案",
 }
 `;
@@ -1098,7 +1098,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'video_douyin' · 'edge-clam
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合抖音「」时长、有传播潜力的主题,并简述选题理由。
 目标平台:抖音
@@ -1229,7 +1229,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'video_douyin' · 'edge-mate
   "prompt": "【抖音短视频脚本工坊 · 半自动运营】
 你只负责选题与脚本创作;拍摄与发布由我人工完成,严禁替我自动发布或调用任何自动投稿工具。
 
-主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 read_reference_material 工具把每一条资料完整读完,从资料中提炼适合抖音「60 秒」时长、有传播潜力的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
+主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 doc_read(source="reference") 把每一条资料完整读完,从资料中提炼适合抖音「60 秒」时长、有传播潜力的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
 目标平台:抖音
 视频时长:60 秒
 产出数量:1 个脚本
@@ -1252,7 +1252,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'video_douyin' · 'edge-mate
 全部完成后提醒我:挑一个脚本拍摄剪辑 → 连接器页抖音「真机唤起」→ 手机 App 上传、人工核对后发布。
 
 【参考资料】
-以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
+以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 doc_read(source="reference") 把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
 【资料1：行业研报】(materialId=art_m1)
 
 【去 AI 化自查 · 26 种痕迹清单】
@@ -1514,7 +1514,7 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
 - 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
 - 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
-- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
+- 资料模式下:动笔前先用 doc_read(source="reference") 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
 成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
 
@@ -1627,12 +1627,12 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'wechat_mp' · 'edge-materia
   "prompt": "【微信公众号内容工坊 · 草稿箱直投】
 你负责选题、撰写公众号文章并整理成结构化文章包;把文章写入我的草稿箱用 wechat_mp_create_draft 工具,调用前我会收到审批确认;最终发布永远由我在公众平台后台人工完成,严禁调用任何群发/发布(freepublish)类接口。
 
-主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 read_reference_material 工具把每一条资料完整读完,从资料中提炼适合「深度长文」的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
+主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 doc_read(source="reference") 把每一条资料完整读完,从资料中提炼适合「深度长文」的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
 材料写法约束(资料必须翻译成文章,不是照抄):
 - 资料是素材不是结构:通读全部资料提炼一条叙事主线,按主线重新组织文章,严禁按资料的章节顺序逐节搬运;
 - 知识点全覆盖:「深度长文」风格下,资料的每个技术/信息主题都要在正文有落点,按字数预算分配详略;其他风格可按篇幅选最重要的主题;
 - 只删证据壳不删知识点:资料里的源码路径、行号、函数名、行数统计不进正文,换成"这个机制是什么、怎么工作、为什么这么设计、代价是什么";数字与结论照留;
-- 动笔前必须先用 read_reference_material 把每一条资料完整读完,在思考里列出 3~5 个核心知识点与一条叙事主线,再组织成文章;严禁按资料章节顺序逐节搬运
+- 动笔前必须先用 doc_read(source="reference") 把每一条资料完整读完,在思考里列出 3~5 个核心知识点与一条叙事主线,再组织成文章;严禁按资料章节顺序逐节搬运
 - 成稿末尾注明资料来源性质(如"基于两项目源码树的对照整理"),不编造出处。
 文章风格:深度长文
 排版主题:classic-green(投草稿箱时把该值作为 wechat_mp_create_draft 的 theme 参数传入)
@@ -1656,14 +1656,14 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
 - 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
 - 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
-- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
+- 资料模式下:动笔前先用 doc_read(source="reference") 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
 成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
 
 全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。
 
 【参考资料】
-以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
+以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 doc_read(source="reference") 把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
 【资料1：行业研报】(materialId=art_m1)
 
 【去 AI 化自查 · 26 种痕迹清单】
@@ -1796,14 +1796,14 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
 - 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
 - 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
-- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
+- 资料模式下:动笔前先用 doc_read(source="reference") 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
 成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
 
 全部完成后提醒我:文章卡片上点「投草稿箱」即可把这篇成品写入公众号草稿箱——经我审批确认后写入,发布由我在公众平台后台人工完成;标题不满意可让你重拟,不用给我候选清单。
 
 【参考资料】
-以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
+以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 doc_read(source="reference") 把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
 【资料1：行业研报】(materialId=art_m1)
 
 【去 AI 化自查 · 26 种痕迹清单】
@@ -1944,7 +1944,7 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
 - 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
 - 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
-- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
+- 资料模式下:动笔前先用 doc_read(source="reference") 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
 成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
 
@@ -2118,7 +2118,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'weibo' · 'edge-clamp' 1`] 
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合「」、有公共讨论度的主题,并简述选题理由。
 微博类型:
@@ -2244,7 +2244,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'weibo' · 'edge-material-mo
   "prompt": "【微博内容工坊 · 半自动运营】
 你只负责选题与内容生产;最终发布由我在手机微博 App 内人工确认完成,严禁替我自动发布或调用任何自动发帖工具。
 
-主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 read_reference_material 工具把每一条资料完整读完,从资料中提炼适合「热点点评」、有公共讨论度的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
+主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 doc_read(source="reference") 把每一条资料完整读完,从资料中提炼适合「热点点评」、有公共讨论度的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
 微博类型:热点点评
 产出数量:1 条
 
@@ -2262,7 +2262,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'weibo' · 'edge-material-mo
 全部完成后提醒我:复制满意的一条 → 连接器页微博「真机唤起」→ 手机 App 粘贴、人工核对后发布。
 
 【参考资料】
-以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
+以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 doc_read(source="reference") 把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
 【资料1：行业研报】(materialId=art_m1)
 
 【去 AI 化自查 · 26 种痕迹清单】
@@ -2500,7 +2500,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-clamp' 1`] = 
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合「未知风格」的高共鸣主题,并注明选题数据来源。
 笔记类型:未知风格
@@ -2762,7 +2762,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-material-mode
   "prompt": "【小红书内容工坊 · 半自动运营】
 你只负责选题与内容生产;最终发布由我在手机小红书 App 内人工确认完成,严禁替我自动发布或调用任何自动发帖工具。
 
-主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 read_reference_material 工具把每一条资料完整读完,从资料中提炼适合「种草推荐」的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
+主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 doc_read(source="reference") 把每一条资料完整读完,从资料中提炼适合「种草推荐」的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
 笔记类型:种草推荐
 产出数量:1 篇
 
@@ -2786,7 +2786,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-material-mode
 全部完成后提醒我:复制这篇成品 → 连接器页小红书「真机唤起」→ 手机 App 粘贴、人工核对后发布;标题不满意可让你重拟,不用给我候选清单。
 
 【参考资料】
-以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
+以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 doc_read(source="reference") 把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
 【资料1：行业研报】(materialId=art_m1)
 
 【去 AI 化自查 · 26 种痕迹清单】
@@ -2900,7 +2900,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'xhs' · 'edge-zero' 1`] = `
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合「」的高共鸣主题,并注明选题数据来源。
 笔记类型:
@@ -3298,7 +3298,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > 'zhihu' · 'edge-material-mo
   "prompt": "【知乎专栏内容工坊 · 草稿托管】
 你负责选题、撰写知乎专栏文章并整理成结构化文章包;把满意的一篇存入我的知乎草稿用 zhihu_save_article_draft 工具,调用前我会收到审批确认;最终发布永远由我在知乎草稿箱人工完成,严禁调用任何发布类接口或点击发布按钮。
 
-主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 read_reference_material 工具把每一条资料完整读完,从资料中提炼适合「专业干货」、在知乎有讨论度的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
+主题:未指定,不需要调研热点选题。本次以文末【参考资料】列出的交付物为核心素材直接编写:动笔前先用 doc_read(source="reference") 把每一条资料完整读完,从资料中提炼适合「专业干货」、在知乎有讨论度的主题与角度;事实、数据、观点以资料为准,可少量联网核实补充,但不得撇开资料另起炉灶。若某条资料读取失败,基于其余资料继续;全部失败时才自行调研选题,并在成稿末尾注明。
 文章风格:专业干货
 产出数量:1 篇
 
@@ -3320,7 +3320,7 @@ Markdown 格式,1500-3000 字;知乎专栏风格:论证严密、有专业纵深�
 全部完成后提醒我:文章卡片上点「存入知乎草稿」即可把这篇成品填进知乎专栏编辑器——经我审批确认后停在草稿箱(每日有上限),发布由我在知乎草稿箱人工完成;标题不满意可让你重拟,不用给我候选清单。
 
 【参考资料】
-以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 read_reference_material 工具把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
+以下是我之前会话的交付物或本地上传文件的引用(仅列标题,正文不在这里;PDF/Word 已抽取为文本):动笔前必须用 doc_read(source="reference") 把下面每一条都读一遍,涉及的事实、数据、观点优先采用引用内容;引用解析失败则按其它要求继续创作并注明。
 【资料1：行业研报】(materialId=art_m1)
 
 【去 AI 化自查 · 26 种痕迹清单】
@@ -3761,7 +3761,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'oss_radar' 1`] 
 调研路径(已连接哪个用哪个,按顺序降级,发生降级须在清单末尾注明):
 1. GitHub 首选固定工具 github_scan:topics 传关注方向对应话题(如 agent / llm / rag / devtool),一次调用即可拿到按 star 排序的活跃候选仓库与未认领的 good first issue(star 数/最近推送/Issue 链接都已核验,直接用于筛选);返回里的 degraded 说明与 searchRateRemaining 额度要尊重,额度不足就到此为止。已连接 mcp_github_mcp_* 工具时可用 MCP 补充检索(help wanted 标签、特定仓库深入查询),不要自己写代码调 GitHub API
 2. DeepWiki(若已连接 mcp_deepwiki_* 工具):对候选仓库提问,快速理解架构、贡献流程与测试方式,判断上手成本
-3. 网页搜索工具(search_web / search_exa / search_tavily):GitHub Trending、项目社区动态与贡献者口碑
+3. 网页搜索工具(search,engine 缺省 auto 自动路由与降级):GitHub Trending、项目社区动态与贡献者口碑
 4. 以上都不可用:基于自身知识给出候选,但每条必须注明「链接与状态未经实时核验」
 
 工具使用优先级与去重遵循系统提示中的通用规则;本工坊额外约定:
@@ -3771,7 +3771,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'oss_radar' 1`] 
 
 规划阶段只确定步骤顺序与检索关键词;数据核验(star 数/活跃度/Issue 状态)一律在执行阶段用真实检索完成,不要在思考中预先推演。
 
-肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search_web 或 MCP,不要派子 agent。
+肥调研派子 agent(上下文成本纪律):凡原始结果可达数千至数万字符的检索——GitHub 连接器的 Issue 候选筛选/仓库深挖、DeepWiki 代码库问答、多个候选项目的社区动态扫描与口碑交叉验证——一律派 research_subagent 工具(只读检索子 agent;GitHub / DeepWiki 连接器的只读工具若已挂载到子 agent 则可用,子 agent 会在点名工具不可用时自行改用网页搜索并在报告中注明)完成,相互独立的调研路(不同项目/不同角度)可在一轮内并行派发多个调用。给子 agent 的任务描述里不要点名具体工具名,只描述检索目标与判断标准(工具可用性以子 agent 实际挂载面为准);任务描述里给出具体的检索目标与回传要求(如「回传候选 Issue 的编号/标题/标签/链接 + 可认领性一句话判断,不要回传原始 JSON」):子 agent 只回传提炼后的结论与来源,原始结果不占主上下文,把主线留给机会筛选与清单输出。关键 Issue 链接与项目状态在写入报告前,仍需由你直接复核(单点小查,如对每条候选各发一次 get_issue);除复核与最终筛选外,不要把肥原始检索结果拉进主上下文。单点小查询(查一个链接、搜一个项目名)直接用 search 或 MCP,不要派子 agent。
 
 检索纪律(直调与写给子 agent 的任务同样遵守;原始 JSON 进了主上下文,后面每一轮都要为它重复付费):
 - 筛选阶段的 Issue 检索只要元数据:number / title / labels / state / updated_at / comments 足够,不要取 body;perPage ≤ 10
@@ -3828,22 +3828,22 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'ppt' 1`] = `
 
 制作流程(qiaomu-bento-ppt skill 已预装在 /opt/skills/qiaomu-bento-ppt,纯 Python 标准库脚本,构建全程无需联网):
 
-1. **环境自检**:调用 ppt_check_env 工具。ready=true 走下面正式路线;skill 缺失(本地开发环境)直接跳到末尾「降级路线」。
-2. **读规范(严禁凭记忆发明字段)**:用 sandbox_run_command 阅读 skill 内置资料——
+1. **环境自检**:调用 ppt 工具。ready=true 走下面正式路线;skill 缺失(本地开发环境)直接跳到末尾「降级路线」。
+2. **读规范(严禁凭记忆发明字段)**:用 sandbox_exec(runtime="shell",target="local") 阅读 skill 内置资料——
    - cat /opt/skills/qiaomu-bento-ppt/SKILL.md
    - cat /opt/skills/qiaomu-bento-ppt/references/upstream/bento-format.md(重点:BentoDoc 顶层结构、Elements、Format invariants、Minimal valid document)
    - cat /opt/skills/qiaomu-bento-ppt/examples/qiaomu-bento-ppt-intro.json(成品 deck.json 范例)
-3. **大纲先行**:先把逐页大纲(每页:任务/核心信息/视觉主语/notes 要点)简短输出到对话,再落 ppt/deck-plan.md(sandbox_write_file);工坊表单已收集我的意图,无需停下等我确认大纲,直接继续。
-4. **起草 deck.json**(sandbox_write_file 写入 ppt/deck.json):
+3. **大纲先行**:先把逐页大纲(每页:任务/核心信息/视觉主语/notes 要点)简短输出到对话,再落 ppt/deck-plan.md(sandbox_file,action="write");工坊表单已收集我的意图,无需停下等我确认大纲,直接继续。
+4. **起草 deck.json**(sandbox_file,action="write" 写入 ppt/deck.json):
    - format "bento/slides"、size 1280×720;新建文档不带 collab/template/readonly 字段,不手写 docId(构建时 --new-document 生成);
    - theme 按风格要求:一套主色、最多两套字体;
    - 内容映射:数字→chart(option 必须是纯 JSON,bar/line 数据用纯数字,禁止函数 formatter)、规格/对比→table、关键数字→countUp、流程→path、同一对象跨页变化→morph(稳定 id);
    - 每页一个视觉主语,画面与正文不复读同一句话;每页写 speaker notes;
    - 离线承诺:严禁外链图片/字体/媒体,插图用 shape/svg 自绘或纯文字排版。
-5. **构建与验证**(sandbox_run_command,在任务输出目录下):
+5. **构建与验证**(sandbox_exec,runtime="shell",target="local",在任务输出目录下):
    python3 /opt/skills/qiaomu-bento-ppt/scripts/bento_deck.py build ppt/deck.json --output ppt/deck.bento.html --new-document --report ppt/reports/deck-validation.json
    再读 ppt/reports/deck-validation.json:有 error 必须修复后重新 build;有 warning(文字越界/关键文字过小/空 notes 等)逐项修复,确实无法消除的在交付说明中解释。
-6. **发布产物**:调用 ppt_publish_deck 工具(path 传 ppt/deck.bento.html,title 传演示稿标题)。严禁把 .bento.html 内容粘贴进 artifact_render —— 文件约 600KB+,必须走 ppt_publish_deck 由服务端读文件挂画布。
+6. **发布产物**:调用 ppt 工具(path 传 ppt/deck.bento.html,title 传演示稿标题)。严禁把 .bento.html 内容粘贴进 artifact_render —— 文件约 600KB+,必须走 ppt 由服务端读文件挂画布。
 7. **交付说明**:页数、风格、验证结果(errors/warnings 处置)、放映方式(中央画布直接放映;可下载 .bento.html 双击离线打开,浏览器内即可继续编辑与演示)、missing evidence(未做真实浏览器人工核验时如实标注,不得写成「已验证」)。
 
 内容红线:
@@ -3852,7 +3852,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'ppt' 1`] = `
 - 大纲先行再排版,不得跳过 deck-plan 直接生成成品;
 - 交付物必须保持单文件离线可用,不引入任何外链资源。
 
-降级路线(仅当 ppt_check_env 报告 skill 缺失时):自行编写一个自包含 HTML 演示页(内联 style/script、16:9 分页、键盘 ←→ 翻页、页码指示、无外链资源),用 artifact_render(type=html)发布,并在交付说明中注明「bento skill 缺失,本次为降级产物」。",
+降级路线(仅当 ppt 报告 skill 缺失时):自行编写一个自包含 HTML 演示页(内联 style/script、16:9 分页、键盘 ←→ 翻页、页码指示、无外链资源),用 artifact_render(type=html)发布,并在交付说明中注明「bento skill 缺失,本次为降级产物」。",
   "title": "PPT 演示稿 · 汇报提案",
 }
 `;
@@ -3866,7 +3866,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'video_bilibili'
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合B站「60 秒」时长、有传播潜力的主题,并简述选题理由。
 目标平台:B站
@@ -4001,7 +4001,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'video_douyin' 1
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合抖音「60 秒」时长、有传播潜力的主题,并简述选题理由。
 目标平台:抖音
@@ -4136,7 +4136,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'wechat_mp' 1`] 
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合「深度长文」的高共鸣主题,并注明选题数据来源。
 文章风格:深度长文
@@ -4161,7 +4161,7 @@ Markdown 格式,2500-5000 字;支持二级标题/列表/引用/代码块;公众�
 - 标题与摘要不做夸大诱导(微信平台对标题党有明确处罚规则)
 - 成稿前必须先完成调研与大纲,不允许直接凭空生成全文
 - 每个技术断言、数据、案例必须有来源或明确标注「存疑」;无来源的断言一律删除
-- 资料模式下:动笔前先用 read_reference_material 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
+- 资料模式下:动笔前先用 doc_read(source="reference") 读完所有资料,在思考里列出 3~5 个核心知识点,再按叙事主线组织;资料的每个技术/信息主题都要在正文有落点,只删证据壳(路径/行号/函数名)不删知识点;数字与结论照留
 
 成稿后自查(必须执行):按文末【去 AI 化自查 · 26 种痕迹清单】逐项检查,出现任一条就重写该段;确认没有 AI 痕迹后再输出最终版本。
 
@@ -4305,7 +4305,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'weibo' 1`] = `
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合「热点点评」、有公共讨论度的主题,并简述选题理由。
 微博类型:热点点评
@@ -4435,7 +4435,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'xhs' 1`] = `
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合「种草推荐」的高共鸣主题,并注明选题数据来源。
 笔记类型:种草推荐
@@ -4571,7 +4571,7 @@ exports[`工坊 golden 快照 · buildWorkshopRun > defaults · 'zhihu' 1`] = `
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 综合调研结果选一个适合「专业干货」、在知乎有讨论度的高共鸣主题,并注明选题数据来源。
 文章风格:专业干货
@@ -4715,7 +4715,7 @@ exports[`工坊 golden 快照 · cron 场景重建 > xhs_weekly_topics · count 
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 - 每条选题的【依据】必须注明数据来源(读了哪个页/搜了什么词/哪个热榜/或明确写「基于自身知识判断」),不得含糊。
 
@@ -4755,7 +4755,7 @@ exports[`工坊 golden 快照 · cron 场景重建 > xhs_weekly_topics · 缺省
 - 全网热榜 NewsNow(若已连接 mcp_newsnow_* 工具):一个连接器聚合 40+ 热榜——微博实时热搜、今日头条、百度热搜、抖音、知乎、哔哩哔哩、36氪、财联社、GitHub Trending、Hacker News 等
 - 知乎(若已连接 mcp_zhihu_* 工具):站内搜索问答/文章、知乎实时热榜、全网聚合搜索
 - X / Twitter 数据(若已连接 mcp_twitterapi_io_* 工具):趋势话题与推文搜索(海外动态、科技圈热点)
-- 网页搜索工具(search_web / search_exa / search_tavily):通用兜底
+- 网页搜索工具(search,engine 缺省 auto 自动路由与降级):通用兜底
 - 以上都不可用:基于自身知识判断,并在选题依据里明确注明
 - 每条选题的【依据】必须注明数据来源(读了哪个页/搜了什么词/哪个热榜/或明确写「基于自身知识判断」),不得含糊。
 

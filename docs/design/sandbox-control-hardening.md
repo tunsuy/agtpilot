@@ -10,7 +10,7 @@
 对当前隔离现状的审计(2026-10)结论:
 
 1. **唯一的系统级隔离是 E2B**(Firecracker MicroVM,云端,仅 Python 且需用户配 Key)。本地执行路径(run_command / run_code 本地分支 / 文件工具)只有**逻辑围栏**: resolveSafePath 路径围栏、execFile 零 shell、超时与 maxBuffer。
-2. **凭据泄漏(已确认)**: `buildChildEnv` 把整个 `session.env` 展开进子进程环境——用户个人空间保存的全部 Key(EXA/TAVILY/FIRECRAWL/E2B/各 Webhook URL)对任意一次模型触发的 `sandbox_run_command` 子进程可见。而所有合法消费方(plugin-search/plugin-notify 等)都在**插件 JS 进程内**读 `session.env`,子进程从不需要这些 Key——纯粹是暴露面。
+2. **凭据泄漏(已确认)**: `buildChildEnv` 把整个 `session.env` 展开进子进程环境——用户个人空间保存的全部 Key(EXA/TAVILY/FIRECRAWL/E2B/各 Webhook URL)对任意一次模型触发的 `sandbox_exec` 子进程可见。而所有合法消费方(plugin-search/plugin-notify 等)都在**插件 JS 进程内**读 `session.env`,子进程从不需要这些 Key——纯粹是暴露面。
 3. **无出站网络控制**: 本地执行的子进程可以自由访问内网、云元数据端点(169.254.169.254)。
 4. **HITL 审批门与插件同进程**: 防的是模型失误,防不了插件被劫持(诚实声明,见 §3)。
 5. **README 与事实不符**: 宣称 "Docker / E2B",实际不存在 Docker 后端。

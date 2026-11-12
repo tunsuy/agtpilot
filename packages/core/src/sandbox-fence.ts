@@ -27,6 +27,11 @@ export interface SandboxSessionPolicy {
   fence?: 'off' | 'best_effort' | 'hard_requirement';
   /** 出站网络: allow(默认) / deny(fence 生效时 bwrap --unshare-net) */
   net?: 'allow' | 'deny';
+  /**
+   * E2B 会话 id（自建/云端 microVM）：plugin-sandbox 创建或恢复沙箱后写回此活引用，
+   * web 层可持久化，进程重启后按 id resume 而不丢任务现场（浏览器登录态/进程）。
+   */
+  e2bSandboxId?: string;
 }
 
 /** 任务未显式配置时的围栏缺省(agent-backend / decideFence 共用) */
@@ -217,7 +222,7 @@ export function guardCommandSensitivePaths(command: string): CommandPathGuardRes
         ok: false,
         code: 'sensitive_path_blocked',
         match: label,
-        message: `命令疑似访问敏感路径(${label}),已拒绝执行。请改用 workspace 内路径与 sandbox_read_file。`,
+        message: `命令疑似访问敏感路径(${label}),已拒绝执行。请改用 workspace 内路径与 sandbox_file。`,
       };
     }
   }

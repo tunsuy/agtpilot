@@ -162,11 +162,11 @@ describe('按需 L2 · read_memory / read_mission 工具', () => {
     expect(us.readRetrievalTrace(uid).some((t) => t.kind === 'mission-read')).toBe(true);
   });
 
-  it('memory_recall 工具召回也写检索轨迹', async () => {
+  it('memory 工具召回也写检索轨迹', async () => {
     us.saveUserMemory(uid, mem({ id: 'mem_r1', title: '部署 checklist', content: '部署前跑测试与 lint' }));
     const tools = ms.buildUserMemoryTools(uid);
-    const recall = tools.find((t) => t.name === 'memory_recall')!;
-    await recall.execute({ query: '部署前要做什么' });
+    const recall = tools.find((t) => t.name === 'memory')!;
+    await recall.execute({ action: 'recall', query: '部署前要做什么' });
     const t = us.readRetrievalTrace(uid).find((x) => x.kind === 'memory-recall')!;
     expect(t).toBeTruthy();
     expect(String(t.query)).toContain('部署');

@@ -17,25 +17,21 @@ export const SELF_TOOL_NAME = 'research_subagent';
 
 /** 默认白名单:注册表中现有已声明 readOnly: true 的检索/读取类工具 */
 export const DEFAULT_READONLY_WHITELIST: readonly string[] = [
-  // plugin-search(后两者带 requiredEnv,缺 Key 时由 filterToolsByEnv 自动不挂)
-  'search_web',
-  'search_exa',
-  'search_tavily',
+  // plugin-search(engine=exa/tavily 需 Key,缺 Key 时执行期诚实报错)
+  'search',
   // plugin-github-scan(只读聚合扫描,无需凭证,服务端缓存 15 分钟;子 agent 广域调研主力)
   'github_scan',
   // plugin-browser(navigate 2026-10-23 起声明 readOnly:纯导航+蒸馏读取;
   // 子 agent 读文档/范文需要它,firecrawl 需要 Key 缺失时由 filterToolsByEnv 摘除)
   'browser_navigate',
   'browser_firecrawl_scrape',
-  // plugin-rag
-  'rag_search',
-  'rag_list_indexed',
-  // plugin-sandbox
-  'sandbox_read_file',
-  'sandbox_list_dir',
-  // plugin-git
-  'git_status',
-  'git_diff',
+  // plugin-rag(action=search/list_indexed 只读;action=index 的写入口不在本名单)
+  'rag_query',
+  // web 宿主只读文档(doc-read.ts):reference 参考资料 / tool_output 超长输出续读;
+  // 定义走 resolveUserTools 任务级注入(不进全局注册表),skill_pack 源不放行给子 agent
+  'doc_read',
+  // plugin-git(action=status/diff 只读)
+  'git_inspect',
 ];
 
 /** MCP 工具名前缀(plugin-mcp:工具名 = sanitize(`mcp_${server}_${tool}`)) */

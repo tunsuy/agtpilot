@@ -271,21 +271,21 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
 
 白名单不逐坊手写全量,按「四层并集」自动派生:
 
-- **A. baseline 常驻**(内核自动并入,工坊不声明):planner_create_plan /
-  planner_update_task、artifact_render、connector_authorize、mcp_call、
-  ask_user / confirm_plan、read_tool_output、workshop_deliver_field。
+- **A. baseline 常驻**(内核自动并入,工坊不声明):planner /
+  planner、artifact_render、connector_authorize、mcp_call、
+  ask_user / confirm_plan、doc_read、workshop_deliver_field。
   > 2026-10-19 基线清理:router_select_tier / router_get_budget_status /
   > router_set_budget_limit(plugin-router 整包删除——用户连接器部署下
   > configOverride 永远压过 preferred,能级切换三重无效)、observability_get_trace /
   > observability_get_metrics(plugin-observability 整包删除——进程内 ring buffer
   > 唯二读者就是这两个工具)、codebase_search_symbols(从 plugin-git 删除——
   > grep 的是服务进程 cwd,Web 部署下即容器目录,检索不到用户代码);
-  > memory_store / memory_recall 所属的 plugin-memory 整包删除——Web 侧三把
+  > memory_* 三把 所属的 plugin-memory 整包删除——Web 侧 memory(action=store/recall/list)
   > (store/recall/list)本就被用户空间同名 taskTools 覆盖,插件版唯一存活场景
   > 是 CLI 单用户;整包移除后用户空间版成为唯一记忆实现,跨用户泄漏路径
   > 物理消除。基线净省 ≈1060 tokens/步(插件注册表口径 2131→1070)。
-- **B. 通用检索组**(按 searchGroup 档位):search_web / search_exa / search_tavily、
-  research_subagent、browser_firecrawl_scrape、read_reference_material。
+- **B. 通用检索组**(按 searchGroup 档位):search(engine=auto 多层级路由,exa/tavily 可显式直连)、
+  research_subagent、browser_firecrawl_scrape、doc_read(source="reference")。
   > 2026-10-19 降载:社媒热榜 MCP(mcp_newsnow_* / mcp_zhihu_* / mcp_twitterapi_io_*)
   > 移出 B 层,一律经 C 层 deps 声明进入(单一事实源;见本节末增补)。
 - **C. deps 映射**:`meta.deps` 连接器 id → `mcp_<id>_*` 前缀(deps 已是单一事实源,
@@ -304,7 +304,7 @@ https://www.microsoft.com/en-us/research/blog/tool-space-interference-in-the-mcp
 | 6 | video(抖音/B站) | 无 | A+B |
 | 7 | novel | mcp_fanqie_radar_*(榜单选题) | B 组裁剪:只留 search 三件套,不要推特热榜;写作/入库走服务端不经工具 |
 | 8 | weekly | mcp_atlassian_*、mcp_lark_suite_*、mcp_dingtalk_* + email_list / email_read | GitHub 已拍板:只读精确名 5 个(list_commits / search_issues / list_pull_requests / get_pull_request / get_file_contents),整台不进 |
-| 9 | ppt | ppt_check_env、ppt_publish_deck、ppt_publish_pptx + sandbox_run_command / sandbox_write_file | 唯一保留 sandbox 的工坊(prompt 明确引用) |
+| 9 | ppt | ppt、ppt、ppt + sandbox_exec / sandbox_file | 唯一保留 sandbox 的工坊(prompt 明确引用) |
 | 10 | email_triage | email_list / email_read / email_send | B 组裁剪:分诊不需要热榜,A+email 三件 |
 | 11 | follow_builders | follow_builders_fetch_feed | twitter 经 deps 保留;newsnow/zhihu 不再白背(降载) |
 | 12 | invest | deps 映射:tushare、a_stock、alphavantage_mcp、coingecko_mcp | +B(research 档;财经热榜 newsnow 经 deps 保留,zhihu/twitter 不再白背) |
@@ -430,7 +430,7 @@ invokeStep 消息同剥(闸3 同款);transcript 落盘保持无损原文(观测�
 > github_scan 一个成功案例(胖工具,单次 2~4.5k);spill-to-file(§9 P1)是层2
 > 兜底 —— 但 16KB 以下的噪音(截图 base64 ~12KB、GitHub 全字段 JSON)够不着
 > spill 阈值,原样常驻历史,且通用头尾截断不是语义裁剪,模型续读一次
-> read_tool_output 又是一整步 16~25k。本节三件套补齐层1。
+> doc_read(source="tool_output") 又是一整步 16~25k。本节三件套补齐层1。
 
 **① 截图剥离(放大器 5 治理)**
 - `browser_navigate` / `browser_screenshot`(plugin-browser)与 `xhs_read_creator_data`
@@ -452,7 +452,7 @@ invokeStep 消息同剥(闸3 同款);transcript 落盘保持无损原文(观测�
   `min(outputCap, TOOL_OUTPUT_LIMIT)`(`text.effectiveOutputLimit`,单一事实源),
   编排器截断点与 plugin-subagent 内部截断**共用同一函数**。
 - 语义:cap 只压「进模型」的一份 —— 超限仍**先试 spill 全量落盘**(无损、可
-  read_tool_output 续读),回退头尾截断按 cap;`tool_result` 广播始终全量原文
+  doc_read(source="tool_output") 续读),回退头尾截断按 cap;`tool_result` 广播始终全量原文
   (UI 不受影响)。未声明 outputCap 的工具行为与从前逐字节一致。
 - 声明方:MCP 连接器注册时代设(见 ③,与客户端 cap 同值双保险);内置工具
   按需自选(现无 —— 读路径均有 4000 字符窗口/github_scan 已瘦身)。
@@ -518,7 +518,7 @@ MCP 统一 cap + deepwiki/GitHub 裁剪 ✅。任务级预算闸(放大器 1)已
   (`pnpm measure:workshops`):消费 JSON,用与生产同一代码路径
   (`resolveWorkshopActiveTools` 四层并集 + 内核 `resolveExplicitTools`)算每坊
   每步 tools 块成本与卡片化理论上限;**2026-10-19 起并入用户级 taskTools 表面**
-  (记忆五件套 / read_tool_output / ask 桥 / cron 三件 / connector 桥 / 交付字段 /
+  (记忆五件套 / doc_read / ask 桥 / cron 三件 / connector 桥 / 交付字段 /
   TOOL_PROVIDER 固定工具——现场用生产同款 builder + stub 依赖构建,这些从不进
   全局注册表,第 1 段对其不可见);`MEASURE=1` 打印表格,JSON 缺席时工坊合并
   表格 skip、用户级表面测量恒跑;
@@ -536,8 +536,8 @@ MCP 统一 cap + deepwiki/GitHub 裁剪 ✅。任务级预算闸(放大器 1)已
 | baseline 常驻块(每任务固定成本) | 2131 |
 | 内置全部非常驻工具卡片化(理论上限,零 load 假设) | 省 ≤791(≈25%) |
 
-单工具前 5 贵:sandbox_http_request 433、planner_create_plan 397(baseline)、
-artifact_render 393(baseline)、search_web 312、research_subagent 302。
+单工具前 5 贵:sandbox_http_request 433、planner 397(baseline)、
+artifact_render 393(baseline)、search 312、research_subagent 302。
 
 **静态结论(数据说话)**:
 1. 工坊白名单(§9.1)已把内置 tools 块从 ~7.7k 压到 ~3.1k/步;**内置工具再
@@ -594,7 +594,7 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
 2. **用户级 taskTools 从不入账**(最大缺口):agent-backend 每任务现场装配的
    26 把用户级工具(合计 ≈6462 tokens)第 1 段全部不可见,其中 baseline 六件
    (ask_user 649 / confirm_plan 326 / workshop_deliver_field 327 /
-   connector_authorize 299 / read_tool_output 234 / mcp_call 173)穿透一切
+   connector_authorize 299 / doc_read 234 / mcp_call 173)穿透一切
    工坊白名单,**每任务每步固定 ≈2008 tokens**——旧每坊表格全部少算这一块;
    记忆/cron 工具非 baseline,只在自由路由任务出现(自由路由最坏情形
    ≈6547+6462=**13009** tokens/步)。修复后每坊合并挂载面:novel 3581 ~
@@ -618,9 +618,9 @@ artifact_render 393(baseline)、search_web 312、research_subagent 302。
 **修复(A,本次实施)**:零命中分支不再全量,收敛为
 `baseline ∪ fallback ∪ prompt 显式点名的工具`:
 - `ToolDefinition.fallback?: boolean`(contracts.ts,与 baseline 同款插件自声明
-  模式,内核零插件知识):检索组自标——search_web/search_exa/search_tavily
+  模式,内核零插件知识):检索组自标——search/search/search
   (plugin-search)、research_subagent(plugin-subagent)、browser_firecrawl_scrape
-  (plugin-browser)、read_reference_material(web 宿主);缺 Key 的仍被
+  (plugin-browser)、doc_read(source="reference")(web 宿主);缺 Key 的仍被
   filterToolsByEnv 剔除,fallback 不绕过 Key 门;
 - 返回序 = 目录声明序(跨任务字节稳定,保 provider 前缀缓存);
 - 漏挂补救沿用既有机制:prepareStep 每步用近 8 条消息重算 + widenMountedTools

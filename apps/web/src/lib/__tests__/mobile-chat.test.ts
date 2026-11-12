@@ -47,7 +47,7 @@ describe('summarizeProcessBlocks', () => {
         type: 'tools',
         key: 'g1',
         steps: [
-          stepOf({ id: 's1', tool: 'search_web' }),
+          stepOf({ id: 's1', tool: 'search' }),
           stepOf({ id: 's2', status: 'FAILED' }), // 无 tool 但失败 → 计数且计失败
           stepOf({ id: 's3', title: '已完成一轮推理' }), // 元步骤 → 不计
         ],

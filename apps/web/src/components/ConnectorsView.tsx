@@ -246,6 +246,8 @@ interface ConnectorsViewProps {
       /** 思考深度(low|medium|high);'' = 清除连接器级配置回落全局。value 留空时凭证不动 */
       reasoningEffort?: string;
       reasoningEffortEnvVar?: string;
+      /** 额外非凭证配置（自建 E2B 的控制面地址/域名/流量地址/模板）；'' = 清除 */
+      extraEnvs?: Record<string, string>;
     }
   ) => Promise<void>;
   onSetDefaultModel: (modelId: string) => Promise<void>;
@@ -277,6 +279,8 @@ export function ConnectorsView({
   const [modelNameInput, setModelNameInput] = useState('');
   // 思考深度('' = 默认:不存连接器级配置,回落全局 env / 厂商缺省)
   const [reasoningInput, setReasoningInput] = useState('');
+  // 额外非凭证配置(自建 E2B 控制面地址/域名/流量地址/模板)
+  const [extraInputs, setExtraInputs] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
 
   // ---- 真机唤起可用性:Capacitor 原生壳或手机浏览器 UA;桌面端隐藏按钮(scheme 打不开是死按钮) ----
@@ -720,10 +724,13 @@ export function ConnectorsView({
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!configuringApp || !configuringApp.envVar) return;
-    // 已连接的模型连接器允许 Key 留空 = 只改 Base URL/模型标识/思考深度(后端对空 Key 不动凭证)
-    const keylessModelSave =
-      configuringApp.isModel && configuringApp.status === 'connected' && !keyInput.trim();
-    if (!keyInput.trim() && !keylessModelSave) return;
+    // 已连接连接器允许 Key 留空 = 只改 Base URL/模型标识/思考深度/自建地址等元数据
+    // （后端对空 Key 不动凭证）；模型与带额外配置项(自建 E2B)的连接器都适用
+    const keylessSave =
+      configuringApp.status === 'connected' &&
+      (Boolean(configuringApp.isModel) || Boolean(configuringApp.extraEnvVars?.length)) &&
+      !keyInput.trim();
+    if (!keyInput.trim() && !keylessSave) return;
     setIsSaving(true);
     try {
       await onSaveKey(configuringApp.envVar, keyInput.trim(), {
@@ -733,12 +740,20 @@ export function ConnectorsView({
         modelNameEnvVar: configuringApp.modelNameEnvVar,
         reasoningEffort: configuringApp.isModel ? reasoningInput : undefined,
         reasoningEffortEnvVar: configuringApp.reasoningEffortEnvVar,
+        ...(configuringApp.extraEnvVars?.length
+          ? {
+              extraEnvs: Object.fromEntries(
+                configuringApp.extraEnvVars.map((field) => [field.envVar, (extraInputs[field.envVar] || '').trim()]),
+              ),
+            }
+          : {}),
       });
       setConfiguringApp(null);
       setKeyInput('');
       setBaseUrlInput('');
       setModelNameInput('');
       setReasoningInput('');
+      setExtraInputs({});
     } catch (err) {
       console.error(err);
     } finally {
@@ -1321,6 +1336,17 @@ export function ConnectorsView({
                 {app.description}
               </p>
 
+              {/* E2B 自建配置回显：一眼看出当前指向自建实例还是官方云服务 */}
+              {app.id === 'e2b' && (
+                <p className="text-[10px] text-zinc-400 leading-relaxed mb-3 font-mono truncate">
+                  {app.extraEnvValues && Object.keys(app.extraEnvValues).length > 0
+                    ? `自建：${app.extraEnvValues.E2B_API_URL || app.extraEnvValues.E2B_DOMAIN || app.extraEnvValues.E2B_SANDBOX_URL || '已配置'}${
+                        app.extraEnvValues.E2B_TEMPLATE ? ` · 模板 ${app.extraEnvValues.E2B_TEMPLATE}` : ''
+                      }`
+                    : '官方云服务（如需自建实例，点「配置密钥」填写控制面地址）'}
+                </p>
+              )}
+
               {/* 小红书专属:网页版登录徽标 + 托管模式状态(scenario-loop P2) */}
               {app.id === 'xiaohongshu' && (
                 <div className="space-y-1.5 mb-4">
@@ -1464,6 +1490,7 @@ export function ConnectorsView({
                       setBaseUrlInput(app.baseUrl || '');
                       setModelNameInput(app.customModelName || '');
                       setReasoningInput(app.reasoningEffort || '');
+                      setExtraInputs(app.extraEnvValues || {});
                     }}
                     className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition"
                     title="手动输入或修改 API Key / Token"
@@ -1815,7 +1842,8 @@ export function ConnectorsView({
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-zinc-700 block">
                   API Key / Token{' '}
-                  {configuringApp.isModel && configuringApp.status === 'connected' ? (
+                  {configuringApp.status === 'connected' &&
+                  (configuringApp.isModel || Boolean(configuringApp.extraEnvVars?.length)) ? (
                     <span className="text-[10px] font-normal text-emerald-600">已配置,不填则保留(可只改下方设置)</span>
                   ) : (
                     <span className="text-red-500">*</span>
@@ -1930,6 +1958,34 @@ export function ConnectorsView({
                 </>
               )}
 
+              {/* 额外非凭证配置（自建 E2B：控制面地址/域名/流量地址/模板） */}
+              {configuringApp.extraEnvVars && configuringApp.extraEnvVars.length > 0 && (
+                <div className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50/60 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-zinc-700">自建服务配置</p>
+                    <span className="text-[10px] text-zinc-400">全部可选，留空用官方/默认</span>
+                  </div>
+                  {configuringApp.extraEnvVars.map((field) => (
+                    <div key={field.envVar} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-medium text-zinc-700 block">{field.label}</label>
+                        <span className="text-[10px] font-mono text-zinc-400">{field.envVar}</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={extraInputs[field.envVar] || ''}
+                        onChange={(e) =>
+                          setExtraInputs((prev) => ({ ...prev, [field.envVar]: e.target.value }))
+                        }
+                        placeholder={field.placeholder}
+                        className="w-full px-3 py-2 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500 font-mono"
+                      />
+                      {field.hint && <p className="text-[10px] text-zinc-400 leading-relaxed">{field.hint}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1942,7 +1998,10 @@ export function ConnectorsView({
                   type="submit"
                   disabled={
                     (!keyInput.trim() &&
-                      !(configuringApp.isModel && configuringApp.status === 'connected')) ||
+                      !(
+                        configuringApp.status === 'connected' &&
+                        (configuringApp.isModel || Boolean(configuringApp.extraEnvVars?.length))
+                      )) ||
                     isSaving
                   }
                   className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-xs font-medium transition shadow-xs"

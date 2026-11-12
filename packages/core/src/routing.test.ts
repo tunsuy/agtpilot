@@ -33,16 +33,16 @@ const mkTool = (name: string, extra: Partial<RoutableTool> = {}): RoutableTool =
 
 const ROUTES: ToolRoute[] = [
   { id: 'browser', prefixes: ['browser_'], test: /(网页|浏览|browser)/i },
-  { id: 'search', prefixes: ['search_'], test: /(搜索|search)/i },
+  { id: 'search', prefixes: ['search'], test: /(搜索|search)/i },
   { id: 'sandbox', prefixes: ['sandbox_'], test: /(运行|execute)/i },
 ];
 
 const TOOLS: RoutableTool[] = [
   mkTool('browser_navigate'),
-  mkTool('search_web'),
-  mkTool('sandbox_run_command'),
-  mkTool('memory_store', { baseline: true }),
-  mkTool('planner_create_plan', { baseline: true }),
+  mkTool('search'),
+  mkTool('sandbox_exec'),
+  mkTool('memory', { baseline: true }),
+  mkTool('planner', { baseline: true }),
 ];
 
 describe('estimateTextTokens', () => {
@@ -82,29 +82,29 @@ describe('selectActiveTools', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1'; // 强制超阈值
     const result = selectActiveTools('帮我浏览这个网页', TOOLS, ROUTES);
     expect(result).toContain('browser_navigate');
-    expect(result).not.toContain('sandbox_run_command');
+    expect(result).not.toContain('sandbox_exec');
   });
 
   it('基线工具无论如何都挂载', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
     const result = selectActiveTools('帮我搜索一下', TOOLS, ROUTES);
-    expect(result).toContain('search_web');
-    expect(result).toContain('memory_store'); // baseline: true
-    expect(result).toContain('planner_create_plan'); // baseline: true
+    expect(result).toContain('search');
+    expect(result).toContain('memory'); // baseline: true
+    expect(result).toContain('planner'); // baseline: true
   });
 
   it('prompt 里显式提到的工具名直接保留', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
-    const result = selectActiveTools('运行 sandbox_run_command 这个工具', TOOLS, ROUTES);
-    expect(result).toContain('sandbox_run_command');
+    const result = selectActiveTools('运行 sandbox_exec 这个工具', TOOLS, ROUTES);
+    expect(result).toContain('sandbox_exec');
   });
 
   it('未命中任何路由规则时收敛兜底:baseline(+fallback)而非全量(§9.5)', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
     // TOOLS 无 fallback 标记 → 兜底档 = baseline 对,声明序
     expect(selectActiveTools('讲个笑话', TOOLS, ROUTES)).toEqual([
-      'memory_store',
-      'planner_create_plan',
+      'memory',
+      'planner',
     ]);
   });
 
@@ -118,7 +118,7 @@ describe('selectActiveTools', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
     for (const hi of ['你是谁', '你好', '自我介绍', '你能做什么？', 'Hello!', '在吗', '谢谢！']) {
       const result = selectActiveTools(hi, TOOLS, ROUTES);
-      expect(result).toEqual(['memory_store', 'planner_create_plan']); // 仅 baseline
+      expect(result).toEqual(['memory', 'planner']); // 仅 baseline
     }
   });
 
@@ -126,16 +126,16 @@ describe('selectActiveTools', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
     // 不是全串问候 → 不走闲聊短路;「搜索」命中 search 路由(正确,不是误伤)
     const hybrid = selectActiveTools('你好，帮我搜索一下', TOOLS, ROUTES);
-    expect(hybrid).toContain('search_web');
+    expect(hybrid).toContain('search');
     expect(hybrid).not.toContain('browser_navigate');
     // 无任何路由命中 → 收敛兜底(baseline 对,§9.5;不再全量)
     expect(selectActiveTools('你是谁的作者', TOOLS, ROUTES)).toEqual([
-      'memory_store',
-      'planner_create_plan',
+      'memory',
+      'planner',
     ]);
     expect(selectActiveTools('介绍一下 RAG 架构', TOOLS, ROUTES)).toEqual([
-      'memory_store',
-      'planner_create_plan',
+      'memory',
+      'planner',
     ]);
   });
 
@@ -147,15 +147,15 @@ describe('selectActiveTools', () => {
     // 续聊转入任务:步内重算命中 search 路由 → widen 扩容
     const next = selectActiveTools('帮我搜索一下', TOOLS, ROUTES)!;
     const widened = widenMountedTools(mounted, next);
-    expect(widened).toContain('search_web');
-    expect(widened).toContain('memory_store'); // 基线还在
+    expect(widened).toContain('search');
+    expect(widened).toContain('memory'); // 基线还在
   });
 
   it('显式白名单:精确名生效、未知名静默跳过、baseline 自动并入、按目录序返回', () => {
-    expect(selectActiveTools('任意', TOOLS, ROUTES, ['search_web', '不存在的工具'])).toEqual([
-      'search_web',
-      'memory_store', // baseline 自动并入(工坊无需声明任务骨架工具)
-      'planner_create_plan',
+    expect(selectActiveTools('任意', TOOLS, ROUTES, ['search', '不存在的工具'])).toEqual([
+      'search',
+      'memory', // baseline 自动并入(工坊无需声明任务骨架工具)
+      'planner',
     ]);
   });
 
@@ -179,7 +179,7 @@ describe('selectActiveTools', () => {
   });
 
   it('显式白名单:结果与 prompt 无关且跨步字节稳定(重算不触发 widen,缓存不破)', () => {
-    const explicit = ['mcp_deepwiki_*', 'search_web'];
+    const explicit = ['mcp_deepwiki_*', 'search'];
     const tools = [...TOOLS, mkTool('mcp_deepwiki_ask_question')];
     const first = selectActiveTools('扫描 github 仓库并浏览网页', tools, ROUTES, explicit)!;
     const second = selectActiveTools('完全无关的后续步骤文本', tools, ROUTES, explicit)!;
@@ -189,16 +189,16 @@ describe('selectActiveTools', () => {
   });
 
   it('显式白名单零命中(全拼错且目录无 baseline)→ 保守回退全量', () => {
-    const noBaseline = [mkTool('browser_navigate'), mkTool('search_web')];
+    const noBaseline = [mkTool('browser_navigate'), mkTool('search')];
     expect(selectActiveTools('任意', noBaseline, ROUTES, ['typo_*', 'also_typo'])).toBeUndefined();
   });
 
   it('显式白名单不受路由开关与阈值门影响(业务强约束,非路由启发式)', () => {
     process.env.AGTPILOT_TOOL_ROUTING = '0';
-    expect(selectActiveTools('任意', TOOLS, ROUTES, ['search_web'])).toEqual([
-      'search_web',
-      'memory_store',
-      'planner_create_plan',
+    expect(selectActiveTools('任意', TOOLS, ROUTES, ['search'])).toEqual([
+      'search',
+      'memory',
+      'planner',
     ]);
   });
 
@@ -221,18 +221,18 @@ describe('零命中收敛兜底(§9.5 快速止血 A)', () => {
   // 检索组带 fallback 标记(生产口径:search 三件套/research_subagent/firecrawl/参考资料)
   const LEAN_TOOLS: RoutableTool[] = [
     mkTool('browser_navigate'),
-    mkTool('search_web', { fallback: true }),
+    mkTool('search', { fallback: true }),
     mkTool('research_subagent', { fallback: true }),
     mkTool('cron_list'), // 无 route 也无标记:零命中时不该挂
-    mkTool('memory_store', { baseline: true }),
+    mkTool('memory', { baseline: true }),
   ];
 
   it('零命中 → baseline+fallback,声明序返回(不挂无关组、不挂无标记工具)', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
     expect(selectActiveTools('帮我把会议纪要整理成文章', LEAN_TOOLS, ROUTES)).toEqual([
-      'search_web',
+      'search',
       'research_subagent',
-      'memory_store',
+      'memory',
     ]);
   });
 
@@ -240,7 +240,7 @@ describe('零命中收敛兜底(§9.5 快速止血 A)', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
     const result = selectActiveTools('看看 cron_list 里有什么', LEAN_TOOLS, ROUTES)!;
     expect(result).toContain('cron_list');
-    expect(result).toContain('memory_store'); // baseline 仍在
+    expect(result).toContain('memory'); // baseline 仍在
   });
 
   it('兜底档与 widen 兼容:后续步骤命中关键词 → 只扩不缩并入工具组', () => {
@@ -249,7 +249,7 @@ describe('零命中收敛兜底(§9.5 快速止血 A)', () => {
     const next = selectActiveTools('打开网页看看这个链接', LEAN_TOOLS, ROUTES)!;
     const widened = widenMountedTools(mounted, next);
     expect(widened).toContain('browser_navigate'); // 浏览器组扩容进来
-    expect(widened).toContain('search_web'); // 兜底档已挂的保留
+    expect(widened).toContain('search'); // 兜底档已挂的保留
   });
 
   it('目录无 baseline/fallback 可依赖 → 保守回退全量(undefined)', () => {
@@ -261,7 +261,7 @@ describe('零命中收敛兜底(§9.5 快速止血 A)', () => {
   it('命中分支不受 fallback 标记影响(命中 search 不会拖进 fallback 的其它工具)', () => {
     process.env.AGTPILOT_CONTEXT_WINDOW = '1';
     const result = selectActiveTools('帮我搜索一下', LEAN_TOOLS, ROUTES)!;
-    expect(result).toContain('search_web'); // search 组本体
+    expect(result).toContain('search'); // search 组本体
     expect(result).not.toContain('research_subagent'); // fallback 只在零命中档生效
   });
 });
@@ -286,38 +286,38 @@ describe('isSmalltalkPrompt（闲聊短路判定）', () => {
 
 describe('widenMountedTools（任务内只扩不缩）', () => {
   it('next 带新增工具 → 返回并集（扩容那一步才写回，provider 前缀缓存只破一次）', () => {
-    const mounted = new Set(['search_web', 'memory_store']);
-    const r = widenMountedTools(mounted, ['search_web', 'browser_navigate', 'memory_store']);
-    expect(r).toEqual(['search_web', 'memory_store', 'browser_navigate']);
+    const mounted = new Set(['search', 'memory']);
+    const r = widenMountedTools(mounted, ['search', 'browser_navigate', 'memory']);
+    expect(r).toEqual(['search', 'memory', 'browser_navigate']);
     expect(mounted.has('browser_navigate')).toBe(true); // 就地并入冻结集合
   });
 
   it('next 是子集（缩容）→ 返回 null 且集合不缩：挂载面不回退', () => {
-    const mounted = new Set(['search_web', 'browser_navigate']);
-    expect(widenMountedTools(mounted, ['search_web'])).toBeNull();
+    const mounted = new Set(['search', 'browser_navigate']);
+    expect(widenMountedTools(mounted, ['search'])).toBeNull();
     expect(mounted.size).toBe(2);
   });
 
   it('next 与集合完全一致 → 返回 null：不写回即声明前缀不变，缓存命中保持', () => {
-    const mounted = new Set(['search_web']);
-    expect(widenMountedTools(mounted, ['search_web'])).toBeNull();
+    const mounted = new Set(['search']);
+    expect(widenMountedTools(mounted, ['search'])).toBeNull();
   });
 
   it('next 为 undefined（路由无意见/全量兜底）→ 返回 null，保持当前集合', () => {
-    const mounted = new Set(['search_web']);
+    const mounted = new Set(['search']);
     expect(widenMountedTools(mounted, undefined)).toBeNull();
     expect(mounted.size).toBe(1);
   });
 
   it('模拟步进序列：第一步扩容写回、后续步骤集合稳定（不重不缩）', () => {
     // 初始路由：搜索任务挂 search_ + baseline
-    const mounted = new Set<string>(['search_web', 'memory_store']);
+    const mounted = new Set<string>(['search', 'memory']);
     // 步骤 3：工具结果里出现 URL → 重算把浏览器组扩进来
-    const w1 = widenMountedTools(mounted, ['search_web', 'memory_store', 'browser_navigate', 'browser_screenshot']);
-    expect(w1).toEqual(['search_web', 'memory_store', 'browser_navigate', 'browser_screenshot']);
+    const w1 = widenMountedTools(mounted, ['search', 'memory', 'browser_navigate', 'browser_screenshot']);
+    expect(w1).toEqual(['search', 'memory', 'browser_navigate', 'browser_screenshot']);
     // 步骤 4-6：话题不再命中浏览器关键词 → 重算缩回，但挂载面不回退
-    expect(widenMountedTools(mounted, ['search_web'])).toBeNull();
-    expect(widenMountedTools(mounted, ['search_web'])).toBeNull();
+    expect(widenMountedTools(mounted, ['search'])).toBeNull();
+    expect(widenMountedTools(mounted, ['search'])).toBeNull();
     expect([...mounted]).toHaveLength(4);
   });
 });
@@ -338,23 +338,23 @@ describe('filterToolsByEnv（缺 Key 工具不挂载,P5）', () => {
   const tool = (name: string, requiredEnv?: string[]) => ({ name, requiredEnv }) as any;
 
   it('无 requiredEnv 声明的工具始终挂载（内部工具不受影响）', () => {
-    const { mounted, missingKeyTools } = filterToolsByEnv([tool('search_web'), tool('browser_navigate')]);
-    expect(mounted.map((t) => t.name)).toEqual(['search_web', 'browser_navigate']);
+    const { mounted, missingKeyTools } = filterToolsByEnv([tool('search'), tool('browser_navigate')]);
+    expect(mounted.map((t) => t.name)).toEqual(['search', 'browser_navigate']);
     expect(missingKeyTools).toEqual([]);
   });
 
   it('taskEnv 与 process.env 均无 Key → 剔除并进入 missingKeyTools（不再挂秒败的壳）', () => {
     const { mounted, missingKeyTools } = filterToolsByEnv(
-      [tool('search_exa', ['EXA_API_KEY']), tool('search_web')],
+      [tool('search', ['EXA_API_KEY']), tool('search')],
       {},
     );
-    expect(mounted.map((t) => t.name)).toEqual(['search_web']);
-    expect(missingKeyTools.map((t) => t.name)).toEqual(['search_exa']);
+    expect(mounted.map((t) => t.name)).toEqual(['search']);
+    expect(missingKeyTools.map((t) => t.name)).toEqual(['search']);
   });
 
   it('用户个人空间（taskEnv）带 Key → 挂载（多用户隔离:他人无 Key 不影响本任务）', () => {
     const { mounted, missingKeyTools } = filterToolsByEnv(
-      [tool('search_exa', ['EXA_API_KEY'])],
+      [tool('search', ['EXA_API_KEY'])],
       { EXA_API_KEY: 'user-key' },
     );
     expect(mounted).toHaveLength(1);
@@ -368,14 +368,14 @@ describe('filterToolsByEnv（缺 Key 工具不挂载,P5）', () => {
   });
 
   it('requiredEnv 为任一存在即满足（anyOf 语义,供别名/多 Key 兼容声明）', () => {
-    const { mounted } = filterToolsByEnv([tool('search_tavily', ['TAVILY_API_KEY', 'TAVELY_KEY'])], {
+    const { mounted } = filterToolsByEnv([tool('search', ['TAVILY_API_KEY', 'TAVELY_KEY'])], {
       TAVELY_KEY: 'x',
     });
     expect(mounted).toHaveLength(1);
   });
 
   it('taskEnv 缺省(undefined)且 process.env 无 Key → 同样剔除', () => {
-    const { missingKeyTools } = filterToolsByEnv([tool('search_tavily', ['TAVILY_API_KEY'])]);
+    const { missingKeyTools } = filterToolsByEnv([tool('search', ['TAVILY_API_KEY'])]);
     expect(missingKeyTools).toHaveLength(1);
   });
 });

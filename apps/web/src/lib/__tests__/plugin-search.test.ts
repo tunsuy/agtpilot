@@ -90,7 +90,7 @@ describe('免费搜索源:解析工具', () => {
   });
 });
 
-describe('免费搜索源:search_web 零 Key 聚合', () => {
+describe('免费搜索源:search 零 Key 聚合', () => {
   it('中文查询:Google News(来源+时间入摘要)为主,Bing(真实摘要+解码 URL)补位', async () => {
     stubFetch({
       'news.google.com/rss/search': () => ({
@@ -118,7 +118,7 @@ describe('免费搜索源:search_web 零 Key 聚合', () => {
       }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
-    const r = await setupPlugin().search_web.execute({ query: '字节跳动 融资', maxResults: 5 });
+    const r = await setupPlugin().search.execute({ query: '字节跳动 融资', maxResults: 5 });
     expect(r.success).toBe(true);
     // 中文主力是 gnews:摘要含来源与时间,不再是占位文案
     expect(r.results[0].engine).toBe('google-news');
@@ -144,7 +144,7 @@ describe('免费搜索源:search_web 零 Key 聚合', () => {
       }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
-    const r = await setupPlugin().search_web.execute({ query: 'OpenAI GPT-6', maxResults: 5 });
+    const r = await setupPlugin().search.execute({ query: 'OpenAI GPT-6', maxResults: 5 });
     expect(r.success).toBe(true);
     expect(r.results[0].engine).toBe('bing');
     expect(r.results[0].snippet).toBe('Research and deployment company');
@@ -160,7 +160,7 @@ describe('免费搜索源:search_web 零 Key 聚合', () => {
       }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
-    const r = await setupPlugin().search_web.execute({ query: '字节跳动', maxResults: 3 });
+    const r = await setupPlugin().search.execute({ query: '字节跳动', maxResults: 3 });
     expect(r.success).toBe(true);
     expect(r.results[0].engine).toBe('google-news');
     expect(String(r.degradedSources)).toContain('bing');
@@ -172,7 +172,7 @@ describe('免费搜索源:search_web 零 Key 聚合', () => {
       'news.google.com/rss/search': () => ({ ok: false, text: async () => '' }),
       wikipedia: () => ({ ok: false, text: async () => '' }),
     });
-    const r = await setupPlugin().search_web.execute({ query: '随便什么', maxResults: 3 });
+    const r = await setupPlugin().search.execute({ query: '随便什么', maxResults: 3 });
     expect(r.success).toBe(false);
     expect(r.error).toContain('bing');
     expect(r.error).toContain('google-news');
@@ -194,7 +194,7 @@ describe('免费搜索源:search_web 零 Key 聚合', () => {
           '{"query":{"search":[{"title":"量子计算","snippet":"量子计算是<em>量子力学</em>的应用"}]}}',
       }),
     });
-    const r = await setupPlugin().search_web.execute({ query: '量子计算 原理', maxResults: 5 });
+    const r = await setupPlugin().search.execute({ query: '量子计算 原理', maxResults: 5 });
     expect(r.success).toBe(true);
     const wiki = r.results.find((x: any) => x.engine === 'wikipedia');
     expect(wiki.title).toBe('量子计算');
@@ -224,7 +224,7 @@ describe('时效:发布时间排序、相对年龄标注与 recencyDays 过滤',
       'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
-    const r = await setupPlugin().search_web.execute({ query: '字节跳动 融资', maxResults: 5 });
+    const r = await setupPlugin().search.execute({ query: '字节跳动 融资', maxResults: 5 });
     expect(r.success).toBe(true);
     const gnews = r.results.filter((x: any) => x.engine === 'google-news');
     expect(gnews.map((x: any) => x.title)).toEqual(['一小时的新闻', '三天前的新闻', '三个月前的旧闻']);
@@ -246,7 +246,7 @@ describe('时效:发布时间排序、相对年龄标注与 recencyDays 过滤',
       'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
-    const r = await setupPlugin().search_web.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
+    const r = await setupPlugin().search.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
     expect(r.success).toBe(true);
     expect(r.results.some((x: any) => x.title === '两个月前的旧闻')).toBe(false);
     expect(r.results.some((x: any) => x.title === '两条新消息')).toBe(true);
@@ -265,23 +265,21 @@ describe('时效:发布时间排序、相对年龄标注与 recencyDays 过滤',
       'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
-    const r = await setupPlugin().search_web.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
+    const r = await setupPlugin().search.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
     expect(r.success).toBe(true);
     expect(r.results.some((x: any) => x.title === '只有旧闻')).toBe(true);
     expect(r.recencyNote).toContain('近 7 天无');
   });
 });
 
-describe('P5:缺 Key 工具的挂载声明', () => {
-  it('config 无 Key 时 search_exa/search_tavily 声明 requiredEnv(编排器据此不挂秒败的壳)', () => {
+describe('P5:engine 直连缺 Key → 执行期诚实报错(合并后不再整枚工具 requiredEnv 剔除)', () => {
+  it('config 无 Key 时 search 不声明 requiredEnv(零 Key 聚合主路径始终挂载)', () => {
     const tools = setupPlugin();
-    expect(tools.search_exa.requiredEnv).toEqual(['EXA_API_KEY']);
-    expect(tools.search_tavily.requiredEnv).toEqual(['TAVILY_API_KEY']);
-    // search_web 是零 Key 聚合主路径,不受影响
-    expect(tools.search_web.requiredEnv).toBeUndefined();
+    expect(Object.keys(tools)).toEqual(['search']);
+    expect(tools.search.requiredEnv).toBeUndefined();
   });
 
-  it('config 已带 Key 时不声明(始终挂载,不进过滤清单)', () => {
+  it('config 已带 Key 时同样只有一枚 search(engine 分派在参数层)', () => {
     const tools: Record<string, any> = {};
     const ctx: any = {
       agent: {
@@ -293,20 +291,21 @@ describe('P5:缺 Key 工具的挂载声明', () => {
       },
     };
     apply(ctx, { exaApiKey: 'k1', tavilyApiKey: 'k2' });
-    expect(tools.search_exa.requiredEnv).toBeUndefined();
-    expect(tools.search_tavily.requiredEnv).toBeUndefined();
+    expect(Object.keys(tools)).toEqual(['search']);
+    expect(tools.search.requiredEnv).toBeUndefined();
   });
 
-  it('filterToolsByEnv 与插件声明联动:用户个人空间有 EXA Key 时 search_exa 挂载、search_tavily 剔除', async () => {
+  it('engine=exa 缺 Key → success:false 并报 EXA_API_KEY', async () => {
     delete process.env.EXA_API_KEY;
+    const r = await setupPlugin().search.execute({ query: 'q', engine: 'exa' });
+    expect(r.success).toBe(false);
+    expect(String(r.error)).toContain('EXA_API_KEY');
+  });
+
+  it('engine=tavily 缺 Key → success:false 并报 TAVILY_API_KEY', async () => {
     delete process.env.TAVILY_API_KEY;
-    const { filterToolsByEnv } = await import('@agtpilot/core');
-    const tools = setupPlugin();
-    const { mounted, missingKeyTools } = filterToolsByEnv(
-      [tools.search_web, tools.search_exa, tools.search_tavily],
-      { EXA_API_KEY: 'user-key' },
-    );
-    expect(mounted.map((t: any) => t.name)).toEqual(['search_web', 'search_exa']);
-    expect(missingKeyTools.map((t: any) => t.name)).toEqual(['search_tavily']);
+    const r = await setupPlugin().search.execute({ query: 'q', engine: 'tavily' });
+    expect(r.success).toBe(false);
+    expect(String(r.error)).toContain('TAVILY_API_KEY');
   });
 });

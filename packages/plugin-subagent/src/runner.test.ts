@@ -58,7 +58,7 @@ const baseSession: ToolSession = { taskId: 'task-1', step: 0, userId: 'u1' };
 
 function makeEngine(
   model: SubagentModel | undefined,
-  tools: ToolDefinition[] = [mkTool('search_web', { readOnly: true })],
+  tools: ToolDefinition[] = [mkTool('search', { readOnly: true })],
   cfg: Partial<ConstructorParameters<typeof SubagentEngine>[1]> = {},
 ) {
   const events: SubagentEventPayload[] = [];
@@ -107,7 +107,7 @@ describe('正常路径(spec §9.1/§9.8)', () => {
     expect(opt.messages[0].role).toBe('user');
     expect(opt.messages[0].content).toContain('调研 Go agent 框架格局');
     // 内部工具集 = 白名单 ∩ readOnly
-    expect(opt.tools!.map((t) => t.name)).toEqual(['search_web']);
+    expect(opt.tools!.map((t) => t.name)).toEqual(['search']);
 
     expect(events.map((e) => e.phase)).toEqual(['started', 'finished']);
     expect(events[0].parentTaskId).toBe('task-1');
@@ -288,7 +288,7 @@ describe('reasoning 剥离(子循环闸)', () => {
     content: [
       { type: 'reasoning', text: '深度思考中'.repeat(50) },
       { type: 'text', text: '我来查一下' },
-      { type: 'tool-call', toolCallId: 'c1', toolName: 'search_web', input: {} },
+      { type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: {} },
     ],
   });
 
@@ -405,9 +405,9 @@ describe('reasoning 剥离(子循环闸)', () => {
 // ---- 3.6 工坊白名单对齐(session.activeTools 交集)----
 
 describe('工坊白名单对齐(session.activeTools 交集)', () => {
-  const webTool = mkTool('search_web', { readOnly: true });
-  const ragTool = mkTool('rag_search', { readOnly: true });
-  const memTool = mkTool('sandbox_read_file', { readOnly: true, baseline: true });
+  const webTool = mkTool('search', { readOnly: true });
+  const ragTool = mkTool('rag_query', { readOnly: true });
+  const memTool = mkTool('rag_query', { readOnly: true, baseline: true });
   const ghTool = mkTool('mcp_github_mcp_search_issues', { readOnly: true });
   const dwTool = mkTool('mcp_deepwiki_ask_question', {}); // 无 readOnly 声明:走逃生口前缀放行
 
@@ -417,23 +417,23 @@ describe('工坊白名单对齐(session.activeTools 交集)', () => {
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, [webTool, ragTool, ghTool], { mcpServers: ['github_mcp'] });
     await engine.run({ query: 'q' }, baseSession);
-    expect(mountedNames(calls.loop[0])).toEqual(['search_web', 'rag_search', 'mcp_github_mcp_search_issues']);
+    expect(mountedNames(calls.loop[0])).toEqual(['search', 'rag_query', 'mcp_github_mcp_search_issues']);
   });
 
   it('精确名交集:白名单外的只读工具被剔除;白名单里零命中的名字静默跳过', async () => {
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, [webTool, ragTool], {});
-    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web', 'github_scan'] });
-    expect(mountedNames(calls.loop[0])).toEqual(['search_web']);
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search', 'github_scan'] });
+    expect(mountedNames(calls.loop[0])).toEqual(['search']);
   });
 
   it('GitHub 整台禁入传导:主循环白名单没有 github → 子循环同样禁入;精确名声明 → 保留', async () => {
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, [webTool, ghTool], { mcpServers: ['github_mcp'] });
-    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web'] });
-    expect(mountedNames(calls.loop[0])).toEqual(['search_web']);
-    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web', 'mcp_github_mcp_search_issues'] });
-    expect(mountedNames(calls.loop[1])).toEqual(['search_web', 'mcp_github_mcp_search_issues']);
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search'] });
+    expect(mountedNames(calls.loop[0])).toEqual(['search']);
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search', 'mcp_github_mcp_search_issues'] });
+    expect(mountedNames(calls.loop[1])).toEqual(['search', 'mcp_github_mcp_search_issues']);
   });
 
   it('前缀通配同语义:mcp_deepwiki_* 整组放行(逃生口进来的工具同样过交集)', async () => {
@@ -443,17 +443,17 @@ describe('工坊白名单对齐(session.activeTools 交集)', () => {
     expect(mountedNames(calls.loop[0])).toEqual(['mcp_deepwiki_ask_question']);
   });
 
-  it('baseline 自动并入:未声明的 sandbox_read_file 仍挂载(与主循环 resolveExplicitTools 同款)', async () => {
+  it('baseline 自动并入:未声明的 rag_query 仍挂载(与主循环 resolveExplicitTools 同款)', async () => {
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, [webTool, memTool], {});
-    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search_web'] });
-    expect(mountedNames(calls.loop[0])).toEqual(['search_web', 'sandbox_read_file']);
+    await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['search'] });
+    expect(mountedNames(calls.loop[0])).toEqual(['search', 'rag_query']);
   });
 
   it('交集为空 → 无法派发,错误信息如实说明白名单交集,不触模型', async () => {
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, [webTool], {});
-    const res = await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['ppt_publish_deck'] });
+    const res = await engine.run({ query: 'q' }, { ...baseSession, activeTools: ['ppt'] });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.meta.reason).toBe('internal-error');
@@ -621,7 +621,7 @@ describe('内部工具包装(spec §4.3)', () => {
   it('合成子 session(userId/env 继承,taskId 带 :sub: 前缀)', async () => {
     let captured: ToolSession | undefined;
     const tools = [
-      mkTool('search_web', {
+      mkTool('search', {
         readOnly: true,
         execute: async (_a, s) => {
           captured = s;
@@ -646,8 +646,8 @@ describe('内部工具包装(spec §4.3)', () => {
 
   it('工具抛错 → { error } 对象回填,不 throw;超大输出 16KB 截断', async () => {
     const tools = [
-      mkTool('search_web', { readOnly: true, execute: async () => 'z'.repeat(20000) }),
-      mkTool('rag_search', {
+      mkTool('search', { readOnly: true, execute: async () => 'z'.repeat(20000) }),
+      mkTool('rag_query', {
         readOnly: true,
         execute: async () => {
           throw new Error('net down');
@@ -672,9 +672,9 @@ describe('内部工具包装(spec §4.3)', () => {
   it('工具声明 outputCap → 子循环限额与主循环同源(min(cap, 16KB),effectiveOutputLimit)', async () => {
     const tools = [
       // cap 2000:5000 字符输出在子循环内即按 2000 截断(MCP 连接器形态)
-      mkTool('search_web', { readOnly: true, outputCap: 2000, execute: async () => 'z'.repeat(5000) }),
+      mkTool('search', { readOnly: true, outputCap: 2000, execute: async () => 'z'.repeat(5000) }),
       // cap 超 16KB 被压顶:与未声明的 20000 字符输出同样按 TOOL_OUTPUT_LIMIT 治理
-      mkTool('rag_search', { readOnly: true, outputCap: 999_999, execute: async () => 'y'.repeat(20000) }),
+      mkTool('rag_query', { readOnly: true, outputCap: 999_999, execute: async () => 'y'.repeat(20000) }),
     ];
     let outputs: any[] = [];
     const { model } = makeFakeModel(async (o) => {
@@ -694,7 +694,7 @@ describe('内部工具包装(spec §4.3)', () => {
 
   it('requiredEnv 缺 Key 的白名单工具不挂;全缺 → internal-error', async () => {
     const tools = [
-      mkTool('search_exa', { readOnly: true, requiredEnv: ['__AGTPILOT_TEST_NO_SUCH_KEY__'] }),
+      mkTool('search', { readOnly: true, requiredEnv: ['__AGTPILOT_TEST_NO_SUCH_KEY__'] }),
     ];
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, tools);
@@ -710,21 +710,21 @@ describe('内部工具包装(spec §4.3)', () => {
       { ...baseSession, env: { __AGTPILOT_TEST_NO_SUCH_KEY__: 'x' } },
     );
     expect(res2.ok).toBe(true);
-    expect(calls.loop[0].tools!.map((t) => t.name)).toEqual(['search_exa']);
+    expect(calls.loop[0].tools!.map((t) => t.name)).toEqual(['search']);
   });
 
   it('config.whitelist 覆盖名单(仍受 readOnly 硬校验)', async () => {
     const tools = [
-      mkTool('search_web', { readOnly: true }),
-      mkTool('memory_list', { readOnly: true }),
+      mkTool('search', { readOnly: true }),
+      mkTool('memory', { readOnly: true }),
       mkTool('sandbox_exec', {}),
     ];
     const { model, calls } = makeFakeModel();
     const { engine } = makeEngine(model, tools, {
-      whitelist: ['memory_list', 'sandbox_exec'],
+      whitelist: ['memory', 'sandbox_exec'],
     });
     await engine.run({ query: 'q' }, baseSession);
-    expect(calls.loop[0].tools!.map((t) => t.name)).toEqual(['memory_list']);
+    expect(calls.loop[0].tools!.map((t) => t.name)).toEqual(['memory']);
   });
 });
 
@@ -806,32 +806,32 @@ describe('杂项', () => {
 
   it('referencedToolNames 抽取任务点名的工具标识(去重保序,支持通配)', () => {
     expect(
-      referencedToolNames('用 mcp_github_mcp_* 查 issue,再用 search_web 补,最后 mcp_github_mcp_* 复核'),
-    ).toEqual(['mcp_github_mcp_*', 'search_web']);
+      referencedToolNames('用 mcp_github_mcp_* 查 issue,再用 search 补,最后 mcp_github_mcp_* 复核'),
+    ).toEqual(['mcp_github_mcp_*', 'search']);
   });
 
   it('buildToolSurfaceNotice 列出未挂载点名工具与实际可用工具', () => {
-    const notice = buildToolSurfaceNotice(['search_web', 'browser_navigate'], ['mcp_github_mcp_*']);
+    const notice = buildToolSurfaceNotice(['search', 'browser_navigate'], ['mcp_github_mcp_*']);
     expect(notice).toContain('mcp_github_mcp_*');
-    expect(notice).toContain('search_web, browser_navigate');
+    expect(notice).toContain('search, browser_navigate');
     expect(notice).toContain('不要尝试调用不可用工具');
-    expect(buildToolSurfaceNotice(['search_web'], [])).toBe('');
+    expect(buildToolSurfaceNotice(['search'], [])).toBe('');
   });
 
   it('任务点名未挂载工具 → 首条 user 消息带工具面告知,避免步内空转', async () => {
     const { model, calls } = makeFakeModel();
-    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })]);
+    const { engine } = makeEngine(model, [mkTool('search', { readOnly: true })]);
     await engine.run({ query: '用 mcp_github_mcp_* 查 issue 并汇总' }, baseSession);
     const content = String(calls.loop[0].messages[0].content);
     expect(content).toContain('【工具面】');
     expect(content).toContain('mcp_github_mcp_*');
-    expect(content).toContain('search_web');
+    expect(content).toContain('search');
   });
 
   it('同一只读工具同一参数命中共享缓存,不重复执行', async () => {
     let executions = 0;
     const tools = [
-      mkTool('search_web', {
+      mkTool('search', {
         readOnly: true,
         execute: async () => {
           executions += 1;
@@ -890,7 +890,7 @@ describe('杂项', () => {
 
 describe('resolveMcpServers(逐用户动态人工钥匙)', () => {
   const mcpRegistry = [
-    mkTool('search_web', { readOnly: true }),
+    mkTool('search', { readOnly: true }),
     mkTool('mcp_zhihu_hot_fetch', { readOnly: true }),
     mkTool('mcp_github_mcp_search_repositories', { readOnly: true }),
     mkTool('mcp_tushare_daily', { readOnly: true }),
@@ -975,7 +975,7 @@ describe('④ 首轮模型错误重试一次(零步消耗才重试)', () => {
     expect(res.meta.reason).toBe('model-error');
     expect(res.error).toContain('已自动重试一次');
     expect(res.meta.modelErrorRetried).toBe(true);
-    expect(res.meta.mountedTools).toContain('search_web');
+    expect(res.meta.mountedTools).toContain('search');
     expect(calls.loop).toHaveLength(2);
   });
 
@@ -1027,7 +1027,7 @@ describe('resolveUserTools(逐用户任务级 MCP 工具池注入)', () => {
 
   it('注入的用户 MCP 工具经双钥匙白名单挂载进子循环(全局注册表没有也能看见)', async () => {
     const { model, calls } = makeFakeModel();
-    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+    const { engine } = makeEngine(model, [mkTool('search', { readOnly: true })], {
       mcpServers: ['github_mcp'],
       resolveUserTools: () => [mkTool('mcp_github_mcp_search_issues', { readOnly: true })],
     });
@@ -1039,7 +1039,7 @@ describe('resolveUserTools(逐用户任务级 MCP 工具池注入)', () => {
 
   it('人工钥匙仍把门:注入的 MCP 工具服务器不在 mcpServers 名单 → 不挂载', async () => {
     const { model, calls } = makeFakeModel();
-    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+    const { engine } = makeEngine(model, [mkTool('search', { readOnly: true })], {
       mcpServers: ['deepwiki'],
       resolveUserTools: () => [mkTool('mcp_github_mcp_search_issues', { readOnly: true })],
     });
@@ -1053,7 +1053,7 @@ describe('resolveUserTools(逐用户任务级 MCP 工具池注入)', () => {
       execute: async () => 'registry',
     });
     const { model, calls } = makeFakeModel();
-    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true }), registryVersion], {
+    const { engine } = makeEngine(model, [mkTool('search', { readOnly: true }), registryVersion], {
       mcpServers: ['github_mcp'],
       resolveUserTools: () => [
         mkTool('mcp_github_mcp_search_issues', { readOnly: true, execute: async () => 'user' }),
@@ -1069,20 +1069,20 @@ describe('resolveUserTools(逐用户任务级 MCP 工具池注入)', () => {
 
   it('回调抛异常 → 回退纯全局注册表,run 仍成功(永不 throw 契约)', async () => {
     const { model, calls } = makeFakeModel();
-    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+    const { engine } = makeEngine(model, [mkTool('search', { readOnly: true })], {
       resolveUserTools: () => {
         throw new Error('user-store down');
       },
     });
     const res = await engine.run({ query: 'q' }, baseSession);
     expect(res.ok).toBe(true);
-    expect(loopToolNames(calls.loop)).toEqual(['search_web']);
+    expect(loopToolNames(calls.loop)).toEqual(['search']);
   });
 
   it('以 session.userId 逐用户调用,不串号', async () => {
     const { model } = makeFakeModel();
     const seen: Array<string | undefined> = [];
-    const { engine } = makeEngine(model, [mkTool('search_web', { readOnly: true })], {
+    const { engine } = makeEngine(model, [mkTool('search', { readOnly: true })], {
       resolveUserTools: (uid) => {
         seen.push(uid);
         return [];
@@ -1099,26 +1099,26 @@ describe('①a mountedTools 观测透出', () => {
   it('成功 run:meta.mountedTools 与 finished 事件都带实际挂载清单', async () => {
     const { model } = makeFakeModel();
     const { engine, events } = makeEngine(model, [
-      mkTool('search_web', { readOnly: true }),
+      mkTool('search', { readOnly: true }),
       mkTool('browser_navigate', { readOnly: true }),
     ]);
     const res = await engine.run({ query: 'q' }, baseSession);
     expect(res.ok).toBe(true);
-    expect(res.meta.mountedTools).toEqual(['search_web', 'browser_navigate']);
+    expect(res.meta.mountedTools).toEqual(['search', 'browser_navigate']);
     const finished = events.find((e) => e.phase === 'finished')!;
-    expect(finished.mountedTools).toEqual(['search_web', 'browser_navigate']);
+    expect(finished.mountedTools).toEqual(['search', 'browser_navigate']);
   });
 
   it('失败 run:failed 事件也带 mountedTools,主循环无需考古日志即可判断工具面', async () => {
     const { model } = makeFakeModel(() => {
       throw new Error('boom');
     });
-    const { engine, events } = makeEngine(model, [mkTool('search_web', { readOnly: true })]);
+    const { engine, events } = makeEngine(model, [mkTool('search', { readOnly: true })]);
     const res = await engine.run({ query: 'q' }, baseSession);
     expect(res.ok).toBe(false);
-    expect(res.meta.mountedTools).toEqual(['search_web']);
+    expect(res.meta.mountedTools).toEqual(['search']);
     const failed = events.find((e) => e.phase === 'failed')!;
-    expect(failed.mountedTools).toEqual(['search_web']);
+    expect(failed.mountedTools).toEqual(['search']);
     expect(failed.reason).toBe('model-error');
   });
 });

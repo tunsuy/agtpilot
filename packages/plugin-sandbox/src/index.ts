@@ -16,6 +16,23 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { promisify } from 'node:util';
 import { Sandbox as E2BSandbox } from '@e2b/code-interpreter';
+import {
+  E2BSessionPool,
+  DEFAULT_POOL_OPTIONS,
+  resolveE2BConnection,
+  resolveControlPlaneUrl,
+  sandboxSessionKey,
+  truncateCommandOutput,
+  sandboxFileUrl,
+  controlPlaneProtocol,
+  probeControlPlane,
+} from './e2b';
+import type {
+  E2BConnection,
+  E2BCreateOptions,
+  E2BSandboxHandle,
+  SandboxFactory,
+} from './e2b';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -27,6 +44,27 @@ export interface SandboxConfig {
   workspaceRoot?: string;
   defaultTimeoutMs?: number;
   e2bApiKey?: string;
+  /** 自建 E2B 控制面域名，例如 e2b.internal.example.com */
+  e2bDomain?: string;
+  /** 自建 E2B API 地址；设置后优先于 e2bDomain */
+  e2bApiUrl?: string;
+  /** 自建 E2B sandbox traffic 地址模板 */
+  e2bSandboxUrl?: string;
+  /** 预构建的 E2B template 名称或 ID */
+  e2bTemplate?: string;
+  /** E2B sandbox 生命周期超时 */
+  e2bTimeoutMs?: number;
+  /** 是否允许自建 sandbox 访问外网 */
+  e2bAllowInternetAccess?: boolean;
+  /** sandbox idle 回收策略 */
+  e2bIdleAction?: 'pause' | 'kill';
+  /** sandbox 空闲回收时间 */
+  e2bIdleTtlMs?: number;
+}
+
+function numberFromEnv(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 /** 探测宿主机 bwrap(bubblewrap)可用性:apply() 时一次,结果缓存 */
@@ -40,12 +78,34 @@ function detectBwrap(): boolean {
   }
 }
 
+/**
+ * E2B SDK 工厂（注入给会话池，便于单测替换为 fake）。
+ * 自建部署的关键：把 domain / apiUrl / sandboxUrl 原样透传给 SDK ——
+ * 默认 SDK 会打 https://api.e2b.app，自建时必须让这几个字段生效。
+ */
+function buildE2BFactory(): SandboxFactory {
+  return {
+    async create(opts) {
+      const { template, ...rest } = opts;
+      const sdkOpts = rest as Record<string, any>;
+      const sandbox = template
+        ? await E2BSandbox.create(template, sdkOpts)
+        : await E2BSandbox.create(sdkOpts);
+      return sandbox as unknown as E2BSandboxHandle;
+    },
+    async connect(sandboxId, connection) {
+      const sandbox = await E2BSandbox.connect(sandboxId, connection as Record<string, any>);
+      return sandbox as unknown as E2BSandboxHandle;
+    },
+  };
+}
+
 export function apply(ctx: Context, config: SandboxConfig = {}) {
   // 工具路由自注册：prompt 命中代码/命令执行类关键词时挂载本插件工具组
   ctx.agent.registerToolRoute({
     id: 'sandbox',
     prefixes: ['sandbox_'],
-    test: /(代码|脚本|运行|执行|命令|编译|部署|python|javascript|node|shell|sql|code|script|run|execute)/i,
+    test: /(代码|脚本|运行|执行|命令|终端|文件|目录|沙箱|微虚拟机|编译|部署|python|javascript|node|shell|sql|code|script|run|execute|sandbox|terminal)/i,
   });
 
   const workspaceRoot = config.workspaceRoot || process.cwd();
@@ -55,6 +115,112 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
 
   if (!fsSync.existsSync(tempSandboxDir)) {
     fsSync.mkdirSync(tempSandboxDir, { recursive: true });
+  }
+
+  // ---- 自建 E2B 接入 ----
+  // 连接配置每次调用按 session.env → 插件配置 → 进程环境解析（见 e2b.ts），
+  // 支持多用户各自指向自己的自建 E2B 实例。会话池按 taskId 复用 sandbox：
+  // 一次任务内多次工具调用共享同一 VM，心跳续期，空闲按 pause/kill 回收。
+  const e2bPool = new E2BSessionPool(
+    buildE2BFactory(),
+    {
+      ...DEFAULT_POOL_OPTIONS,
+      timeoutMs: config.e2bTimeoutMs || numberFromEnv(process.env.E2B_TIMEOUT_MS, DEFAULT_POOL_OPTIONS.timeoutMs),
+      idleTtlMs: config.e2bIdleTtlMs || numberFromEnv(process.env.E2B_IDLE_TTL_MS, DEFAULT_POOL_OPTIONS.idleTtlMs),
+      idleAction: config.e2bIdleAction || (process.env.E2B_IDLE_ACTION === 'kill' ? 'kill' : DEFAULT_POOL_OPTIONS.idleAction),
+    },
+  );
+
+  function e2bConnection(session?: any): E2BConnection {
+    return resolveE2BConnection({
+      sessionEnv: session?.env,
+      plugin: {
+        apiKey: config.e2bApiKey,
+        domain: config.e2bDomain,
+        apiUrl: config.e2bApiUrl,
+        sandboxUrl: config.e2bSandboxUrl,
+      },
+      processEnv: process.env as Record<string, string | undefined>,
+    });
+  }
+
+  function e2bCreateOptions(session?: any): E2BCreateOptions {
+    const template =
+      session?.env?.E2B_TEMPLATE || config.e2bTemplate || process.env.E2B_TEMPLATE || undefined;
+    return {
+      ...e2bConnection(session),
+      ...(template ? { template } : {}),
+      timeoutMs: config.e2bTimeoutMs || numberFromEnv(process.env.E2B_TIMEOUT_MS, DEFAULT_POOL_OPTIONS.timeoutMs),
+      allowInternetAccess: config.e2bAllowInternetAccess,
+      metadata: {
+        ...(session?.userId ? { userId: String(session.userId) } : {}),
+        ...(session?.taskId ? { taskId: String(session.taskId) } : {}),
+      },
+      envs: buildChildEnv(session?.env, session?.sandbox as SandboxSessionPolicy | undefined),
+      ...(session?.sandbox?.net === 'deny' ? { network: { denyOut: ['0.0.0.0/0'] } } : {}),
+    };
+  }
+
+  /** 取当前任务会话（自建 E2B 不可用时抛错，由调用方决定是否降级） */
+  async function acquireE2BSandbox(session?: any): Promise<{ key: string; sandbox: E2BSandboxHandle }> {
+    const key = sandboxSessionKey(session);
+    void e2bPool.evictIdle().catch(() => {});
+    const sandbox = await e2bPool.acquire(
+      key,
+      e2bCreateOptions(session),
+      e2bConnection(session),
+      session?.sandbox?.e2bSandboxId,
+    );
+    // 把 sandboxId 写回活引用策略对象：web 层可持久化，跨进程重启可 resume
+    if (session?.sandbox && typeof session.sandbox === 'object') {
+      try {
+        session.sandbox.e2bSandboxId = sandbox.sandboxId;
+      } catch {
+        // 策略对象被冻结时跳过写回；会话本身仍可用，只是不能跨进程 resume
+      }
+    }
+    await e2bPool.touch(key, sandbox);
+    return { key, sandbox };
+  }
+
+  async function runPythonInSandbox(
+    sandbox: E2BSandboxHandle,
+    code: string,
+    timeoutMs: number,
+  ): Promise<{
+    stdout: string;
+    stderr: string;
+    error?: string;
+    artifacts: Array<{ text?: string; formats?: string[]; hasImage?: boolean; pngBase64?: string }>;
+    mode: 'runCode' | 'command';
+  }> {
+    if (typeof sandbox.runCode === 'function') {
+      const execution = await sandbox.runCode(code, { timeoutMs });
+      return {
+        stdout: execution.logs.stdout.join('\n').trim(),
+        stderr: execution.logs.stderr.join('\n').trim(),
+        error: execution.error ? execution.error.value || execution.error.name : undefined,
+        artifacts: (execution.results || []).map((r: any) => ({
+          text: r.text,
+          formats: r.formats ? Object.keys(r.formats) : [],
+          hasImage: !!(r.png || r.jpeg || r.svg),
+          pngBase64: r.png,
+        })),
+        mode: 'runCode',
+      };
+    }
+    // 自建模板没有 code-interpreter kernel 时退回文件 + python3
+    const file = `/home/user/.agtpilot/snippet_${Date.now()}.py`;
+    await sandbox.files.makeDir('/home/user/.agtpilot').catch(() => {});
+    await sandbox.files.write(file, code);
+    const result = await sandbox.commands.run(`python3 ${file}`, { timeoutMs });
+    return {
+      stdout: (result.stdout || '').trim(),
+      stderr: (result.stderr || '').trim(),
+      error: result.exitCode !== 0 ? result.error || result.stderr || `exit ${result.exitCode}` : undefined,
+      artifacts: [],
+      mode: 'command',
+    };
   }
 
   // 辅助函数：路径围栏（Path Traversal 防护）。
@@ -98,492 +264,560 @@ export function apply(ctx: Context, config: SandboxConfig = {}) {
     });
   }
 
-  // 1. 命令执行原子能力 (sandbox_run_command)
-  ctx.agent.registerTool({
-    name: 'sandbox_run_command',
-    description:
-      '在工作区执行 Shell 命令，返回标准输出、标准错误和退出码。隔离层级：默认 best_effort——有 bwrap 时为窄挂载内核围栏（只读 /usr 等最小系统集 + 可写 workspace，不挂整盘根）；无 bwrap 时降级为逻辑围栏并拦截敏感绝对路径字面量。显式 fence=off 才关闭内核围栏。Python 可改用 sandbox_run_code 走 E2B。高危工具，触发安全审批拦截。',
-    dangerLevel: 'high',
-    parameters: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: '待执行的终端命令 (如: "ls -la", "pnpm test")' },
-        cwd: { type: 'string', description: '命令执行的工作目录，默认为当前项目根目录' },
-        timeoutMs: { type: 'number', description: '命令执行超时毫秒数，默认 30000ms' },
-      },
-      required: ['command'],
-    },
-    execute: async ({ command, cwd, timeoutMs }, session?: any) => {
-      let execCwd = workspaceRoot;
-      if (cwd) {
-        const resolved = resolveSafePath(String(cwd));
-        if (!resolved) {
-          return { success: false, command, error: `工作目录越界: ${cwd}（只允许 workspace 内路径）` };
-        }
-        execCwd = resolved;
-      }
-      const timeout = timeoutMs || defaultTimeoutMs;
-      const startTime = Date.now();
+  // 1. 统一执行入口 (sandbox_exec) + 文件/目录操作 (sandbox_file)
+  type SandboxRuntime = 'shell' | 'python' | 'node' | 'ts';
+  type SandboxTarget = 'auto' | 'local' | 'e2b';
 
-      // 内核围栏决策(hard_requirement 下 bwrap 缺失 → 拒绝执行)
-      const fence = fenceDecision(session);
-      if (fence.blocked) {
-        ctx.agent.emitEvent({
-          type: 'thought',
-          payload: { text: `沙箱围栏拒绝执行: ${fence.reason}` },
-          timestamp: Date.now(),
-        });
-        return { success: false, command, error: fence.reason, fence: 'blocked' };
-      }
-      if (fence.degraded) {
-        ctx.agent.emitEvent({
-          type: 'thought',
-          payload: { text: `沙箱围栏降级: ${fence.reason}` },
-          timestamp: Date.now(),
-        });
-      }
-      const fenceLabel = fence.wrap ? 'bwrap' : fence.degraded ? 'degraded (bwrap 不可用)' : 'off';
+  /** 取当前任务 E2B 会话：只复用/恢复，不冷启动空 VM（读文件/列目录场景） */
+  async function getE2BSandbox(session?: any): Promise<E2BSandboxHandle | undefined> {
+    const key = sandboxSessionKey(session);
+    const existing = e2bPool.get(key);
+    if (existing) {
+      await e2bPool.touch(key, existing);
+      return existing;
+    }
+    const savedId = session?.sandbox?.e2bSandboxId as string | undefined;
+    if (!savedId) return undefined;
+    const resumed = await e2bPool.resume(key, savedId, e2bConnection(session));
+    if (resumed) await e2bPool.touch(key, resumed);
+    return resumed;
+  }
 
-      // 无 bwrap 包裹时逻辑读盘预检(托底);有窄挂载时也做字面量拦截,错误更可读
-      const pathGuard = guardCommandSensitivePaths(String(command));
-      if (!pathGuard.ok) {
-        emitDeny(session, {
-          tool: 'sandbox_run_command',
-          reason: pathGuard.code,
-          match: pathGuard.match,
-          command: String(command),
-          detail: pathGuard.message,
-        });
-        return {
-          success: false,
-          command,
-          code: pathGuard.code,
-          error: pathGuard.message,
-          fence: fenceLabel,
-        };
-      }
+  function emitTerminal(payload: Record<string, any>, session?: any) {
+    ctx.agent.emitEvent({
+      type: 'terminal_output',
+      payload: { ...payload, taskId: session?.taskId, userId: session?.userId },
+      timestamp: Date.now(),
+    });
+  }
 
-      try {
-        const env = childEnv(session);
+  /** 本地执行：shell 走 bwrap/裸 shell；代码写临时文件后由 python3/node/tsx 执行 */
+  async function execLocal(
+    runtime: SandboxRuntime,
+    payload: { command?: string; code?: string; cwd?: string; timeoutMs: number },
+    session?: any,
+  ) {
+    let execCwd = workspaceRoot;
+    if (payload.cwd) {
+      const resolved = resolveSafePath(String(payload.cwd));
+      if (!resolved) {
+        return { success: false, target: 'local' as const, error: `工作目录越界: ${payload.cwd}（只允许 workspace 内路径）` };
+      }
+      execCwd = resolved;
+    }
+
+    const fence = fenceDecision(session);
+    if (fence.blocked) {
+      return { success: false, target: 'local' as const, isolation: 'blocked', error: fence.reason };
+    }
+    if (fence.degraded) {
+      ctx.agent.emitEvent({ type: 'thought', payload: { text: `沙箱围栏降级: ${fence.reason}` }, timestamp: Date.now() });
+    }
+    const fenceLabel = fence.wrap ? 'bwrap' : fence.degraded ? 'degraded' : 'off';
+
+    const source = runtime === 'shell' ? String(payload.command ?? '') : String(payload.code ?? '');
+    const sourceGuard = guardCommandSensitivePaths(source);
+    if (!sourceGuard.ok) {
+      emitDeny(session, {
+        tool: 'sandbox_exec',
+        reason: sourceGuard.code,
+        match: sourceGuard.match,
+        detail: sourceGuard.message,
+      });
+      return { success: false, target: 'local' as const, isolation: fenceLabel, code: sourceGuard.code, error: sourceGuard.message };
+    }
+
+    const startTime = Date.now();
+    const env = childEnv(session);
+    try {
+      if (runtime === 'shell') {
         const { stdout, stderr } = fence.wrap
           ? await execFileAsync(
               'bwrap',
-              [...buildBwrapArgs({ workspaceRoot, net: session?.sandbox?.net }), '--', '/bin/sh', '-c', String(command)],
-              { cwd: execCwd, timeout, maxBuffer: 10 * 1024 * 1024, env },
+              [...buildBwrapArgs({ workspaceRoot, net: session?.sandbox?.net }), '--', '/bin/sh', '-c', String(payload.command)],
+              { cwd: execCwd, timeout: payload.timeoutMs, maxBuffer: 10 * 1024 * 1024, env },
             )
-          : await execAsync(command, {
+          : await execAsync(String(payload.command), {
               cwd: execCwd,
-              timeout,
-              maxBuffer: 10 * 1024 * 1024, // 10MB 缓冲区保护
+              timeout: payload.timeoutMs,
+              maxBuffer: 10 * 1024 * 1024,
               env,
             });
-
         const durationMs = Date.now() - startTime;
-        ctx.agent.emitEvent({
-          type: 'terminal_output',
-          payload: {
-            command,
-            cwd: execCwd,
-            stdout: stdout.trim(),
-            stderr: stderr.trim(),
-            exitCode: 0,
-            durationMs,
-            fence: fenceLabel,
-          },
-          timestamp: Date.now(),
-        });
+        emitTerminal(
+          { command: payload.command, cwd: execCwd, stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0, durationMs, fence: fenceLabel },
+          session,
+        );
         return {
           success: true,
-          command,
+          target: 'local' as const,
+          isolation: fenceLabel,
           exitCode: 0,
           stdout: stdout.trim(),
           stderr: stderr.trim(),
           durationMs,
-          fence: fenceLabel,
-        };
-      } catch (err: any) {
-        const durationMs = Date.now() - startTime;
-        const errOut = (err.stderr || err.message || '').trim();
-        const stdOut = (err.stdout || '').trim();
-        ctx.agent.emitEvent({
-          type: 'terminal_output',
-          payload: {
-            command,
-            cwd: execCwd,
-            stdout: stdOut,
-            stderr: errOut,
-            exitCode: err.code ?? -1,
-            durationMs,
-            fence: fenceLabel,
-          },
-          timestamp: Date.now(),
-        });
-        return {
-          success: false,
-          command,
-          exitCode: err.code ?? -1,
-          stdout: stdOut,
-          stderr: errOut,
-          durationMs,
-          timedOut: err.killed || false,
-          fence: fenceLabel,
-        };
-      }
-    },
-  });
-
-  // 2. 本地/云端多语言代码解释执行 (sandbox_run_code)
-  ctx.agent.registerTool({
-    name: 'sandbox_run_code',
-    description: '执行一段 Node.js (JavaScript/TypeScript) 或 Python 代码片段：配置了 E2B_API_KEY 且为 Python 时自动走云端 Firecracker 微虚拟机隔离执行（结果 mode=e2b-isolated）；否则在本地临时目录执行（默认无系统级隔离，结果 mode=local；fence 开启且宿主机有 bwrap 时以只读根内核围栏包裹，结果 fence=bwrap；降级时会显式标注）。',
-    dangerLevel: 'high',
-    parameters: {
-      type: 'object',
-      properties: {
-        language: {
-          type: 'string',
-          enum: ['javascript', 'typescript', 'python'],
-          description: '代码所用语言类型',
-        },
-        code: { type: 'string', description: '待执行的代码文本内容' },
-        timeoutMs: { type: 'number', description: '执行超时时间 (毫秒)，默认 15000ms' },
-      },
-      required: ['language', 'code'],
-    },
-    execute: async ({ language, code, timeoutMs = 15000 }, session?: any) => {
-      // 若检测到 Python 代码且配置了 E2B_API_KEY，自动走云端 Firecracker 微虚拟机
-      // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离）
-      const e2bKey = session?.env?.E2B_API_KEY || config.e2bApiKey || process.env.E2B_API_KEY;
-      if (language === 'python' && e2bKey) {
-        let sandbox: any = null;
-        try {
-          sandbox = await E2BSandbox.create({ apiKey: e2bKey });
-          const execution = await sandbox.runCode(code, { timeoutMs });
-          return {
-            success: !execution.error,
-            language: 'python (E2B Cloud MicroVM)',
-            mode: 'e2b-isolated',
-            stdout: execution.logs.stdout.join('\n').trim(),
-            stderr: execution.logs.stderr.join('\n').trim(),
-            error: execution.error ? execution.error.value : undefined,
-            artifacts: (execution.results || []).map((r: any) => ({
-              text: r.text,
-              hasImage: !!(r.png || r.jpeg),
-            })),
-          };
-        } catch (err: any) {
-          // 云端沙箱失败 → 降级本地执行，但必须让模型与用户看见降级事实
-          ctx.agent.emitEvent({
-            type: 'thought',
-            payload: {
-              text: `E2B 云端沙箱不可用（${err.message}），已降级为本地临时目录执行（无系统级隔离）。`,
-            },
-            timestamp: Date.now(),
-          });
-        } finally {
-          if (sandbox) await sandbox.kill().catch(() => {});
-        }
-      }
-
-      // 本地临时目录执行:有 bwrap 时窄挂载包裹(可写区仅 workspace);无则逻辑预检托底
-      const fileExt = language === 'python' ? '.py' : language === 'typescript' ? '.ts' : '.mjs';
-      const tempFileName = `snippet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${fileExt}`;
-      const tempFilePath = path.join(tempSandboxDir, tempFileName);
-      const degraded = Boolean(language === 'python' && e2bKey);
-
-      const fence = fenceDecision(session);
-      if (fence.blocked) {
-        return { success: false, language, error: fence.reason, fence: 'blocked' };
-      }
-      if (fence.degraded) {
-        ctx.agent.emitEvent({
-          type: 'thought',
-          payload: { text: `沙箱围栏降级: ${fence.reason}` },
-          timestamp: Date.now(),
-        });
-      }
-      const fenceLabel = fence.wrap ? 'bwrap' : fence.degraded ? 'degraded (bwrap 不可用)' : 'off';
-
-      // 代码串敏感路径预检(无/有 bwrap 都做:窄挂载外的路径会失败,字面量先拒更清晰)
-      const codeGuard = guardCommandSensitivePaths(String(code));
-      if (!codeGuard.ok) {
-        emitDeny(session, {
-          tool: 'sandbox_run_code',
-          reason: codeGuard.code,
-          match: codeGuard.match,
-          detail: codeGuard.message,
-        });
-        return {
-          success: false,
-          language,
-          code: codeGuard.code,
-          error: codeGuard.message,
-          fence: fenceLabel,
         };
       }
 
+      const fileExt = runtime === 'python' ? '.py' : runtime === 'ts' ? '.ts' : '.mjs';
+      const tempFilePath = path.join(
+        tempSandboxDir,
+        `snippet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${fileExt}`,
+      );
+      await fs.writeFile(tempFilePath, String(payload.code ?? ''), 'utf-8');
       try {
-        await fs.writeFile(tempFilePath, code, 'utf-8');
-
-        // execFile 数组参数：临时文件路径不经 shell 解释（路径由本插件生成，但保持零 shell 原则）
-        const runner =
-          language === 'python' ? 'python3' : language === 'typescript' ? 'npx' : 'node';
-        const runnerArgs =
-          language === 'typescript' ? ['tsx', tempFilePath] : [tempFilePath];
-
-        const startTime = Date.now();
+        const runner = runtime === 'python' ? 'python3' : runtime === 'ts' ? 'npx' : 'node';
+        const runnerArgs = runtime === 'ts' ? ['tsx', tempFilePath] : [tempFilePath];
         const { stdout, stderr } = fence.wrap
           ? await execFileAsync(
               'bwrap',
-              [
-                ...buildBwrapArgs({ workspaceRoot, net: session?.sandbox?.net }),
-                '--',
-                runner,
-                ...runnerArgs,
-              ],
-              { cwd: workspaceRoot, timeout: timeoutMs, env: childEnv(session) },
+              [...buildBwrapArgs({ workspaceRoot, net: session?.sandbox?.net }), '--', runner, ...runnerArgs],
+              { cwd: execCwd, timeout: payload.timeoutMs, env },
             )
-          : await execFileAsync(runner, runnerArgs, {
-              cwd: workspaceRoot,
-              timeout: timeoutMs,
-              env: childEnv(session),
-            });
-
+          : await execFileAsync(runner, runnerArgs, { cwd: execCwd, timeout: payload.timeoutMs, env });
         return {
           success: true,
-          language,
-          mode: degraded ? 'local-fallback (E2B 不可用)' : 'local',
-          fence: fenceLabel,
+          target: 'local' as const,
+          isolation: fenceLabel,
+          exitCode: 0,
           stdout: stdout.trim(),
           stderr: stderr.trim(),
           durationMs: Date.now() - startTime,
-          ...(degraded ? { warning: '云端隔离沙箱不可用，本次在本地宿主环境执行。' } : {}),
-        };
-      } catch (err: any) {
-        return {
-          success: false,
-          language,
-          mode: degraded ? 'local-fallback (E2B 不可用)' : 'local',
-          fence: fenceLabel,
-          stdout: (err.stdout || '').trim(),
-          stderr: (err.stderr || err.message || '').trim(),
-          error: err.message,
         };
       } finally {
         await fs.unlink(tempFilePath).catch(() => {});
       }
-    },
-  });
+    } catch (err: any) {
+      const durationMs = Date.now() - startTime;
+      const stdout = String(err.stdout || '').trim();
+      const stderr = String(err.stderr || err.message || '').trim();
+      if (runtime === 'shell') {
+        emitTerminal(
+          { command: payload.command, cwd: execCwd, stdout, stderr, exitCode: err.code ?? -1, durationMs, fence: fenceLabel },
+          session,
+        );
+      }
+      return {
+        success: false,
+        target: 'local' as const,
+        isolation: fenceLabel,
+        exitCode: typeof err.code === 'number' ? err.code : -1,
+        stdout,
+        stderr,
+        durationMs,
+        ...(err.killed ? { timedOut: true } : {}),
+        error: stderr || err.message,
+      };
+    }
+  }
 
-  // 3. E2B 官方云端安全微虚拟机 (Firecracker MicroVM) 沙箱执行 (sandbox_e2b_run_python)
+  /** E2B microVM 执行：会话复用 + 心跳；python 走 runCode（无 kernel 模板自动退回 python3） */
+  async function execE2B(
+    runtime: SandboxRuntime,
+    payload: { command?: string; code?: string; cwd?: string; timeoutMs: number; background?: boolean },
+    session?: any,
+  ) {
+    const connection = e2bConnection(session);
+    if (!connection.apiKey) {
+      return { success: false, target: 'e2b' as const, error: `未配置 E2B_API_KEY（控制面 ${resolveControlPlaneUrl(connection)}）` };
+    }
+    const { key, sandbox } = await acquireE2BSandbox(session);
+    const startTime = Date.now();
+
+    if (runtime === 'python') {
+      const execution = await runPythonInSandbox(sandbox, String(payload.code ?? ''), payload.timeoutMs);
+      return {
+        success: !execution.error,
+        target: 'e2b' as const,
+        isolation: 'e2b-microvm',
+        sandboxId: sandbox.sandboxId,
+        sessionKey: key,
+        exitCode: execution.error ? 1 : 0,
+        stdout: truncateCommandOutput(execution.stdout),
+        stderr: truncateCommandOutput(execution.stderr),
+        durationMs: Date.now() - startTime,
+        ...(execution.error ? { error: execution.error } : {}),
+        ...(execution.artifacts.length
+          ? {
+              artifacts: execution.artifacts.map(({ pngBase64, ...rest }) => ({
+                text: rest.text,
+                formats: rest.formats,
+                isChartOrImage: rest.hasImage,
+              })),
+            }
+          : {}),
+        ...(execution.artifacts.some((artifact) => artifact.pngBase64)
+          ? { imageArtifacts: execution.artifacts.filter((artifact) => artifact.pngBase64).map((artifact) => artifact.pngBase64) }
+          : {}),
+      };
+    }
+
+    if (runtime === 'shell') {
+      const cwd = String(payload.cwd || '/home/user');
+      const result = await sandbox.commands.run(String(payload.command ?? ''), {
+        cwd,
+        timeoutMs: payload.timeoutMs,
+        ...(payload.background ? { background: true } : {}),
+      });
+      const durationMs = Date.now() - startTime;
+      const stdout = truncateCommandOutput(result.stdout || '');
+      const stderr = truncateCommandOutput(result.stderr || '');
+      emitTerminal(
+        { command: payload.command, cwd, stdout, stderr, exitCode: result.exitCode ?? 0, durationMs, fence: 'e2b-microvm', sandboxId: sandbox.sandboxId },
+        session,
+      );
+      return {
+        success: (result.exitCode ?? 0) === 0,
+        target: 'e2b' as const,
+        isolation: 'e2b-microvm',
+        sandboxId: sandbox.sandboxId,
+        sessionKey: key,
+        exitCode: result.exitCode ?? 0,
+        stdout,
+        stderr,
+        durationMs,
+        ...(payload.background ? { pid: (result as any).pid } : {}),
+      };
+    }
+
+    const fileExt = runtime === 'ts' ? '.ts' : '.mjs';
+    const file = `/home/user/.agtpilot/snippet_${Date.now()}${fileExt}`;
+    await sandbox.files.makeDir('/home/user/.agtpilot').catch(() => {});
+    await sandbox.files.write(file, String(payload.code ?? ''));
+    const result = await sandbox.commands.run(
+      runtime === 'ts' ? `npx tsx ${file}` : `node ${file}`,
+      { cwd: '/home/user', timeoutMs: payload.timeoutMs },
+    );
+    const exitCode = result.exitCode ?? 0;
+    return {
+      success: exitCode === 0,
+      target: 'e2b' as const,
+      isolation: 'e2b-microvm',
+      sandboxId: sandbox.sandboxId,
+      sessionKey: key,
+      exitCode,
+      stdout: truncateCommandOutput(result.stdout || ''),
+      stderr: truncateCommandOutput(result.stderr || ''),
+      durationMs: Date.now() - startTime,
+      ...(exitCode !== 0 ? { error: result.error || result.stderr || `exit ${exitCode}` } : {}),
+    };
+  }
+
   ctx.agent.registerTool({
-    name: 'sandbox_e2b_run_python',
-    description: '在 E2B 官方云端安全微虚拟机 (Firecracker MicroVM) 沙箱中执行 Python 代码，支持全套科学计算库 (pandas, numpy, matplotlib) 并能自动捕获生成的图表与可视化图片',
+    name: 'sandbox_exec',
+    description:
+      '统一执行入口：runtime=shell 执行命令，python/node/ts 执行代码片段。target 语义：auto（默认，runtime=python 且已配 E2B 时走微虚拟机，其余本地工作区）、e2b（强制 Firecracker 微虚拟机，持久文件系统/后台任务/图表产物，跨调用复用同一台 VM）、local（强制本机工作区，工坊构建产物等必须落 workspace 的场景）。本地默认 best_effort 围栏（bwrap 窄挂载，缺失时逻辑预检并显式降级）；显式 target=e2b 失败会如实报错，只有 auto 会降级本地并标注 degraded。高危工具，触发安全审批拦截。',
     dangerLevel: 'high',
     parameters: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: '待在 E2B 沙箱微虚拟机中执行的 Python 代码' },
+        runtime: { type: 'string', enum: ['shell', 'python', 'node', 'ts'], description: '执行类型' },
+        command: { type: 'string', description: 'runtime=shell 时的命令' },
+        code: { type: 'string', description: 'runtime=python/node/ts 时代码' },
+        target: { type: 'string', enum: ['auto', 'local', 'e2b'], description: '执行环境，默认 auto' },
+        cwd: { type: 'string', description: '工作目录；本地必须在 workspace 内，E2B 默认 /home/user' },
+        timeoutMs: { type: 'number', description: '超时毫秒；本地默认 30000，E2B 默认 120000' },
+        background: { type: 'boolean', description: '仅 E2B shell：后台运行并返回 pid' },
       },
-      required: ['code'],
+      required: ['runtime'],
     },
-    execute: async ({ code }, session?: any) => {
-      // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离）
-      const apiKey = session?.env?.E2B_API_KEY || config.e2bApiKey || process.env.E2B_API_KEY;
-      if (!apiKey) {
-        return {
-          success: false,
-          error: '未配置 E2B_API_KEY。请在环境变量或插件配置中设置 E2B_API_KEY 即可使用云端安全 MicroVM 沙箱。',
-        };
+    execute: async (args: any, session?: any) => {
+      const runtime = String(args?.runtime || '') as SandboxRuntime;
+      if (!['shell', 'python', 'node', 'ts'].includes(runtime)) {
+        return { success: false, error: 'runtime 必须为 shell/python/node/ts' };
+      }
+      if (runtime === 'shell' && !String(args?.command || '').trim()) {
+        return { success: false, error: 'runtime=shell 需要 command' };
+      }
+      if (runtime !== 'shell' && !String(args?.code || '').trim()) {
+        return { success: false, error: `runtime=${runtime} 需要 code` };
+      }
+      if (args?.background && runtime !== 'shell') {
+        return { success: false, error: 'background 仅支持 runtime=shell 且 target=e2b' };
       }
 
-      ctx.agent.emitEvent({
-        type: 'tool_call',
-        payload: { tool: 'sandbox_e2b_run_python', codeSnippet: code.slice(0, 100), callId: session?.callId },
-        timestamp: Date.now(),
-      });
+      const requested = (args?.target as SandboxTarget) || 'auto';
+      const hasKey = Boolean(e2bConnection(session).apiKey);
+      const target: 'local' | 'e2b' =
+        requested === 'e2b' || requested === 'local'
+          ? requested
+          : runtime === 'python' && hasKey
+          ? 'e2b'
+          : 'local';
+      const timeoutMs = Number(args?.timeoutMs) || (target === 'e2b' ? 120_000 : defaultTimeoutMs);
+      if (args?.background && !(target === 'e2b' && runtime === 'shell')) {
+        return { success: false, error: 'background 仅支持 runtime=shell 且 target=e2b' };
+      }
+      const payload = {
+        command: args?.command,
+        code: args?.code,
+        cwd: args?.cwd,
+        timeoutMs,
+        background: Boolean(args?.background),
+      };
 
-      let sandbox: any = null;
-      try {
-        sandbox = await E2BSandbox.create({ apiKey });
-        const execution = await sandbox.runCode(code, { timeoutMs: defaultTimeoutMs * 4 });
-
-        const logs = {
-          stdout: execution.logs.stdout.join('\n'),
-          stderr: execution.logs.stderr.join('\n'),
-        };
-
-        const artifacts = (execution.results || []).map((r: any) => ({
-          text: r.text,
-          formats: r.formats ? Object.keys(r.formats) : [],
-          isChartOrImage: !!(r.png || r.jpeg || r.svg),
-          pngBase64: r.png,
-        }));
-
-        // 沙箱内代码报错是真实失败（success:false），不能拿着 error 还报 success
-        return {
-          success: !execution.error,
-          logs,
-          artifacts,
-          ...(execution.error ? { error: execution.error.value } : {}),
-        };
-      } catch (err: any) {
-        return {
-          success: false,
-          error: err.message,
-        };
-      } finally {
-        if (sandbox) {
-          await sandbox.kill().catch(() => {});
+      if (target === 'e2b') {
+        if (!hasKey) {
+          return {
+            success: false,
+            target,
+            error: `target=e2b 但未配置 E2B_API_KEY（控制面 ${resolveControlPlaneUrl(e2bConnection(session))}）`,
+          };
+        }
+        try {
+          return await execE2B(runtime, payload, session);
+        } catch (err: any) {
+          // 显式 e2b：失败就失败，不偷偷换本机执行
+          if (requested === 'e2b') {
+            return { success: false, target, error: err.message };
+          }
+          ctx.agent.emitEvent({
+            type: 'thought',
+            payload: { text: `E2B 沙箱不可用（${err.message}），auto 模式降级为本地执行。` },
+            timestamp: Date.now(),
+          });
+          const fallback = await execLocal(runtime, payload, session);
+          return { ...fallback, degraded: true, warning: `E2B 不可用，已降级本地执行：${err.message}` };
         }
       }
+      return execLocal(runtime, payload, session);
     },
   });
 
-  // 4. 安全读取文件 (sandbox_read_file)
   ctx.agent.registerTool({
-    name: 'sandbox_read_file',
-    readOnly: true, // 只读并行门控:纯读文件,无副作用
-    description: '读取工作区中指定文件的文本内容 (支持按行读取与防超大文件截断保护)',
-    dangerLevel: 'low',
-    parameters: {
-      type: 'object',
-      properties: {
-        filePath: { type: 'string', description: '待读取的目标文件路径' },
-        startLine: { type: 'number', description: '起始行号 (可选，从 1 开始)' },
-        maxLines: { type: 'number', description: '最大读取行数 (默认 500 行)' },
-      },
-      required: ['filePath'],
-    },
-    execute: async ({ filePath, startLine = 1, maxLines = 500 }) => {
-      const fullPath = resolveSafePath(String(filePath));
-      if (!fullPath) {
-        return { success: false, filePath, error: `路径越界: ${filePath}（只允许 workspace 内路径）` };
-      }
-
-      try {
-        const stats = await fs.stat(fullPath);
-        if (stats.isDirectory()) {
-          return { success: false, error: `路径 [${filePath}] 是一个目录，请使用 sandbox_list_dir。` };
-        }
-
-        const rawContent = await fs.readFile(fullPath, 'utf-8');
-        const lines = rawContent.split('\n');
-        const totalLines = lines.length;
-
-        const startIdx = Math.max(0, startLine - 1);
-        const selectedLines = lines.slice(startIdx, startIdx + maxLines);
-
-        return {
-          success: true,
-          filePath,
-          totalLines,
-          startLine,
-          linesRead: selectedLines.length,
-          content: selectedLines.join('\n'),
-        };
-      } catch (err: any) {
-        return {
-          success: false,
-          filePath,
-          error: err.message,
-        };
-      }
-    },
-  });
-
-  // 5. 安全写入/更新文件 (sandbox_write_file)
-  ctx.agent.registerTool({
-    name: 'sandbox_write_file',
-    description: '向工作区指定文件写入内容 (自动创建不存在的父级目录)',
+    name: 'sandbox_file',
+    description:
+      '文件与目录操作：action=read|write|list|downloadUrl，target=local（默认，仅 workspace 路径围栏）| e2b（当前任务 microVM，与 sandbox_exec 共享 /home/user）。e2b 的 read/list/downloadUrl 只复用已有会话、不冷启动空 VM；write 按需创建。downloadUrl 返回 traffic 域名直连地址。',
     dangerLevel: 'medium',
     parameters: {
       type: 'object',
       properties: {
-        filePath: { type: 'string', description: '目标文件路径' },
-        content: { type: 'string', description: '需要写入的文件内容' },
-        overwrite: { type: 'boolean', description: '是否允许覆盖已有文件，默认 true' },
+        action: { type: 'string', enum: ['read', 'write', 'list', 'downloadUrl'], description: '操作类型' },
+        path: { type: 'string', description: '文件或目录路径（本地相对 workspace；E2B 默认 /home/user 下）' },
+        content: { type: 'string', description: 'action=write 时的文本内容' },
+        target: { type: 'string', enum: ['local', 'e2b'], description: '操作环境，默认 local' },
+        overwrite: { type: 'boolean', description: 'write 是否覆盖已有文件，默认 true' },
+        startLine: { type: 'number', description: 'read 起始行（从 1 开始）' },
+        maxLines: { type: 'number', description: 'read 最大行数，默认 500（本地）' },
+        maxChars: { type: 'number', description: 'read 最大返回字符数，默认 20000' },
+        port: { type: 'number', description: 'downloadUrl 端口，默认 49983' },
       },
-      required: ['filePath', 'content'],
+      required: ['action', 'path'],
     },
-    execute: async ({ filePath, content, overwrite = true }) => {
-      const fullPath = resolveSafePath(String(filePath));
-      if (!fullPath) {
+    execute: async (args: any, session?: any) => {
+      const action = String(args?.action || '');
+      const target = (args?.target as 'local' | 'e2b') || 'local';
+      const filePath = String(args?.path || '');
+      const maxChars = Number(args?.maxChars) || 20_000;
+
+      if (!filePath) return { success: false, error: 'path 不能为空' };
+
+      if (action === 'downloadUrl') {
+        if (target !== 'e2b') return { success: false, error: 'downloadUrl 仅适用于 target=e2b' };
+        const sandbox = await getE2BSandbox(session);
+        if (!sandbox) {
+          return { success: false, path: filePath, error: '当前任务暂无 E2B 会话（先用 sandbox_exec target=e2b 或 sandbox_file write）' };
+        }
         return {
-          success: false,
-          filePath,
-          error: `路径越界: ${filePath}（只允许 workspace 内路径）`,
+          success: true,
+          path: filePath,
+          sandboxId: sandbox.sandboxId,
+          url: sandboxFileUrl(sandbox, filePath, Number(args?.port) || 49983, controlPlaneProtocol(e2bConnection(session))),
         };
       }
 
-      try {
-        if (!overwrite && fsSync.existsSync(fullPath)) {
-          return {
-            success: false,
-            filePath,
-            error: `文件 [${filePath}] 已存在且 overwrite 为 false。`,
-          };
+      if (target === 'local') {
+        if (action === 'write') {
+          const fullPath = resolveSafePath(filePath);
+          if (!fullPath) return { success: false, path: filePath, error: `路径越界: ${filePath}（只允许 workspace 内路径）` };
+          try {
+            if (args?.overwrite === false && fsSync.existsSync(fullPath)) {
+              return { success: false, path: filePath, error: `文件已存在且 overwrite=false: ${filePath}` };
+            }
+            await fs.mkdir(path.dirname(fullPath), { recursive: true });
+            await fs.writeFile(fullPath, String(args?.content ?? ''), 'utf-8');
+            return {
+              success: true,
+              path: filePath,
+              bytesWritten: Buffer.byteLength(String(args?.content ?? ''), 'utf-8'),
+            };
+          } catch (err: any) {
+            return { success: false, path: filePath, error: err.message };
+          }
         }
 
-        await fs.mkdir(path.dirname(fullPath), { recursive: true });
-        await fs.writeFile(fullPath, content, 'utf-8');
+        if (action === 'list') {
+          const fullPath = filePath === '.' ? workspaceRoot : resolveSafePath(filePath);
+          if (!fullPath) return { success: false, path: filePath, error: `路径越界: ${filePath}（只允许 workspace 内路径）` };
+          try {
+            const entries = await fs.readdir(fullPath, { withFileTypes: true });
+            return {
+              success: true,
+              path: filePath,
+              count: entries.length,
+              entries: entries.map((entry) => ({
+                name: entry.name,
+                isDirectory: entry.isDirectory(),
+                isFile: entry.isFile(),
+              })),
+            };
+          } catch (err: any) {
+            return { success: false, path: filePath, error: err.message };
+          }
+        }
 
+        const fullPath = resolveSafePath(filePath);
+        if (!fullPath) return { success: false, path: filePath, error: `路径越界: ${filePath}（只允许 workspace 内路径）` };
+        try {
+          const stats = await fs.stat(fullPath);
+          if (stats.isDirectory()) return { success: false, path: filePath, error: '目标是目录，请用 action=list' };
+          const raw = await fs.readFile(fullPath, 'utf-8');
+          const lines = raw.split('\n');
+          const startIdx = Math.max(0, (Number(args?.startLine) || 1) - 1);
+          const maxLines = Number(args?.maxLines) || 500;
+          const selected = lines.slice(startIdx, startIdx + maxLines).join('\n');
+          return {
+            success: true,
+            path: filePath,
+            totalLines: lines.length,
+            linesRead: Math.min(maxLines, Math.max(0, lines.length - startIdx)),
+            content: truncateCommandOutput(selected, maxChars),
+          };
+        } catch (err: any) {
+          return { success: false, path: filePath, error: err.message };
+        }
+      }
+
+      // ---- E2B 文件面 ----
+      if (!e2bConnection(session).apiKey) {
+        return { success: false, path: filePath, error: '未配置 E2B_API_KEY（自建 E2B 控制面未就绪）' };
+      }
+
+      if (action === 'write') {
+        try {
+          const { sandbox, key } = await acquireE2BSandbox(session);
+          const dir = path.posix.dirname(filePath);
+          if (dir && dir !== '.' && dir !== '/') await sandbox.files.makeDir(dir).catch(() => {});
+          await sandbox.files.write(filePath, String(args?.content ?? ''));
+          return {
+            success: true,
+            path: filePath,
+            bytesWritten: Buffer.byteLength(String(args?.content ?? ''), 'utf-8'),
+            sandboxId: sandbox.sandboxId,
+            sessionKey: key,
+            downloadUrl: sandboxFileUrl(sandbox, filePath, 49983, controlPlaneProtocol(e2bConnection(session))),
+          };
+        } catch (err: any) {
+          return { success: false, path: filePath, error: err.message };
+        }
+      }
+
+      const sandbox = await getE2BSandbox(session);
+      if (!sandbox) {
+        return { success: false, path: filePath, error: '当前任务暂无 E2B 会话（write 或 sandbox_exec target=e2b 会创建）' };
+      }
+      try {
+        if (action === 'list') {
+          const entries = await sandbox.files.list(filePath || '/home/user');
+          return {
+            success: true,
+            path: filePath,
+            count: entries.length,
+            entries: entries.map((entry) => ({
+              name: entry.name,
+              type: entry.type,
+              ...(entry.path ? { path: entry.path } : {}),
+            })),
+          };
+        }
+        const content = await sandbox.files.read(filePath);
         return {
           success: true,
-          filePath,
-          bytesWritten: Buffer.byteLength(content, 'utf-8'),
-          message: `已成功保存文件: ${filePath}`,
+          path: filePath,
+          sandboxId: sandbox.sandboxId,
+          truncated: content.length > maxChars,
+          content: truncateCommandOutput(content, maxChars),
         };
       } catch (err: any) {
-        return {
-          success: false,
-          filePath,
-          error: err.message,
-        };
+        return { success: false, path: filePath, error: err.message };
       }
     },
   });
 
-  // 6. 目录浏览 (sandbox_list_dir)
+  // 2. 会话生命周期 (sandbox_session)
   ctx.agent.registerTool({
-    name: 'sandbox_list_dir',
-    readOnly: true, // 只读并行门控:纯读目录,无副作用
-    description: '列出指定目录下的所有文件与子文件夹详情',
-    dangerLevel: 'low',
+    name: 'sandbox_session',
+    description:
+      '管理当前任务的隔离沙箱会话：status 查看状态、probe 探测自建 E2B 控制面连通性、pause 暂停并保留内存快照（登录态/进程不丢）、resume 恢复、kill 销毁。暂停后下次 sandbox_exec(target=e2b) / sandbox_file(target=e2b) 会自动恢复；未配置 E2B 时仅回报无会话。',
+    dangerLevel: 'medium',
     parameters: {
       type: 'object',
       properties: {
-        dirPath: { type: 'string', description: '目标目录路径，默认为当前工作区根目录' },
+        action: {
+          type: 'string',
+          enum: ['status', 'probe', 'pause', 'resume', 'kill'],
+          description: '会话操作',
+        },
       },
+      required: ['action'],
     },
-    execute: async ({ dirPath = '.' }) => {
-      const fullPath = resolveSafePath(String(dirPath)) || workspaceRoot;
-
-      try {
-        const entries = await fs.readdir(fullPath, { withFileTypes: true });
-        const list = entries.map((entry) => ({
-          name: entry.name,
-          isDirectory: entry.isDirectory(),
-          isFile: entry.isFile(),
-        }));
-
+    execute: async ({ action }, session?: any) => {
+      const key = sandboxSessionKey(session);
+      const connection = e2bConnection(session);
+      if (action === 'probe') {
+        const probe = await probeControlPlane(connection);
+        return {
+          success: probe.ok,
+          action,
+          controlPlane: probe.url,
+          status: probe.status,
+          latencyMs: probe.latencyMs,
+          ...(probe.error ? { error: probe.error } : {}),
+          hasApiKey: Boolean(connection.apiKey),
+        };
+      }
+      const savedId = session?.sandbox?.e2bSandboxId as string | undefined;
+      if (action === 'status') {
+        const sandbox = e2bPool.get(key);
         return {
           success: true,
-          dirPath,
-          count: list.length,
-          entries: list,
+          action,
+          sessionKey: key,
+          controlPlane: resolveControlPlaneUrl(connection),
+          active: Boolean(sandbox),
+          resumable: Boolean(savedId),
+          ...(savedId ? { savedSandboxId: savedId } : {}),
+          ...(sandbox ? { sandboxId: sandbox.sandboxId, running: await sandbox.isRunning?.().catch(() => undefined) } : {}),
         };
+      }
+      if (action === 'pause') {
+        return { success: await e2bPool.pause(key), action, sessionKey: key };
+      }
+      if (action === 'kill') {
+        const killed = await e2bPool.kill(key);
+        if (session?.sandbox && typeof session.sandbox === 'object') {
+          try {
+            delete session.sandbox.e2bSandboxId;
+          } catch {
+            // 冻结对象忽略
+          }
+        }
+        return { success: killed, action, sessionKey: key };
+      }
+      // resume：无非重新 acquire 一次（connect 会自动恢复已暂停的 sandbox）
+      if (!connection.apiKey) {
+        return { success: false, action, error: '未配置 E2B_API_KEY（自建 E2B 控制面未就绪）。' };
+      }
+      try {
+        const { sandbox } = await acquireE2BSandbox(session);
+        return { success: true, action, sessionKey: key, sandboxId: sandbox.sandboxId };
       } catch (err: any) {
-        return {
-          success: false,
-          dirPath,
-          error: err.message,
-        };
+        return { success: false, action, error: err.message };
       }
     },
   });
 
-  // 7. 受控 HTTP 出站 (sandbox_http_request) —— 凭据托管注入 + 端点绑定 + 私网围栏
+  // 3. 受控 HTTP 出站 (sandbox_http_request) —— 凭据托管注入 + 端点绑定 + 私网围栏
   //    (docs/design/sandbox-control-hardening.md §4.3:密钥永远不进子进程环境;
   //    需要携带用户 Key 的出站请求走本工具,由宿主进程按 credentialRef 解析、
   //    校验端点绑定后代发。任何拒绝都发 sandbox_deny 事件 → 审计 + 权限提案。)

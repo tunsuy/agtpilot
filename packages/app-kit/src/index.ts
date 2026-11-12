@@ -5,6 +5,7 @@ import * as BrowserPlugin from '@agtpilot/plugin-browser';
 import * as SkillPlugin from '@agtpilot/plugin-skill';
 import type { SkillPluginConfig } from '@agtpilot/plugin-skill';
 import * as SandboxPlugin from '@agtpilot/plugin-sandbox';
+import type { SandboxConfig } from '@agtpilot/plugin-sandbox';
 import * as SearchPlugin from '@agtpilot/plugin-search';
 import * as MCPPlugin from '@agtpilot/plugin-mcp';
 import * as ModelPlugin from '@agtpilot/plugin-model';
@@ -50,6 +51,8 @@ export interface CreateAgentOptions {
   skill?: SkillPluginConfig;
   /** 子 agent 插件配置（白名单/预算覆盖、M2 transcript 落盘适配器注入等） */
   subagent?: SubagentPluginConfig;
+  /** 自建 E2B 运行时配置（未设置时读取 E2B_* 环境变量） */
+  e2b?: SandboxConfig;
   /** 跳过指定插件（按插件名，如 'plugin-browser'）——最小化部署用 */
   exclude?: string[];
 }
@@ -86,7 +89,17 @@ export async function createAgentRuntime(options: CreateAgentOptions = {}): Prom
   await mount('plugin-artifact', ArtifactPlugin);
   await mount('plugin-browser', BrowserPlugin, { headless: options.browser?.headless ?? true });
   await mount('plugin-skill', SkillPlugin, options.skill);
-  await mount('plugin-sandbox', SandboxPlugin);
+  await mount('plugin-sandbox', SandboxPlugin, options.e2b || {
+    e2bApiKey: process.env.E2B_API_KEY,
+    e2bDomain: process.env.E2B_DOMAIN,
+    e2bApiUrl: process.env.E2B_API_URL,
+    e2bSandboxUrl: process.env.E2B_SANDBOX_URL,
+    e2bTemplate: process.env.E2B_TEMPLATE,
+    e2bTimeoutMs: Number(process.env.E2B_TIMEOUT_MS) || undefined,
+    e2bAllowInternetAccess: process.env.E2B_ALLOW_INTERNET_ACCESS === 'true' ? true : undefined,
+    e2bIdleAction: process.env.E2B_IDLE_ACTION === 'kill' ? 'kill' : 'pause',
+    e2bIdleTtlMs: Number(process.env.E2B_IDLE_TTL_MS) || undefined,
+  });
   await mount('plugin-search', SearchPlugin);
   await mount('plugin-git', GitPlugin);
   await mount('plugin-desktop', DesktopPlugin);

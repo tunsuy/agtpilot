@@ -91,7 +91,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
   // 工具路由自注册：prompt 命中搜索/资讯类关键词时挂载本插件工具组
   ctx.agent.registerToolRoute({
     id: 'search',
-    prefixes: ['search_'],
+    prefixes: ['search', 'search_'],
     test: /(搜索|检索|查一下|查下|搜一下|查查|最新|新闻|资讯|search|news|look\s?up)/i,
   });
 
@@ -245,7 +245,7 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       const lang = isCjk ? 'zh' : 'en';
       const wUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=${maxResults}`;
       // 与 Bing/GNews 同款 10s 超时闸:维基媒体 API 偶发挂死,无界等待会把整个
-      // search_web 调用拖到墙钟分钟级(生产实例 2026-10-23:三次 search_web
+      // search 调用拖到墙钟分钟级(生产实例 2026-10-23:三次 search
       // 各挂 400~500s,把公众号会话的 token 与时间预算一起拖垮)
       const wRes = await fetch(wUrl, {
         headers: { 'User-Agent': 'agtpilot-search/1.0' },
@@ -312,19 +312,24 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     }));
   }
 
-  // 1. 统一多层级智能检索 (search_web)
+  // 1. 统一搜索 (search):engine=auto 走多层级路由;engine=exa/tavily 直连单引擎
   ctx.agent.registerTool({
-    name: 'search_web',
+    name: 'search',
     readOnly: true, // 只读并行门控:纯检索,无副作用
     // 零命中收敛兜底(§9.5):路由没猜中关键词时检索能力仍常驻
     fallback: true,
     description:
-      '在互联网上搜索指定关键词或问题，自动在 Exa 神经语义搜索、Tavily Agent 搜索以及零 Key 多源聚合(Bing 国际区真实摘要 + Google News RSS 时效新闻 + Wikipedia)间进行多层级路由与容灾降级。零 Key 层返回真实内容摘要,多数情况下无需再逐个打开网页。基于检索结果作答时,在相应结论句末以 markdown 链接标注依据来源,链接用该条结果的原始 url(前端会渲染成可点的角标,读者直达原文)',
+      '在互联网上搜索指定关键词或问题。engine=auto(缺省)自动在 Exa 神经语义搜索、Tavily Agent 搜索以及零 Key 多源聚合(Bing 国际区真实摘要 + Google News RSS 时效新闻 + Wikipedia)间进行多层级路由与容灾降级;engine=exa 或 engine=tavily 强制单引擎直连(需对应 API Key,缺失时诚实报错)。零 Key 层返回真实内容摘要,多数情况下无需再逐个打开网页。基于检索结果作答时,在相应结论句末以 markdown 链接标注依据来源,链接用该条结果的原始 url(前端会渲染成可点的角标,读者直达原文)',
     dangerLevel: 'low',
     parameters: {
       type: 'object',
       properties: {
         query: { type: 'string', description: '待搜索的关键词或自然语言问题' },
+        engine: {
+          type: 'string',
+          enum: ['auto', 'exa', 'tavily'],
+          description: '搜索引擎:auto(缺省,自动路由与降级) / exa(神经语义,需 EXA_API_KEY) / tavily(结构化,需 TAVILY_API_KEY)',
+        },
         maxResults: { type: 'number', description: '期望返回的搜索结果条目数 (默认 5)' },
         recencyDays: {
           type: 'number',
@@ -334,10 +339,10 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
       },
       required: ['query'],
     },
-    execute: async ({ query, maxResults = 5, recencyDays }, session?: any) => {
+    execute: async ({ query, engine = 'auto', maxResults = 5, recencyDays }, session?: any) => {
       ctx.agent.emitEvent({
         type: 'tool_call',
-        payload: { tool: 'search_web', query, maxResults, recencyDays, callId: session?.callId },
+        payload: { tool: 'search', engine, query, maxResults, recencyDays, callId: session?.callId },
         timestamp: Date.now(),
       });
 
@@ -353,9 +358,38 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
         return { items: fresh, note: fresh.length < items.length ? `已过滤 ${items.length - fresh.length} 条 ${recencyDays} 天前的旧结果` : undefined };
       };
 
-      // 用户级 Key 优先（session.env 来自任务发起者的个人空间，多用户隔离，绝不进 process.env）
       const exaKey = session?.env?.EXA_API_KEY || config.exaApiKey || process.env.EXA_API_KEY;
       const tavilyKey = session?.env?.TAVILY_API_KEY || config.tavilyApiKey || process.env.TAVILY_API_KEY;
+
+      // engine 显式指定 → 单引擎直连(与原 search/search 行为一致,缺 Key 诚实报错)
+      if (engine === 'exa' || engine === 'tavily') {
+        const key = engine === 'exa' ? exaKey : tavilyKey;
+        if (!key) {
+          return {
+            success: false,
+            query,
+            error:
+              engine === 'exa'
+                ? '未配置 EXA_API_KEY。请在环境变量或配置中设置 EXA_API_KEY 以开启 Exa 神经语义搜索。'
+                : '未配置 TAVILY_API_KEY。请在环境变量中配置 TAVILY_API_KEY。',
+          };
+        }
+        try {
+          const items =
+            engine === 'exa' ? await searchExa(key, query, maxResults) : await searchTavily(key, query, maxResults);
+          const { items: filtered, note } = applyRecency(items);
+          return {
+            success: true,
+            query,
+            count: filtered.length,
+            engine,
+            results: filtered,
+            ...(note ? { recencyNote: note } : {}),
+          };
+        } catch (err: any) {
+          return { success: false, query, error: err.message };
+        }
+      }
 
       // 优先级 1: Exa.ai 语义神经搜索 (若配置了 Key)
       if (exaKey && config.defaultEngine !== 'duckduckgo' && config.defaultEngine !== 'tavily') {
@@ -415,74 +449,4 @@ export function apply(ctx: Context, config: SearchPluginConfig = {}) {
     },
   });
 
-  // 2. 独立暴露 Exa 神经语义搜索工具 (search_exa)
-  ctx.agent.registerTool({
-    name: 'search_exa',
-    readOnly: true, // 只读并行门控:纯检索,无副作用
-    fallback: true, // 零命中收敛兜底(§9.5);缺 Key 时仍被 filterToolsByEnv 剔除
-    description: '使用 Exa.ai 原生神经网络语义搜索引擎，基于语义 Embedding 精准匹配网页与正文 Highlight',
-    dangerLevel: 'low',
-    // P5:config 未带 Key 时声明 env 依赖 —— 用户个人空间(taskEnv)或
-    // process.env 有 Key 才挂载,否则不挂秒败的壳
-    requiredEnv: config.exaApiKey ? undefined : ['EXA_API_KEY'],
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: '自然语言搜索语义描述' },
-        maxResults: { type: 'number', description: '最大返回条数，默认 5' },
-      },
-      required: ['query'],
-    },
-    execute: async ({ query, maxResults = 5 }, session?: any) => {
-      const exaKey = session?.env?.EXA_API_KEY || config.exaApiKey || process.env.EXA_API_KEY;
-      if (!exaKey) {
-        return {
-          success: false,
-          error: '未配置 EXA_API_KEY。请在环境变量或配置中设置 EXA_API_KEY 以开启 Exa 神经语义搜索。',
-        };
-      }
-
-      try {
-        const results = await searchExa(exaKey, query, maxResults);
-        return { success: true, query, count: results.length, results };
-      } catch (err: any) {
-        return { success: false, query, error: err.message };
-      }
-    },
-  });
-
-  // 3. 独立暴露 Tavily 搜索工具 (search_tavily)
-  ctx.agent.registerTool({
-    name: 'search_tavily',
-    readOnly: true, // 只读并行门控:纯检索,无副作用
-    fallback: true, // 零命中收敛兜底(§9.5);缺 Key 时仍被 filterToolsByEnv 剔除
-    description: '使用 Tavily 官方 API 搜索针对大模型优化的结构化内容',
-    dangerLevel: 'low',
-    // P5:同 search_exa,缺 Key 不挂载
-    requiredEnv: config.tavilyApiKey ? undefined : ['TAVILY_API_KEY'],
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: '搜索关键词' },
-        maxResults: { type: 'number', description: '最大返回条数，默认 5' },
-      },
-      required: ['query'],
-    },
-    execute: async ({ query, maxResults = 5 }, session?: any) => {
-      const tavilyKey = session?.env?.TAVILY_API_KEY || config.tavilyApiKey || process.env.TAVILY_API_KEY;
-      if (!tavilyKey) {
-        return {
-          success: false,
-          error: '未配置 TAVILY_API_KEY。请在环境变量中配置 TAVILY_API_KEY。',
-        };
-      }
-
-      try {
-        const results = await searchTavily(tavilyKey, query, maxResults);
-        return { success: true, query, count: results.length, results };
-      } catch (err: any) {
-        return { success: false, query, error: err.message };
-      }
-    },
-  });
 }

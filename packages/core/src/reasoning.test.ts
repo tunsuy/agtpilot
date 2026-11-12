@@ -11,7 +11,7 @@ import { stripReasoningParts } from './reasoning';
 
 const reasoning = (text: string) => ({ type: 'reasoning', text });
 const text = (t: string) => ({ type: 'text', text: t });
-const toolCall = (id: string) => ({ type: 'tool-call', toolCallId: id, toolName: 'search_web', input: {} });
+const toolCall = (id: string) => ({ type: 'tool-call', toolCallId: id, toolName: 'search', input: {} });
 
 describe('stripReasoningParts', () => {
   it('剥离 assistant 的 reasoning 部件,text/tool-call 原样保留(工具配对不破)', () => {

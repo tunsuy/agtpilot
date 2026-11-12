@@ -5,7 +5,7 @@ import { PlannerService } from './index';
  * PlannerService 看板语义测试:
  * - 建板:首步 in_progress、其余 pending;同 taskKey 重建自动替换旧板
  *   (提示词现在明确引导「计划改向时重建看板」,替换语义是它的落地)
- * - 滞后催促(2026-10 契约切换):看板进度由模型显式申报(planner_update_task
+ * - 滞后催促(2026-10 契约切换):看板进度由模型显式申报(planner
  *   同批,业界 Claude Code TodoWrite / Codex update_plan 同款);模型忘了
  *   申报时 boardLagNotice 给出带当前步骤上下文的催促文本。旧的
  *   noteToolResult「工具成功自动推进」已废 —— 推断猜不准语义事件。
@@ -60,7 +60,7 @@ describe('PlannerService 看板语义', () => {
     expect(notice).toContain('2 轮');
     expect(notice).toContain('步骤1'); // 当前进行中步骤的标题进上下文
     expect(notice).toContain('同一批');
-    expect(notice).toContain('planner_update_task');
+    expect(notice).toContain('planner');
   });
 
   it('无看板 / 无进行中步骤(全完结)→ null,没有可催促的进度', () => {

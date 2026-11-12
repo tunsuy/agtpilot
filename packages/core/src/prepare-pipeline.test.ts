@@ -27,10 +27,10 @@ describe('runPreparePipeline', () => {
   it('只改 activeTools 时保留 activeTools,不额外写 messages', () => {
     const result = runPreparePipeline(ctx(), [
       (x) => {
-        x.adjust.activeTools = ['search_web'];
+        x.adjust.activeTools = ['search'];
       },
     ]);
-    expect(result).toEqual({ activeTools: ['search_web'] });
+    expect(result).toEqual({ activeTools: ['search'] });
   });
 
   it('异步中间件按序 await', async () => {

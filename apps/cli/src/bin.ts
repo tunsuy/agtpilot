@@ -35,60 +35,53 @@ function mountCliCronTools(ctx: any) {
   };
 
   ctx.agent.registerTool({
-    name: 'cron_schedule_task',
-    description: '设置自主定时/周期性主动执行任务 (Cron Job)。例如："每天早上9点搜索AI论文"、"每小时检查某系统状态并告警"。Agent 会在后台无人值守自动唤醒执行。',
+    name: 'cron_task',
+    description: 'CLI 用户定时任务统一入口。action=schedule:设置定时/周期性主动执行任务(如"每天早上9点搜索AI论文");action=list:查看已激活任务列表与下次触发时间;action=cancel:按 jobId 取消任务。Agent 会在后台无人值守自动唤醒执行。',
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '定时任务名称' },
-        cronPattern: { type: 'string', description: '标准 5 位 Cron 表达式 (如: "0 9 * * *")' },
-        taskPrompt: { type: 'string', description: '触发时自动派发给 Agent 执行的任务指令' },
+        action: { type: 'string', enum: ['schedule', 'list', 'cancel'], description: 'schedule = 创建定时任务;list = 列出任务;cancel = 取消任务' },
+        name: { type: 'string', description: 'action=schedule:定时任务名称' },
+        cronPattern: { type: 'string', description: 'action=schedule:标准 5 位 Cron 表达式 (如: "0 9 * * *")' },
+        taskPrompt: { type: 'string', description: 'action=schedule:触发时自动派发给 Agent 执行的任务指令' },
+        jobId: { type: 'string', description: 'action=cancel:要取消的任务 ID' },
       },
-      required: ['name', 'cronPattern', 'taskPrompt'],
+      required: ['action'],
     },
-    execute: async ({ name, cronPattern, taskPrompt }: any) => {
-      try {
-        const jobs = loadCliCronJobs();
-        const job = {
-          id: `cron_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          name, pattern: cronPattern, prompt: taskPrompt, status: 'active', runCount: 0,
-        };
-        jobs.push(job);
-        saveCliCronJobs(jobs);
-        sync(jobs);
-        return { success: true, jobId: job.id, nextRun: ctx.cron.nextRun(job.id), message: `定时任务 [${name}] 已创建。` };
-      } catch (err: any) {
-        return { success: false, error: err.message };
+    execute: async (args: any) => {
+      const action = String(args?.action || '');
+      if (action === 'schedule') {
+        try {
+          const name = String(args.name || '');
+          const cronPattern = String(args.cronPattern || '');
+          const taskPrompt = String(args.taskPrompt || '');
+          if (!name || !cronPattern || !taskPrompt) return { success: false, error: 'action=schedule 需要 name、cronPattern 与 taskPrompt' };
+          const jobs = loadCliCronJobs();
+          const job = { id: `cron_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name, pattern: cronPattern, prompt: taskPrompt, status: 'active', runCount: 0 };
+          jobs.push(job);
+          saveCliCronJobs(jobs);
+          sync(jobs);
+          return { success: true, jobId: job.id, nextRun: ctx.cron.nextRun(job.id), message: `定时任务 [${name}] 已创建。` };
+        } catch (err: any) {
+          return { success: false, error: err.message };
+        }
       }
-    },
-  });
-
-  ctx.agent.registerTool({
-    name: 'cron_list_tasks',
-    description: '查看当前后台已激活的所有定时巡检任务列表与下一次触发时间。',
-    parameters: { type: 'object', properties: {} },
-    execute: async () => {
-      const jobs = loadCliCronJobs().map((j: any) => ({ ...j, nextRun: ctx.cron.nextRun(j.id) }));
-      return { success: true, total: jobs.length, tasks: jobs };
-    },
-  });
-
-  ctx.agent.registerTool({
-    name: 'cron_cancel_task',
-    description: '取消已登记的定时巡检任务，停止后续自动触发。',
-    parameters: {
-      type: 'object',
-      properties: { jobId: { type: 'string', description: '要取消的定时任务 ID' } },
-      required: ['jobId'],
-    },
-    execute: async ({ jobId }: any) => {
-      let jobs = loadCliCronJobs();
-      const job = jobs.find((j: any) => j.id === jobId);
-      if (!job) return { success: false, error: `未找到 ID 为 [${jobId}] 的定时任务。` };
-      jobs = jobs.filter((j: any) => j.id !== jobId);
-      saveCliCronJobs(jobs);
-      ctx.cron.cancel(jobId);
-      return { success: true, message: `任务 [${job.name}] 已取消。` };
+      if (action === 'list') {
+        const jobs = loadCliCronJobs().map((j: any) => ({ ...j, nextRun: ctx.cron.nextRun(j.id) }));
+        return { success: true, total: jobs.length, tasks: jobs };
+      }
+      if (action === 'cancel') {
+        const jobId = String(args?.jobId || '');
+        if (!jobId) return { success: false, error: 'action=cancel 需要 jobId' };
+        let jobs = loadCliCronJobs();
+        const job = jobs.find((j: any) => j.id === jobId);
+        if (!job) return { success: false, error: `未找到 ID 为 [${jobId}] 的定时任务。` };
+        jobs = jobs.filter((j: any) => j.id !== jobId);
+        saveCliCronJobs(jobs);
+        ctx.cron.cancel(jobId);
+        return { success: true, message: `任务 [${job.name}] 已取消。` };
+      }
+      return { success: false, error: `action 无效: ${action}（可选 schedule / list / cancel）` };
     },
   });
 

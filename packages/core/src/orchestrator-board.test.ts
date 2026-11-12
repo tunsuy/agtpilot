@@ -7,7 +7,7 @@ import { BOARD_REMINDER_PREFIX } from './notice';
 /**
  * 看板滞后催促(2026-10 看板契约切换的核心新增,对照 Claude Code 检测到
  * todo 落后注入 system-reminder 的机制):看板进度由模型显式申报
- * (planner_update_task 与实际工具调用同批),内核不推断步骤完成
+ * (planner 与实际工具调用同批),内核不推断步骤完成
  * (旧 noteToolResult「工具成功自动推进」已废)。模型忘了申报时:
  * - 连续 BOARD_LAG_THRESHOLD(=2) 轮「真实工具成功但看板零更新」
  *   → 下一步注入一条【看板同步提醒】(文本来自 PlannerNotifier)并清零
@@ -95,11 +95,11 @@ describe('看板滞后催促(模型显式申报契约的内核侧守门)', () =>
     expect(reminder.content).toContain('请同批申报');
   });
 
-  it('模型同批申报(planner_update_task 执行)→ 滞后计数清零,全程零催促', async () => {
+  it('模型同批申报(planner 执行)→ 滞后计数清零,全程零催促', async () => {
     // 每轮工作后跟一次申报:申报即清零,永远攒不满阈值
-    const seq = ['work_a', 'planner_update_task', 'work_b', 'planner_update_task', 'work_c', 'planner_update_task', 'work_d', 'planner_update_task'];
+    const seq = ['work_a', 'planner', 'work_b', 'planner', 'work_c', 'planner', 'work_d', 'planner'];
     const h = buildBoardHarness({ callSeq: seq });
-    ['work_a', 'work_b', 'work_c', 'work_d', 'planner_update_task'].forEach(h.register);
+    ['work_a', 'work_b', 'work_c', 'work_d', 'planner'].forEach(h.register);
     await h.run();
     expect(h.lagCalls).toEqual([]);
     expect(h.adjustedMessages).toEqual([]);
@@ -107,9 +107,9 @@ describe('看板滞后催促(模型显式申报契约的内核侧守门)', () =>
 
   it('元工具(memory_/router_/observability_)不算真实推进:不计入滞后', async () => {
     // 1 轮工作 + 5 轮元工具 + 4 轮工作:元工具轮不积累滞后,催促只按真实工作轮计
-    const seq = ['work_a', 'memory_store', 'memory_recall', 'router_select_tier', 'observability_trace', 'memory_purge', 'work_b', 'work_c', 'work_d', 'work_e'];
+    const seq = ['work_a', 'memory', 'memory', 'router_select_tier', 'observability_trace', 'memory_purge', 'work_b', 'work_c', 'work_d', 'work_e'];
     const h = buildBoardHarness({ callSeq: seq });
-    [...WORK_TOOLS, 'memory_store', 'memory_recall', 'router_select_tier', 'observability_trace', 'memory_purge'].forEach(h.register);
+    [...WORK_TOOLS, 'memory', 'memory', 'router_select_tier', 'observability_trace', 'memory_purge'].forEach(h.register);
     await h.run();
     // 真实工作轮:a(轮1), b/c/d/e(轮7-10) → 第 8、10 步前各催一次;元工具轮若误计会催 ~5 次
     expect(h.lagCalls.length).toBe(2);

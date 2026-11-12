@@ -12,7 +12,7 @@ import {
  * github_scan 固定工具(工坊脚本化):此前模型在沙箱现写 Python 调
  * GitHub REST API —— 限速/分页/解析全靠临场发挥。这里把机械取数固化,
  * 测试锚定:topic 规范化、去重合并、issue 归仓、限速降级不阻塞、
- * 全失败给出 search_web 降级出口、缓存命中不打上游。
+ * 全失败给出 search 降级出口、缓存命中不打上游。
  */
 
 const NOW = Date.parse('2026-10-13T10:00:00.000Z');
@@ -186,13 +186,13 @@ describe('scanGithub', () => {
     expect(r.degraded[0]).toContain('topic:ai');
   });
 
-  it('仓库检索全部失败 → success:false + search_web 降级出口', async () => {
+  it('仓库检索全部失败 → success:false + search 降级出口', async () => {
     const { impl } = makeFetch([() => ({ status: 403, body: {} })]);
     const r = await scanGithub({ topics: ['ai'], now, fetchImpl: impl });
 
     expect(r.success).toBe(false);
     expect(r.repos).toEqual([]);
-    expect(r.error).toContain('search_web');
+    expect(r.error).toContain('search');
   });
 
   it('topics 为空 → 直接失败,不发任何请求', async () => {
@@ -269,7 +269,7 @@ describe('buildGithubScanTools', () => {
     try {
       const out = await tools[0].execute({ topics: ['ai'] });
       expect(out.success).toBe(false);
-      expect(out.error).toContain('search_web');
+      expect(out.error).toContain('search');
     } finally {
       globalThis.fetch = origFetch;
     }

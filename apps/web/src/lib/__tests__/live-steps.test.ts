@@ -154,7 +154,7 @@ describe('finalizeWithAnswer（done 合并去重）', () => {
     const m = makeMission();
     ensureLiveStep(m, 1);
     applyDelta(m, '你好!我是 Agt', 'text');
-    m.steps.push({ id: 'step_tool_1', role: 'tool', tool: 'search_web', status: 'RUNNING', title: '执行工具' } as any);
+    m.steps.push({ id: 'step_tool_1', role: 'tool', tool: 'search', status: 'RUNNING', title: '执行工具' } as any);
 
     // ① 先合并（live step 仍 RUNNING，原地升级）
     expect(finalizeWithAnswer(m, '你好!我是 AgtPilot')).toBe(true);
@@ -165,7 +165,7 @@ describe('finalizeWithAnswer（done 合并去重）', () => {
     expect(assistants).toHaveLength(1); // 不追加重复 final 卡
     expect(assistants[0].messageKind).toBe('final');
     expect(assistants[0].answer).toBe('你好!我是 AgtPilot');
-    expect(m.steps.find((s) => s.tool === 'search_web')?.status).toBe('DONE');
+    expect(m.steps.find((s) => s.tool === 'search')?.status).toBe('DONE');
     // 反证旧顺序：先清扫后合并必然扑空、留下 progress 残骸
     const old = makeMission();
     ensureLiveStep(old, 1);

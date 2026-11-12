@@ -20,16 +20,16 @@ import { measureTool, type SchemaCostRow } from '../../../../../scripts/tool-sch
  * resolveExplicitTools)算出每坊白名单挂载面的每步 tokens 与卡片化理论上限。
  *
  * 口径修复(2026-10-19):生产的 taskTools 里还有一整层**用户级工具**从不进
- * 全局注册表——记忆五件套 / read_tool_output / ask_user / confirm_plan /
+ * 全局注册表——记忆五件套 / doc_read / ask_user / confirm_plan /
  * cron 三件 / connector_authorize / mcp_call / workshop_deliver_field /
  * TOOL_PROVIDER 固定工具(ppt/wechat_mp/email/follow_builders/github_scan/
- * xhs/zhihu/参考资料)。第 1 段对它们全部不可见,旧表格因此系统性低估每坊
+ * xhs/zhihu)。第 1 段对它们全部不可见,旧表格因此系统性低估每坊
  * 每步成本约 1.3k+ tokens。本文件现在现场构建这层表面(agent-backend 同款
  * builder + stub 依赖),与注册表 JSON 合并后再算挂载面;估算口径与第 1 段
  * 共享 scripts/tool-schema-est.ts(单一事实源)。
  *
  * 挂载语义(与内核 routing.resolveExplicitTools 一致):
- * - baseline:true 的用户级工具(read_tool_output / ask 对 / connector 对 /
+ * - baseline:true 的用户级工具(doc_read / ask 对 / connector 对 /
  *   交付字段)穿透一切工坊白名单,每任务常驻;
  * - 记忆/cron 工具**非** baseline:工坊白名单任务不挂(只在自由路由任务出现);
  * - provider 固定工具按白名单 D 层精确名挂载(email_send、xhs_* 等)。
@@ -110,8 +110,8 @@ async function buildUserPool(): Promise<typeof state> {
       load: async () => (await import('@/lib/memory-service')).buildUserMemoryTools(MEASURE_UID),
     },
     {
-      source: 'tool-output',
-      load: async () => (await import('@/lib/tool-output-store')).buildToolOutputTools(MEASURE_UID),
+      source: 'doc-read',
+      load: async () => (await import('@/lib/doc-read')).buildDocReadTools(MEASURE_UID),
     },
     {
       source: 'ask',
@@ -192,7 +192,7 @@ const USER_BASELINE_NAMES = [
   'confirm_plan',
   'connector_authorize',
   'mcp_call',
-  'read_tool_output',
+  'doc_read',
   'workshop_deliver_field',
 ].sort();
 
@@ -240,12 +240,12 @@ describe('用户级 taskTools 表面测量(§9.4 口径修复:注册表外的每
 
   it('固定表面六模块全部构建成功(memory/tool-output/ask/cron/connector/delivery)', () => {
     expect(state.buildFailures, `用户级表面构建失败: ${state.buildFailures.join(' | ')}`).toEqual([]);
-    for (const src of ['memory', 'tool-output', 'ask', 'cron', 'connector', 'delivery']) {
+    for (const src of ['memory', 'doc-read', 'ask', 'cron', 'connector', 'delivery']) {
       expect(state.rows.some((r) => r.source === src), `${src} 模块应产出工具`).toBe(true);
     }
   });
 
-  it('baseline 常驻块恰为六件:ask 对 / connector 对 / read_tool_output / 交付字段', () => {
+  it('baseline 常驻块恰为六件:ask 对 / connector 对 / doc_read / 交付字段', () => {
     const base = state.rows.filter((r) => r.baseline).map((r) => r.name).sort();
     expect(base).toEqual(USER_BASELINE_NAMES);
   });

@@ -110,7 +110,7 @@ describe('effectiveCompactThreshold(动态压缩阈值)', () => {
 describe('estimateToolsBlockTokens(tools 块估算)', () => {
   it('与 schema 上线载荷同口径:name+description+parameters 序列化后估算', () => {
     const tools = [
-      { name: 'search_web', description: '搜索网页', parameters: { type: 'object', properties: {} } },
+      { name: 'search', description: '搜索网页', parameters: { type: 'object', properties: {} } },
     ];
     const tokens = estimateToolsBlockTokens(tools);
     expect(tokens).toBeGreaterThan(0);

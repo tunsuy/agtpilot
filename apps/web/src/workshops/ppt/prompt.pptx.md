@@ -4,14 +4,14 @@
 
 **任务意图声明:本次是 Generate PPTX 路线的 Quick Generate(快速生成)—— 全程无交互:不向我提问、不等任何确认、不生成 design_spec.md / spec_lock.md、不走 Strategist/Confirm UI;所有未指明的选择由你直接决定。**
 
-1. **环境自检**(sandbox_run_command):
+1. **环境自检**(sandbox_exec,runtime="shell",target="local"):
    test -f {{pptSkillDir}}/SKILL.md && {{pptMasterPython}} -c "import yaml, pptx, pathops, uharfbuzz" && echo PPT-MASTER-READY
    失败(skill 或依赖缺失,常见于本地开发环境)→ 跳到末尾「降级路线」。
 2. **完整性门禁**:{{pptMasterPython}} {{pptSkillDir}}/scripts/attribution_guard.py —— 非零退出立即停止,不得检查/修复/绕过。
 3. **读规范**:cat {{pptSkillDir}}/SKILL.md、{{pptSkillDir}}/workflows/profiles/quick-generate.md(本次的执行权威)、{{pptSkillDir}}/references/canvas-formats.md、{{pptSkillDir}}/references/shared-standards-core.md;需要图表/图标时再读 {{pptSkillDir}}/templates/charts/chart-vocabulary.md 与 {{pptSkillDir}}/templates/icons/README.md。严禁凭记忆发明字段与流程。
 4. **初始化项目**(在任务输出目录下):
    {{pptMasterPython}} {{pptSkillDir}}/scripts/project_manager.py init deck --quick-generate --dir ppt
-   记下打印的项目路径(形如 ppt/deck_<日期>),后续命令的 <project_path> 都用它。若我提供了材料,先把材料原文写入 ppt/source-material.md(sandbox_write_file),再执行:
+   记下打印的项目路径(形如 ppt/deck_<日期>),后续命令的 <project_path> 都用它。若我提供了材料,先把材料原文写入 ppt/source-material.md(sandbox_file,action="write"),再执行:
    {{pptMasterPython}} {{pptSkillDir}}/scripts/project_manager.py import-sources <project_path> ppt/source-material.md
 5. **大纲先行**:把逐页 roster(每页:核心信息一句话 + 版式方向 + 密度 anchor/dense/breathing)简短输出到对话并落 <project_path>/deck-plan.md;无需停下等我确认,直接继续。
 6. **文字度量校准**(排版前必做,防止文字溢出画布):
@@ -30,7 +30,7 @@
 10. **导出 PPTX**:
     {{pptMasterPython}} {{pptSkillDir}}/scripts/svg_to_pptx.py <project_path> --quick-generate --with-notes
     产物在 <project_path>/exports/*.pptx(原生 DrawingML,可编辑)。禁止运行 finalize_svg.py;禁止生成 narration/音频/视频。
-11. **发布产物**:调用 ppt_publish_pptx 工具(path 传 exports/ 下 .pptx 的工作区相对路径,title 传演示稿标题,description 传页数/画布/质检摘要)。严禁用 artifact_render 回显 .pptx 内容或 base64 —— 二进制必须走 ppt_publish_pptx 由服务端读文件入库。
+11. **发布产物**:调用 ppt 工具(path 传 exports/ 下 .pptx 的工作区相对路径,title 传演示稿标题,description 传页数/画布/质检摘要)。严禁用 artifact_render 回显 .pptx 内容或 base64 —— 二进制必须走 ppt 由服务端读文件入库。
 12. **交付说明**:页数、画布与字体、质检结果(error/warning 处置)、下载方式(画布文件卡片一键下载 .pptx,PowerPoint/WPS/Keynote 可直接编辑)、missing evidence(未人工在 Office 里打开核验时如实标注,不得写成「已验证」)。
 
 内容红线:
@@ -45,4 +45,4 @@ pptx 路线附加红线:
 - 不调用生图/搜图/联网接口,不生成音频视频;
 - 中途上下文丢失就从头重跑 Quick,不做跨运行拼接。
 
-降级路线(仅当第 1 步环境自检失败时):改走网页演示页(bento)路线 —— 调用 ppt_check_env,按其结果执行 bento 构建(规范与命令见 {{bentoSkillDir}},流程同「网页演示页」形态的制作流程 2~7 步,发布用 ppt_publish_deck),并在交付说明中注明「ppt-master 环境缺失,本次降级为网页演示页」。若 bento 也缺失,自行编写自包含 HTML 演示页用 artifact_render(type=html)发布。
+降级路线(仅当第 1 步环境自检失败时):改走网页演示页(bento)路线 —— 调用 ppt,按其结果执行 bento 构建(规范与命令见 {{bentoSkillDir}},流程同「网页演示页」形态的制作流程 2~7 步,发布用 ppt),并在交付说明中注明「ppt-master 环境缺失,本次降级为网页演示页」。若 bento 也缺失,自行编写自包含 HTML 演示页用 artifact_render(type=html)发布。

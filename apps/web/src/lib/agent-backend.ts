@@ -247,18 +247,32 @@ class AgentBackend {
           // ①b 根修(2026-10-26 oss_radar 生产实例):web 多用户下用户 MCP 工具走
           // 任务级 taskTools 注入只喂主循环,从不进全局注册表 —— 子 agent 默认只读
           // 全局注册表,结构上看不见用户 MCP 工具(任务描述点名 mcp_github_mcp_*,
-          // 子 agent 实际只有 browser_navigate/search_web,被迫裸撞反爬墙 66 次)。
+          // 子 agent 实际只有 browser_navigate/search,被迫裸撞反爬墙 66 次)。
           // 按用户逐次取「当前已连接 MCP 工具定义」并入子 agent 工具池;连接在
           // 任务启动时由 syncUserServers 建好,此处零额外连接开销。取不到回退空
           // 数组(plugin-mcp 未挂载/读盘异常),不击穿「永不 throw」契约。
+          // 同池顺带注入 doc_read(reference / tool_output 只读文档面;与白名单
+          // DEFAULT_READONLY_WHITELIST 的 'doc_read' 条目配套,skill_pack 源不放行)。
           resolveUserTools: async (userId: string | undefined) => {
+            const out: any[] = [];
             const svc = (this.ctx as any)?.mcp;
-            if (!userId || typeof svc?.getUserTools !== 'function') return [];
-            try {
-              return await svc.getUserTools(userId);
-            } catch {
-              return [];
+            if (userId && typeof svc?.getUserTools === 'function') {
+              try {
+                const mcpTools = await svc.getUserTools(userId);
+                if (Array.isArray(mcpTools)) out.push(...mcpTools);
+              } catch {
+                // 取不到用户 MCP 工具 → 仅回退到本段其余工具
+              }
             }
+            if (userId) {
+              try {
+                const { buildDocReadTools } = require('@/lib/doc-read');
+                out.push(...buildDocReadTools(userId, { allowSkillPack: false }));
+              } catch {
+                // doc-read 构建失败不影响 MCP 工具池
+              }
+            }
+            return out;
           },
           // 子代理模型继承用户连接器配置:不注入时插件静态缺省档钉 deepseek,
           // web 部署通常没有 DEEPSEEK_API_KEY env → 派发全挂,调研脏活回灌主
@@ -780,7 +794,7 @@ class AgentBackend {
             // (无 tool 字段),进度只在左侧会话徽标可见 —— 卡片补上这一层
             mission.plan = plan;
             // 合并式同步：看板任务按 id 增量更新/追加，【不】整体覆盖 steps ——
-            // 旧实现每次 planner_update_task 都会把用户提问、已执行的工具步骤
+            // 旧实现每次 planner 都会把用户提问、已执行的工具步骤
             // 全部抹掉，时间线反复闪烁且回溯不可见
             for (const t of plan.tasks) {
               const status =
@@ -1863,7 +1877,7 @@ class AgentBackend {
         // 工坊参考资料引用(docs/design/material-uploads.md):交付物页「参考
         // 资料」区的数据源;只在新建任务时落,续聊不覆盖首轮的资料清单
         ...(options.materialRefs?.length ? { materialRefs: options.materialRefs } : {}),
-        // 用户显式引用的技能包(路由层已白名单收敛):注入块与 skill_pack_read
+        // 用户显式引用的技能包(路由层已白名单收敛):注入块与 doc_read
         // 挂载的唯一事实源;续聊不带显式引用时继承本字段
         ...(options.skillPacks?.length ? { skillPacks: options.skillPacks } : {}),
         // 巡航会话身份标记(docs/design/cruise-session-split.md):工作台列表
@@ -1986,7 +2000,7 @@ class AgentBackend {
           // 1.6 用户显式引用的技能包(SKILL.md 全文注入,「用户指定,严格遵循」
           // + 第三方护栏):只有 mission.skillPacks 非空才注入(派发时的显式覆盖
           // 已在续聊分支回写记录);未引用 → 空串零开销,且 2.46 不挂
-          // skill_pack_read —— 第三方内容只在用户点名时进场。任务开始组装一次,
+          // doc_read(source="skill_pack") —— 第三方内容只在用户点名时进场。任务开始组装一次,
           // 任务内前缀稳定(不破自动前缀缓存)。
           try {
             if (targetMission.skillPacks?.length) {
@@ -2054,7 +2068,7 @@ class AgentBackend {
         let taskSandbox: import('@agtpilot/core').SandboxSessionPolicy | undefined;
         // 超长工具输出全量落盘回调(docs/design/tool-output-spill.md):内核在
         // 16KB 截断点先试落盘,成功则模型收「预览+指针」,截掉部分经
-        // read_tool_output 续读;保险丝 AGTPILOT_TOOL_SPILL=0 由内核侧门控
+        // doc_read(source="tool_output") 续读;保险丝 AGTPILOT_TOOL_SPILL=0 由内核侧门控
         let spillToolOutput:
           | ((info: { taskId: string; callId: string; toolName: string; fullText: string }) => string | null | Promise<string | null>)
           | undefined;
@@ -2062,7 +2076,7 @@ class AgentBackend {
           const uid = options.userId;
 
           // 2.4 用户级长期记忆工具（独立于 MCP 挂载，不随连接器失败而失效）：
-          // memory_store/recall/list 全部读写该用户专属记忆库（user-store），
+          // memory/recall/list 全部读写该用户专属记忆库（user-store），
           // 多用户部署时 A 用户 Agent 沉淀的记忆不会进入 B 用户的召回结果。
           // （曾以同名 taskTools 覆盖 plugin-memory 的进程级共享版;该插件已于
           // 2026-10-19 整包删除,这里是唯一的记忆实现）
@@ -2073,14 +2087,13 @@ class AgentBackend {
             this.addTerminalLog('stderr', `[Memory] 用户记忆工具挂载异常: ${e?.message || e}`, uid);
           }
 
-          // 2.41 超长工具输出:落盘回调 + 续读工具(read_tool_output,baseline
-          // 常驻挂载)—— 与回调共用同一存储(tool-output-store),按 uid 分区
+          // 2.41 超长工具输出:全量落盘回调(续读统一走 doc_read source=tool_output,
+          // 挂载见下方 2.46)—— 存储按 uid 分区,与续读共用 tool-output-store
           try {
-            const { buildToolOutputTools, spillToolOutput: spillImpl } = await import('@/lib/tool-output-store');
-            taskTools = [...(taskTools || []), ...buildToolOutputTools(uid)];
+            const { spillToolOutput: spillImpl } = await import('@/lib/tool-output-store');
             spillToolOutput = (info) => spillImpl(uid, info);
           } catch (e: any) {
-            this.addTerminalLog('stderr', `[ToolOutput] 超长输出落盘/续读工具挂载异常: ${e?.message || e}`, uid);
+            this.addTerminalLog('stderr', `[ToolOutput] 超长输出落盘回调挂载异常: ${e?.message || e}`, uid);
           }
 
           // 2.44 ask_user / confirm_plan 卡工具(先问后猜 + 计划确认门):baseline
@@ -2150,19 +2163,17 @@ class AgentBackend {
             this.addTerminalLog('stderr', `[Cron] 用户定时任务工具挂载异常: ${e?.message || e}`, uid);
           }
 
-          // 2.46 技能包读取工具(skill_pack_read):仅当本任务有显式引用时挂载 ——
-          // 读引用包的脚本/模板/参考文档,以及注入块里被截断的 SKILL.md 余文。
-          // 无引用 → 无任何包工具(渐进披露两步都只对引用包开放)。只读、
-          // 路径围栏在用户安装域内、体积上限、二进制拒绝。
+          // 2.46 统一只读文档工具(doc_read):reference(参考资料)/ tool_output(超长输出续读)
+          // 常驻(baseline);skill_pack 源仅当本任务显式引用技能包时进 schema ——
+          // 第三方内容只在用户点名时进场。路径围栏/体积上限/二进制拒绝在 skill-center 内。
           try {
-            if (targetMission.skillPacks?.length) {
-              const { buildUserSkillPackTools, listInstalledPacks } = await import('@/lib/skill-center');
-              if (listInstalledPacks(uid).length > 0) {
-                taskTools = [...(taskTools || []), ...buildUserSkillPackTools(uid)];
-              }
-            }
+            const { buildDocReadTools } = await import('@/lib/doc-read');
+            taskTools = [
+              ...(taskTools || []),
+              ...buildDocReadTools(uid, { allowSkillPack: Boolean(targetMission.skillPacks?.length) }),
+            ];
           } catch (e: any) {
-            this.addTerminalLog('stderr', `[Skills] 技能包读取工具挂载异常: ${e?.message || e}`, uid);
+            this.addTerminalLog('stderr', `[DocRead] 文档读取工具挂载异常: ${e?.message || e}`, uid);
           }
 
           // 2.48 后台子任务派发工具(docs/design/background-child-missions.md):
@@ -2335,7 +2346,12 @@ class AgentBackend {
               'TAVILY_API_KEY',
               'FIRECRAWL_API_KEY',
               'E2B_API_KEY',
-              // 通知类 Webhook（plugin-notify notify_send_webhook 按 session.env 解析）
+              // 自建 E2B 控制面与模板（连接器中心「E2B」卡片可配；缺省回落全局 env）
+              'E2B_API_URL',
+              'E2B_DOMAIN',
+              'E2B_SANDBOX_URL',
+              'E2B_TEMPLATE',
+              // 通知类 Webhook（plugin-notify notify 按 session.env 解析）
               'FEISHU_WEBHOOK_URL',
               'SLACK_WEBHOOK_URL',
               'DINGTALK_WEBHOOK_URL',

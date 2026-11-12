@@ -29,65 +29,65 @@ export function apply(ctx: Context) {
 
   const cwd = process.cwd();
 
-  // 1. git_status: 查看当前 Git 工作区与分支状态
+  // 1. git_inspect: 只读仓库检视(status / diff)
   ctx.agent.registerTool({
-    name: 'git_status',
+    name: 'git_inspect',
     readOnly: true, // 只读并行门控:execFile 直调 git 只读命令,不经 shell
-    description: '查看当前工程代码库的 Git 状态（当前分支、未提交的文件变动、新增未跟踪文件）。',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    execute: async () => {
-      try {
-        const { stdout: status } = await execFileAsync('git', ['status', '-s'], { cwd });
-        const { stdout: branch } = await execFileAsync('git', ['branch', '--show-current'], { cwd });
-        return {
-          success: true,
-          branch: branch.trim(),
-          changedFiles: status.trim() ? status.trim().split('\n') : [],
-          clean: !status.trim(),
-        };
-      } catch (err: any) {
-        return { success: false, error: err.message };
-      }
-    },
-  });
-
-  // 2. git_diff: 获取修改对比 Diff
-  ctx.agent.registerTool({
-    name: 'git_diff',
-    readOnly: true, // 只读并行门控:execFile 直调 git 只读命令,不经 shell
-    description: '获取代码库中工作区与暂存区的详细 Git Diff 补丁内容，用于精准代码审查。',
+    description:
+      '只读检视当前工程代码库。action=status:当前分支、未提交的文件变动与新增未跟踪文件;action=diff:工作区与暂存区的详细 Diff 补丁内容(可用 file 限定文件、staged 看已暂存改动),用于精准代码审查。',
     parameters: {
       type: 'object',
       properties: {
-        file: { type: 'string', description: '可选，限定审查特定文件的 diff' },
-        staged: { type: 'boolean', description: '是否查看已暂存(staged)的 diff，默认 false' },
+        action: {
+          type: 'string',
+          enum: ['status', 'diff'],
+          description: 'status = 仓库状态;diff = 变更补丁',
+        },
+        file: { type: 'string', description: 'action=diff:可选,限定审查特定文件的 diff' },
+        staged: { type: 'boolean', description: 'action=diff:是否查看已暂存(staged)的 diff,默认 false' },
       },
+      required: ['action'],
     },
-    execute: async ({ file, staged }) => {
-      try {
-        // execFile 数组参数：不经 shell，file 中的任何字符都只是 git 的路径参数
-        const { stdout } = await execFileAsync(
-          'git',
-          ['diff', ...(staged ? ['--staged'] : []), ...(file ? ['--', String(file)] : [])],
-          { cwd, maxBuffer: 10 * 1024 * 1024 }
-        );
-        return {
-          success: true,
-          diff: stdout.trim() || '（当前无改动）',
-        };
-      } catch (err: any) {
-        return { success: false, error: err.message };
+    execute: async (args: any) => {
+      const action = String(args?.action || '');
+      if (action === 'status') {
+        try {
+          const { stdout: status } = await execFileAsync('git', ['status', '-s'], { cwd });
+          const { stdout: branch } = await execFileAsync('git', ['branch', '--show-current'], { cwd });
+          return {
+            success: true,
+            branch: branch.trim(),
+            changedFiles: status.trim() ? status.trim().split('\n') : [],
+            clean: !status.trim(),
+          };
+        } catch (err: any) {
+          return { success: false, error: err.message };
+        }
       }
+      if (action === 'diff') {
+        try {
+          // execFile 数组参数：不经 shell，file 中的任何字符都只是 git 的路径参数
+          const { stdout } = await execFileAsync(
+            'git',
+            ['diff', ...(args?.staged ? ['--staged'] : []), ...(args?.file ? ['--', String(args.file)] : [])],
+            { cwd, maxBuffer: 10 * 1024 * 1024 }
+          );
+          return {
+            success: true,
+            diff: stdout.trim() || '（当前无改动）',
+          };
+        } catch (err: any) {
+          return { success: false, error: err.message };
+        }
+      }
+      return { success: false, error: `action 无效: ${action}（可选 status / diff）` };
     },
   });
 
   // 3. git_apply_patch: 精准应用 Unified Diff / 局部补丁 (基于官方 jsdiff 引擎)
   ctx.agent.registerTool({
     name: 'git_apply_patch',
-    description: '集成全球标准 diff 库与 Aider 补丁引擎：对目标文件应用标准 Unified Diff 补丁或指定查找块替换，支持 hunk 行号容差对齐，避免全文件重写丢失代码。文件写入类操作（同 sandbox_write_file 级别）。',
+    description: '集成全球标准 diff 库与 Aider 补丁引擎：对目标文件应用标准 Unified Diff 补丁或指定查找块替换，支持 hunk 行号容差对齐，避免全文件重写丢失代码。文件写入类操作（同 sandbox_file 写文件级别）。',
     dangerLevel: 'medium',
     // 回滚把手(治理 I5):补丁可逆 —— 反向补丁或 git checkout 即可恢复原文件
     compensation: {

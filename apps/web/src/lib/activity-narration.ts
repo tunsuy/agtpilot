@@ -50,8 +50,8 @@ function narrateTool(tool: string, args: any = {}): NarratedActivity {
   if (tool.startsWith('mcp_')) {
     return { kind: 'connector', label: '调用外部服务', detail: clip(tool, 50) };
   }
-  if (tool.startsWith('notify_')) {
-    return { kind: 'notify', label: '发送通知' };
+  if (tool === 'notify') {
+    return { kind: 'notify', label: '发送通知', detail: title };
   }
 
   if (tool.includes('search')) {
@@ -78,35 +78,65 @@ function narrateTool(tool: string, args: any = {}): NarratedActivity {
       return { kind: 'browser', label: '观察页面结构' };
     case 'browser_stagehand_act':
       return { kind: 'browser', label: '在网页上执行操作', detail: text };
-    case 'sandbox_run_command':
-      return { kind: 'sandbox', label: '运行命令', detail: command };
-    case 'sandbox_run_code':
-      return { kind: 'sandbox', label: '运行代码' };
+    case 'sandbox_exec': {
+      const runtime = String(args?.runtime || 'shell');
+      const target = args?.target === 'e2b' ? ' (E2B)' : '';
+      if (runtime === 'shell') {
+        return { kind: 'sandbox', label: `运行命令${target}`, detail: command };
+      }
+      const langLabel = runtime === 'python' ? 'Python' : runtime === 'ts' ? 'TypeScript' : 'Node.js';
+      return { kind: 'sandbox', label: `运行 ${langLabel}${target}` };
+    }
+    case 'sandbox_file': {
+      const action = String(args?.action || '');
+      if (action === 'write') return { kind: 'sandbox', label: '写入文件', detail: path };
+      if (action === 'list') return { kind: 'sandbox', label: '查看目录', detail: path };
+      if (action === 'downloadUrl') return { kind: 'sandbox', label: '生成产物下载地址', detail: path };
+      return { kind: 'sandbox', label: '读取文件', detail: path };
+    }
+    case 'sandbox_session':
+      return { kind: 'sandbox', label: '管理沙箱会话' };
     case 'sandbox_http_request':
       return { kind: 'sandbox', label: '发起网络请求', detail: url };
-    case 'sandbox_read_file':
-      return { kind: 'sandbox', label: '读取文件', detail: path };
-    case 'sandbox_write_file':
-      return { kind: 'sandbox', label: '写入文件', detail: path };
-    case 'sandbox_list_dir':
-      return { kind: 'sandbox', label: '查看目录', detail: path };
     case 'artifact_render':
       return { kind: 'artifact', label: '生成交付文档', detail: title };
-    case 'planner_create_plan':
-      // goal 作单行细节:会话流里这行不再是孤零零的「创建任务看板」
+    case 'planner': {
+      const a = String(args?.action || '');
+      if (a === 'update_task') return { kind: 'planner', label: '推进任务看板' };
       return { kind: 'planner', label: '创建任务看板', detail: clip(args?.goal, 60) };
-    case 'planner_update_task':
-      return { kind: 'planner', label: '推进任务看板' };
+    }
     case 'connector_authorize':
       return { kind: 'connector', label: '发起连接器授权' };
-    case 'memory_store':
-      return { kind: 'memory', label: '沉淀长期记忆' };
+    case 'memory': {
+      const a = String(args?.action || '');
+      if (a === 'store') return { kind: 'memory', label: '沉淀长期记忆' };
+      return { kind: 'memory', label: '检索长期记忆' };
+    }
     case 'launch_background_task':
       // 派发即返回,子任务过程折叠在工具行的展开面板里(BackgroundChildPanel)
       return { kind: 'background', label: '派发后台任务', detail: title || clip(args?.goal, 40) };
-    case 'memory_recall':
-    case 'memory_list':
-      return { kind: 'memory', label: '检索长期记忆' };
+    case 'ppt': {
+      const a = String(args?.action || '');
+      if (a === 'check_env') return { kind: 'sandbox', label: '检查演示环境' };
+      return { kind: 'artifact', label: '发布演示文稿', detail: title };
+    }
+    case 'cron_task': {
+      const a = String(args?.action || '');
+      const labels: Record<string, string> = { schedule: '设置定时任务', list: '查看定时任务', cancel: '取消定时任务' };
+      return { kind: 'background', label: labels[a] ?? '管理定时任务', detail: args?.jobId || undefined };
+    }
+    case 'desktop_inspect':
+      return { kind: 'sandbox', label: '读取宿主信息', detail: String(args?.action || '') };
+    case 'desktop_action':
+      return { kind: 'sandbox', label: '操作宿主桌面', detail: args?.target || args?.text || undefined };
+    case 'rag_query': {
+      const a = String(args?.action || '');
+      return a === 'list_indexed' ? { kind: 'search', label: '查看知识库' } : { kind: 'search', label: '检索知识库', detail: clip(args?.query, 40) };
+    }
+    case 'git_inspect': {
+      const a = String(args?.action || '');
+      return a === 'diff' ? { kind: 'sandbox', label: '查看代码差异', detail: clip(args?.file, 60) } : { kind: 'sandbox', label: '查看仓库状态' };
+    }
     case 'xhs_read_creator_data':
       return { kind: 'connector', label: '读取小红书创作数据' };
     case 'xhs_save_note_draft':
@@ -192,10 +222,14 @@ export function narrateStep(step: MissionStep): NarratedActivity | null {
     return { kind: 'think', label: '完成一轮推理' };
   }
 
-  // planner_update_task 是 Agent 给自己的看板记账(每推进一步一条),对用户是纯噪音:
+  // planner 是 Agent 给自己的看板记账(action=update_task 的推进记录对用户是纯噪音):
   // 看板状态本就由左侧计划卡实时呈现,活动流不再逐条「推进任务看板」
-  // (planner_create_plan 保留 —— 计划建立是一次性事件,goal 作细节有信息量)
-  if (step.tool === 'planner_update_task') return null;
+  // (action=create 是一次性事件,goal 作细节有信息量,保留一行)
+  if (step.tool === 'planner') {
+    const action = String((step.args as any)?.action || '');
+    const hasGoal = Boolean((step.args as any)?.goal);
+    if (action !== 'create' && !hasGoal) return null;
+  }
 
   return narrateTool(step.tool, step.args);
 }

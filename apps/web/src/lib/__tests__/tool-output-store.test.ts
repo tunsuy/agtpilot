@@ -11,7 +11,7 @@ import * as path from 'path';
  * 4. 预算 LRU:超限淘汰最旧任务目录,当前任务受保护;
  * 5. 级联:cleanupTaskToolOutputs 删整任务目录;
  * 6. 审计:spill/read/cleanup 全部进 audit/tool-output.jsonl;
- * 7. 工具面:read_tool_output(baseline/readOnly/low)execute 往返;
+ * 7. 工具面:doc_read(source=tool_output)(baseline/readOnly/low)execute 往返;
  * 8. v2 关闭回退旧平铺形态(对齐 agent-notes 先例)。
  *
  * 环境隔离:USER_DATA_DIR 指向一次性临时目录,必须在动态 import 被测模块之前设置。
@@ -19,12 +19,14 @@ import * as path from 'path';
 
 let tmpDir: string;
 let store: typeof import('@/lib/tool-output-store');
+let buildDocReadTools: typeof import('@/lib/doc-read').buildDocReadTools;
 
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agtpilot-spill-'));
   process.env.USER_DATA_DIR = tmpDir;
   process.env.AGTPILOT_SECRET_KEY = 'spill-test-key';
   store = await import('@/lib/tool-output-store');
+  ({ buildDocReadTools } = await import('@/lib/doc-read'));
 });
 
 afterAll(() => {
@@ -62,12 +64,12 @@ describe('存储层 · 落位与写读往返', () => {
 
   it('spill 落位 v2/<uid>/tool-output/<taskId>/<callId>.txt,返回引用 id,内容全量', () => {
     const full = 'x'.repeat(20000);
-    const ref = store.spillToolOutput(uid, { taskId: 'task_1', callId: 'call_a1', toolName: 'search_web', fullText: full });
+    const ref = store.spillToolOutput(uid, { taskId: 'task_1', callId: 'call_a1', toolName: 'search', fullText: full });
     expect(ref).toBe('call_a1');
     expect(fs.readFileSync(spillFile(uid, 'task_1', 'call_a1'), 'utf8')).toBe(full);
     const spillAudit = auditLines(uid).filter((a) => a.kind === 'spill');
     expect(spillAudit).toHaveLength(1);
-    expect(spillAudit[0]).toMatchObject({ callId: 'call_a1', taskId: 'task_1', tool: 'search_web', originalChars: 20000 });
+    expect(spillAudit[0]).toMatchObject({ callId: 'call_a1', taskId: 'task_1', tool: 'search', originalChars: 20000 });
   });
 
   it('read 往返:全文窗口 + totalChars;offset 续读带 nextOffset/hint', () => {
@@ -171,28 +173,31 @@ describe('任务删除级联清理', () => {
   });
 });
 
-describe('工具面 · read_tool_output', () => {
+describe('工具面 · doc_read(source=tool_output)', () => {
   const uid = 't_tool';
 
   it('声明形态:baseline(白名单/路由退化场景必挂)+ readOnly + dangerLevel low', () => {
-    const tools = store.buildToolOutputTools(uid);
+    const tools = buildDocReadTools(uid);
     expect(tools).toHaveLength(1);
     const t = tools[0];
-    expect(t.name).toBe('read_tool_output');
+    expect(t.name).toBe('doc_read');
     expect(t.baseline).toBe(true);
     expect(t.readOnly).toBe(true);
     expect(t.dangerLevel).toBe('low');
-    expect(t.parameters.required).toEqual(['callId']);
+    expect(t.parameters.required).toEqual(['source']);
   });
 
   it('execute 往返:落盘 → 工具续读窗口;不存在的 callId 诚实报错', async () => {
     store.spillToolOutput(uid, { taskId: 'task_tool', callId: 'call_t1', toolName: 'mcp_big', fullText: '全文'.repeat(6000) });
-    const t = store.buildToolOutputTools(uid)[0];
-    const r: any = await t.execute({ callId: 'call_t1', offset: 0, limit: 100 } as any, {} as any);
+    const t = buildDocReadTools(uid)[0];
+    const r: any = await t.execute(
+      { source: 'tool_output', callId: 'call_t1', offset: 0, limit: 100 } as any,
+      {} as any,
+    );
     expect(r.success).toBe(true);
     expect(r.content).toHaveLength(100);
     expect(r.nextOffset).toBe(100);
-    const miss: any = await t.execute({ callId: 'call_nope' } as any, {} as any);
+    const miss: any = await t.execute({ source: 'tool_output', callId: 'call_nope' } as any, {} as any);
     expect(miss.success).toBe(false);
     expect(miss.message).toContain('不存在或已过期');
   });

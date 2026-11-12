@@ -196,10 +196,10 @@ declare module '@deepseek-ai/cordis' {
 const TOOL_DESCRIPTION = [
   '派发一个只读检索子 agent 完成广域调研:多路搜索、网页阅读、资料汇总。',
   '适用:需要翻大量资料才能得出结论、且各路检索相互独立的任务(横向对比、尽调、文献/项目雷达)。',
-  '不适用:单点查询(直接用 search_web 更快)、写操作、需要审批的动作。',
+  '不适用:单点查询(直接用 search 更快)、写操作、需要审批的动作。',
   '子 agent 在独立上下文中运行,只回传提炼后的结论报告(含来源引用),原始检索内容不占主上下文。',
   '多路独立调研可在一轮内并行派发多个调用。',
-  '失败处理:若返回工具面缺口(无可用工具/工具不全)或子任务被熔断,不要原样重派同一 query;改用主循环自身工具(search_web / browser_navigate 等)直接完成,或先修正连接器授权/依赖 Key 后再试。',
+  '失败处理:若返回工具面缺口(无可用工具/工具不全)或子任务被熔断,不要原样重派同一 query;改用主循环自身工具(search / browser_navigate 等)直接完成,或先修正连接器授权/依赖 Key 后再试。',
 ].join('');
 
 export function apply(ctx: Context, config: SubagentPluginConfig = {}) {

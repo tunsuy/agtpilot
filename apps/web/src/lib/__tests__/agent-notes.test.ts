@@ -196,7 +196,7 @@ describe('工具面 · context_file', () => {
     try {
       expect(ms.buildUserMemoryTools(uid).some((t) => t.name === 'context_file')).toBe(false);
       // 其余记忆工具不受影响
-      expect(ms.buildUserMemoryTools(uid).some((t) => t.name === 'memory_store')).toBe(true);
+      expect(ms.buildUserMemoryTools(uid).some((t) => t.name === 'memory')).toBe(true);
     } finally {
       delete process.env.AGTPILOT_AGENT_NOTES;
     }

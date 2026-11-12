@@ -149,7 +149,7 @@ export interface ModelGateway {
 
 /**
  * 内核向规划器查询的最小接口：看板滞后提醒。
- * 看板进度由模型显式申报维护（planner_update_task 与实际工具调用同批
+ * 看板进度由模型显式申报维护（planner 与实际工具调用同批
  * 发出 —— Claude Code TodoWrite / Codex update_plan 同款契约）；模型忘了
  * 申报时，内核累计「真实工具成功但看板零更新」的轮数，达到阈值时向
  * 规划器取一条催促文本注入下一轮 —— 把「忘了」从静默漂移变成一轮内

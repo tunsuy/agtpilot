@@ -18,12 +18,12 @@ const CLOSE = '</tool' + '_call>';
 
 describe('isCutOffToolCall(截断 + 未闭合工具调用标签)', () => {
   it('length + 未闭合标签 = 截断(生产实例形态:标签写到一半被截)', () => {
-    const text = `收到。我来制作演示稿。${OPEN}planner_create_plan(tasks=[{"title": "环境自检"`;
+    const text = `收到。我来制作演示稿。${OPEN}planner(tasks=[{"title": "环境自检"`;
     expect(isCutOffToolCall('length', text)).toBe(true);
   });
 
   it('length + 开闭配对 = 不算截断(调用完整写出,只是没被执行另说)', () => {
-    const text = `${OPEN}search_web(query="x")${CLOSE} 以上调用已列出。`;
+    const text = `${OPEN}search(query="x")${CLOSE} 以上调用已列出。`;
     expect(isCutOffToolCall('length', text)).toBe(false);
   });
 
@@ -37,7 +37,7 @@ describe('isCutOffToolCall(截断 + 未闭合工具调用标签)', () => {
   });
 
   it('stop/other + 未闭合标签 = 不算(提供商未报截断,不替它猜)', () => {
-    const text = `${OPEN}planner_create_plan(tasks=[`;
+    const text = `${OPEN}planner(tasks=[`;
     expect(isCutOffToolCall('stop', text)).toBe(false);
     expect(isCutOffToolCall('tool-calls', text)).toBe(false);
   });
@@ -57,7 +57,7 @@ describe('isCutOffAnswer(截断 + 无未闭合标签 = 正文截停)', () => {
   });
 
   it('length + 未闭合标签(工具调用截停形态)= 不算(归 isCutOffToolCall 管)', () => {
-    const text = `${OPEN}search_web(query="x"`;
+    const text = `${OPEN}search(query="x"`;
     expect(isCutOffAnswer('length', text)).toBe(false);
   });
 

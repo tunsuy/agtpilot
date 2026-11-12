@@ -62,7 +62,7 @@ describe('buildOssRadarPrompt · 格式契约(与 oss-opportunities.ts 解析器
   it('调研链按 GitHub MCP → DeepWiki → 网页搜索 → 自身知识降级', () => {
     expect(prompt).toContain('mcp_github_mcp_');
     expect(prompt).toContain('mcp_deepwiki_');
-    expect(prompt).toContain('search_web');
+    expect(prompt).toContain('search');
     expect(prompt).toContain('链接与状态未经实时核验');
     expect(prompt).toContain('近 90 天');
     expect(prompt).toContain('good first issue');
@@ -297,7 +297,7 @@ describe('buildTargetReposSection / buildOssRadarPrompt · 指定项目注入', 
   it('指定项目 = 用户已选定:跳过项目级尽调(star/活跃度/口碑/DeepWiki),只留 Issue 级核验', () => {
     const section = buildTargetReposSection(['milvus-io/milvus'])!;
     // 生产实测 mission ar27n:旧措辞「star 数 / 最近推送照常核验」驱动模型对已指定仓库
-    // 跑 list_commits + deepwiki + search_web 三发项目级尽调 → 全部砍掉
+    // 跑 list_commits + deepwiki + search 三发项目级尽调 → 全部砍掉
     expect(section).toContain('不做项目级尽调');
     expect(section).toContain('不要检索 star 数、提交活跃度与社区口碑');
     expect(section).toContain('「近 90 天有实质提交」一条对指定项目不适用');

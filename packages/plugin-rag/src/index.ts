@@ -226,46 +226,38 @@ export function apply(ctx: Context) {
     },
   });
 
-  // 2. 关键词检索召回 (rag_search)
+  // 2. 知识库检索与清单 (rag_query) —— 两个只读动作合并
   ctx.agent.registerTool({
-    name: 'rag_search',
-    readOnly: true, // 只读并行门控:纯检索,无副作用
-    description: '在当前用户的私有文档知识库中进行关键词相关度检索（bag-of-words 余弦相似度），召回最匹配的文档片段正文。只能检索到当前用户自己索引的文档。',
+    name: 'rag_query',
+    readOnly: true, // 只读并行门控:纯检索/查询,无副作用
+    description:
+      '当前用户私有文档知识库的只读检索入口。action=search:关键词相关度检索(bag-of-words 余弦相似度),召回最匹配的文档片段正文,只能检索到当前用户自己索引的文档;action=list_indexed:查看已建立索引的全部文档列表及切片数量。',
     parameters: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '用户的检索问题或关键词' },
-        topK: { type: 'number', description: '期望召回的最相关片段数量，默认 3 条' },
+        action: {
+          type: 'string',
+          enum: ['search', 'list_indexed'],
+          description: 'search = 关键词检索;list_indexed = 列出已索引文档',
+        },
+        query: { type: 'string', description: 'action=search:用户的检索问题或关键词' },
+        topK: { type: 'number', description: 'action=search:期望召回的最相关片段数量，默认 3 条' },
       },
-      required: ['query'],
+      required: ['action'],
     },
-    execute: async ({ query, topK = 3 }, session?: any) => {
-      const results = ragService.search(RagService.userKey(session?.userId), String(query), topK);
-      return {
-        success: true,
-        query,
-        count: results.length,
-        results,
-      };
-    },
-  });
-
-  // 3. 列出已索引知识库清单 (rag_list_indexed)
-  ctx.agent.registerTool({
-    name: 'rag_list_indexed',
-    readOnly: true, // 只读并行门控:纯查询,无副作用
-    description: '查看当前用户私有 RAG 知识库中已建立索引的全部文档列表及切片数量。',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    execute: async (_args, session?: any) => {
-      const docs = ragService.listIndexed(RagService.userKey(session?.userId));
-      return {
-        success: true,
-        totalDocs: docs.length,
-        docs,
-      };
+    execute: async (args: any, session?: any) => {
+      const action = String(args?.action || '');
+      if (action === 'search') {
+        const query = String(args?.query || '');
+        if (!query) return { success: false, error: 'action=search 需要 query' };
+        const results = ragService.search(RagService.userKey(session?.userId), query, Number(args?.topK) || 3);
+        return { success: true, query, count: results.length, results };
+      }
+      if (action === 'list_indexed') {
+        const docs = ragService.listIndexed(RagService.userKey(session?.userId));
+        return { success: true, totalDocs: docs.length, docs };
+      }
+      return { success: false, error: `action 无效: ${action}（可选 search / list_indexed）` };
     },
   });
 }

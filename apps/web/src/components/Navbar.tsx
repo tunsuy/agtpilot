@@ -18,7 +18,6 @@ import {
   MonitorSmartphone,
   Unplug,
   Wand2,
-  BarChart3,
 } from 'lucide-react';
 import { Mission, ApprovalRequest, User } from '../types/agent';
 import { UserMenu } from './UserMenu';
@@ -254,40 +253,24 @@ export function Navbar({
             </span>
           )}
         </button>
-
-        <button
-          onClick={() => onViewChange('devices')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-            activeView === 'devices'
-              ? 'bg-white text-zinc-900 shadow-xs font-semibold'
-              : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
-          }`}
-          title="本地 Runner 设备(贡献任务派发到本地)"
-        >
-          <MonitorSmartphone className="h-3.5 w-3.5" />
-          <span>设备</span>
-        </button>
-
-        {/* 运营看板:仅 admin 可见(env AGTPILOT_OPS_ADMINS / mock Demo);
-            入口显隐是 UI 级,数据出口 /api/ops/* 另有服务端双重校验 */}
-        {isAdmin && (
-          <button
-            onClick={() => onViewChange('ops')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-              activeView === 'ops'
-                ? 'bg-white text-zinc-900 shadow-xs font-semibold'
-                : 'text-zinc-600 hover:text-zinc-900 hover:bg-white/50'
-            }`}
-            title="运营看板(用户活跃 / 用量趋势 / 质量成本)"
-          >
-            <BarChart3 className="h-3.5 w-3.5" />
-            <span>运营</span>
-          </button>
-        )}
       </nav>
 
       {/* Right Controls */}
       <div className="flex items-center gap-2 z-10">
+        {/* 本地 Runner 设备:移到顶栏右侧,靠近 IM 入口 */}
+        <button
+          onClick={() => onViewChange('devices')}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition shadow-2xs ${
+            activeView === 'devices'
+              ? 'bg-zinc-900 text-white border-zinc-900 hover:bg-zinc-800'
+              : 'bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 border-zinc-200/70'
+          }`}
+          title="本地 Runner 设备(贡献任务派发到本地)"
+        >
+          <MonitorSmartphone className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">设备</span>
+        </button>
+
         {/* IM 通道入口:桌面端唤起弹窗(ChannelModal,与「下载移动版」一致);
             未接线 onOpenChannel 时回退整页跳转 /channel(移动端「我的」仍走该路由)。
             弹窗内容 = 个人微信扫码授权 + 绑定码 + 通道状态,复用 ChannelPanel。 */}
@@ -333,7 +316,11 @@ export function Navbar({
         )}
 
         {/* User Auth Profile Menu */}
-        <UserMenu onOpenAuth={onOpenAuth} />
+        <UserMenu
+          onOpenAuth={onOpenAuth}
+          isAdmin={isAdmin}
+          onOpenOps={() => onViewChange('ops')}
+        />
       </div>
       </div>
     </header>

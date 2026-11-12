@@ -11,13 +11,18 @@ import {
   Zap,
   ChevronDown,
   Sparkles,
+  BarChart3,
 } from 'lucide-react';
 
 interface UserMenuProps {
   onOpenAuth: (tab: 'login' | 'register') => void;
+  /** 运营管理员:控制下拉里「运营看板」入口显隐(数据出口另有服务端门禁) */
+  isAdmin?: boolean;
+  /** 打开运营看板(仅 admin 可见入口调用) */
+  onOpenOps?: () => void;
 }
 
-export function UserMenu({ onOpenAuth }: UserMenuProps) {
+export function UserMenu({ onOpenAuth, isAdmin = false, onOpenOps }: UserMenuProps) {
   const { data: session, status } = useSession();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -128,6 +133,18 @@ export function UserMenu({ onOpenAuth }: UserMenuProps) {
 
           {/* Quick Menu Items */}
           <div className="space-y-0.5 text-xs text-zinc-700">
+            {isAdmin && onOpenOps && (
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  onOpenOps();
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-zinc-100 transition text-left"
+              >
+                <BarChart3 className="h-3.5 w-3.5 text-zinc-400" />
+                <span>运营看板</span>
+              </button>
+            )}
             <button
               onClick={() => setIsOpen(false)}
               className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-zinc-100 transition text-left"

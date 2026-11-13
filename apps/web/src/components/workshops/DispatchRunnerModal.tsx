@@ -151,13 +151,16 @@ export function DispatchRunnerModal({
   };
 
   return (
+    // z-[60] > MobileTabBar(z-50):底栏 sheet 与 Tab 同级时会被菜单盖住抢点击
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
       onClick={onClose}
     >
       {/*
-        移动端踩坑:整块 overflow-y-auto + sticky 底栏时,长内容把按钮顶出可视区,
-        或被 iOS 底栏/安全区挡住点不到。改成三栏:头/底固定,仅中间滚动。
+        移动端踩坑:
+        1) 整块 overflow-y-auto + sticky 底栏 → 长内容把按钮顶出可视区;
+        2) 与 MobileTabBar 同 z-50 → 底部菜单挡住「派发」按钮。
+        改成三栏(头/底固定、中间滚动)+ 抬高层级盖住 Tab。
       */}
       <div
         className="w-full sm:max-w-lg max-h-[min(90vh,100dvh)] flex flex-col rounded-t-2xl sm:rounded-2xl bg-white shadow-xl"

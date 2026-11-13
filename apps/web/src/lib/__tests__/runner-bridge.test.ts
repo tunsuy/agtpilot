@@ -16,6 +16,7 @@ import {
   getRunnerTasks,
   getRunnerTask,
   cancelRunnerTask,
+  retryRunnerTask,
   deleteRunnerTask,
   getRunnerTaskTombstones,
   interjectRunnerTask,
@@ -980,5 +981,89 @@ describe('本地 CLI 用量补账(phase1_result/error 事件 payload.usage → t
       T0 + 30
     );
     expect(getRunnerTask(USER_A, 'rtask_0001', T0 + 30)!.localUsage).toBeUndefined();
+  });
+});
+
+describe('重新派发(retryRunnerTask:failed 终态一键续跑,2026-11-13 看门狗改造配套)', () => {
+  /** 任务推进到 failed 终态(领取→running→error+failed);issueNo 避开同 Issue 派发防重。
+   *  opts.deviceId:显式绑定 targetDeviceId(该设备同时负责领取 —— 与生产一致:
+   *  绑定任务只有归属设备能领);缺省 = 不绑定,helper 自配设备 FIFO 领取。 */
+  function failedTask(taskId: string, issueNo: number, opts?: { deviceId?: string; missionId?: string }) {
+    const r = pairDevice(USER_A);
+    const bound = opts?.deviceId;
+    enqueueTask(USER_A, { ...validPack, taskId, issueUrl: `https://github.com/owner/repo/issues/${issueNo}` }, T0, {
+      ...(bound ? { targetDeviceId: bound } : {}),
+      ...(opts?.missionId ? { missionId: opts.missionId } : {}),
+    })!;
+    claimNextTask(USER_A, bound ?? r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: `ev_rt_${taskId}_run`, taskId, deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+      { eventId: `ev_rt_${taskId}_err`, taskId, deviceId: r.deviceId, at: T0 + 30, type: 'error', payload: { message: '无进展终止(10 分钟无任何输出,判挂死)' } },
+      { eventId: `ev_rt_${taskId}_fail`, taskId, deviceId: r.deviceId, at: T0 + 31, type: 'state', payload: { state: 'failed' } },
+    ], T0 + 31);
+    return r;
+  }
+
+  it('failed → 原包克隆 + 新 taskId 入队 queued;workBranch/repo/issueUrl 原样,目标设备与关联会话继承', () => {
+    // 场景一:显式绑定设备(生产主流:机会卡选了目标设备)→ 重派继承绑定
+    const r = failedTask('rtask_rt1', 101, { missionId: 'mission-rt' });
+    // failedTask 缺省不绑定;这里再建一条显式绑定任务验继承(绑定到上面领取的设备 r)
+    failedTask('rtask_rt1b', 111, { deviceId: r.deviceId });
+    const resB = retryRunnerTask(USER_A, 'rtask_rt1b', T0 + 100);
+    expect(resB.ok).toBe(true);
+    expect(resB.task!.targetDeviceId).toBe(r.deviceId); // 定向继承
+    expect(resB.task!.pack.issueUrl).toBe('https://github.com/owner/repo/issues/111');
+
+    // 场景二:无绑定任务 → 重派保持 FIFO 无绑定
+    const res = retryRunnerTask(USER_A, 'rtask_rt1', T0 + 100);
+    expect(res.ok).toBe(true);
+    const nt = res.task!;
+    expect(nt.state).toBe('queued');
+    expect(nt.taskId).not.toBe('rtask_rt1');
+    expect(nt.taskId).toMatch(/^rtask_[\w-]+$/);
+    expect(nt.pack.workBranch).toBe(validPack.workBranch); // 续跑语义:分支不变,runner 检测 WIP commit 自动续
+    expect(nt.pack.issueUrl).toBe('https://github.com/owner/repo/issues/101');
+    expect('targetDeviceId' in nt).toBe(false); // FIFO 语义继承
+    expect(nt.missionId).toBe('mission-rt'); // 会话关联继承
+    // 原任务原样保留(历史不丢,重派是克隆不是复活)
+    expect(getRunnerTask(USER_A, 'rtask_rt1', T0 + 200)!.state).toBe('failed');
+  });
+
+  it('无绑定/无会话的原任务:重派后同样无绑定(FIFO 语义继承)', () => {
+    failedTask('rtask_rt2', 102);
+    const res = retryRunnerTask(USER_A, 'rtask_rt2', T0 + 100);
+    expect(res.ok).toBe(true);
+    expect('targetDeviceId' in res.task!).toBe(false);
+    expect('missionId' in res.task!).toBe(false);
+  });
+
+  it('非 failed 状态拒绝:在途(running)/ 其余终态(done/no_action/cancelled/queued)', () => {
+    // queued(在途):刚入队就点重派 → 拒
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_rt3', issueUrl: 'https://github.com/owner/repo/issues/103' }, T0);
+    expect(retryRunnerTask(USER_A, 'rtask_rt3', T0 + 1).error).toBe('not_failed_terminal');
+
+    // running(在途):领了没跑完 → 拒
+    const r = pairDevice(USER_A);
+    enqueueTask(USER_A, { ...validPack, taskId: 'rtask_rt4', issueUrl: 'https://github.com/owner/repo/issues/104' }, T0);
+    claimNextTask(USER_A, r.deviceId, T0 + 10);
+    recordRunnerEvents(USER_A, r.deviceId, [
+      { eventId: 'ev_rt4_run', taskId: 'rtask_rt4', deviceId: r.deviceId, at: T0 + 20, type: 'state', payload: { state: 'running' } },
+    ], T0 + 20);
+    expect(retryRunnerTask(USER_A, 'rtask_rt4', T0 + 30).error).toBe('not_failed_terminal');
+
+    // 不存在 → not_found
+    expect(retryRunnerTask(USER_A, 'rtask_nope', T0).error).toBe('not_found');
+  });
+
+  it('重派任务过期后(retry→TTL 过期 → expired)仍可再重派(失败循环出路始终在)', () => {
+    failedTask('rtask_rt5', 105);
+    const first = retryRunnerTask(USER_A, 'rtask_rt5', T0 + 100)!;
+    // 越过 TTL读取 → 新任务 expired(终态);原任务再点重派 → 又一条新任务
+    const later = T0 + 100 + 8 * 24 * 60 * 60 * 1000;
+    getRunnerTasks(USER_A, later); // 懒过期清扫
+    expect(getRunnerTask(USER_A, first.task!.taskId, later)!.state).toBe('expired');
+    const second = retryRunnerTask(USER_A, 'rtask_rt5', later);
+    expect(second.ok).toBe(true);
+    expect(second.task!.taskId).not.toBe(first.task!.taskId);
   });
 });

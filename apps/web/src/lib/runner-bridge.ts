@@ -32,7 +32,7 @@ import {
   type RunnerTaskRecord,
   type RunnerTaskState,
 } from '@agtpilot/protocol';
-import { runnerDeletable, type RunnerTaskTombstone } from './runner-dispatch';
+import { runnerDeletable, newRunnerTaskId, type RunnerTaskTombstone } from './runner-dispatch';
 
 /**
  * 本地 Runner 桥接 · 云端侧服务(docs/design/local-runner-bridge.md)
@@ -413,6 +413,45 @@ export function cancelRunnerTask(userId: string, taskId: string, now: number = D
     return { ok: true, task };
   }
   return { ok: false, error: 'not_cancellable', task };
+}
+
+/**
+ * 重新派发(2026-11-13:超时机制改造配套 —— 看门狗只杀真挂死,失败/挂死任务
+ * 原来只能回机会卡重建包重派,包字段与关联会话全丢)。终态 failed 任务 →
+ * 原包克隆 + 新 taskId 入队:workBranch 不变(runner prepareRepo 领到后检测
+ * 分支已有 WIP commit 自动走续跑模式,已有产出/探索不丢),targetDeviceId/
+ * missionId 原样继承(没绑定过的保持 FIFO 语义)。
+ * 语义与人工回机会卡重派完全一致,只是不丢字段 —— 发布仍走审批门。
+ * 仅 failed 可重派(其余终态各有含义:done 无需,no_action 是核实结论,重派
+ * 会打架;cancelled/expired 如需再来也应回机会卡重新决策)。force 走旁路:
+ * 同 Issue 若有在途任务(另一台设备在跑)findDispatchConflict 会拒,这里
+ * 明确允许并存(用户看着列表点的按钮,知情)。
+ */
+export function retryRunnerTask(
+  userId: string,
+  taskId: string,
+  now: number = Date.now()
+): { ok: boolean; error?: string; task?: RunnerTaskRecord } {
+  const tasks = readTasks(userId);
+  const task = tasks.find((t) => t.taskId === taskId);
+  if (!task) return { ok: false, error: 'not_found' };
+  if (task.state !== 'failed') return { ok: false, error: 'not_failed_terminal', task };
+  // 原包克隆 + 换新 taskId(taskId 幂等冲突兜底);normalizeTaskPack 再过一遍
+  // (防历史包字段超限/畸形 —— 清洗失败宁可拒绝也不派一个跑不了的包)
+  const rePack = normalizeTaskPack({ ...task.pack, taskId: newRunnerTaskId(now) });
+  if (!rePack) return { ok: false, error: 'pack_normalize_failed', task };
+  const record = enqueueTask(
+    userId,
+    rePack,
+    now,
+    {
+      ...(task.targetDeviceId ? { targetDeviceId: task.targetDeviceId } : {}),
+      ...(task.missionId ? { missionId: task.missionId } : {}),
+      force: true, // 原任务已终态不冲突;旁路是为「另一设备有同 Issue 在途」的知情并存
+    }
+  );
+  if (!record) return { ok: false, error: 'enqueue_failed', task };
+  return { ok: true, task: record };
 }
 
 /** 墓碑只服务雷达黑名单(每轮截断 50 条),200 条封顶够多年派发量;超限丢最旧 */

@@ -9,7 +9,9 @@
  *  - FAKE_CLAUDE_AWAIT_INTERJECT=1: 输出常规流后等第二条 stdin 行(插话,8s 超时);
  *    收到则回显 assistant 文本并在 result 里附 INTERJECTED 标记(测中途插话注入)
  *  - FAKE_CLAUDE_EXIT: 退出码(默认 0)
- *  - FAKE_CLAUDE_SLEEP_MS: 退出前睡眠(测超时终止)
+ *  - FAKE_CLAUDE_SLEEP_MS: 退出前睡眠(测挂死:全程零输出)
+ *  - FAKE_CLAUDE_SLOW_STREAM_MS: 每条 stream事件间隔睡眠(测无进展看门狗:
+ *    间隔喂狗场景 —— 只要间隔 < 看门狗窗口,总时长再长也不杀;间隔 > 窗口则被杀)
  *  - FAKE_CLAUDE_NO_PR=1: result 不带 pr-final 围栏
  *  - FAKE_CLAUDE_NO_ACTION=1: result 带 no-action 围栏(agent 核实无需改动的例外终态)
  *  - FAKE_CLAUDE_BAD_RESULT=1: result 为 is_error(max_turns)
@@ -24,6 +26,7 @@ if (argsFile) writeFileSync(argsFile, JSON.stringify(process.argv.slice(2)));
 const stdinFile = process.env.FAKE_CLAUDE_STDIN_FILE;
 const awaitInterject = process.env.FAKE_CLAUDE_AWAIT_INTERJECT === '1';
 const sleepMs = Number(process.env.FAKE_CLAUDE_SLEEP_MS || 0);
+const slowStreamMs = Number(process.env.FAKE_CLAUDE_SLOW_STREAM_MS || 0);
 const exitCode = Number(process.env.FAKE_CLAUDE_EXIT || 0);
 
 const prBody = process.env.FAKE_CLAUDE_NO_ACTION === '1'
@@ -106,7 +109,10 @@ async function run() {
     { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'pytest tests/test_sampling.py' } }] } },
     { type: 'user', message: { content: [{ type: 'tool_result', content: '1 passed' }] } },
   ];
-  for (const l of lines) console.log(JSON.stringify(l));
+  for (const l of lines) {
+    if (slowStreamMs > 0) await new Promise((r) => setTimeout(r, slowStreamMs));
+    console.log(JSON.stringify(l));
+  }
 
   let interjected = '';
   if (awaitInterject) {

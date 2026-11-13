@@ -421,7 +421,10 @@ export function buildTaskPackFromOpportunity(
       title: `fix: ${prTitle}`,
       bodyTemplate: `关联 Issue:${issueUrl}\n\n## 改动说明\n(由本地 agent 按实际改动补全)\n\n## 测试\n(验收命令与结果)`,
     },
-    executor: { name: 'claude-code', maxTurns: 60, timeoutMinutes: 30 },
+    // timeoutMinutes 不再下发(2026-11-13 超时机制改造):runner 0.0.12+ 走无进展
+    // 看门狗(10 分钟无输出才判挂死),总时长不设限;遗留字段由协议 normalize
+    // 缺省补 240,旧 runner 领包仍按 240 分钟总上限,不会再被 30 分钟误杀
+    executor: { name: 'claude-code', maxTurns: 60 },
     dispatchNote: (opts.dispatchNote || '').trim() || undefined,
     viaFork: opts.viaFork === true ? true : undefined,
   });
@@ -480,7 +483,7 @@ export function buildFollowUpTaskPack(
       title: prNo ? `followup: 响应 PR #${prNo} review` : 'followup: 响应 PR review',
       bodyTemplate: '',
     },
-    executor: { name: 'claude-code', maxTurns: 60, timeoutMinutes: 30 },
+    executor: { name: 'claude-code', maxTurns: 60 }, // timeoutMinutes 不再下发(同上,看门狗管挂死)
     dispatchNote: (opts.dispatchNote || '').trim() || undefined,
     viaFork: base.viaFork === true ? true : undefined,
     prFollowUp: { prUrl: base.prUrl, ...(base.baseTaskId ? { baseTaskId: base.baseTaskId } : {}) },

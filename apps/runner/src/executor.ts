@@ -259,10 +259,11 @@ export function tail2k(s: string): string {
  * [claude-code:unrecognized_model],同环境两次忠实复跑均成功)。
  *
  * 明确**不**重试(重跑要么必复现、要么再耗一个超时窗口、要么是真失败):
- * 执行超时 / max_turns / 验收命令未过 / 无本地产出 / git 校验失败 / claude 启动失败。
+ * 无进展挂死(原执行超时) / max_turns / 验收命令未过 / 无本地产出 / git 校验失败 / claude 启动失败。
  * 采用「先否决后放行」:命中任一 NON_RETRYABLE 立即 false,再匹配 RETRYABLE 指纹。
  */
 const NON_RETRYABLE_PATTERNS: readonly RegExp[] = [
+  /无进展终止/,
   /执行超时/,
   /max[_\s]?turns/i,
   /达到最大轮次/,
@@ -333,6 +334,15 @@ const execFileAsync = promisify(execFile) as unknown as ExecAsync;
 const defaultExec: ExecAsync = (cmd, args, opts) =>
   execFileAsync(cmd, args, { timeout: 10 * 60 * 1000, maxBuffer: 16 * 1024 * 1024, ...opts });
 
+/** 无进展看门狗窗口(毫秒):claude 连续这段时间没有任何 stdout 输出 → 判挂死杀树。
+ *  2026-11-13 超时机制改造:原「总时长 30 分钟」上限取消(生产实例 CubeSandbox #2042
+ *  两轮都在纯读代码调研阶段被超时误杀,300+ 分钟的长任务被30 分钟卡死是错配),
+ *  改为「无进展看门狗」—— 只要 agent 持续有产出,任务跑多久都行;真正挂死
+ *  (网络调用卡住/工具死循环/stream 断了进程不退)静默超过本窗口才终止。
+ *  每条 stdout chunk(= 每条 stream-json 事件)都喂狗;busy 的 Bash 工具
+ *  (长测试/长构建)通常 ≥30s 输出一次心跳事件,10 分钟窗口足够宽。 */
+export const IDLE_WATCHDOG_MS = 10 * 60 * 1000;
+
 export interface ClaudeCodeAdapterOptions {
   /** claude 可执行文件(测试注入假二进制) */
   bin?: string;
@@ -340,6 +350,8 @@ export interface ClaudeCodeAdapterOptions {
   exec?: ExecAsync;
   /** 测试用:覆盖任务包的超时(毫秒);生产走 pack.executor.timeoutMinutes */
   timeoutMs?: number;
+  /** 测试用:覆盖无进展看门狗窗口(毫秒);生产走常量 IDLE_WATCHDOG_MS */
+  idleWatchdogMs?: number;
 }
 
 export class ClaudeCodeAdapter implements ExecutorAdapter {
@@ -348,12 +360,14 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
   private spawnImpl: SpawnImpl;
   private exec: ExecAsync;
   private timeoutMs?: number;
+  private idleWatchdogMs?: number;
 
   constructor(opts: ClaudeCodeAdapterOptions = {}) {
     this.bin = opts.bin ?? 'claude';
     this.spawnImpl = opts.spawnImpl ?? (spawn as unknown as SpawnImpl);
     this.exec = opts.exec ?? defaultExec;
     this.timeoutMs = opts.timeoutMs;
+    this.idleWatchdogMs = opts.idleWatchdogMs;
   }
 
   async detect(): Promise<{ installed: boolean; version?: string }> {
@@ -379,8 +393,17 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     const args = buildClaudeArgs(pack, repoDir);
 
     // ---- 1. headless 跑 agent(流式解析 stream-json → 进度事件;prompt 经 stdin 注入) ----
-    const timeoutMs = this.timeoutMs ?? Math.max(1, pack.executor.timeoutMinutes) * 60_000;
-    const agent = await this.runClaude(args, prompt, repoDir, timeoutMs, onProgress, opts?.abortSignal, opts?.interjectHandle);
+    // 超时机制改造(2026-11-13):总时长上限取消,runClaude 内改用无进展看门狗
+    // (连续 IDLE_WATCHDOG_MS 无 stdout 输出才判挂死);timeoutMs 仅测试注入。
+    const agent = await this.runClaude(
+      args,
+      prompt,
+      repoDir,
+      this.timeoutMs ?? this.idleWatchdogMs ?? IDLE_WATCHDOG_MS,
+      onProgress,
+      opts?.abortSignal,
+      opts?.interjectHandle
+    );
     // usage 补账:所有出口(成功/失败/no-action/中止)都挂上本轮用量 —— 消耗已发生,
     // task-run 汇总(含自动重试轮)后随 phase1_result/error 事件上行,云端任务详情展示
     const withUsage = (r: Phase1Result): Phase1Result => (agent.usage ? { ...r, usage: agent.usage } : r);
@@ -459,16 +482,16 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
     return withUsage({ ok: true, commitHash, diffstat: diffstat || undefined, testTail, prFinal });
   }
 
-  /** spawn claude 并流式消费 stdout;超时 tree-kill(SIGTERM→5s→SIGKILL,整进程组);
-   *  abortSignal(云端终止指令)同用 tree-kill,带 aborted=true 返回。
-   *  流式输入会话:prompt 作为首条 user 消息写 stdin;首个 result 到达(agent 认为
-   *  做完)即关 stdin → claude 自然退出 → 进 git 校验/验收;result 前到达的插话
-   *  经 interjectHandle 注入(写入即成会话下一条 user 消息,agent 立刻处理)。 */
+  /** spawn claude 并流式消费 stdout;无进展看门狗(连续 idleMs 无 stdout 输出)tree-kill
+   *  (SIGTERM→5s→SIGKILL,整进程组);abortSignal(云端终止指令)同用 tree-kill,带
+   *  aborted=true 返回。流式输入会话:prompt 作为首条 user 消息写 stdin;首个 result
+   *  到达(agent 认为做完)即关 stdin → claude 自然退出 → 进 git 校验/验收;result 前
+   *  到达的插话经 interjectHandle 注入(写入即成会话下一条 user 消息,agent 立刻处理)。 */
   private runClaude(
     args: string[],
     prompt: string,
     repoDir: string,
-    timeoutMs: number,
+    idleMs: number,
     onProgress?: (e: ParsedStreamEvent) => void,
     abortSignal?: AbortSignal,
     interjectHandle?: InterjectHandle
@@ -505,13 +528,22 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
         /* 启动即失败会走 child.on('error')/close 分支,这里不重复处理 */
       }
 
-      const killTimer = setTimeout(() => {
+      // 无进展看门狗:每条 stdout chunk(= 每条 stream-json 事件)喂狗重置;
+      // 连续 idleMs 无输出才判挂死杀树。替代原「总时长 timeoutMs 一次性闹钟」
+      // (2026-11-13:30 分钟总上限误杀长调研任务,改为只杀真静默的)。
+      const killTreeNow = () => {
         timedOut = true;
         killTree(child, 'SIGTERM');
         setTimeout(() => {
           killTree(child, 'SIGKILL');
         }, 5000).unref?.();
-      }, timeoutMs);
+      };
+      let idleTimer: ReturnType<typeof setTimeout> | null = setTimeout(killTreeNow, idleMs);
+      const feedWatchdog = () => {
+        if (idleTimer === null) return; // 已判挂死/已收尾,不再续命
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(killTreeNow, idleMs);
+      };
 
       // 用户止损:同超时路径整树杀(claude 可能已 spawn 子进程,单杀父进程会留孤儿)
       const onAbort = () => {
@@ -539,7 +571,10 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       const finish = (r: { ok: boolean; resultText?: string; error?: string; aborted?: boolean }) => {
         if (settled) return;
         settled = true;
-        clearTimeout(killTimer);
+        if (idleTimer !== null) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
         abortSignal?.removeEventListener('abort', onAbort);
         if (interjectHandle) interjectHandle.send = null;
         // 失败路径也带 usage(消耗已发生);claude 没跑到 result(启动失败/超时)则缺省
@@ -547,6 +582,7 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
       };
 
       child.stdout?.on('data', (chunk: Buffer) => {
+        feedWatchdog(); // 有输出 = 活着,看门狗重新计时
         buf += chunk.toString('utf-8');
         let nl: number;
         while ((nl = buf.indexOf('\n')) >= 0) {
@@ -582,7 +618,10 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
           return;
         }
         if (timedOut) {
-          finish({ ok: false, error: `执行超时(${Math.round(timeoutMs / 60000)} 分钟),已终止` });
+          finish({
+            ok: false,
+            error: `无进展终止(${Math.round(idleMs / 60000)} 分钟无任何输出,判挂死)—— 云端「重新派发」保留分支产出续跑`,
+          });
           return;
         }
         if (code !== 0) {

@@ -19,6 +19,7 @@ import {
   Zap,
   GitPullRequest,
   Bot,
+  RotateCcw,
 } from 'lucide-react';
 import {
   isRunnerTaskActive,
@@ -81,6 +82,7 @@ function DeviceTaskItem({
   onToggle,
   onCancel,
   onDelete,
+  onRetry,
   onInterject,
   onFollowUp,
   missionTitle,
@@ -93,6 +95,8 @@ function DeviceTaskItem({
   onCancel: (taskId: string) => void;
   /** 删除终态任务记录(墓碑保留 Issue 结局,雷达黑名单不受影响) */
   onDelete: (taskId: string) => void;
+  /** 重新派发(failed 终态):原包克隆+新 taskId 入队,workBranch 不变自动续跑 */
+  onRetry: (taskId: string) => void;
   /** 中途插话(执行中纠偏):文本入队下发,runner 注入正在执行的会话后回执清除 */
   onInterject: (taskId: string, text: string) => Promise<boolean>;
   /** 「响应 review」跟进派发(done + 有 PR 的任务;弹窗由页面层持有) */
@@ -221,6 +225,20 @@ function DeviceTaskItem({
             <Square className="h-2.5 w-2.5 fill-current" /> 终止
           </button>
         ) : deletable ? (
+          <span className="flex items-center gap-1 flex-shrink-0">
+          {task.state === 'failed' && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetry(task.taskId);
+              }}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-sky-600 border border-sky-200 hover:bg-sky-50 hover:border-sky-300 transition"
+              title="重新派发:原任务包克隆入队,工作分支不变 → runner 检测已有 WIP commit 自动续跑(已有产出不丢);仍需审批门才能发布"
+            >
+              <RotateCcw className="h-2.5 w-2.5" /> 重新派发
+            </button>
+          )}
           <button
             type="button"
             onClick={(e) => {
@@ -232,6 +250,7 @@ function DeviceTaskItem({
           >
             <Trash2 className="h-2.5 w-2.5" /> 删除
           </button>
+          </span>
         ) : null}
         <ChevronDown className={`h-3.5 w-3.5 text-zinc-400 transition flex-shrink-0 ${expanded ? 'rotate-180' : ''}`} />
       </button>
@@ -563,6 +582,27 @@ export function DevicesView({
     }
   }, [refreshTasks]);
 
+  // 重新派发(failed 终态):原包克隆 + 新 taskId 入队 —— workBranch 不变,runner
+  // 检测分支已有 WIP commit 自动走续跑模式(2026-11-13 配套看门狗改造:挂死/失败
+  // 任务一键续跑,不再回机会卡重建包丢字段)。目标设备/关联会话原样继承。
+  const retryTask = useCallback(async (taskId: string) => {
+    try {
+      const res = await fetch('/api/runner/tasks/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId }),
+      });
+      const data = await res.json();
+      if (!data?.success) {
+        setError(data?.error || '重新派发失败');
+        return;
+      }
+      refreshTasks(); // 新任务立即出现在列表(queued)
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  }, [refreshTasks]);
+
   // 删除终态任务记录:云端列表清理(设备工作区/已发布 PR 不受影响);带 Issue 的
   // 由服务端落墓碑,雷达去重黑名单照常生效。非终态服务端会 400 拒绝(入口已按
   // 终态门控,这里是兜底)
@@ -795,6 +835,7 @@ export function DevicesView({
                             onToggle={() => setExpandedTaskId(expandedTaskId === t.taskId ? null : t.taskId)}
                             onCancel={(taskId) => setPendingConfirm({ kind: 'cancel-task', taskId })}
                             onDelete={(taskId) => setPendingConfirm({ kind: 'delete-task', taskId })}
+                            onRetry={(taskId) => void retryTask(taskId)}
                             onInterject={interjectTask}
                             onFollowUp={setFollowUpTask}
                             missionTitle={t.missionId ? missionTitleById[t.missionId] : undefined}

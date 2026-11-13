@@ -44,16 +44,19 @@ describe('normalizeTaskPack · 合法输入', () => {
     expect(p!.prDraft.title).toBe('fix: 采样参数解析越界');
   });
 
-  it('executor 缺省档位:maxTurns 60 / timeoutMinutes 30', () => {
+  it('executor 缺省档位:maxTurns 60 / timeoutMinutes 240(遗留字段,2026-11-13 缺省从 30 调到协议上限)', () => {
     const p = normalizeTaskPack(validPack)!;
-    expect(p.executor).toEqual({ name: 'claude-code', maxTurns: 60, timeoutMinutes: 30 });
+    expect(p.executor).toEqual({ name: 'claude-code', maxTurns: 60, timeoutMinutes: 240 });
   });
 
-  it('executor 越界值收敛进 [1,200]/[1,240],NaN 走缺省', () => {
+  it('executor 越界值收敛进 [1,200]/[1,240],NaN 走缺省;timeoutMinutes 可缺省(新派发端不下发)', () => {
     expect(normalizeTaskPack({ ...validPack, executor: { name: 'claude-code', maxTurns: 999, timeoutMinutes: 0 } })!.executor)
       .toEqual({ name: 'claude-code', maxTurns: 200, timeoutMinutes: 1 });
     expect(normalizeTaskPack({ ...validPack, executor: { name: 'claude-code', maxTurns: 'abc' } })!.executor.maxTurns).toBe(60);
     expect(normalizeTaskPack({ ...validPack, executor: { name: 'claude-code', maxTurns: 4.4 } })!.executor.maxTurns).toBe(4);
+    // 新派发端只带 maxTurns:缺省补 240(兼容旧 runner 的总上限语义),不再是 30
+    expect(normalizeTaskPack({ ...validPack, executor: { name: 'claude-code', maxTurns: 60 } })!.executor)
+      .toEqual({ name: 'claude-code', maxTurns: 60, timeoutMinutes: 240 });
   });
 
   it('可选字段缺失 → constraints 空数组、acceptance 空对象、无 baseBranch/claimDraft/dispatchNote', () => {

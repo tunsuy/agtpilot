@@ -151,13 +151,20 @@ export function DispatchRunnerModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
+      onClick={onClose}
+    >
+      {/*
+        移动端踩坑:整块 overflow-y-auto + sticky 底栏时,长内容把按钮顶出可视区,
+        或被 iOS 底栏/安全区挡住点不到。改成三栏:头/底固定,仅中间滚动。
+      */}
       <div
-        className="w-full sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-white shadow-xl"
+        className="w-full sm:max-w-lg max-h-[min(90vh,100dvh)] flex flex-col rounded-t-2xl sm:rounded-2xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100 sticky top-0 bg-white z-10">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100 shrink-0 bg-white">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-zinc-900">派发到本地 Runner</h2>
             <p className="text-[11px] text-zinc-500 truncate font-mono mt-0.5">
@@ -170,7 +177,7 @@ export function DispatchRunnerModal({
           </button>
         </div>
 
-        <div className="px-4 py-3 space-y-4">
+        <div className="px-4 py-3 space-y-4 flex-1 min-h-0 overflow-y-auto overscroll-contain">
           {!pack ? (
             <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-rose-50 border border-rose-100 text-xs text-rose-700">
               <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
@@ -360,8 +367,11 @@ export function DispatchRunnerModal({
           )}
         </div>
 
-        {/* 底部动作 */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-zinc-100 sticky bottom-0 bg-white">
+        {/* 底部动作:不进滚动区,始终可见可点;移动端加 safe-area 避刘海/底栏 */}
+        <div
+          className="flex items-center justify-end gap-2 px-4 py-3 border-t border-zinc-100 shrink-0 bg-white"
+          style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
+        >
           {handoff && (
             <button
               type="button"

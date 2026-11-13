@@ -102,37 +102,26 @@ describe('accumulateMissionUsage（agtpilot/usage 事件逐次并入任务总账
   });
 });
 
-describe('computeMissionTokenBudget（任务总账预算闸门:本轮可花 = cap − 已花）', () => {
-  it('未配置 cap 时用缺省总账 300k', () => {
+describe('computeMissionTokenBudget（单轮问答预算闸:每轮固定 cap,不扣历史）', () => {
+  it('未配置 cap 时用缺省 300k', () => {
+    expect(computeMissionTokenBudget()).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
     expect(computeMissionTokenBudget(undefined)).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
-    expect(computeMissionTokenBudget({ promptTokens: 0, completionTokens: 0 })).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
   });
 
-  it('余额 = cap − 已花(prompt+completion 都算)', () => {
-    expect(computeMissionTokenBudget({ promptTokens: 80_000, completionTokens: 20_000 }, 300_000)).toBe(200_000);
-    expect(computeMissionTokenBudget({ promptTokens: 50, completionTokens: 25 }, 1_000)).toBe(925);
+  it('显式正数 cap → 原样取整返回(不扣任何已花用量)', () => {
+    expect(computeMissionTokenBudget(300_000)).toBe(300_000);
+    expect(computeMissionTokenBudget(1_000)).toBe(1_000);
+    expect(computeMissionTokenBudget(50_000.9)).toBe(50_000);
   });
 
-  it('显式 cap = 0 → undefined(总闸关闭,不设限)', () => {
-    expect(computeMissionTokenBudget({ promptTokens: 9_999_999 }, 0)).toBeUndefined();
+  it('显式 cap = 0 → undefined(关闸,不设限)', () => {
+    expect(computeMissionTokenBudget(0)).toBeUndefined();
   });
 
-  it('余额耗尽钉 1 而非 0(0 在网关语义 = 不设限,会导致静默放开烧)', () => {
-    expect(computeMissionTokenBudget({ promptTokens: 300_000, completionTokens: 0 }, 300_000)).toBe(1);
-    expect(computeMissionTokenBudget({ promptTokens: 299_000, completionTokens: 2_000 }, 300_000)).toBe(1);
-  });
-
-  it('负余额(脏数据防御)同样钉 1', () => {
-    expect(computeMissionTokenBudget({ promptTokens: 400_000, completionTokens: 50_000 }, 300_000)).toBe(1);
-  });
-
-  it('usage 字段缺失/NaN 按 0 计,不产生 NaN 预算', () => {
-    expect(computeMissionTokenBudget({ promptTokens: Number.NaN }, 1_000)).toBe(1_000);
-    expect(computeMissionTokenBudget(undefined, 1_000)).toBe(1_000);
-  });
-
-  it('小数余额向下取整', () => {
-    expect(computeMissionTokenBudget({ promptTokens: 0.5, completionTokens: 0.4 }, 10)).toBe(9);
+  it('非法 cap(负数/NaN/Infinity)→ 回缺省 300k,不静默关闸', () => {
+    expect(computeMissionTokenBudget(-1)).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
+    expect(computeMissionTokenBudget(Number.NaN)).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
+    expect(computeMissionTokenBudget(Number.POSITIVE_INFINITY)).toBe(DEFAULT_MISSION_TOKEN_BUDGET);
   });
 });
 

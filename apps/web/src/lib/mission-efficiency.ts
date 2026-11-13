@@ -52,26 +52,27 @@ export function accumulateMissionUsage(
   };
 }
 
-/** 任务 token 总预算缺省值(多轮共享一个总账;env AGTPILOT_MISSION_TOKEN_BUDGET 可覆盖) */
+/**
+ * 单轮问答(一次 runTask / agent loop)的 token 预算缺省值。
+ * 多轮续聊每轮重置,不与 mission.usage 历史累计挂钩;
+ * env AGTPILOT_MISSION_TOKEN_BUDGET 可覆盖。
+ */
 export const DEFAULT_MISSION_TOKEN_BUDGET = 300_000;
 
 /**
- * 本轮可花的 token 预算 = 任务总账上限 − 已花(含子代理/压缩蒸馏等全部入账消耗)。
+ * 解析单轮问答的 token 预算。
  *
- * - cap 显式为 0 → undefined(不设限,总闸关闭语义)
- * - 余额耗尽不回 0(0 在网关语义 = 不设限!)—— 钉住 1,让循环最多再走 1 步
- *   即触顶,由强制总结轮诚实收尾:「预算用完」对用户可见,而不是静默放开
- * - 负余额(理论不可达,防脏数据)同样钉 1
+ * 语义:防「这一次回答」失控狂烧(死循环调工具等);同一会话里追问 N 次,
+ * 每轮都拿完整 cap,不会因为前面聊过就额度见底。
+ *
+ * - cap 显式为 0 → undefined(不设限,关闸)
+ * - 未传 / 非法 → DEFAULT 300k
+ * - mission.usage 仍作成本观测总账,但不再参与本闸扣减
  */
-export function computeMissionTokenBudget(
-  used: { promptTokens?: number; completionTokens?: number } | undefined,
-  cap?: number
-): number | undefined {
+export function computeMissionTokenBudget(cap?: number): number | undefined {
   if (cap === 0) return undefined;
-  const budget = Number.isFinite(cap) && (cap as number) > 0 ? (cap as number) : DEFAULT_MISSION_TOKEN_BUDGET;
-  const p = Number.isFinite(used?.promptTokens) ? (used?.promptTokens as number) : 0;
-  const c = Number.isFinite(used?.completionTokens) ? (used?.completionTokens as number) : 0;
-  return Math.max(1, Math.floor(budget - p - c));
+  if (Number.isFinite(cap) && (cap as number) > 0) return Math.floor(cap as number);
+  return DEFAULT_MISSION_TOKEN_BUDGET;
 }
 
 /** env 解析:AGTPILOT_MISSION_TOKEN_BUDGET → 数值 cap(非法值回缺省,显式 0 = 关闭) */

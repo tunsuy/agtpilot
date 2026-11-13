@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apply, decodeBingUrl, stripHtml } from '@agtpilot/plugin-search';
+import { apply, stripHtml } from '@agtpilot/plugin-search';
 
 /** 挂载插件,拿回注册的工具表 */
 function setupPlugin() {
@@ -15,27 +15,6 @@ function setupPlugin() {
   };
   apply(ctx, {});
   return tools;
-}
-
-function b64u(url: string) {
-  return Buffer.from(url).toString('base64url');
-}
-
-/** Bing 国际区结果块(ck/a 跳转链 + b_lineclamp 摘要) */
-function bingHtml(items: Array<{ url: string; title: string; snippet?: string }>) {
-  return (
-    '<html><body><ol>' +
-    items
-      .map(
-        (it) =>
-          `<li class="b_algo"><div class="b_title"><h2><a href="https://www.bing.com/ck/a?!&amp;&amp;p=xx&amp;u=a1${b64u(
-            it.url
-          )}">${it.title}</a></h2></div>` +
-          `<p class="b_lineclamp2">${it.snippet ?? ''}</p></li>`
-      )
-      .join('') +
-    '</ol></body></html>'
-  );
 }
 
 function gnewsRss(items: Array<{ title: string; link: string; pubDate?: string; source?: string }>) {
@@ -80,18 +59,10 @@ describe('免费搜索源:解析工具', () => {
     expect(stripHtml('&#0183;&#x4e2d;&#25991;')).toBe('·中文');
     expect(stripHtml('  <b>x</b>\n<i>y</i> ')).toBe('x y');
   });
-
-  it('decodeBingUrl:ck/a 跳转链解码出真实出版权 URL;普通直链透传;垃圾返回 null', () => {
-    const href = `https://www.bing.com/ck/a?!&&p=xx&u=a1${b64u('https://openai.com/index/math')}`;
-    expect(decodeBingUrl(href)).toBe('https://openai.com/index/math');
-    expect(decodeBingUrl('https://www.solid.example/a')).toBe('https://www.solid.example/a');
-    expect(decodeBingUrl('https://www.bing.com/ck/a?!&&p=xx')).toBeNull();
-    expect(decodeBingUrl('javascript:alert(1)')).toBeNull();
-  });
 });
 
-describe('免费搜索源:search 零 Key 聚合', () => {
-  it('中文查询:Google News(来源+时间入摘要)为主,Bing(真实摘要+解码 URL)补位', async () => {
+describe('免费搜索源:search 零 Key 聚合(无 Bing)', () => {
+  it('中文查询:Google News(来源+时间入摘要)为主', async () => {
     stubFetch({
       'news.google.com/rss/search': () => ({
         ok: true,
@@ -105,88 +76,70 @@ describe('免费搜索源:search 零 Key 聚合', () => {
             },
           ]),
       }),
-      'bing.com/search': () => ({
-        ok: true,
-        text: async () =>
-          bingHtml([
-            {
-              url: 'https://techcrunch.example/bytedance',
-              title: 'ByteDance raises round',
-              snippet: 'The company closed a new round &amp; valuation jumped',
-            },
-          ]),
-      }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
     const r = await setupPlugin().search.execute({ query: '字节跳动 融资', maxResults: 5 });
     expect(r.success).toBe(true);
-    // 中文主力是 gnews:摘要含来源与时间,不再是占位文案
     expect(r.results[0].engine).toBe('google-news');
     expect(r.results[0].snippet).toContain('来源: 36氪');
     expect(r.results[0].snippet).toContain('发布时间');
-    // Bing 补位:URL 已解码为真实出版权链接,摘要是真实内容
-    const bing = r.results.find((x: any) => x.engine === 'bing');
-    expect(bing.url).toBe('https://techcrunch.example/bytedance');
-    expect(bing.snippet).toContain('valuation jumped');
+    expect(r.results.every((x: any) => x.engine !== 'bing')).toBe(true);
   });
 
-  it('英文查询:Bing 为主(真实摘要在前),Google News 补位', async () => {
+  it('英文查询:Google News + Wikipedia 补位(不再走 Bing)', async () => {
     stubFetch({
       'news.google.com/rss/search': () => ({
         ok: true,
         text: async () =>
           gnewsRss([{ title: 'OpenAI ships GPT-6', link: 'https://news.google.com/rss/articles/CBMi2' }]),
       }),
-      'bing.com/search': () => ({
+      'wikipedia.org': () => ({
         ok: true,
         text: async () =>
-          bingHtml([{ url: 'https://openai.com/', title: 'OpenAI', snippet: 'Research and deployment company' }]),
+          '{"query":{"search":[{"title":"OpenAI","snippet":"An AI <em>research</em> company"}]}}',
       }),
-      wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
     const r = await setupPlugin().search.execute({ query: 'OpenAI GPT-6', maxResults: 5 });
     expect(r.success).toBe(true);
-    expect(r.results[0].engine).toBe('bing');
-    expect(r.results[0].snippet).toBe('Research and deployment company');
-    expect(r.results.some((x: any) => x.engine === 'google-news')).toBe(true);
-  });
-
-  it('Bing 单源失败 → 只降级不致命,degradedSources 记录原因', async () => {
-    stubFetch({
-      'bing.com/search': () => ({ ok: false, text: async () => '' }),
-      'news.google.com/rss/search': () => ({
-        ok: true,
-        text: async () => gnewsRss([{ title: 't', link: 'https://news.google.com/rss/articles/CBMi3' }]),
-      }),
-      wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
-    });
-    const r = await setupPlugin().search.execute({ query: '字节跳动', maxResults: 3 });
-    expect(r.success).toBe(true);
     expect(r.results[0].engine).toBe('google-news');
-    expect(String(r.degradedSources)).toContain('bing');
+    expect(r.results.some((x: any) => x.engine === 'wikipedia')).toBe(true);
+    expect(r.results.every((x: any) => x.engine !== 'bing')).toBe(true);
   });
 
-  it('全源失败 → success:false 且报出每源失败原因(不返回 count:0 假成功)', async () => {
+  it('Google News 失败 → Wikipedia 兜底,不报 bing', async () => {
     stubFetch({
-      'bing.com/search': () => ({ ok: false, text: async () => '' }),
+      'news.google.com/rss/search': () => ({ ok: false, text: async () => '' }),
+      'wikipedia.org': () => ({
+        ok: true,
+        text: async () =>
+          '{"query":{"search":[{"title":"量子计算","snippet":"量子计算是<em>量子力学</em>的应用"}]}}',
+      }),
+    });
+    const r = await setupPlugin().search.execute({ query: '量子计算 原理', maxResults: 5 });
+    expect(r.success).toBe(true);
+    expect(r.results[0].engine).toBe('wikipedia');
+    expect(String(r.degradedSources || '')).toContain('google-news');
+    expect(String(r.degradedSources || '')).not.toContain('bing');
+  });
+
+  it('全源失败 → success:false(不含 bing)', async () => {
+    stubFetch({
       'news.google.com/rss/search': () => ({ ok: false, text: async () => '' }),
       wikipedia: () => ({ ok: false, text: async () => '' }),
     });
-    const r = await setupPlugin().search.execute({ query: '随便什么', maxResults: 3 });
+    const r = await setupPlugin().search.execute({ query: '随便什么书名测试', maxResults: 3 });
     expect(r.success).toBe(false);
-    expect(r.error).toContain('bing');
     expect(r.error).toContain('google-news');
+    expect(r.error).not.toContain('bing');
+    expect(r.error).toContain('TAVILY_API_KEY');
   });
 
-  it('Wikipedia 兜底:前两源不足时补真实摘要条目', async () => {
+  it('Wikipedia 与 Google News 合流补条目', async () => {
     stubFetch({
-      'bing.com/search': () => ({
-        ok: true,
-        text: async () => bingHtml([{ url: 'https://a.example/x', title: 'A' }]),
-      }),
       'news.google.com/rss/search': () => ({
         ok: true,
-        text: async () => gnewsRss([{ title: 'B', link: 'https://news.google.com/rss/articles/CBMi4' }]),
+        text: async () =>
+          gnewsRss([{ title: '量子计算新突破', link: 'https://news.google.com/rss/articles/CBMi4' }]),
       }),
       'wikipedia.org': () => ({
         ok: true,
@@ -203,31 +156,45 @@ describe('免费搜索源:search 零 Key 聚合', () => {
   });
 });
 
-/** 时效治理:google-news 按发布时间倒序 + 相对年龄标注 + recencyDays 过滤
- *  (生产踩坑:模型把几个月前的旧闻当「最新动态」作答 —— 摘要只给绝对
- *  时间不够,模型没有可靠的「今天」基准,也不做心算) */
 describe('时效:发布时间排序、相对年龄标注与 recencyDays 过滤', () => {
   const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toUTCString();
 
   it('google-news 结果带 publishedAt 且按时间倒序,摘要含相对年龄', async () => {
-    // RSS 故意乱序:3 天前 → 90 天前 → 1 小时前
     stubFetch({
       'news.google.com/rss/search': () => ({
         ok: true,
         text: async () =>
           gnewsRss([
-            { title: '三天前的新闻', link: 'https://news.google.com/rss/articles/a1', pubDate: daysAgo(3), source: '源A' },
-            { title: '三个月前的旧闻', link: 'https://news.google.com/rss/articles/a2', pubDate: daysAgo(90), source: '源B' },
-            { title: '一小时的新闻', link: 'https://news.google.com/rss/articles/a3', pubDate: daysAgo(2 / 24), source: '源C' },
+            {
+              title: '字节跳动三天前的新闻',
+              link: 'https://news.google.com/rss/articles/a1',
+              pubDate: daysAgo(3),
+              source: '源A',
+            },
+            {
+              title: '字节跳动三个月前的旧闻',
+              link: 'https://news.google.com/rss/articles/a2',
+              pubDate: daysAgo(90),
+              source: '源B',
+            },
+            {
+              title: '字节跳动一小时的新闻',
+              link: 'https://news.google.com/rss/articles/a3',
+              pubDate: daysAgo(2 / 24),
+              source: '源C',
+            },
           ]),
       }),
-      'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
     const r = await setupPlugin().search.execute({ query: '字节跳动 融资', maxResults: 5 });
     expect(r.success).toBe(true);
     const gnews = r.results.filter((x: any) => x.engine === 'google-news');
-    expect(gnews.map((x: any) => x.title)).toEqual(['一小时的新闻', '三天前的新闻', '三个月前的旧闻']);
+    expect(gnews.map((x: any) => x.title)).toEqual([
+      '字节跳动一小时的新闻',
+      '字节跳动三天前的新闻',
+      '字节跳动三个月前的旧闻',
+    ]);
     expect(gnews[0].snippet).toContain('2 小时前');
     expect(gnews[1].snippet).toContain('3 天前');
     expect(gnews[2].snippet).toContain('约 3 个月前');
@@ -239,47 +206,60 @@ describe('时效:发布时间排序、相对年龄标注与 recencyDays 过滤',
         ok: true,
         text: async () =>
           gnewsRss([
-            { title: '两条新消息', link: 'https://news.google.com/rss/articles/b1', pubDate: daysAgo(2), source: '源A' },
-            { title: '两个月前的旧闻', link: 'https://news.google.com/rss/articles/b2', pubDate: daysAgo(60), source: '源B' },
+            {
+              title: 'AI 两条新消息最新发展',
+              link: 'https://news.google.com/rss/articles/b1',
+              pubDate: daysAgo(2),
+              source: '源A',
+            },
+            {
+              title: 'AI 两个月前的旧闻最新发展',
+              link: 'https://news.google.com/rss/articles/b2',
+              pubDate: daysAgo(60),
+              source: '源B',
+            },
           ]),
       }),
-      'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
     const r = await setupPlugin().search.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
     expect(r.success).toBe(true);
-    expect(r.results.some((x: any) => x.title === '两个月前的旧闻')).toBe(false);
-    expect(r.results.some((x: any) => x.title === '两条新消息')).toBe(true);
+    expect(r.results.some((x: any) => x.title.includes('两个月前的旧闻'))).toBe(false);
+    expect(r.results.some((x: any) => x.title.includes('两条新消息'))).toBe(true);
     expect(r.recencyNote).toContain('已过滤 1 条');
   });
 
-  it('全滤光时退回未过滤结果并注明(静默空结果会让模型误判「无新闻」)', async () => {
+  it('全滤光时退回未过滤结果并注明', async () => {
     stubFetch({
       'news.google.com/rss/search': () => ({
         ok: true,
         text: async () =>
           gnewsRss([
-            { title: '只有旧闻', link: 'https://news.google.com/rss/articles/c1', pubDate: daysAgo(120), source: '源A' },
+            {
+              title: 'AI 只有旧闻最新发展',
+              link: 'https://news.google.com/rss/articles/c1',
+              pubDate: daysAgo(120),
+              source: '源A',
+            },
           ]),
       }),
-      'bing.com/search': () => ({ ok: true, text: async () => bingHtml([]) }),
       wikipedia: () => ({ ok: true, text: async () => '{"query":{"search":[]}}' }),
     });
     const r = await setupPlugin().search.execute({ query: 'ai 最新发展', maxResults: 5, recencyDays: 7 });
     expect(r.success).toBe(true);
-    expect(r.results.some((x: any) => x.title === '只有旧闻')).toBe(true);
+    expect(r.results.some((x: any) => x.title.includes('只有旧闻'))).toBe(true);
     expect(r.recencyNote).toContain('近 7 天无');
   });
 });
 
-describe('P5:engine 直连缺 Key → 执行期诚实报错(合并后不再整枚工具 requiredEnv 剔除)', () => {
-  it('config 无 Key 时 search 不声明 requiredEnv(零 Key 聚合主路径始终挂载)', () => {
+describe('P5:engine 直连缺 Key → 执行期诚实报错', () => {
+  it('config 无 Key 时 search 不声明 requiredEnv', () => {
     const tools = setupPlugin();
     expect(Object.keys(tools)).toEqual(['search']);
     expect(tools.search.requiredEnv).toBeUndefined();
   });
 
-  it('config 已带 Key 时同样只有一枚 search(engine 分派在参数层)', () => {
+  it('config 已带 Key 时同样只有一枚 search', () => {
     const tools: Record<string, any> = {};
     const ctx: any = {
       agent: {

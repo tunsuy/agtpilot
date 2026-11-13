@@ -1,12 +1,18 @@
 /**
- * 免费聚合层开关与纯函数口径(2026-10-23 生产事故配套):
- * - Wikipedia 补抓取曾无超时,挂死把 search 拖到 400~500s(现在 10s 闸);
- * - 境内部署免费源整体不稳时需要一刀切的停用开关,调用返回诚实报错。
- * 网络函数本身(bing/gnews/wikipedia fetch)不做单测 —— fetch mock 无法证明
- * 境内可用性;这里钉的是开关语义与导出契约。
+ * 免费聚合层开关与纯函数口径:
+ * - Wikipedia 补抓取有 10s 超时闸;
+ * - 境内部署免费源不稳时可 AGTPILOT_SEARCH_FREE_SOURCES=0 关层。
+ * Bing HTML 抓取已移除,不再测 decodeBingUrl。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { freeSourcesEnabled, stripHtml, decodeBingUrl } from './index';
+import {
+  freeSourcesEnabled,
+  stripHtml,
+  isCjkQuery,
+  extractQueryTokens,
+  isRelevantSearchResult,
+  filterRelevantResults,
+} from './index';
 
 describe('freeSourcesEnabled(免费聚合层总开关)', () => {
   it('缺省启用', () => {
@@ -18,7 +24,7 @@ describe('freeSourcesEnabled(免费聚合层总开关)', () => {
     }
   });
 
-  it('=0 停用(境内部署免费源不稳时关层,让调用方拿诚实报错)', () => {
+  it('=0 停用', () => {
     vi.stubEnv('AGTPILOT_SEARCH_FREE_SOURCES', '0');
     try {
       expect(freeSourcesEnabled()).toBe(false);
@@ -40,16 +46,39 @@ describe('freeSourcesEnabled(免费聚合层总开关)', () => {
 describe('纯函数回归锚点', () => {
   it('stripHtml:标签抹除不补空格,实体解码,CJK 两侧无空格', () => {
     expect(stripHtml('<em>词</em>')).toBe('词');
-    // 实体解码按实现口径钉:&nbsp;→空格、&amp;→&,但 &amp; 后不补空格
     expect(stripHtml('<p>a&nbsp;&amp;b</p>')).toBe('a &b');
     expect(stripHtml('  <div>x</div>  ')).toBe('x');
   });
+});
 
-  it('decodeBingUrl:重定向链解出真实 URL;非重定向直链原样返回', () => {
-    // base64url("https://example.com/a") 形态
-    const b64 = Buffer.from('https://example.com/a').toString('base64url');
-    expect(decodeBingUrl(`https://www.bing.com/ck/a?!&&p=x&u=a1${b64}`)).toBe('https://example.com/a');
-    expect(decodeBingUrl('https://plain.example.com/page')).toBe('https://plain.example.com/page');
-    expect(decodeBingUrl('javascript:alert(1)')).toBeNull();
+describe('相关性过滤', () => {
+  it('isCjkQuery / extractQueryTokens', () => {
+    expect(isCjkQuery('极道特种兵')).toBe(true);
+    expect(isCjkQuery('OpenAI GPT')).toBe(false);
+    expect(extractQueryTokens('极道特种兵 小说')).toEqual(['极道特种兵', '小说']);
+    expect(extractQueryTokens('OpenAI agent tools')).toEqual(['openai', 'agent', 'tools']);
+  });
+
+  it('假结果判不相关;真命中保留', () => {
+    const q = '极道特种兵';
+    expect(
+      isRelevantSearchResult(q, { title: '极（汉语文字）_百度百科', snippet: '极的拼音', url: 'https://baike.baidu.com/x' })
+    ).toBe(false);
+    expect(
+      isRelevantSearchResult(q, {
+        title: '《极道特种兵》全集免费阅读',
+        snippet: '都市兵王小说',
+        url: 'https://fanqie.example/book/1',
+      })
+    ).toBe(true);
+  });
+
+  it('filterRelevantResults 剔除无关保留相关', () => {
+    const kept = filterRelevantResults('极道特种兵', [
+      { title: '极的解释', url: 'https://a.example/1', snippet: '', engine: 'wikipedia' },
+      { title: '极道特种兵 - 番茄小说', url: 'https://a.example/2', snippet: '兵王回归', engine: 'wikipedia' },
+    ]);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].url).toBe('https://a.example/2');
   });
 });

@@ -7,7 +7,7 @@ import type { RunnerTaskPack } from '@agtpilot/protocol';
 import {
   buildClaudeArgs,
   buildUserMessageLine,
-  parseStreamLine,
+  parseStreamEvents,
   summarizeToolInput,
   tail2k,
   isRetryableClaudeFailure,
@@ -107,63 +107,82 @@ describe('buildClaudeArgs(§6.1 固化命令行,纯函数直测)', () => {
   });
 });
 
-describe('parseStreamLine(stream-json 宽容解析)', () => {
-  it('system/init → 会话启动 + 模型名;非 init 的 system 行 → null', () => {
-    expect(parseStreamLine('{"type":"system","subtype":"init","model":"sonnet"}')).toEqual({
-      kind: 'system',
-      summary: '会话启动 · 模型 sonnet',
-    });
+describe('parseStreamEvents(stream-json 宽容解析)', () => {
+  it('system/init → 会话启动 + 模型名;非 init 的 system 行 → 空', () => {
+    expect(parseStreamEvents('{"type":"system","subtype":"init","model":"sonnet"}')).toEqual([
+      { kind: 'system', summary: '会话启动 · 模型 sonnet' },
+    ]);
     // CLI 实测:思考过程会持续输出 subtype=thinking_tokens 的 system 行(无 model 字段),
     // 旧实现把它们全标成「会话启动」,任务时间线被灌成一屏重复 —— 必须忽略
-    expect(parseStreamLine('{"type":"system","subtype":"thinking_tokens","estimated_tokens":8}')).toBeNull();
-    expect(parseStreamLine('{"type":"system","subtype":"status","status":"busy"}')).toBeNull();
+    expect(parseStreamEvents('{"type":"system","subtype":"thinking_tokens","estimated_tokens":8}')).toEqual([]);
+    expect(parseStreamEvents('{"type":"system","subtype":"status","status":"busy"}')).toEqual([]);
   });
 
   it('assistant tool_use → 工具名 + 一行摘要;text → 仅首行', () => {
-    const tool = parseStreamLine('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pytest -x\\nsecond"}}]}}');
-    expect(tool).toEqual({ kind: 'tool', tool: 'Bash', summary: 'pytest -x' });
-    const text = parseStreamLine('{"type":"assistant","message":{"content":[{"type":"text","text":"第一行\\n第二行"}]}}');
-    expect(text).toEqual({ kind: 'text', summary: '第一行' });
+    const tool = parseStreamEvents('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pytest -x\\nsecond"}}]}}');
+    expect(tool).toEqual([{ kind: 'tool', tool: 'Bash', summary: 'pytest -x' }]);
+    const text = parseStreamEvents('{"type":"assistant","message":{"content":[{"type":"text","text":"第一行\\n第二行"}]}}');
+    expect(text).toEqual([{ kind: 'text', summary: '第一行' }]);
+  });
+
+  it('一条 assistant 消息含多个内容块 → 每块各产一条事件(text 不再被 tool_use 吞掉)', () => {
+    // 生产实测(2026-11-14):模型常在一条消息里先说明再调工具、或夹叙夹议,
+    // 旧 parseStreamLine 只取第一个命中块 → 云端时间线只见命令不见话
+    const mixed = parseStreamEvents(
+      '{"type":"assistant","message":{"content":[' +
+        '{"type":"text","text":"根因已定位:调度器未注册过滤器"},' +
+        '{"type":"tool_use","name":"Bash","input":{"command":"git status"}},' +
+        '{"type":"text","text":"接下来写复现测试"},' +
+        '{"type":"text","text":"  "}' +
+        ']}}'
+    );
+    expect(mixed).toEqual([
+      { kind: 'text', summary: '根因已定位:调度器未注册过滤器' },
+      { kind: 'tool', tool: 'Bash', summary: 'git status' },
+      { kind: 'text', summary: '接下来写复现测试' },
+    ]);
   });
 
   it('result → 文本与 is_error;error_max_turns 视为失败', () => {
-    expect(parseStreamLine('{"type":"result","subtype":"success","result":"done","is_error":false}')).toEqual({
-      kind: 'result', text: 'done', isError: false,
-    });
-    expect(parseStreamLine('{"type":"result","subtype":"error_max_turns","result":"x"}')?.kind).toBe('result');
-    expect(parseStreamLine('{"type":"result","subtype":"error_max_turns","result":"x"}')).toMatchObject({ isError: true });
+    expect(parseStreamEvents('{"type":"result","subtype":"success","result":"done","is_error":false}')).toEqual([
+      { kind: 'result', text: 'done', isError: false },
+    ]);
+    expect(parseStreamEvents('{"type":"result","subtype":"error_max_turns","result":"x"}')[0]?.kind).toBe('result');
+    expect(parseStreamEvents('{"type":"result","subtype":"error_max_turns","result":"x"}')[0]).toMatchObject({ isError: true });
   });
 
   it('result 行 usage/成本字段 → 解析为清洗后的 usage(本地消耗补账数据源,旧实现在此丢弃)', () => {
-    const ev = parseStreamLine(
+    const ev = parseStreamEvents(
       '{"type":"result","subtype":"success","result":"done","is_error":false,' +
         '"usage":{"input_tokens":1200,"output_tokens":340,"cache_read_input_tokens":99000,"cache_creation_input_tokens":100},' +
         '"total_cost_usd":0.00431249,"num_turns":7,"duration_ms":45000}'
     );
-    expect(ev).toEqual({
-      kind: 'result', text: 'done', isError: false,
-      usage: {
-        inputTokens: 1200, outputTokens: 340, cacheReadTokens: 99000, cacheCreationTokens: 100,
-        totalCostUsd: 0.004312, numTurns: 7, durationMs: 45000,
+    expect(ev).toEqual([
+      {
+        kind: 'result', text: 'done', isError: false,
+        usage: {
+          inputTokens: 1200, outputTokens: 340, cacheReadTokens: 99000, cacheCreationTokens: 100,
+          totalCostUsd: 0.004312, numTurns: 7, durationMs: 45000,
+        },
       },
-    });
+    ]);
   });
 
   it('result 行无 usage / usage 畸形 → 不带 usage 键(旧格式 claude 输出兼容)', () => {
-    expect(parseStreamLine('{"type":"result","subtype":"success","result":"x","is_error":false,"usage":null}')).toEqual({
-      kind: 'result', text: 'x', isError: false,
-    });
-    expect(parseStreamLine('{"type":"result","subtype":"success","result":"x","is_error":false,"usage":{"input_tokens":-5}}')).toEqual({
-      kind: 'result', text: 'x', isError: false,
-    });
+    expect(parseStreamEvents('{"type":"result","subtype":"success","result":"x","is_error":false,"usage":null}')).toEqual([
+      { kind: 'result', text: 'x', isError: false },
+    ]);
+    expect(parseStreamEvents('{"type":"result","subtype":"success","result":"x","is_error":false,"usage":{"input_tokens":-5}}')).toEqual([
+      { kind: 'result', text: 'x', isError: false },
+    ]);
   });
 
-  it('非 JSON / 未知类型 / user 消息 → null(不中断流)', () => {
-    expect(parseStreamLine('not json')).toBeNull();
-    expect(parseStreamLine('')).toBeNull();
-    expect(parseStreamLine('{"type":"user","message":{}}')).toBeNull();
-    expect(parseStreamLine('{"type":"assistant","message":{"content":[]}}')).toBeNull();
-    expect(parseStreamLine('{broken')).toBeNull();
+  it('非 JSON / 未知类型 / user 消息 → 空数组(不中断流)', () => {
+    expect(parseStreamEvents('not json')).toEqual([]);
+    expect(parseStreamEvents('')).toEqual([]);
+    expect(parseStreamEvents('{"type":"user","message":{}}')).toEqual([]);
+    expect(parseStreamEvents('{"type":"assistant","message":{"content":[]}}')).toEqual([]);
+    expect(parseStreamEvents('{broken')).toEqual([]);
   });
 
   it('summarizeToolInput:command/file_path 优先,兜底 JSON 截断;tail2k 截尾', () => {

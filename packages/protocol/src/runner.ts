@@ -92,7 +92,12 @@ export interface RunnerTaskPack {
   claimDraft?: string;
   /** PR 草稿(终稿由本地 agent 按实际改动补全) */
   prDraft: { title: string; bodyTemplate: string };
-  executor: { name: 'claude-code'; maxTurns: number; timeoutMinutes: number };
+  /**
+   * 执行器参数。timeoutMinutes 为**遗留字段**(2026-11-13 超时机制改造:runner 侧
+   * 已改「无进展看门狗」,总时长上限取消)——老包照带、normalize 照收(兼容不破),
+   * 新派发端可以不再填;runner 0.0.12+ 忽略它,旧 runner 仍按它设总超时。
+   */
+  executor: { name: 'claude-code'; maxTurns: number; timeoutMinutes?: number };
   /** 用户在派发弹窗里的补充说明(自由文本,进 prompt) */
   dispatchNote?: string;
   /**
@@ -462,7 +467,9 @@ export function normalizeTaskPack(input: unknown): RunnerTaskPack | null {
     executor: {
       name: 'claude-code',
       maxTurns: intOr(ex.maxTurns, 1, 200, 60),
-      timeoutMinutes: intOr(ex.timeoutMinutes, 1, 240, 30),
+      // 遗留字段:缺省不再给 30(防旧 runner 领新包时30 分钟误杀),给协议上限 240;
+      // 新 runner(0.0.12+)完全不读这个值,总时长由无进展看门狗管理
+      timeoutMinutes: intOr(ex.timeoutMinutes, 1, 240, 240),
     },
     dispatchNote: capText(o.dispatchNote, 5000),
     // 只认真正的 true(缺省/false/脏值一律视为未经 fork,派发保持直连语义)

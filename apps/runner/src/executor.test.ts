@@ -56,7 +56,7 @@ function fakeGitExec(over?: { ahead?: string; testFail?: boolean; testOut?: stri
   };
 }
 
-const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_STDIN_FILE', 'FAKE_CLAUDE_AWAIT_INTERJECT', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_NO_ACTION', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT', 'FAKE_CLAUDE_STDERR'];
+const ENV_KEYS = ['FAKE_CLAUDE_ARGS_FILE', 'FAKE_CLAUDE_STDIN_FILE', 'FAKE_CLAUDE_AWAIT_INTERJECT', 'FAKE_CLAUDE_EXIT', 'FAKE_CLAUDE_SLEEP_MS', 'FAKE_CLAUDE_SLOW_STREAM_MS', 'FAKE_CLAUDE_NO_PR', 'FAKE_CLAUDE_NO_ACTION', 'FAKE_CLAUDE_BAD_RESULT', 'FAKE_CLAUDE_NO_RESULT', 'FAKE_CLAUDE_STDERR'];
 afterEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
 });
@@ -207,6 +207,7 @@ describe('isRetryableClaudeFailure(瞬时 API/网关错误分类器,加固 ①�
 
   it('确定性失败 → 不重试(重跑必复现/再耗超时窗口/是真失败)', () => {
     for (const e of [
+      '无进展终止(10 分钟无任何输出,判挂死)—— 云端「重新派发」保留分支产出续跑',
       '执行超时(30 分钟),已终止',
       'agent 报告执行失败(max_turns 或内部错误)',
       'agent 报告执行失败(max_turns 或内部错误) · 达到最大轮次',
@@ -224,7 +225,8 @@ describe('isRetryableClaudeFailure(瞬时 API/网关错误分类器,加固 ①�
     }
   });
 
-  it('否决优先:文案同时含瞬时指纹与不可重试标记 → 不重试(如超时里提到 overloaded)', () => {
+  it('否决优先:文案同时含瞬时指纹与不可重试标记 → 不重试(如挂死/超时里提到 overloaded)', () => {
+    expect(isRetryableClaudeFailure('无进展终止(10 分钟无任何输出,判挂死) · stderr: overloaded')).toBe(false);
     expect(isRetryableClaudeFailure('执行超时(30 分钟),已终止 · 期间 overloaded')).toBe(false);
     expect(isRetryableClaudeFailure('验收命令未通过 · pytest 报 connection error')).toBe(false);
   });
@@ -369,11 +371,28 @@ describe('ClaudeCodeAdapter.run(真 spawn 假 claude + 假 git/验收 exec)', ()
     expect(r2.error).toContain('未见 result');
   }, 20_000);
 
-  it('超时 → SIGTERM 终止并失败(不挂死)', async () => {
-    process.env.FAKE_CLAUDE_SLEEP_MS = '5000';
+  it('挂死(全程零输出)→ 无进展看门狗 SIGTERM 终止并失败(不挂死)', async () => {
+    process.env.FAKE_CLAUDE_SLEEP_MS = '5000'; // 启动前睡 5s,期间零 stdout
     const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec(), timeoutMs: 300 }).run(pack, tmpDir());
     expect(r.ok).toBe(false);
-    expect(r.error).toContain('执行超时');
+    expect(r.error).toContain('无进展终止');
+  }, 20_000);
+
+  it('看门狗喂狗:持续有输出 → 总时长超窗口也不杀(2026-11-13 超时机制改造的核心语义)', async () => {
+    // 每条事件间隔 200ms,共 5 条 ≈ 1s 总时长;看门狗窗口 300ms —— 任何单段静默
+    // 都< 窗口,任务必须正常跑完(ok)。旧一次性闹钟在该用例会误杀(总时长 > 窗口)
+    process.env.FAKE_CLAUDE_SLOW_STREAM_MS = '200';
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec(), timeoutMs: 300 }).run(pack, tmpDir());
+    expect(r.ok).toBe(true);
+    expect(r.prFinal).not.toBeNull(); // 走完全程提取到 pr-final(没被看门狗中途杀掉)
+  }, 20_000);
+
+  it('看门狗饿死:单段静默超窗口 → 判挂死终止', async () => {
+    // 每条事件间隔 800ms,窗口 300ms —— 第一段静默(200ms 启动后)即超窗被杀
+    process.env.FAKE_CLAUDE_SLOW_STREAM_MS = '800';
+    const r = await new ClaudeCodeAdapter({ bin: FIXTURE, exec: fakeGitExec(), timeoutMs: 300 }).run(pack, tmpDir());
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('无进展终止');
   }, 20_000);
 
   it('云端终止(abortSignal)→ tree-kill 进程并带 aborted 返回,区别于超时/失败', async () => {

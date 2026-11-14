@@ -59,7 +59,8 @@ describe('buildTaskPackFromOpportunity(雷达机会 → 可入库任务包)', ()
     expect(pack!.prDraft.title).toBe('fix: 采样参数越界导致崩溃,负数温度场景');
     expect(pack!.prDraft.bodyTemplate).toContain('https://github.com/vllm-project/vllm/issues/12345');
     expect(pack!.claimDraft).toContain('#12345');
-    expect(pack!.executor).toEqual({ name: 'claude-code', maxTurns: 60, timeoutMinutes: 30 });
+    // timeoutMinutes 不再下发(2026-11-13 看门狗改造);normalize 缺省补 240 兼容旧 runner
+    expect(pack!.executor).toEqual({ name: 'claude-code', maxTurns: 60, timeoutMinutes: 240 });
     expect(pack!.acceptance.testCommand).toBeUndefined();
     expect(pack!.acceptance.note).toContain('CONTRIBUTING');
   });

@@ -66,6 +66,20 @@ describe('renderTaskPrompt(Phase 1 执行指令)', () => {
     expect(p).toContain('CONTRIBUTING');
     expect(p).not.toContain('pytest');
   });
+
+  it('进展播报块:说明消费方式(时间线只见文字)、绑定自身节奏、要求关键发现落文字、限制篇幅', () => {
+    // 生产背景(2026-11-14):无人值守下 agent 默认闷头干活,60+ 条 tool 事件
+    // 只有 1-4 条文字 —— 用户在时间线上看不到任何「过程说明」
+    expect(prompt).toContain('【进展播报】');
+    expect(prompt).toContain('工具调用只会显示成一行命令摘要');
+    expect(prompt).toContain('每开始做一件新的事、或一件事有了结论');
+    expect(prompt).toContain('关键发现必须写进文字播报');
+    expect(prompt).toContain('不复述代码原文');
+    // 不锁死阶段清单:复现型/PR 跟进型/no-action 核验型的阶段划分各不相同
+    expect(prompt).not.toContain('每进入一个阶段');
+    // 播报块在工作步骤之前(先立规矩再看流程)
+    expect(prompt.indexOf('【进展播报】')).toBeLessThan(prompt.indexOf('【工作步骤】'));
+  });
 });
 
 describe('renderTaskPrompt · WIP 留痕与续跑模式(中断续作,git 记录 = 恢复点)', () => {

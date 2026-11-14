@@ -173,35 +173,41 @@ export interface InterjectHandle {
   send: ((text: string) => InterjectOutcome) | null;
 }
 
-/** stream-json 逐行解析(宽容:非 JSON / 未知结构 → null,不中断流) */
-export function parseStreamLine(line: string): ParsedStreamEvent | null {
+/**
+ * stream-json 逐行解析(宽容:非 JSON / 未知结构 → 空数组,不中断流)。
+ * 一条 assistant 消息可含多个内容块(如 text + tool_use,或多段 text)——
+ * **每块各产一条事件**(2026-11-14 修复:旧实现只取第一个命中块,模型先调
+ * 工具后附说明、或一段消息里多段文字时,后续 text 全被吞掉,云端时间线
+ * 只见命令不见话)。
+ */
+export function parseStreamEvents(line: string): ParsedStreamEvent[] {
   const t = line.trim();
-  if (!t.startsWith('{')) return null;
+  if (!t.startsWith('{')) return [];
   let o: Record<string, unknown>;
   try {
     o = JSON.parse(t) as Record<string, unknown>;
   } catch {
-    return null;
+    return [];
   }
   if (o.type === 'system') {
     // 只有 init 是真会话启动;CLI 还会输出 thinking_tokens 等其它 subtype 的
     // system 行(思考过程 token 估算,每步多条)——不区分会把时间线灌满重复的「会话启动」
-    if (o.subtype !== 'init') return null;
+    if (o.subtype !== 'init') return [];
     const model = typeof o.model === 'string' ? o.model : '';
-    return { kind: 'system', summary: model ? `会话启动 · 模型 ${model}` : '会话启动' };
+    return [{ kind: 'system', summary: model ? `会话启动 · 模型 ${model}` : '会话启动' }];
   }
   if (o.type === 'assistant') {
     const msg = o.message as { content?: unknown[] } | undefined;
     const content = Array.isArray(msg?.content) ? msg!.content : [];
+    const out: ParsedStreamEvent[] = [];
     for (const c of content as Record<string, unknown>[]) {
       if (c?.type === 'tool_use' && typeof c.name === 'string') {
-        return { kind: 'tool', tool: c.name, summary: summarizeToolInput(c.input) };
-      }
-      if (c?.type === 'text' && typeof c.text === 'string' && c.text.trim()) {
-        return { kind: 'text', summary: oneLine(c.text, 160) };
+        out.push({ kind: 'tool', tool: c.name, summary: summarizeToolInput(c.input) });
+      } else if (c?.type === 'text' && typeof c.text === 'string' && c.text.trim()) {
+        out.push({ kind: 'text', summary: oneLine(c.text, 160) });
       }
     }
-    return null;
+    return out;
   }
   if (o.type === 'result') {
     // usage 补账(2026-10-20):claude result 行自带会话累计用量与成本,
@@ -216,14 +222,16 @@ export function parseStreamLine(line: string): ParsedStreamEvent | null {
       numTurns: o.num_turns,
       durationMs: o.duration_ms,
     });
-    return {
-      kind: 'result',
-      text: typeof o.result === 'string' ? o.result : '',
-      isError: o.is_error === true || o.subtype === 'error_max_turns' || o.subtype === 'error_during_execution',
-      ...(usage ? { usage } : {}),
-    };
+    return [
+      {
+        kind: 'result',
+        text: typeof o.result === 'string' ? o.result : '',
+        isError: o.is_error === true || o.subtype === 'error_max_turns' || o.subtype === 'error_during_execution',
+        ...(usage ? { usage } : {}),
+      },
+    ];
   }
-  return null;
+  return [];
 }
 
 function oneLine(s: string, max: number): string {
@@ -588,23 +596,24 @@ export class ClaudeCodeAdapter implements ExecutorAdapter {
         while ((nl = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, nl);
           buf = buf.slice(nl + 1);
-          const ev = parseStreamLine(line);
-          if (!ev) continue;
-          if (ev.kind === 'result') {
-            sawResult = true;
-            resultText = ev.text;
-            resultIsError = ev.isError;
-            if (ev.usage) resultUsage = ev.usage;
-            // 首个 result = agent 认为任务完成:关闭输入,claude 走完当前输出即退。
-            // result 前已写入 stdin 的插话仍会被处理(排队消息在 EOF 前有效),
-            // 若因此多出一轮,新 result 覆盖 resultText —— 最终以最后一轮为准。
-            try {
-              child.stdin?.end();
-            } catch {
-              /* 已关/已退,EPIPE 由 error 监听吞掉 */
+          const evs = parseStreamEvents(line);
+          for (const ev of evs) {
+            if (ev.kind === 'result') {
+              sawResult = true;
+              resultText = ev.text;
+              resultIsError = ev.isError;
+              if (ev.usage) resultUsage = ev.usage;
+              // 首个 result = agent 认为任务完成:关闭输入,claude 走完当前输出即退。
+              // result 前已写入 stdin 的插话仍会被处理(排队消息在 EOF 前有效),
+              // 若因此多出一轮,新 result 覆盖 resultText —— 最终以最后一轮为准。
+              try {
+                child.stdin?.end();
+              } catch {
+                /* 已关/已退,EPIPE 由 error 监听吞掉 */
+              }
+            } else {
+              onProgress?.(ev);
             }
-          } else {
-            onProgress?.(ev);
           }
         }
       });
